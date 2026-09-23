@@ -1,0 +1,9 @@
+build-*/
+package/
+*.ipa
+*.xcuserstate
+xcuserdata/
+.DS_Store
+*.mobileprovision
+*.p12
+*.key
