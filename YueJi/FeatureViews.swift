@@ -180,7 +180,7 @@ struct RefundsView: View {
                     LabeledContent(tr("已退款", "Refunded", "Dipulangkan"), value: money(e.refunded))
                     LabeledContent(tr("净消费（含朋友）", "Net cost (all shares)", "Kos bersih (semua bahagian)"), value: money(e.cents - e.refunded))
                 }
-                Section(tr("新增退款", "Add refund", "Tambah bayaran balik")) {
+                Section {
                     TextField(tr("实际收到的退款 · MYR", "Refund received · MYR", "Bayaran balik diterima · MYR"), text: $amount).keyboardType(.decimalPad)
                     DatePicker(tr("退款日期", "Refund date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                     Button(tr("填入剩余全额", "Fill remaining amount", "Isi baki penuh")) { amount = Currency.input(e.cents - e.refunded, "MYR") }.disabled(e.cents == e.refunded)
@@ -188,6 +188,8 @@ struct RefundsView: View {
                     Button(tr("保存退款", "Save refund", "Simpan bayaran balik")) {
                         do { let n = try toCents(amount); try LocalStore.shared.change { try $0.addRefund(expenseID: expenseID, cents: n, date: date) }; amount = ""; model.reload() } catch { self.error = error.localizedDescription }
                     }.disabled(e.cents == e.refunded)
+                } header: {
+                    Text(tr("新增退款", "Add refund", "Tambah bayaran balik"))
                 } footer: { Text(tr("退款按各人剩余份额分配，并回算到原消费月份。朋友已经还款的部分会显示为你需退回的款项。外币退款按实际收到 MYR 填写，最多退至原入账额。", "Refunds are allocated proportionally to remaining shares and reduce the original spending month. Amounts already repaid by friends become payable back to them. Enter foreign refunds in actual MYR, capped at the original recorded amount.", "Bayaran balik diagih mengikut baki bahagian dan mengurangkan bulan belanja asal. Amaun yang sudah dibayar rakan perlu dipulangkan kepada mereka. Isi bayaran balik asing dalam MYR sebenar, terhad kepada amaun asal.")) }
                 Section(tr("退款历史", "Refund history", "Sejarah bayaran balik")) {
                     ForEach(e.refunds ?? []) { r in
