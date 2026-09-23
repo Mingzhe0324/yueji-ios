@@ -2,6 +2,12 @@
 
 这是 SwiftUI 原生项目源码，不是网页，也不是已签名、可直接安装的 IPA。优先实现 Apple Pay → 快捷指令 → 本机账本。无需账本服务器、网页令牌或付费开发者账号。安装与首次自动化配置仍需要你在自己的设备完成。
 
+## 1.3.2（build 7）编译修复
+
+根据 run6 完整日志修复 FeatureViews.swift 新增退款区块的 Section 初始化方式：使用独立 content、header、footer 闭包。run6 在编译阶段失败，测试未执行。其余带 footer 的区块已检查，未发现相同的标题参数混用。
+
+上传项目内容（包括 .github 文件夹）并重新运行 Actions，确认 Source: 1.3.2 (7)。成功后的 IPA 为 YueJi-1.3.2-build7-unsigned.ipa。保留原有功能、账本格式和诊断日志上传。此版本仅完成本地静态检查，仍需 GitHub Xcode 编译及测试确认。
+
 ## 1.3.1（build 6）编译修复
 
 按 GitHub Actions 报错，将退款分配预览拆成独立视图，在普通 Swift 计算属性中生成有明确类型的行数据，移除触发编译器超时的元组 ForEach 表达式。简化油费预览的同类表达式。保留全部 1.3 功能及数据格式。
