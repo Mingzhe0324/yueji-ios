@@ -18,7 +18,7 @@ jobs:
           from pathlib import Path
           info=plistlib.loads(Path('YueJi/Info.plist').read_bytes())
           version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
-          assert (version,build)==('1.3','5'), 'Wrong source version; expected 1.3 build 5'
+          assert (version,build)==('1.3.1','6'), 'Wrong source version; expected 1.3.1 build 6'
           source=Path('YueJi/FeatureViews.swift').read_text()
           for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView']:
               assert 'struct '+name in source, 'Missing feature: '+name
@@ -39,7 +39,8 @@ jobs:
           PY
       - name: Build and test
         run: |
-          xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
+          set -o pipefail
+          xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
       - name: Build unsigned device app
         run: |
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
@@ -62,4 +63,14 @@ jobs:
         with:
           name: YueJi-${{ steps.release.outputs.label }}-run${{ github.run_number }}
           path: YueJi-${{ steps.release.outputs.label }}-unsigned.ipa
+          retention-days: 7
+      - name: Upload build diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: YueJi-diagnostics-run${{ github.run_number }}
+          path: |
+            build-test.log
+            TestResults.xcresult
+          if-no-files-found: ignore
           retention-days: 7
