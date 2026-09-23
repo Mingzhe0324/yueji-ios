@@ -37,24 +37,12 @@ struct MonthPicker: View {
             Spacer(); Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID)))).font(.headline); Spacer()
             Button { shift(1) } label: { Image(systemName: "chevron.right").padding(8) }.accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
         }
-        .contentShape(Rectangle())
-        .simultaneousGesture(DragGesture(minimumDistance: 25).onEnded { value in
-            let dx = value.translation.width, dy = value.translation.height
-            guard abs(dx) > 45, abs(dx) > abs(dy) * 1.5 else { return }
-            shift(dx < 0 ? 1 : -1)
-        })
-        .accessibilityHint(tr("左右滑动切换月份", "Swipe left or right to change month", "Leret kiri atau kanan untuk menukar bulan"))
     }
-    private func shift(_ n: Int) { month = shiftedMonth(month, by: n) }
+    private func shift(_ n: Int) { if let d = Calendar.current.date(byAdding: .month, value: n, to: month) { month = d } }
 }
 struct DashboardView: View {
     @EnvironmentObject var model: LedgerModel
-    @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
-    private var month: Date {
-        get { Date(timeIntervalSince1970: monthTimestamp) }
-        nonmutating set { monthTimestamp = newValue.timeIntervalSince1970 }
-    }
-    private var monthBinding: Binding<Date> { Binding(get: { month }, set: { month = $0 }) }
+    @State private var month = Date()
     @State private var adding = false
     @State private var budgetText = ""
     @State private var budgeting = false
@@ -65,7 +53,7 @@ struct DashboardView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    MonthPicker(month: monthBinding)
+                    MonthPicker(month: $month)
                     GlassPanel {
                         VStack(alignment: .leading, spacing: 15) {
                             Label(tr("我的月度消费", "My monthly spending", "Belanja bulanan saya"), systemImage: "sparkles").foregroundStyle(.secondary)
@@ -101,7 +89,7 @@ struct DashboardView: View {
                 }.padding()
             }.background(LinearGradient(colors: [.cyan.opacity(0.15), .blue.opacity(0.06), .mint.opacity(0.14)], startPoint: .topLeading, endPoint: .bottomTrailing))
                 .navigationTitle(tr("月记", "YueJi", "YueJi"))
-                .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
+                .sheet(isPresented: $adding) { ExpenseEditor(original: nil) }
                 .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
                     TextField("1500.00", text: $budgetText).keyboardType(.decimalPad)
                     Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); model.change { $0.budgets[monthKey(month)] = n } } catch { model.error = error.localizedDescription } }
@@ -128,12 +116,7 @@ struct ExpenseRow: View {
 }
 struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
-    @SceneStorage("ledgerMonth") private var monthTimestamp = Date().timeIntervalSince1970
-    private var month: Date {
-        get { Date(timeIntervalSince1970: monthTimestamp) }
-        nonmutating set { monthTimestamp = newValue.timeIntervalSince1970 }
-    }
-    private var monthBinding: Binding<Date> { Binding(get: { month }, set: { month = $0 }) }
+    @State private var month = Date()
     @State private var search = ""
     @State private var adding = false
     @State private var editing: Expense?
@@ -141,7 +124,7 @@ struct ExpensesView: View {
     var body: some View {
         NavigationStack {
             List {
-                MonthPicker(month: monthBinding)
+                MonthPicker(month: $month)
                 let entries = model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) && (search.isEmpty || $0.merchant.localizedCaseInsensitiveContains(search) || categoryLabel($0.category).localizedCaseInsensitiveContains(search)) }.sorted { $0.date > $1.date }
                 if entries.isEmpty { ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray") }
                 ForEach(entries) { e in
@@ -150,7 +133,7 @@ struct ExpensesView: View {
                 }
             }.navigationTitle(tr("账本", "Ledger", "Lejar")).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
                 .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
-                .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
+                .sheet(isPresented: $adding) { ExpenseEditor(original: nil) }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .confirmationDialog(tr("删除付款及其分账和还款？", "Delete payment, splits and repayments?", "Padam bayaran, pembahagian dan bayaran balik?"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                     Button(tr("删除", "Delete", "Padam"), role: .destructive) { if let e = deleting { model.change { $0.expenses.removeAll { $0.id == e.id } } }; deleting = nil }
@@ -166,7 +149,6 @@ struct ExpenseEditor: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let original: Expense?
-    var initialDate: Date = Date()
     @State private var name = ""
     @State private var amount = ""
     @State private var currency = "MYR"
@@ -237,7 +219,6 @@ struct ExpenseEditor: View {
     }
     private func load() {
         guard !initialized else { return }; initialized = true
-        if original == nil { date = initialDate }
         if let e = original {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
@@ -369,7 +350,7 @@ struct SettingsView: View {
                     } }
                 }
                 Section(tr("版本", "Version", "Versi")) {
-                    Text("YueJi · 1.1.1")
+                    Text("YueJi · 1.1")
                     Text(tr("免费侧载签名每 7 天需要刷新；过期会影响 App 和自动记账。", "Free sideload signing needs renewal every 7 days. Expiry affects the app and automatic recording.", "Tandatangan sideload percuma perlu diperbaharui setiap 7 hari. Tamat tempoh menjejaskan aplikasi dan rekod automatik.")).font(.footnote)
                 }
             }.navigationTitle(tr("设置", "Settings", "Tetapan")).onAppear { loadBackups() }

@@ -129,19 +129,3 @@ struct FXService {
         let quote = RateQuote(value: r.rate, date: date, source: "Frankfurter"); try quote.validate(); return quote
     }
 }
-
-// Calendar month navigation must not drift from Jan 31 to Feb 28 to Mar 28.
-func shiftedMonth(_ month: Date, by offset: Int, calendar: Calendar = .current) -> Date {
-    guard let anchor = calendar.dateInterval(of: .month, for: month)?.start else { return month }
-    return calendar.date(byAdding: .month, value: offset, to: anchor) ?? month
-}
-// New entries inherit the viewed month; existing entries always retain their own date.
-func dateForNewExpense(in month: Date, now: Date = Date(), calendar: Calendar = .current) -> Date {
-    if calendar.isDate(month, equalTo: now, toGranularity: .month) { return now }
-    guard let interval = calendar.dateInterval(of: .month, for: month),
-          let days = calendar.range(of: .day, in: .month, for: month) else { return month }
-    let today = calendar.dateComponents([.day, .hour, .minute, .second], from: now)
-    let day = min(today.day ?? 1, days.count)
-    guard let target = calendar.date(byAdding: .day, value: day - 1, to: interval.start) else { return month }
-    return calendar.date(bySettingHour: today.hour ?? 12, minute: today.minute ?? 0, second: today.second ?? 0, of: target) ?? target
-}

@@ -121,21 +121,3 @@ final class FeatureTests: XCTestCase {
         XCTAssertEqual(ledger.expenses[0].cents, 3000)
     }
 }
-
-final class MonthSelectionTests: XCTestCase {
-    func testBackdatedEntryStaysInViewedMonthAndClampsDay() throws {
-        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!
-        let today = c.date(from: DateComponents(year: 2026, month: 3, day: 31, hour: 14, minute: 30))!
-        let feb = shiftedMonth(today, by: -1, calendar: c)
-        let result = dateForNewExpense(in: feb, now: today, calendar: c)
-        XCTAssertEqual(c.component(.month, from: result), 2)
-        XCTAssertEqual(c.component(.day, from: result), 28)
-        XCTAssertEqual(c.component(.hour, from: result), 14)
-        XCTAssertEqual(dateForNewExpense(in: today, now: today, calendar: c), today)
-        let march = shiftedMonth(feb, by: 1, calendar: c)
-        XCTAssertEqual(c.component(.month, from: march), 3)
-        XCTAssertEqual(c.component(.day, from: march), 1)
-        let jan = c.date(from: DateComponents(year: 2026, month: 1, day: 31))!
-        XCTAssertEqual(c.component(.year, from: shiftedMonth(jan, by: -1, calendar: c)), 2025)
-    }
-}
