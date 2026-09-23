@@ -3,7 +3,7 @@ import CryptoKit
 
 enum LedgerError: LocalizedError {
     case invalid(String)
-    var errorDescription: String? { switch self { case .invalid(let text): return text } }
+    var errorDescription: String? { switch self { case .invalid(let text): return localizedError(text) } }
 }
 let categories = ["餐饮", "交通", "购物", "账单", "娱乐", "其他"]
 func money(_ cents: Int) -> String { String(format: "RM %.2f", Double(cents) / 100) }
@@ -42,17 +42,43 @@ struct Expense: Codable, Identifiable, Equatable {
     var source: String = "手动"
     var fuel = false
     var shares: [Share] = []
+    var foreign: ForeignAmount? = nil
+    var recurringKey: String? = nil
     var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } }
 }
 struct Ledger: Codable {
-    var version = 1
+    var version = 2
     var expenses: [Expense] = []
     var budgets: [String: Int] = [:]
     var seenEvents: Set<String> = []
+    var rates: [String: RateQuote] = [:]
+    var recurring: [RecurringExpense] = []
+    var postedRecurring: Set<String> = []
+    init(version: Int = 2, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
+        self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
+        self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
+    }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let v = try c.decode(Int.self, forKey: .version)
+        guard v == 1 || v == 2 else { throw LedgerError.invalid("账本格式或版本无效。") }
+        version = 2
+        expenses = try c.decode([Expense].self, forKey: .expenses)
+        budgets = try c.decode([String: Int].self, forKey: .budgets)
+        seenEvents = try c.decode(Set<String>.self, forKey: .seenEvents)
+        rates = try c.decodeIfPresent([String: RateQuote].self, forKey: .rates) ?? [:]
+        recurring = try c.decodeIfPresent([RecurringExpense].self, forKey: .recurring) ?? []
+        postedRecurring = try c.decodeIfPresent(Set<String>.self, forKey: .postedRecurring) ?? []
+    }
     func validated() throws -> Ledger {
-        guard version == 1, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
+        guard version == 2, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
+        guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
+        for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
+        for rule in recurring { try rule.validate() }
         for e in expenses {
+            if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   e.merchant.count <= 200, e.cents > 0, e.cents <= 10_000_000_000,
                   e.date.timeIntervalSince1970.isFinite, categories.contains(e.category), e.shares.count <= 100,
@@ -69,17 +95,22 @@ struct Ledger: Codable {
         return self
     }
     mutating func addPayment(amount: Double, merchant: String, currency: String, date: Date, eventID: String?) throws -> Bool {
-        guard currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines) == "MYR" else { throw LedgerError.invalid("目前只接受 MYR，请勿把其他币种当成马币入账。") }
-        guard amount.isFinite, amount > 0, amount <= 100_000_000,
-              abs(amount * 100 - (amount * 100).rounded()) < 0.00001, date.timeIntervalSince1970.isFinite, date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        let code = currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard Currency.codes.contains(code), amount.isFinite, amount > 0, amount <= 100_000_000,
+              date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        let scale = Currency.scale(code)
+        guard abs(amount * Double(scale) - (amount * Double(scale)).rounded()) < 0.00001 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        let minor = Int((amount * Double(scale)).rounded())
         let name = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 200 else { throw LedgerError.invalid("未取得商户名称，请检查快捷指令的输入。") }
         let explicit = eventID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        let value = Int((amount * 100).rounded())
-        let fingerprint = explicit.isEmpty ? "\(Int(date.timeIntervalSince1970))|\(name.lowercased())|\(value)|MYR" : explicit
+        // Preserve the v1 MYR fingerprint for migration-safe deduplication.
+        let fingerprint = explicit.isEmpty ? "\(Int(date.timeIntervalSince1970))|\(name.lowercased())|\(minor)|\(code)" : explicit
         let key = SHA256.hash(data: Data(fingerprint.utf8)).map { String(format: "%02x", $0) }.joined()
         guard !seenEvents.contains(key) else { return false }
-        expenses.append(Expense(merchant: name, cents: value, date: date, category: guessCategory(name), source: "Apple Pay"))
+        let fx = try foreignAmount(minor: minor, code: code)
+        let value = try fx?.myrCents() ?? minor
+        expenses.append(Expense(merchant: name, cents: value, date: date, category: guessCategory(name), source: "Apple Pay", foreign: fx))
         seenEvents.insert(key)
         return true
     }

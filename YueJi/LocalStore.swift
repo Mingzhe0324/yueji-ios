@@ -52,6 +52,6 @@ final class LocalStore {
     func backups() throws -> [URL] { try prepare(); return try FileManager.default.contentsOfDirectory(at: backupFolder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent } }
     func restore(_ data: Data) throws {
         let imported = try Self.decode(data)
-        try change { ledger in var next = imported; next.seenEvents.formUnion(ledger.seenEvents); ledger = next }
+        try change { ledger in var next = imported; next.seenEvents.formUnion(ledger.seenEvents); next.postedRecurring.formUnion(ledger.postedRecurring); ledger = next }
     }
 }

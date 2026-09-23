@@ -1,0 +1,214 @@
+{
+  "sourceLanguage": "zh-Hans",
+  "strings": {
+    "记录 Apple Pay 支出": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record Apple Pay expense"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod belanja Apple Pay"
+          }
+        }
+      }
+    },
+    "记录 Apple Pay": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record Apple Pay"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod Apple Pay"
+          }
+        }
+      }
+    },
+    "金额": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Amount"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Amaun"
+          }
+        }
+      }
+    },
+    "商户": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Merchant"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peniaga"
+          }
+        }
+      }
+    },
+    "币种": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Currency"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mata wang"
+          }
+        }
+      }
+    },
+    "交易时间": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transaction date"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarikh transaksi"
+          }
+        }
+      }
+    },
+    "交易标识（可选）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transaction ID (optional)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "ID transaksi (pilihan)"
+          }
+        }
+      }
+    },
+    "将快捷指令提供的成功付款写入月记本地账本。不会读取银行或钱包历史记录。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Save a successful payment from Shortcuts locally. Does not read bank or Wallet history."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Simpan bayaran berjaya daripada Pintasan secara tempatan. Tidak membaca sejarah bank atau Wallet."
+          }
+        }
+      }
+    },
+    "已保存到月记。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Saved to YueJi."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Disimpan ke YueJi."
+          }
+        }
+      }
+    },
+    "这笔付款已记录，没有重复入账。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Already recorded. No duplicate added."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sudah direkod. Tiada pendua ditambah."
+          }
+        }
+      }
+    },
+    "补记固定消费": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Post recurring expenses"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod belanja berulang"
+          }
+        }
+      }
+    },
+    "补记已到期且开启自动入账的固定消费，不会执行付款。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record due schedules with auto-recording enabled. Does not make payments."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod jadual yang tiba dengan rekod automatik diaktifkan. Tidak membuat bayaran."
+          }
+        }
+      }
+    },
+    "已检查到期项目。缺少汇率的项目仍保留待记。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Checked due schedules. Entries without rates remain pending."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jadual yang tiba telah disemak. Rekod tanpa kadar masih tertunda."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

@@ -5,6 +5,14 @@
 	};
 	"objectVersion" = 56;
 	"objects" = {
+		"4272165E609CEB45988F02A0" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "text.json.xcstrings"; "path" = "Localizable.xcstrings"; "sourceTree" = "<group>"; };
+		"ABAD2E33A649C96D618F1E8D" = { "isa" = "PBXBuildFile"; "fileRef" = "4272165E609CEB45988F02A0"; };
+		"ED29F67A6CF18DB93C10A996" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "FeatureViews.swift"; "sourceTree" = "<group>"; };
+		"18C3C4F160B163CE58D17794" = { "isa" = "PBXBuildFile"; "fileRef" = "ED29F67A6CF18DB93C10A996"; };
+		"AD28BE70373820C47C519965" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "Language.swift"; "sourceTree" = "<group>"; };
+		"E3782C11DFBCC2462503FF4D" = { "isa" = "PBXBuildFile"; "fileRef" = "AD28BE70373820C47C519965"; };
+		"ABC6DE47CA143D858089030F" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "Features.swift"; "sourceTree" = "<group>"; };
+		"91E32EA26F46EE0FB1BCD291" = { "isa" = "PBXBuildFile"; "fileRef" = "ABC6DE47CA143D858089030F"; };
 		"1CC326AC7BD7880DDEECA3A9" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -96,6 +104,10 @@
 		"E17E80AD8E2103CF3FC3FD96" = {
 			"isa" = "PBXGroup";
 			"children" = (
+				"4272165E609CEB45988F02A0",
+				"ED29F67A6CF18DB93C10A996",
+				"AD28BE70373820C47C519965",
+				"ABC6DE47CA143D858089030F",
 				"1CC326AC7BD7880DDEECA3A9",
 				"1BCB6E9098EDF3C8586A717A",
 				"04C9E642D5433FF8B0317B46",
@@ -137,6 +149,9 @@
 			"isa" = "PBXSourcesBuildPhase";
 			"buildActionMask" = 2147483647;
 			"files" = (
+				"18C3C4F160B163CE58D17794",
+				"E3782C11DFBCC2462503FF4D",
+				"91E32EA26F46EE0FB1BCD291",
 				"6517DFEE3B579FA613C5B1A2",
 				"D43449BB9A4800A1AAF919C0",
 				"115391515550ECE83AE55C48",
@@ -156,6 +171,7 @@
 			"isa" = "PBXResourcesBuildPhase";
 			"buildActionMask" = 2147483647;
 			"files" = (
+				"ABAD2E33A649C96D618F1E8D",
 				"5522B3B3B2EACC1C8F9BEAAC",
 			);
 			"runOnlyForDeploymentPostprocessing" = 0;
@@ -382,6 +398,7 @@
 			"developmentRegion" = "zh-Hans";
 			"hasScannedForEncodings" = 0;
 			"knownRegions" = (
+				"ms",
 				"zh-Hans",
 				"en",
 				"Base",

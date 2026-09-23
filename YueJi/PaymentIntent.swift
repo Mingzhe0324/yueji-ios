@@ -10,12 +10,6 @@ struct RecordApplePayIntent: AppIntent {
     @Parameter(title: "币种", default: "MYR") var currency: String
     @Parameter(title: "交易时间") var transactionDate: Date
     @Parameter(title: "交易标识（可选）") var transactionID: String?
-    static var parameterSummary: some ParameterSummary {
-        Summary("记录 \(\.$merchant) 的 \(\.$amount) \(\.$currency) 支出") {
-            \.$transactionDate
-            \.$transactionID
-        }
-    }
     func perform() async throws -> some IntentResult & ProvidesDialog {
         let added = try LocalStore.shared.change {
             try $0.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID)
@@ -24,8 +18,18 @@ struct RecordApplePayIntent: AppIntent {
         return .result(dialog: "这笔付款已记录，没有重复入账。")
     }
 }
+struct PostRecurringIntent: AppIntent {
+    static var title: LocalizedStringResource = "补记固定消费"
+    static var description = IntentDescription("补记已到期且开启自动入账的固定消费，不会执行付款。")
+    static var openAppWhenRun = false
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        try LocalStore.shared.change { try $0.postDue() }
+        return .result(dialog: "已检查到期项目。缺少汇率的项目仍保留待记。")
+    }
+}
 struct YueJiShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: PostRecurringIntent(), phrases: ["Post recurring expenses in \(.applicationName)"], shortTitle: "补记固定消费", systemImageName: "repeat")
         AppShortcut(intent: RecordApplePayIntent(), phrases: ["用\(.applicationName)记录付款", "Record a payment in \(.applicationName)"], shortTitle: "记录 Apple Pay", systemImageName: "creditcard.fill")
     }
 }

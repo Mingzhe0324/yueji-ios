@@ -52,3 +52,90 @@ final class LedgerTests: XCTestCase {
         XCTAssertThrowsError(try ledger.validated())
     }
 }
+
+final class FeatureTests: XCTestCase {
+    private func date(_ y: Int, _ m: Int, _ d: Int) -> Date {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!
+        return c.date(from: DateComponents(year: y, month: m, day: d))!
+    }
+    func testMonthEndReturnsTo31AndLeapYear() throws {
+        var r = RecurringExpense(name: "Rent", minor: 10000, start: date(2024, 1, 31)); r.timeZoneID = "GMT"
+        XCTAssertEqual(r.occurrence(1), date(2024, 2, 29))
+        XCTAssertEqual(r.occurrence(2), date(2024, 3, 31))
+        r.start = date(2024, 2, 29); r.cycle = .yearly
+        XCTAssertEqual(r.occurrence(1), date(2025, 2, 28))
+        XCTAssertEqual(r.occurrence(4), date(2028, 2, 29))
+    }
+    func testRecurringIdempotenceAfterDeletionAndPause() throws {
+        var r = RecurringExpense(name: "Rent", minor: 10000, start: date(2026, 1, 31)); r.timeZoneID = "GMT"; r.autoPost = true
+        var ledger = Ledger(recurring: [r])
+        try ledger.postDue(now: date(2026, 3, 31))
+        XCTAssertEqual(ledger.expenses.count, 3)
+        try ledger.postDue(now: date(2026, 3, 31)); XCTAssertEqual(ledger.expenses.count, 3)
+        ledger.expenses.removeAll(); try ledger.postDue(now: date(2026, 3, 31)); XCTAssertTrue(ledger.expenses.isEmpty)
+        ledger.recurring[0].active = false
+        try ledger.postDue(now: date(2026, 5, 31)); XCTAssertTrue(ledger.expenses.isEmpty)
+        ledger.resumeRule(r.id, now: date(2026, 6, 15))
+        XCTAssertEqual(ledger.recurring[0].nextDate, date(2026, 6, 30))
+        try ledger.postDue(now: date(2026, 6, 30)); XCTAssertEqual(ledger.expenses.count, 1)
+    }
+    func testWeeklyManualAndMissingFX() throws {
+        var weekly = RecurringExpense(name: "Lunch", minor: 1000, start: date(2026, 1, 1), cycle: .weekly); weekly.timeZoneID = "GMT"
+        var foreign = RecurringExpense(name: "Cloud", minor: 500, currency: "USD", start: date(2026, 1, 1)); foreign.autoPost = true; foreign.timeZoneID = "GMT"
+        var ledger = Ledger(recurring: [weekly, foreign])
+        try ledger.postDue(now: date(2026, 1, 15)); XCTAssertTrue(ledger.expenses.isEmpty)
+        try ledger.postDue(now: date(2026, 1, 15), only: weekly.id, force: true); XCTAssertEqual(ledger.expenses.count, 3)
+        ledger.rates["USD"] = RateQuote(value: 4, date: date(2026, 1, 15), source: "test")
+        try ledger.postDue(now: date(2026, 1, 15)); XCTAssertEqual(ledger.expenses.last?.cents, 2000)
+    }
+    func testCurrencyPrecisionRateDirectionAndSnapshot() throws {
+        let q = RateQuote(value: Decimal(string: "4.1234")!, date: Date(), source: "test")
+        let fx = ForeignAmount(currency: "USD", minor: 1234, quote: q)
+        XCTAssertEqual(try fx.myrCents(), 5088)
+        XCTAssertThrowsError(try Currency.parse("100.50", code: "JPY"))
+        XCTAssertEqual(try Currency.parse("100", code: "JPY"), 100)
+        XCTAssertThrowsError(try parseRate("4abc")); XCTAssertThrowsError(try parseRate("0"))
+        var ledger = Ledger(rates: ["USD": q])
+        XCTAssertTrue(try ledger.addPayment(amount: 12.34, merchant: "Shop", currency: "USD", date: Date(), eventID: "fx001"))
+        ledger.rates["USD"] = RateQuote(value: 5, date: Date(), source: "test")
+        XCTAssertEqual(ledger.expenses[0].cents, 5088)
+        XCTAssertEqual(ledger.expenses[0].foreign?.quote.value, q.value)
+        _ = try ledger.validated()
+    }
+    func testV1MigrationAndV2RoundTrip() throws {
+        let old = Data(#"{"version":1,"expenses":[],"budgets":{"2026-09":10000},"seenEvents":["old"]}"#.utf8)
+        var ledger = try LocalStore.decode(old)
+        XCTAssertEqual(ledger.version, 2); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
+        ledger.recurring = [RecurringExpense(name: "Phone", minor: 3000, start: Date())]
+        ledger.rates["SGD"] = RateQuote(value: Decimal(string: "3.2")!, date: date(2026, 1, 1), source: "Manual")
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.recurring[0].name, "Phone"); XCTAssertEqual(restored.rates["SGD"], ledger.rates["SGD"])
+        XCTAssertTrue(restored.seenEvents.contains("old"))
+    }
+    func testWalletWithoutRateDoesNotConsumeDedupKey() throws {
+        var ledger = Ledger()
+        XCTAssertThrowsError(try ledger.addPayment(amount: 10, merchant: "Shop", currency: "SGD", date: Date(), eventID: "pending"))
+        XCTAssertTrue(ledger.seenEvents.isEmpty)
+        ledger.rates["SGD"] = RateQuote(value: 3, date: Date(), source: "test")
+        XCTAssertTrue(try ledger.addPayment(amount: 10, merchant: "Shop", currency: "SGD", date: Date(), eventID: "pending"))
+        XCTAssertEqual(ledger.expenses[0].cents, 3000)
+    }
+}
+
+final class MonthSelectionTests: XCTestCase {
+    func testBackdatedEntryStaysInViewedMonthAndClampsDay() throws {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = c.date(from: DateComponents(year: 2026, month: 3, day: 31, hour: 14, minute: 30))!
+        let feb = shiftedMonth(today, by: -1, calendar: c)
+        let result = dateForNewExpense(in: feb, now: today, calendar: c)
+        XCTAssertEqual(c.component(.month, from: result), 2)
+        XCTAssertEqual(c.component(.day, from: result), 28)
+        XCTAssertEqual(c.component(.hour, from: result), 14)
+        XCTAssertEqual(dateForNewExpense(in: today, now: today, calendar: c), today)
+        let march = shiftedMonth(feb, by: 1, calendar: c)
+        XCTAssertEqual(c.component(.month, from: march), 3)
+        XCTAssertEqual(c.component(.day, from: march), 1)
+        let jan = c.date(from: DateComponents(year: 2026, month: 1, day: 31))!
+        XCTAssertEqual(c.component(.year, from: shiftedMonth(jan, by: -1, calendar: c)), 2025)
+    }
+}
