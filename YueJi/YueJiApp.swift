@@ -5,8 +5,10 @@ import AppIntents
 struct YueJiApp: App {
     @StateObject private var model = LedgerModel()
     @AppStorage("appLanguage") private var language = "system"
+    @AppStorage("appAppearance") private var appearance = "system"
+    private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
     init() { YueJiShortcuts.updateAppShortcutParameters() }
-    var body: some Scene { WindowGroup { MainView().environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language) } }
+    var body: some Scene { WindowGroup { MainView().environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
     @Published var ledger = Ledger()

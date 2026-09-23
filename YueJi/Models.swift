@@ -24,14 +24,19 @@ struct Repayment: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var cents: Int
     var date: Date = Date()
+    var batchID: String? = nil
 }
 struct Share: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var name: String
     var cents: Int
     var repayments: [Repayment] = []
+    var refundCents: Int? = nil
+    var returns: [Repayment]? = nil
+    var refunded: Int { refundCents ?? 0 }
+    var returned: Int { (returns ?? []).reduce(0) { $0 + $1.cents } }
     var repaid: Int { repayments.reduce(0) { $0 + $1.cents } }
-    var owed: Int { cents - repaid }
+    var owed: Int { cents - refunded - repaid + returned }
 }
 struct Expense: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
@@ -44,52 +49,61 @@ struct Expense: Codable, Identifiable, Equatable {
     var shares: [Share] = []
     var foreign: ForeignAmount? = nil
     var recurringKey: String? = nil
-    var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } }
+    var refunds: [RefundRecord]? = nil
+    var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
+    var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
+    var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } - personalRefund }
 }
 struct Ledger: Codable {
-    var version = 2
+    var version = 3
     var expenses: [Expense] = []
     var budgets: [String: Int] = [:]
     var seenEvents: Set<String> = []
     var rates: [String: RateQuote] = [:]
     var recurring: [RecurringExpense] = []
     var postedRecurring: Set<String> = []
-    init(version: Int = 2, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
+    var dismissedDuplicates: Set<String> = []
+    var automationEvents: [AutomationEvent] = []
+    init(version: Int = 3, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
-        guard v == 1 || v == 2 else { throw LedgerError.invalid("账本格式或版本无效。") }
-        version = 2
+        guard (1...3).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
+        version = 3
         expenses = try c.decode([Expense].self, forKey: .expenses)
         budgets = try c.decode([String: Int].self, forKey: .budgets)
         seenEvents = try c.decode(Set<String>.self, forKey: .seenEvents)
         rates = try c.decodeIfPresent([String: RateQuote].self, forKey: .rates) ?? [:]
         recurring = try c.decodeIfPresent([RecurringExpense].self, forKey: .recurring) ?? []
         postedRecurring = try c.decodeIfPresent(Set<String>.self, forKey: .postedRecurring) ?? []
+        dismissedDuplicates = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedDuplicates) ?? []
+        automationEvents = try c.decodeIfPresent([AutomationEvent].self, forKey: .automationEvents) ?? []
     }
     func validated() throws -> Ledger {
-        guard version == 2, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
+        guard version == 3, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
         for rule in recurring { try rule.validate() }
+        guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for e in expenses {
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   e.merchant.count <= 200, e.cents > 0, e.cents <= 10_000_000_000,
                   e.date.timeIntervalSince1970.isFinite, categories.contains(e.category), e.shares.count <= 100,
                   Set(e.shares.map(\.id)).count == e.shares.count,
-                  Set(e.shares.map { $0.name.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }).count == e.shares.count else { throw LedgerError.invalid("付款或分账数据无效。") }
+                  Set(e.shares.map { friendKey($0.name) }).count == e.shares.count else { throw LedgerError.invalid("付款或分账数据无效。") }
             for s in e.shares {
                 guard !s.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                      s.cents >= 0, s.cents <= e.cents, s.repayments.count <= 10_000,
+                      s.cents >= 0, s.cents <= e.cents, s.refunded >= 0, s.refunded <= s.cents, s.repayments.count <= 10_000,
                       s.repayments.allSatisfy({ $0.cents > 0 && $0.cents <= s.cents && $0.date.timeIntervalSince1970.isFinite }) else { throw LedgerError.invalid("还款不能超过朋友应付金额。") }
-                guard s.repaid <= s.cents else { throw LedgerError.invalid("还款超出朋友份额。") }
+                guard (s.returns ?? []).count <= 10_000, (s.returns ?? []).allSatisfy({ $0.cents > 0 && $0.cents <= e.cents && $0.date.timeIntervalSince1970.isFinite }), s.returned <= max(0, s.repaid + s.refunded - s.cents), s.repaid <= s.cents else { throw LedgerError.invalid("还款超出朋友份额。") }
             }
+            try validateRefunds(e)
             guard e.personal >= 0 else { throw LedgerError.invalid("朋友份额超过实际付款。") }
         }
         return self

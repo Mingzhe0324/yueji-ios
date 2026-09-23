@@ -11,11 +11,19 @@ struct RecordApplePayIntent: AppIntent {
     @Parameter(title: "交易时间") var transactionDate: Date
     @Parameter(title: "交易标识（可选）") var transactionID: String?
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let added = try LocalStore.shared.change {
-            try $0.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID)
+        do {
+            let added = try LocalStore.shared.change { ledger in
+                let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID)
+                ledger.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : "duplicate")
+                return saved
+            }
+            if added { return .result(dialog: "已保存到月记。") }
+            return .result(dialog: "这笔付款已记录，没有重复入账。")
+        } catch {
+            let failure = error
+            try? LocalStore.shared.change { $0.logAutomation(source: "Apple Pay", outcome: "failed", detail: failure.localizedDescription) }
+            throw failure
         }
-        if added { return .result(dialog: "已保存到月记。") }
-        return .result(dialog: "这笔付款已记录，没有重复入账。")
     }
 }
 struct PostRecurringIntent: AppIntent {
@@ -23,7 +31,13 @@ struct PostRecurringIntent: AppIntent {
     static var description = IntentDescription("补记已到期且开启自动入账的固定消费，不会执行付款。")
     static var openAppWhenRun = false
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        try LocalStore.shared.change { try $0.postDue() }
+        do {
+            try LocalStore.shared.change { ledger in try ledger.postDue(); ledger.logAutomation(source: "Recurring", outcome: "checked") }
+        } catch {
+            let failure = error
+            try? LocalStore.shared.change { $0.logAutomation(source: "Recurring", outcome: "failed", detail: failure.localizedDescription) }
+            throw failure
+        }
         return .result(dialog: "已检查到期项目。缺少汇率的项目仍保留待记。")
     }
 }

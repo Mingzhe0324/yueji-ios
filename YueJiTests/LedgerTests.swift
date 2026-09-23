@@ -105,7 +105,7 @@ final class FeatureTests: XCTestCase {
     func testV1MigrationAndV2RoundTrip() throws {
         let old = Data(#"{"version":1,"expenses":[],"budgets":{"2026-09":10000},"seenEvents":["old"]}"#.utf8)
         var ledger = try LocalStore.decode(old)
-        XCTAssertEqual(ledger.version, 2); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
+        XCTAssertEqual(ledger.version, 3); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
         ledger.recurring = [RecurringExpense(name: "Phone", minor: 3000, start: Date())]
         ledger.rates["SGD"] = RateQuote(value: Decimal(string: "3.2")!, date: date(2026, 1, 1), source: "Manual")
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
@@ -119,5 +119,137 @@ final class FeatureTests: XCTestCase {
         ledger.rates["SGD"] = RateQuote(value: 3, date: Date(), source: "test")
         XCTAssertTrue(try ledger.addPayment(amount: 10, merchant: "Shop", currency: "SGD", date: Date(), eventID: "pending"))
         XCTAssertEqual(ledger.expenses[0].cents, 3000)
+    }
+}
+
+final class MonthSelectionTests: XCTestCase {
+    func testBackdatedEntryStaysInViewedMonthAndClampsDay() throws {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = c.date(from: DateComponents(year: 2026, month: 3, day: 31, hour: 14, minute: 30))!
+        let feb = shiftedMonth(today, by: -1, calendar: c)
+        let result = dateForNewExpense(in: feb, now: today, calendar: c)
+        XCTAssertEqual(c.component(.month, from: result), 2)
+        XCTAssertEqual(c.component(.day, from: result), 28)
+        XCTAssertEqual(c.component(.hour, from: result), 14)
+        XCTAssertEqual(dateForNewExpense(in: today, now: today, calendar: c), today)
+        let march = shiftedMonth(feb, by: 1, calendar: c)
+        XCTAssertEqual(c.component(.month, from: march), 3)
+        XCTAssertEqual(c.component(.day, from: march), 1)
+        let jan = c.date(from: DateComponents(year: 2026, month: 1, day: 31))!
+        XCTAssertEqual(c.component(.year, from: shiftedMonth(jan, by: -1, calendar: c)), 2025)
+    }
+}
+
+final class AccountingToolsTests: XCTestCase {
+    func testPartialAndFullRefundAllocateWithoutDoubleCounting() throws {
+        let e = Expense(merchant: "Dinner", cents: 6000, date: Date().addingTimeInterval(-3600), shares: [Share(name: "Amy", cents: 4000)])
+        var ledger = Ledger(expenses: [e])
+        try ledger.addRefund(expenseID: e.id, cents: 1500, date: Date())
+        XCTAssertEqual(ledger.expenses[0].personal, 1500)
+        XCTAssertEqual(ledger.expenses[0].shares[0].owed, 3000)
+        try ledger.addRefund(expenseID: e.id, cents: 4500, date: Date())
+        XCTAssertEqual(ledger.expenses[0].personal, 0)
+        XCTAssertEqual(ledger.expenses[0].shares[0].owed, 0)
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: e.id, cents: 1, date: Date()))
+        _ = try ledger.validated()
+        let decoded = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(decoded.expenses[0].refunded, 6000)
+    }
+    func testRefundOfSettledShareCreatesPayableAndCanBeReturned() throws {
+        let friend = Share(name: "Amy", cents: 1000)
+        let e = Expense(merchant: "Food", cents: 2000, date: Date().addingTimeInterval(-86400), shares: [friend])
+        var ledger = Ledger(expenses: [e])
+        try ledger.repay(expenseID: e.id, shareID: friend.id, cents: 1000, date: Date().addingTimeInterval(-100))
+        try ledger.addRefund(expenseID: e.id, cents: 2000, date: Date().addingTimeInterval(-10))
+        XCTAssertEqual(ledger.expenses[0].shares[0].owed, -1000)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 1000)
+        try ledger.returnToFriend(expenseID: e.id, shareID: friend.id, cents: 600, date: Date())
+        XCTAssertEqual(ledger.expenses[0].shares[0].owed, -400)
+        _ = try ledger.validated()
+        XCTAssertThrowsError(try ledger.returnToFriend(expenseID: e.id, shareID: friend.id, cents: 401, date: Date()))
+        let id = ledger.expenses[0].refunds![0].id
+        XCTAssertThrowsError(try ledger.removeRefund(expenseID: e.id, refundID: id))
+        XCTAssertEqual(ledger.expenses[0].refunded, 2000) // failed undo must be atomic
+    }
+    func testRefundPenniesAndLargeAmounts() throws {
+        XCTAssertEqual(try allocateRefund(1, capacities: [0, 1, 1]).reduce(0, +), 1)
+        XCTAssertEqual(try allocateRefund(3, capacities: [1, 1, 1]), [1, 1, 1])
+        let allocation = try allocateRefund(10_000_000_000, capacities: [5_000_000_000, 5_000_000_000])
+        XCTAssertEqual(allocation, [5_000_000_000, 5_000_000_000])
+    }
+    func testBatchRepaymentUsesOldestAndRejectsOverpaymentAtomically() throws {
+        let old = Expense(merchant: "Old", cents: 1000, date: Date().addingTimeInterval(-86400), shares: [Share(name: " AMY ", cents: 700)])
+        let new = Expense(merchant: "New", cents: 1000, date: Date().addingTimeInterval(-3600), shares: [Share(name: "amy", cents: 800)])
+        var ledger = Ledger(expenses: [new, old])
+        XCTAssertEqual(ledger.friendBalances.count, 1)
+        try ledger.batchRepay(friend: "amy", cents: 1000, date: Date())
+        XCTAssertEqual(ledger.expenses[1].shares[0].owed, 0)
+        XCTAssertEqual(ledger.expenses[0].shares[0].owed, 500)
+        XCTAssertEqual(ledger.expenses[0].shares[0].repayments[0].batchID, ledger.expenses[1].shares[0].repayments[0].batchID)
+        XCTAssertThrowsError(try ledger.batchRepay(friend: "amy", cents: 501, date: Date()))
+        XCTAssertEqual(ledger.friendBalances[0].owed, 500)
+    }
+    func testDuplicateReviewDoesNotMergeAndCanDismiss() throws {
+        let first = Expense(merchant: "Coffee", cents: 1000, date: Date(), source: "Apple Pay")
+        let second = Expense(merchant: "Coffee", cents: 1000, date: Date(), source: "手动")
+        var ledger = Ledger(expenses: [first, second])
+        let pairs = ledger.duplicatePairs()
+        XCTAssertEqual(pairs.count, 1); XCTAssertEqual(ledger.expenses.count, 2)
+        ledger.dismissedDuplicates.insert(pairs[0].id)
+        XCTAssertTrue(ledger.duplicatePairs().isEmpty)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertTrue(restored.duplicatePairs().isEmpty)
+    }
+    func testFuelEstimateDoesNotTouchLedger() throws {
+        let estimate = FuelEstimate(distance: 100, litresPer100km: 8, pricePerLitre: Decimal(string: "2.05")!, parking: 500, toll: 300)
+        XCTAssertEqual(try estimate.total(), 2440)
+        XCTAssertEqual(equalShares(total: try estimate.total(), count: 2, includeMe: true).reduce(0, +), 1627)
+        XCTAssertThrowsError(try FuelEstimate(distance: -1, litresPer100km: 8, pricePerLitre: 2, parking: 0, toll: 0).total())
+    }
+    func testPreviewExcludesPausedAndPostedAndReportsMissingFX() throws {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone.current
+        let start = c.date(from: DateComponents(year: 2027, month: 1, day: 15))!
+        let now = c.date(from: DateComponents(year: 2027, month: 1, day: 1))!
+        let myr = RecurringExpense(name: "Rent", minor: 10000, start: start)
+        var paused = RecurringExpense(name: "Paused", minor: 500, start: start); paused.active = false
+        let usd = RecurringExpense(name: "Cloud", minor: 500, currency: "USD", start: start)
+        var ledger = Ledger(recurring: [myr, paused, usd])
+        let plans = ledger.upcoming(in: start, now: now)
+        XCTAssertEqual(plans.count, 2); XCTAssertEqual(plans.compactMap(\.myr).reduce(0, +), 10000)
+        ledger.postedRecurring.insert("\(myr.id):0")
+        XCTAssertEqual(ledger.upcoming(in: start, now: now).count, 1)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+    }
+    func testAutomationLogsAreBoundedAndSurviveBackup() throws {
+        var ledger = Ledger()
+        for _ in 0..<110 { ledger.logAutomation(source: "Apple Pay", outcome: "saved") }
+        XCTAssertEqual(ledger.automationEvents.count, 100)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.automationEvents.count, 100)
+        let old = Data(#"{"version":2,"expenses":[],"budgets":{},"seenEvents":[],"rates":{},"recurring":[],"postedRecurring":[]}"#.utf8)
+        XCTAssertTrue(try LocalStore.decode(old).automationEvents.isEmpty)
+    }
+}
+
+final class FriendSpendingTests: XCTestCase {
+    func testCategoryOverviewUsesSharesAndRefundsNotFullPayment() throws {
+        let date = Date().addingTimeInterval(-3600)
+        let a = Share(name: "Amy", cents: 3000)
+        let b = Share(name: " AMY ", cents: 1000)
+        let meal = Expense(merchant: "Dinner", cents: 6000, date: date, category: "餐饮", shares: [a])
+        let fuel = Expense(merchant: "Trip", cents: 2000, date: date, category: "交通", shares: [b])
+        var ledger = Ledger(expenses: [meal, fuel])
+        try ledger.addRefund(expenseID: meal.id, cents: 2000, date: Date())
+        let before = ledger.friendSpending(friend: "amy")
+        XCTAssertEqual(before.net, 3000)
+        XCTAssertEqual(before.categories["餐饮"], 2000)
+        XCTAssertEqual(before.categories["交通"], 1000)
+        XCTAssertEqual(before.refunds, 1000)
+        try ledger.batchRepay(friend: "amy", cents: 500, date: Date())
+        XCTAssertEqual(ledger.friendSpending(friend: "amy").net, before.net)
+        XCTAssertEqual(ledger.friendSpending(friend: "amy").owed, 2500)
+        XCTAssertEqual(ledger.friendSpending(friend: "other").net, 0)
+        let otherMonth = shiftedMonth(date, by: -2)
+        XCTAssertEqual(ledger.friendSpending(friend: "amy", month: otherMonth).net, 0)
     }
 }
