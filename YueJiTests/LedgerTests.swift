@@ -253,3 +253,53 @@ final class FriendSpendingTests: XCTestCase {
         XCTAssertEqual(ledger.friendSpending(friend: "amy", month: otherMonth).net, 0)
     }
 }
+
+final class ConvenienceFeatureTests: XCTestCase {
+    func testMerchantRuleRoundTripAndAutomaticCategory() throws {
+        var ledger = Ledger()
+        ledger.merchantCategories[friendKey("  ZUS   Coffee ")] = "娱乐"
+        ledger = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertTrue(try ledger.addPayment(amount: 12, merchant: "zus coffee", currency: "MYR", date: Date(), eventID: "rule-1"))
+        XCTAssertEqual(ledger.expenses.last?.category, "娱乐")
+        ledger.merchantCategories.removeAll()
+        XCTAssertTrue(try ledger.addPayment(amount: 12, merchant: "zus coffee", currency: "MYR", date: Date(), eventID: "rule-2"))
+        XCTAssertEqual(ledger.expenses.last?.category, "餐饮")
+        XCTAssertEqual(ledger.expenses.first?.category, "娱乐")
+    }
+    func testOlderBackupHasNoRulesOrInventedBackupDate() throws {
+        let data = try LocalStore.encode(Ledger())
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        object.removeValue(forKey: "merchantCategories"); object.removeValue(forKey: "backupCreatedAt")
+        let ledger = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(ledger.merchantCategories.isEmpty)
+        XCTAssertNil(ledger.backupCreatedAt)
+        XCTAssertNotNil(try LocalStore.decode(LocalStore.exportData(ledger)).backupCreatedAt)
+    }
+    func testStatementOnlySharesSelectedFriendAndSpendingMonth() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [
+            Expense(merchant: "VISIBLE-MERCHANT", cents: 2000, date: now, shares: [Share(name: "James", cents: 1000, repayments: [Repayment(cents: 400)]), Share(name: "PRIVATE-FRIEND", cents: 500)]),
+            Expense(merchant: "OTHER-MONTH", cents: 1000, date: shiftedMonth(now, by: -1), shares: [Share(name: "James", cents: 500)])
+        ]
+        let text = ledger.friendStatement(key: friendKey("James"), month: now)
+        XCTAssertTrue(text.contains("VISIBLE-MERCHANT"))
+        XCTAssertTrue(text.contains(money(600)))
+        XCTAssertFalse(text.contains("PRIVATE-FRIEND"))
+        XCTAssertFalse(text.contains("OTHER-MONTH"))
+    }
+    func testRecoveryCopySurvivesSnapshotRotationAndInvalidRestore() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        try store.change { $0.expenses.append(Expense(merchant: "Original", cents: 100)) }
+        try store.restore(LocalStore.exportData(Ledger()))
+        let recovery = try Data(contentsOf: store.recoveryFile)
+        XCTAssertEqual(try LocalStore.decode(recovery).expenses.first?.merchant, "Original")
+        for i in 0..<35 { try store.change { $0.budgets["2026-09"] = i + 1 } }
+        XCTAssertEqual(try Data(contentsOf: store.recoveryFile), recovery)
+        XCTAssertThrowsError(try store.restore(Data("bad".utf8)))
+        XCTAssertEqual(try Data(contentsOf: store.recoveryFile), recovery)
+        XCTAssertEqual(try store.backups().count, 30)
+    }
+}

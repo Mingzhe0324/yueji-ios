@@ -11,6 +11,10 @@ final class LocalStore {
     private var file: URL { folder.appendingPathComponent("ledger.json") }
     private var backupFolder: URL { folder.appendingPathComponent("Backups", isDirectory: true) }
     static func encode(_ ledger: Ledger) throws -> Data { let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601; return try encoder.encode(ledger) }
+    static func exportData(_ ledger: Ledger) throws -> Data {
+        var copy = ledger; copy.backupCreatedAt = Date(); return try encode(copy)
+    }
+    var recoveryFile: URL { folder.appendingPathComponent("before-last-restore.json") }
     static func decode(_ data: Data) throws -> Ledger { guard data.count <= 20_000_000 else { throw LedgerError.invalid("备份不能超过 20 MB。") }; let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601; return try decoder.decode(Ledger.self, from: data).validated() }
     private func prepare() throws { try FileManager.default.createDirectory(at: backupFolder, withIntermediateDirectories: true) }
     private func readUnlocked() throws -> Ledger {
@@ -38,7 +42,7 @@ final class LocalStore {
                 let next = try Self.encode(ledger.validated())
                 if previous != next {
                     let name = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString).json"
-                    try previous.write(to: self.backupFolder.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    try Self.exportData(try Self.decode(previous)).write(to: self.backupFolder.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                     try next.write(to: self.file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                     let backups = try self.backups()
                     for old in backups.dropFirst(30) { try? FileManager.default.removeItem(at: old) }
@@ -52,6 +56,11 @@ final class LocalStore {
     func backups() throws -> [URL] { try prepare(); return try FileManager.default.contentsOfDirectory(at: backupFolder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent } }
     func restore(_ data: Data) throws {
         let imported = try Self.decode(data)
-        try change { ledger in var next = imported; next.seenEvents.formUnion(ledger.seenEvents); next.postedRecurring.formUnion(ledger.postedRecurring); ledger = next }
+        try change { ledger in
+            // Independent recovery copy is not removed by the 30-snapshot rotation.
+            try Self.exportData(ledger).write(to: recoveryFile, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            var next = imported; next.seenEvents.formUnion(ledger.seenEvents)
+            next.postedRecurring.formUnion(ledger.postedRecurring); ledger = next
+        }
     }
 }

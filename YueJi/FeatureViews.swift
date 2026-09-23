@@ -241,10 +241,15 @@ private struct RefundAllocationPreview: View {
 
 struct FriendSummaryView: View {
     @EnvironmentObject var model: LedgerModel
+    @State private var settled = false
     var body: some View {
         List {
             Text(tr("按姓名汇总，忽略大小写和多余空格。同名的不同朋友请使用不同备注名。一次收款按最旧欠款优先分配，不自动抵扣你需退回的款项。", "Grouped by name, ignoring case and extra spaces. Use distinct names for different people. Batch receipts settle oldest debts first and do not offset money you owe back.", "Dikumpulkan mengikut nama tanpa mengira huruf besar dan ruang tambahan. Gunakan nama berbeza untuk individu berlainan. Penerimaan kelompok melangsaikan hutang tertua dahulu tanpa menolak wang yang perlu dipulangkan.")).font(.footnote)
-            ForEach(model.ledger.friendBalances) { friend in
+            Picker(tr("显示", "Show", "Papar"), selection: $settled) {
+                Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
+                Text(tr("已结清", "Settled", "Selesai")).tag(true)
+            }.pickerStyle(.segmented)
+            ForEach(model.ledger.friendBalances.filter { (($0.owed == 0) && ($0.payable == 0)) == settled }) { friend in
                 NavigationLink { FriendDetailView(key: friend.id) } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(friend.name).font(.headline)
@@ -267,9 +272,11 @@ struct FriendDetailView: View {
         Form {
             if let friend = model.ledger.friendBalances.first(where: { $0.id == key }) {
                 Section { NavigationLink(tr("消费概览 · 花在哪里", "Spending overview · by category", "Ringkasan belanja · mengikut kategori")) { FriendSpendingView(friend: key) } }
+                Section { NavigationLink(tr("分享朋友账单", "Share friend statement", "Kongsi penyata rakan")) { FriendStatementView(key: key) } }
                 Section(friend.name) {
                     LabeledContent(tr("待收", "Receivable", "Belum diterima"), value: money(friend.owed))
-                    LabeledContent(tr("需退回", "Payable back", "Perlu dipulangkan"), value: money(friend.payable))
+                    LabeledContent(tr("我需退给朋友", "I need to return", "Saya perlu pulangkan"), value: money(friend.payable))
+                    Text(tr("此金额自动计算，不能直接填写。若朋友已还款，后来商家退款，多收的部分会列在这里；请在下方对应账目点「退回朋友」，记录实际返款。", "Calculated automatically. If a merchant refunds a payment after your friend repays you, their excess payment appears here. Use Return to friend on the entry below to record money returned.", "Dikira automatik. Jika peniaga memulangkan bayaran selepas rakan membayar anda, lebihan muncul di sini. Gunakan Pulangkan kepada rakan pada rekod di bawah untuk merekod wang dipulangkan.")).font(.footnote).foregroundStyle(.secondary)
                     TextField(tr("本次收到 · MYR", "Received now · MYR", "Diterima kini · MYR"), text: $amount).keyboardType(.decimalPad)
                     DatePicker(tr("收到日期", "Date received", "Tarikh diterima"), selection: $date, displayedComponents: .date)
                     Button(tr("分配到最旧欠款", "Allocate to oldest debts", "Agih kepada hutang tertua")) {
@@ -291,11 +298,13 @@ struct FriendDetailView: View {
     }
 }
 struct FuelCalculatorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var draft: Expense?
     @State private var distance = ""
     @State private var consumption = ""
     @State private var price = ""
-    @State private var parking = "0"
-    @State private var toll = "0"
+    @State private var parking = ""
+    @State private var toll = ""
     @State private var friends = 2
     @State private var includeMe = true
     private var estimate: Int? {
@@ -310,10 +319,14 @@ struct FuelCalculatorView: View {
                 TextField(tr("总里程 km（往返请填合计）", "Total km (include return trip)", "Jumlah km (termasuk pergi balik)"), text: $distance).keyboardType(.decimalPad)
                 TextField(tr("油耗 L / 100 km", "Fuel use L / 100 km", "Penggunaan L / 100 km"), text: $consumption).keyboardType(.decimalPad)
                 TextField(tr("油价 MYR / L", "Fuel price MYR / L", "Harga minyak MYR / L"), text: $price).keyboardType(.decimalPad)
-                TextField(tr("停车费 MYR", "Parking MYR", "Parkir MYR"), text: $parking).keyboardType(.decimalPad)
-                TextField(tr("过路费 MYR", "Tolls MYR", "Tol MYR"), text: $toll).keyboardType(.decimalPad)
-                Stepper(tr("朋友人数：", "Friends: ", "Bilangan rakan: ") + String(friends), value: $friends, in: 1...20)
-                Toggle(tr("司机也参与分摊", "Include driver in split", "Pemandu turut berkongsi"), isOn: $includeMe)
+                LabeledContent(tr("停车费 · MYR", "Parking · MYR", "Parkir · MYR")) {
+                    TextField(tr("选填", "Optional", "Pilihan"), text: $parking).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                LabeledContent(tr("过路费 · MYR", "Tolls · MYR", "Tol · MYR")) {
+                    TextField(tr("选填", "Optional", "Pilihan"), text: $toll).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                Stepper(tr("朋友人数：", "Friends: ", "Bilangan rakan: ") + String(friends), value: $friends, in: 0...20)
+                Toggle(tr("司机也参与分摊", "Include driver in split", "Pemandu turut berkongsi"), isOn: $includeMe).disabled(friends == 0)
             }
             if let total = estimate {
                 let values = equalShares(total: total, count: friends, includeMe: includeMe)
@@ -325,11 +338,20 @@ struct FuelCalculatorView: View {
                         Text("\(title)\(index + 1): \(formattedAmount)")
                     }
                     LabeledContent(tr("司机份额", "Driver's share", "Bahagian pemandu"), value: money(total - values.reduce(0, +)))
+                    Button {
+                        let shares: [Share] = values.map { Share(name: "", cents: $0) }
+                        draft = Expense(merchant: tr("行程费用", "Trip cost", "Kos perjalanan"), cents: total, category: "交通", fuel: true, shares: shares)
+                    } label: {
+                        Label(tr("保存到账本", "Save to ledger", "Simpan ke lejar"), systemImage: "plus.circle")
+                    }.disabled(total <= 0)
                     ShareLink(item: tr("行程费用估算", "Trip cost estimate", "Anggaran kos perjalanan") + "\n" + money(total) + "\n" + values.enumerated().map { "\($0.offset + 1): \(money($0.element))" }.joined(separator: "\n")) { Label(tr("分享估算", "Share estimate", "Kongsi anggaran"), systemImage: "square.and.arrow.up") }
                 }
             } else { Text(tr("填入有效里程、油耗和油价后显示结果。", "Enter valid distance, fuel use and price to calculate.", "Isi jarak, penggunaan dan harga sah untuk mengira.")) }
-            Text(tr("只计算和分享估算，不新增消费或欠款。实际付款请在已有加油 / 行程账目中分账，避免重复计算。", "Calculates and shares an estimate only; creates no expense or debt. Split the existing fuel/trip payment to avoid double counting.", "Mengira dan berkongsi anggaran sahaja; tidak mencipta belanja atau hutang. Bahagikan bayaran minyak/perjalanan sedia ada untuk elak kiraan berganda.")).font(.footnote)
+            Text(tr("停车费和过路费留空按零计算。保存到账本会打开确认页面，可修改行程名称、日期、金额并填写朋友姓名。朋友人数为 0 时全部记为个人花费。若加油或行程付款已经入账，请编辑原账目分账，避免重复计费。", "Blank parking and tolls count as zero. Save to ledger opens a review where you can edit the trip, date, amount and friends' names. With zero friends, the full amount is personal spending. If the fuel or trip payment is already recorded, split the existing entry to avoid double counting.", "Parkir dan tol kosong dikira sifar. Simpan ke lejar membuka semakan nama perjalanan, tarikh, amaun dan nama rakan. Dengan sifar rakan, semua kos ialah belanja sendiri. Jika bayaran minyak atau perjalanan sudah direkod, bahagikan rekod sedia ada supaya tidak dikira dua kali.")).font(.footnote)
         }.navigationTitle(tr("油费计算器", "Fuel calculator", "Kalkulator minyak"))
+            .sheet(item: $draft) { entry in
+                ExpenseEditor(original: nil, initialDraft: entry, onSaved: { dismiss() })
+            }
     }
 }
 struct UpcomingView: View {
@@ -427,5 +449,126 @@ struct FriendSpendingView: View {
                 }
             }
         }.navigationTitle(name)
+    }
+}
+
+struct MerchantRulesView: View {
+    @EnvironmentObject var model: LedgerModel
+    var body: some View {
+        List {
+            Text(tr("修改已有账目的分类后，会记住该商户。以后 Apple Pay 入账优先使用此规则，历史记录不会批量改变。商户名称忽略大小写与多余空格。", "Changing an entry's category remembers its merchant for future Apple Pay entries. History is unchanged. Names ignore case and extra spaces.", "Mengubah kategori rekod mengingati peniaga untuk Apple Pay seterusnya. Sejarah tidak berubah. Nama mengabaikan huruf besar dan ruang tambahan.")).font(.footnote)
+            ForEach(model.ledger.merchantCategories.keys.sorted(), id: \.self) { merchant in
+                HStack {
+                    Text(merchant); Spacer()
+                    Text(categoryLabel(model.ledger.merchantCategories[merchant] ?? "其他"))
+                }.swipeActions { Button(role: .destructive) { model.change { $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("删除规则", "Delete rule", "Padam peraturan"), systemImage: "trash") } }
+            }
+        }.navigationTitle(tr("商户分类规则", "Merchant rules", "Peraturan peniaga"))
+    }
+}
+struct FriendStatementView: View {
+    @EnvironmentObject var model: LedgerModel
+    let key: String
+    @State private var month = Date()
+    @State private var all = false
+    private var statement: String { model.ledger.friendStatement(key: key, month: all ? nil : month) }
+    var body: some View {
+        List {
+            Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $all)
+            if !all { MonthPicker(month: $month) }
+            Text(statement).textSelection(.enabled)
+            ShareLink(item: statement) { Label(tr("分享账单", "Share statement", "Kongsi penyata"), systemImage: "square.and.arrow.up") }
+        }.navigationTitle(tr("朋友账单", "Friend statement", "Penyata rakan"))
+    }
+}
+struct RestorePreviewView: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let preview: RestorePreview
+    var onRestored: () -> Void
+    @State private var confirm = false
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(tr("待恢复的备份", "Backup to restore", "Sandaran untuk dipulihkan")) {
+                    LabeledContent(tr("备份时间", "Backup created", "Masa sandaran"), value: preview.ledger.backupCreatedAt.map { dateLabel($0, time: true) } ?? tr("旧备份未记录", "Not recorded in this older backup", "Tidak direkod dalam sandaran lama"))
+                    LabeledContent(tr("账目数量", "Entries", "Rekod"), value: String(preview.ledger.expenses.count))
+                    LabeledContent(tr("固定消费", "Recurring bills", "Bil berulang"), value: String(preview.ledger.recurring.count))
+                    LabeledContent(tr("分类规则", "Category rules", "Peraturan kategori"), value: String(preview.ledger.merchantCategories.count))
+                    if let first = preview.ledger.expenses.map(\.date).min(), let last = preview.ledger.expenses.map(\.date).max() {
+                        Text(dateLabel(first) + " — " + dateLabel(last))
+                    }
+                }
+                Section {
+                    LabeledContent(tr("当前账目数量", "Current entries", "Rekod semasa"), value: String(model.ledger.expenses.count))
+                    Text(tr("恢复会替换账本。当前数据另存为「上次导入前的数据」，不受 30 份备份轮换影响；下次恢复时会更新这份副本。通知设置属于本机设置，不随账本恢复。", "Restoring replaces the ledger. Current data is kept separately as data before last restore, outside the 30-snapshot rotation. The next restore replaces that recovery copy. Notification preferences remain on this device.", "Pemulihan menggantikan lejar. Data semasa disimpan berasingan daripada 30 sandaran sebagai data sebelum pemulihan terakhir. Pemulihan seterusnya menggantikan salinan itu. Pilihan notifikasi kekal pada peranti ini."))
+                    Button(tr("恢复这份备份", "Restore this backup", "Pulihkan sandaran ini"), role: .destructive) { confirm = true }
+                }
+            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan"))
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+                .confirmationDialog(tr("确认替换当前账本？", "Replace the current ledger?", "Ganti lejar semasa?"), isPresented: $confirm, titleVisibility: .visible) {
+                    Button(tr("确认恢复", "Restore", "Pulihkan"), role: .destructive) {
+                        do { try LocalStore.shared.restore(preview.data); model.reload(); onRestored(); dismiss() } catch { self.error = error.localizedDescription }
+                    }
+                }
+                .alert(tr("恢复失败", "Restore failed", "Pemulihan gagal"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        }
+    }
+}
+
+import UserNotifications
+import UIKit
+
+struct NotificationSettingsView: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var daily = UserDefaults.standard.bool(forKey: "dailyReminder")
+    @State private var results = UserDefaults.standard.bool(forKey: "automationNotifications")
+    @State private var time = Date()
+    @State private var busy = false
+    @State private var message: String?
+    @State private var permission = ""
+    var body: some View {
+        Form {
+            Section {
+                Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
+                if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
+                Toggle(tr("自动记账结果通知", "Automatic recording notifications", "Notifikasi rekod automatik"), isOn: $results)
+                Text(tr("结果通知包含金额、商户和分类；失败时显示原因。只有快捷指令实际调用月记后才能报告结果，无法检测未触发的付款。", "Result notifications include amount, merchant and category, or a failure reason. They require Shortcuts to call YueJi; payments that never trigger it cannot be detected.", "Notifikasi mengandungi amaun, peniaga dan kategori, atau sebab kegagalan. Pintasan mesti memanggil YueJi; bayaran yang tidak mencetuskannya tidak dapat dikesan.")).font(.footnote)
+                Button(tr("保存通知设置", "Save notification settings", "Simpan tetapan notifikasi")) {
+                    busy = true
+                    Task {
+                        do {
+                            let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+                            try await LedgerNotifications.configure(daily: daily, results: results, hour: c.hour ?? 21, minute: c.minute ?? 0)
+                            message = tr("设置已保存", "Settings saved", "Tetapan disimpan")
+                        } catch { message = error.localizedDescription }
+                        await refreshPermission(); busy = false
+                    }
+                }
+                if busy { ProgressView() }
+            }.disabled(busy)
+            Section {
+                Text(permission)
+                Button(tr("打开 iPhone 通知设置", "Open iPhone notification settings", "Buka tetapan notifikasi iPhone")) {
+                    if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
+                }
+                Text(tr("每日提醒每天一次，即使当天已有账目也会提醒。系统专注模式或通知摘要可能延后显示。首次开启请允许通知；修改 App 语言后重新保存可更新提醒语言。", "Reminds once daily even if entries already exist. Focus or Scheduled Summary may delay display. Allow notifications when enabling them. Save again after changing app language to update reminder text.", "Mengingatkan sekali sehari walaupun rekod sudah ada. Focus atau ringkasan berjadual mungkin melambatkan paparan. Benarkan notifikasi semasa mengaktifkan. Simpan semula selepas menukar bahasa aplikasi.")).font(.footnote)
+            }
+        }.navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi"))
+            .task {
+                let d = UserDefaults.standard
+                let minutes = d.object(forKey: "reminderMinutes") == nil ? 21 * 60 : d.integer(forKey: "reminderMinutes")
+                time = Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date()
+                await refreshPermission()
+            }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refreshPermission() } } }
+            .alert(tr("通知设置", "Notification settings", "Tetapan notifikasi"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK") {} } message: { Text(message ?? "") }
+    }
+    private func refreshPermission() async {
+        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        permission = status == .authorized || status == .provisional
+            ? tr("系统通知权限：已允许", "System permission: allowed", "Kebenaran sistem: dibenarkan")
+            : tr("系统通知权限：尚未允许", "System permission: not allowed yet", "Kebenaran sistem: belum dibenarkan")
     }
 }

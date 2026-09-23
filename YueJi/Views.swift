@@ -182,6 +182,8 @@ struct ExpenseEditor: View {
     @Environment(\.dismiss) private var dismiss
     let original: Expense?
     var initialDate: Date = Date()
+    var initialDraft: Expense? = nil
+    var onSaved: (() -> Void)? = nil
     @State private var name = ""
     @State private var amount = ""
     @State private var currency = "MYR"
@@ -257,7 +259,7 @@ struct ExpenseEditor: View {
     private func load() {
         guard !initialized else { return }; initialized = true
         if original == nil { date = initialDate }
-        if let e = original {
+        if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
@@ -267,7 +269,7 @@ struct ExpenseEditor: View {
     }
     private func commit() {
         do {
-            let n = try total(); var entry = original ?? Expense(merchant: "", cents: n)
+            let n = try total(); var entry = original ?? initialDraft ?? Expense(merchant: "", cents: n)
             entry.merchant = name.trimmingCharacters(in: .whitespacesAndNewlines); entry.cents = n; entry.date = date; entry.category = category; entry.fuel = fuel
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
@@ -289,13 +291,24 @@ struct ExpenseEditor: View {
                 guard entry.shares.map(\.id) == original.shares.map(\.id), zip(entry.shares, original.shares).allSatisfy({ pair in pair.0.cents == pair.1.cents && pair.0.name == pair.1.name }) else { throw reviewError("已有退款，请先撤销退款再修改分账。", "Undo refunds before changing splits.", "Batalkan bayaran balik sebelum mengubah pembahagian.") }
                 entry.shares = original.shares
             }
+            if initialDraft != nil && splitting {
+                let names = entry.shares.map { friendKey($0.name) }
+                guard !names.contains(""), Set(names).count == names.count else {
+                    throw reviewError("请填写每位朋友的姓名，且姓名不能重复。", "Enter a distinct name for each friend.", "Isi nama berbeza bagi setiap rakan.")
+                }
+            }
             try LocalStore.shared.change { ledger in
                 if let original {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid(tr("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")) }
                     ledger.expenses[i] = entry
-                } else { ledger.expenses.append(entry) }
+                    if original.category != entry.category {
+                        ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
+                    }
+                } else if !ledger.expenses.contains(where: { $0.id == entry.id }) {
+                    ledger.expenses.append(entry)
+                }
             }
-            model.reload(); dismiss()
+            model.reload(); dismiss(); onSaved?()
         } catch { self.error = error.localizedDescription }
     }
 }
@@ -305,16 +318,21 @@ struct FriendsView: View {
     @State private var target: RepayTarget?
     @State private var editing: Expense?
     @State private var undo: (String, String, String, Bool)?
+    @State private var settled = false
     var body: some View {
         NavigationStack {
             List {
                 NavigationLink(tr("按朋友汇总 / 一次还多笔", "Balances / batch repayment", "Baki / bayaran balik kelompok")) { FriendSummaryView() }
                 NavigationLink(tr("油费计算器", "Fuel calculator", "Kalkulator minyak")) { FuelCalculatorView() }
-                let entries = model.ledger.expenses.filter { !$0.shares.isEmpty }.sorted { $0.date > $1.date }
+                Picker(tr("显示", "Show", "Papar"), selection: $settled) {
+                    Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
+                    Text(tr("已结清", "Settled", "Selesai")).tag(true)
+                }.pickerStyle(.segmented)
+                let entries = model.ledger.expenses.filter { e in e.shares.contains { ($0.owed == 0) == settled } }.sorted { $0.date > $1.date }
                 if entries.isEmpty { ContentUnavailableView(tr("暂无分账", "No shared expenses", "Tiada belanja dikongsi"), systemImage: "person.2", description: Text(tr("在账本中编辑一笔付款，开启朋友分账。", "Edit a payment in Ledger and enable splitting.", "Edit bayaran dalam Lejar dan aktifkan pembahagian."))) }
                 ForEach(entries) { e in
                     Section {
-                        ForEach(e.shares) { s in
+                        ForEach(e.shares.filter { ($0.owed == 0) == settled }) { s in
                             VStack(alignment: .leading, spacing: 8) {
                                 HStack { Text(s.name).font(.headline); Spacer(); Text(s.owed == 0 ? tr("已结清", "Settled", "Selesai") : money(s.owed)) }
                                 Text(tr("应付 / 已还：", "Share / repaid: ", "Bahagian / dibayar: ") + money(s.cents) + " / " + money(s.repaid)).font(.caption)
@@ -373,7 +391,7 @@ struct SettingsView: View {
     @State private var exporting = false
     @State private var importing = false
     @State private var document: LedgerDocument?
-    @State private var restoreData: Data?
+    @State private var restorePreview: RestorePreview?
     @State private var backups: [URL] = []
     var body: some View {
         NavigationStack {
@@ -388,6 +406,8 @@ struct SettingsView: View {
                         Text(tr("浅色模式", "Light mode", "Mod cerah")).tag("light")
                         Text(tr("深色模式", "Dark mode", "Mod gelap")).tag("dark")
                     }
+                    NavigationLink(tr("通知与每日提醒", "Notifications & daily reminder", "Notifikasi & peringatan harian")) { NotificationSettingsView() }
+                    NavigationLink(tr("商户分类规则", "Merchant category rules", "Peraturan kategori peniaga")) { MerchantRulesView() }
                     NavigationLink(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")) { RatesView() }
                     Text(tr("统计本位币：MYR", "Accounting currency: MYR", "Mata wang perakaunan: MYR")).font(.caption)
                 }
@@ -399,9 +419,14 @@ struct SettingsView: View {
                 }
                 Section(tr("数据与备份", "Data & backups", "Data & sandaran")) {
                     Text(tr("每次修改前保留旧版，最多 30 份本地备份。卸载会删除本地数据，请定期导出到文件或 iCloud Drive。", "Keeps up to 30 local snapshots before changes. Uninstalling deletes local data. Export to Files or iCloud Drive regularly.", "Menyimpan sehingga 30 sandaran tempatan sebelum perubahan. Nyahpasang memadam data tempatan. Eksport ke Files atau iCloud Drive secara berkala.")).font(.footnote)
-                    Button(tr("导出完整备份", "Export full backup", "Eksport sandaran penuh")) { do { document = LedgerDocument(data: try LocalStore.encode(LocalStore.shared.read())); exporting = true } catch { model.error = error.localizedDescription } }
+                    Button(tr("导出完整备份", "Export full backup", "Eksport sandaran penuh")) { do { document = LedgerDocument(data: try LocalStore.exportData(LocalStore.shared.read())); exporting = true } catch { model.error = error.localizedDescription } }
                     Button(tr("恢复 JSON 备份", "Restore JSON backup", "Pulihkan sandaran JSON")) { importing = true }
-                    ForEach(backups, id: \.self) { url in Button { do { restoreData = try Data(contentsOf: url) } catch { model.error = error.localizedDescription } } label: {
+                    if FileManager.default.fileExists(atPath: LocalStore.shared.recoveryFile.path) {
+                        Button(tr("恢复上次导入前的数据", "Recover data before last restore", "Pulihkan data sebelum pemulihan terakhir")) {
+                            do { restorePreview = try RestorePreview(data: Data(contentsOf: LocalStore.shared.recoveryFile)) } catch { model.error = error.localizedDescription }
+                        }
+                    }
+                    ForEach(backups, id: \.self) { url in Button { do { restorePreview = try RestorePreview(data: Data(contentsOf: url)) } catch { model.error = error.localizedDescription } } label: {
                         Text(tr("恢复：", "Restore: ", "Pulihkan: ") + backupTitle(url))
                     } }
                 }
@@ -412,10 +437,10 @@ struct SettingsView: View {
             }.navigationTitle(tr("设置", "Settings", "Tetapan")).onAppear { loadBackups() }
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                    do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); _ = try LocalStore.decode(data); restoreData = data } catch { model.error = error.localizedDescription }
+                    do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }
                 }
-                .confirmationDialog(tr("替换账本？当前数据会先备份。", "Replace ledger? Current data will be backed up.", "Ganti lejar? Data semasa akan disandarkan."), isPresented: Binding(get: { restoreData != nil }, set: { if !$0 { restoreData = nil } }), titleVisibility: .visible) {
-                    Button(tr("确认恢复", "Restore", "Pulihkan"), role: .destructive) { if let data = restoreData { do { try LocalStore.shared.restore(data); model.reload(); loadBackups() } catch { model.error = error.localizedDescription } }; restoreData = nil }
+                .sheet(item: $restorePreview) { preview in
+                    RestorePreviewView(preview: preview) { loadBackups() }
                 }
         }
     }

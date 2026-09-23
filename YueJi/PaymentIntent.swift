@@ -12,16 +12,23 @@ struct RecordApplePayIntent: AppIntent {
     @Parameter(title: "交易标识（可选）") var transactionID: String?
     func perform() async throws -> some IntentResult & ProvidesDialog {
         do {
-            let added = try LocalStore.shared.change { ledger in
+            let result = try LocalStore.shared.change { ledger -> (Bool, String) in
                 let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID)
                 ledger.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : "duplicate")
-                return saved
+                let entry = saved ? ledger.expenses.last : nil
+                let detail = entry.map { money($0.cents) + " · " + $0.merchant + " · " + categoryLabel($0.category) } ?? ""
+                return (saved, detail)
             }
-            if added { return .result(dialog: "已保存到月记。") }
+            if result.0 {
+                await LedgerNotifications.result(title: tr("已记账", "Recorded", "Direkod"), body: result.1)
+                return .result(dialog: "已保存到月记。")
+            }
+            await LedgerNotifications.result(title: tr("未重复记账", "Duplicate skipped", "Pendua dilangkau"), body: tr("这笔付款已存在。", "This payment is already recorded.", "Bayaran ini sudah direkod."))
             return .result(dialog: "这笔付款已记录，没有重复入账。")
         } catch {
             let failure = error
             try? LocalStore.shared.change { $0.logAutomation(source: "Apple Pay", outcome: "failed", detail: failure.localizedDescription) }
+            await LedgerNotifications.result(title: tr("自动记账失败", "Recording failed", "Rekod gagal"), body: failure.localizedDescription)
             throw failure
         }
     }

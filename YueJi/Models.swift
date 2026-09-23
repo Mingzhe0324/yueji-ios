@@ -64,11 +64,13 @@ struct Ledger: Codable {
     var postedRecurring: Set<String> = []
     var dismissedDuplicates: Set<String> = []
     var automationEvents: [AutomationEvent] = []
+    var merchantCategories: [String: String] = [:]
+    var backupCreatedAt: Date? = nil
     init(version: Int = 3, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -82,8 +84,14 @@ struct Ledger: Codable {
         postedRecurring = try c.decodeIfPresent(Set<String>.self, forKey: .postedRecurring) ?? []
         dismissedDuplicates = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedDuplicates) ?? []
         automationEvents = try c.decodeIfPresent([AutomationEvent].self, forKey: .automationEvents) ?? []
+        merchantCategories = try c.decodeIfPresent([String: String].self, forKey: .merchantCategories) ?? [:]
+        backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
     }
     func validated() throws -> Ledger {
+        guard merchantCategories.count <= 50_000,
+              merchantCategories.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 200 && categories.contains($0.value) }) else {
+            throw LedgerError.invalid("付款或分账数据无效。")
+        }
         guard version == 3, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
@@ -124,7 +132,7 @@ struct Ledger: Codable {
         guard !seenEvents.contains(key) else { return false }
         let fx = try foreignAmount(minor: minor, code: code)
         let value = try fx?.myrCents() ?? minor
-        expenses.append(Expense(merchant: name, cents: value, date: date, category: guessCategory(name), source: "Apple Pay", foreign: fx))
+        expenses.append(Expense(merchant: name, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name), source: "Apple Pay", foreign: fx))
         seenEvents.insert(key)
         return true
     }

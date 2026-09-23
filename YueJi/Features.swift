@@ -324,3 +324,77 @@ extension Ledger {
         return result
     }
 }
+
+struct RestorePreview: Identifiable {
+    let id = UUID()
+    let data: Data
+    let ledger: Ledger
+    init(data: Data) throws { self.ledger = try LocalStore.decode(data); self.data = data }
+}
+
+extension Ledger {
+    func friendStatement(key: String, month: Date?) -> String {
+        let name = friendBalances.first { $0.id == key }?.name ?? key
+        let period = month.map(monthKey) ?? tr("全部月份", "All months", "Semua bulan")
+        var lines = [tr("月记 · 朋友账单", "YueJi · Friend statement", "YueJi · Penyata rakan"), name, period, "MYR"]
+        var net = 0, paid = 0, returned = 0, owed = 0, payable = 0
+        let entries = expenses.filter { month == nil || monthKey($0.date) == monthKey(month!) }.sorted { $0.date < $1.date }
+        for e in entries {
+            for s in e.shares where friendKey(s.name) == key {
+                net += s.cents - s.refunded; paid += s.repaid; returned += s.returned
+                owed += max(0, s.owed); payable += max(0, -s.owed)
+                lines.append("\n\(dateLabel(e.date)) · \(e.merchant) · \(categoryLabel(e.category))")
+                lines.append(tr("份额 / 退款：", "Share / refund: ", "Bahagian / pulangan: ") + money(s.cents) + " / " + money(s.refunded))
+                lines.append(tr("已还 / 已退回：", "Repaid / returned: ", "Dibayar / dipulangkan: ") + money(s.repaid) + " / " + money(s.returned))
+                for r in s.repayments { lines.append("  \(dateLabel(r.date)) · " + tr("还款 ", "Repayment ", "Bayaran ") + money(r.cents)) }
+                for r in s.returns ?? [] { lines.append("  \(dateLabel(r.date)) · " + tr("返款 ", "Returned ", "Dipulangkan ") + money(r.cents)) }
+            }
+        }
+        lines.append("\n" + tr("净消费：", "Net spending: ", "Belanja bersih: ") + money(net))
+        lines.append(tr("已还：", "Repaid: ", "Dibayar: ") + money(paid))
+        lines.append(tr("已退回：", "Returned: ", "Dipulangkan: ") + money(returned))
+        lines.append(tr("朋友待还：", "Still owed by friend: ", "Baki hutang rakan: ") + money(owed))
+        lines.append(tr("我需退给朋友：", "I need to return: ", "Saya perlu pulangkan: ") + money(payable))
+        lines.append(tr("按消费月份筛选，包含这些消费截至目前的所有还款和返款。", "Filtered by spending month; includes all repayments and returns for these entries to date.", "Ditapis mengikut bulan belanja; termasuk semua bayaran dan pulangan rekod ini setakat kini."))
+        return lines.joined(separator: "\n")
+    }
+}
+
+import UserNotifications
+
+final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
+    static let shared = LedgerNotifications()
+    static let dailyID = "yueji.daily-reminder"
+    func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .sound, .list])
+    }
+    static func configure(daily: Bool, results: Bool, hour: Int, minute: Int) async throws {
+        let center = UNUserNotificationCenter.current()
+        if daily || results {
+            guard try await center.requestAuthorization(options: [.alert, .sound]) else {
+                throw reviewError("通知未获允许，请到 iPhone 设置开启月记通知。", "Notifications are not allowed. Enable YueJi notifications in iPhone Settings.", "Notifikasi tidak dibenarkan. Aktifkan notifikasi YueJi dalam Tetapan iPhone.")
+            }
+        }
+        if daily {
+            let content = UNMutableNotificationContent()
+            content.title = tr("今天的消费记好了吗？", "Have you recorded today's spending?", "Sudah rekod belanja hari ini?")
+            content.body = tr("打开月记，补上今天的消费，也检查自动记账有没有遗漏。", "Open YueJi to record today's spending and check for missing automatic entries.", "Buka YueJi untuk merekod belanja hari ini dan semak rekod automatik yang terlepas.")
+            content.sound = .default
+            var components = DateComponents(); components.hour = hour; components.minute = minute
+            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+            try await center.add(UNNotificationRequest(identifier: dailyID, content: content, trigger: trigger))
+        } else { center.removePendingNotificationRequests(withIdentifiers: [dailyID]) }
+        let defaults = UserDefaults.standard
+        defaults.set(daily, forKey: "dailyReminder"); defaults.set(results, forKey: "automationNotifications")
+        defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
+    }
+    static func result(title: String, body: String) async {
+        guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+        let content = UNMutableNotificationContent(); content.title = title; content.body = body; content.sound = .default
+        // Notification failure must never roll back or retry a successfully recorded payment.
+        try? await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
+    }
+}

@@ -1,5 +1,6 @@
 import SwiftUI
 import AppIntents
+import UserNotifications
 
 @main
 struct YueJiApp: App {
@@ -7,7 +8,7 @@ struct YueJiApp: App {
     @AppStorage("appLanguage") private var language = "system"
     @AppStorage("appAppearance") private var appearance = "system"
     private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
-    init() { YueJiShortcuts.updateAppShortcutParameters() }
+    init() { UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; YueJiShortcuts.updateAppShortcutParameters() }
     var body: some Scene { WindowGroup { MainView().environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
