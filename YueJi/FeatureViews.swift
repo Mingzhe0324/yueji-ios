@@ -184,10 +184,7 @@ struct RefundsView: View {
                     TextField(tr("实际收到的退款 · MYR", "Refund received · MYR", "Bayaran balik diterima · MYR"), text: $amount).keyboardType(.decimalPad)
                     DatePicker(tr("退款日期", "Refund date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                     Button(tr("填入剩余全额", "Fill remaining amount", "Isi baki penuh")) { amount = Currency.input(e.cents - e.refunded, "MYR") }.disabled(e.cents == e.refunded)
-                    if let n = try? toCents(amount), let parts = try? allocateRefund(n, capacities: [e.personal] + e.shares.map({ $0.cents - $0.refunded })) {
-                        Text(tr("减少我的消费：", "Reduces my spending by: ", "Mengurangkan belanja saya: ") + money(parts[0]))
-                        ForEach(Array(e.shares.enumerated()), id: \.element.id) { index, share in Text(share.name + ": " + money(parts[index + 1])).font(.caption) }
-                    }
+                    RefundAllocationPreview(expense: e, amount: amount)
                     Button(tr("保存退款", "Save refund", "Simpan bayaran balik")) {
                         do { let n = try toCents(amount); try LocalStore.shared.change { try $0.addRefund(expenseID: expenseID, cents: n, date: date) }; amount = ""; model.reload() } catch { self.error = error.localizedDescription }
                     }.disabled(e.cents == e.refunded)
@@ -205,6 +202,41 @@ struct RefundsView: View {
             }
     }
 }
+private struct RefundAllocationPreview: View {
+    let expense: Expense
+    let amount: String
+
+    private struct AllocationRow: Identifiable {
+        let id: String
+        let label: String
+    }
+
+    private var rows: [AllocationRow] {
+        guard let cents = try? toCents(amount) else { return [] }
+        let friendCapacities: [Int] = expense.shares.map { $0.cents - $0.refunded }
+        let capacities: [Int] = [expense.personal] + friendCapacities
+        guard let parts = try? allocateRefund(cents, capacities: capacities) else { return [] }
+        let ownerTitle: String = tr("减少我的消费：", "Reduces my spending by: ", "Mengurangkan belanja saya: ")
+        var result = [AllocationRow(id: "owner", label: ownerTitle + money(parts[0]))]
+        for (index, share) in expense.shares.enumerated() {
+            let formattedAmount: String = money(parts[index + 1])
+            let label: String = "\(share.name): \(formattedAmount)"
+            result.append(AllocationRow(id: "friend-" + share.id, label: label))
+        }
+        return result
+    }
+
+    var body: some View {
+        ForEach(rows) { row in
+            if row.id == "owner" {
+                Text(row.label)
+            } else {
+                Text(row.label).font(.caption)
+            }
+        }
+    }
+}
+
 struct FriendSummaryView: View {
     @EnvironmentObject var model: LedgerModel
     var body: some View {
@@ -285,7 +317,11 @@ struct FuelCalculatorView: View {
                 let values = equalShares(total: total, count: friends, includeMe: includeMe)
                 Section(tr("估算结果", "Estimated cost", "Kos anggaran")) {
                     LabeledContent(tr("合计", "Total", "Jumlah"), value: money(total))
-                    ForEach(Array(values.enumerated()), id: \.offset) { i, cents in Text(tr("朋友 ", "Friend ", "Rakan ") + String(i + 1) + ": " + money(cents)) }
+                    ForEach(values.indices, id: \.self) { index in
+                        let title: String = tr("朋友 ", "Friend ", "Rakan ")
+                        let formattedAmount: String = money(values[index])
+                        Text("\(title)\(index + 1): \(formattedAmount)")
+                    }
                     LabeledContent(tr("司机份额", "Driver's share", "Bahagian pemandu"), value: money(total - values.reduce(0, +)))
                     ShareLink(item: tr("行程费用估算", "Trip cost estimate", "Anggaran kos perjalanan") + "\n" + money(total) + "\n" + values.enumerated().map { "\($0.offset + 1): \(money($0.element))" }.joined(separator: "\n")) { Label(tr("分享估算", "Share estimate", "Kongsi anggaran"), systemImage: "square.and.arrow.up") }
                 }
