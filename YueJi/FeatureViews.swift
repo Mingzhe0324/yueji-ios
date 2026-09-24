@@ -40,7 +40,7 @@ struct RatesView: View {
                 }
                 Text(tr("历史账目保留原汇率，不会重算。固定消费补记时采用当前保存的汇率，请检查较早月份的补记。", "Existing entries keep their rates. Recurring catch-up uses the currently saved rate; review entries for older periods.", "Rekod sedia ada mengekalkan kadarnya. Rekod berulang tertunggak menggunakan kadar simpanan semasa; semak tempoh lama.")).font(.footnote)
             }
-        }.navigationTitle(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")).onAppear { load() }
+        }.navigationTitle(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")).navigationBarTitleDisplayMode(.inline).onAppear { load() }
             .alert(tr("汇率", "Exchange rate", "Kadar pertukaran"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
     private func load() { quote = model.ledger.rates[currency]; rate = quote?.text ?? "" }
@@ -53,6 +53,7 @@ struct RatesView: View {
     }
 }
 struct RecurringView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
     @State private var adding = false
     @State private var editing: RecurringExpense?
@@ -81,7 +82,7 @@ struct RecurringView: View {
                     } description: {
                         Text(tr("设置金额和周期，每次到期更好记。", "Set an amount and a repeat schedule.", "Tetapkan amaun dan jadual berulang."))
                     } actions: {
-                        Button(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) { adding = true }.buttonStyle(.borderedProminent)
+                        Button(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) { adding = true }.yuejiPrimaryButton()
                     }.listRowBackground(Color.clear)
                 }
                 ForEach(rules) { rule in
@@ -89,7 +90,7 @@ struct RecurringView: View {
                         RecurringScheduleRow(rule: rule, edit: { editing = rule }, delete: { deleting = rule })
                     }
                 }
-            }.listStyle(.insetGrouped).navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang"))
+            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: paused).navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang"))
                 .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(isPresented: $adding) { RecurringEditor(original: nil) }
                 .sheet(item: $editing) { RecurringEditor(original: $0) }
@@ -176,7 +177,7 @@ struct RecurringEditor: View {
                 DisclosureGroup(tr("周期与修改说明", "Schedule details", "Butiran jadual")) {
                 Text(tr("编辑金额只影响未来未入账项目。更改周期或首次日期请暂停旧项目，再新增。每月 31 日会在短月份落到月底。", "Amount edits affect unrecorded occurrences only. To change cycle or start date, pause this schedule and create another. The 31st uses month-end in shorter months.", "Perubahan amaun hanya untuk tempoh belum direkod. Untuk ubah kitaran atau tarikh mula, jeda jadual ini dan cipta baharu. Tarikh 31 menggunakan hujung bulan bagi bulan pendek.")).font(.footnote)
                 }
-            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang"))
+            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() } } }
                 .onAppear { if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -217,7 +218,7 @@ struct DuplicateReviewView: View {
                 }
             }
             Button(tr("重新检查已忽略的项目", "Review dismissed pairs again", "Semak semula pasangan diabaikan")) { model.change { $0.dismissedDuplicates = [] } }
-        }.navigationTitle(tr("重复账目检查", "Duplicate review", "Semakan pendua"))
+        }.navigationTitle(tr("重复账目检查", "Duplicate review", "Semakan pendua")).navigationBarTitleDisplayMode(.inline)
             .confirmationDialog(tr("删除此账目及其分账、还款和退款？无法自动合并这些资料。", "Delete this entry and its splits, repayments and refunds? These cannot be merged automatically.", "Padam rekod serta pembahagian dan bayaran baliknya? Data ini tidak dapat digabungkan automatik."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                 Button(tr("确认删除", "Delete", "Padam"), role: .destructive) { if let e = deleting { model.change { $0.expenses.removeAll { $0.id == e.id } } }; deleting = nil }
             }
@@ -274,7 +275,7 @@ struct RefundsView: View {
                     }
                 }
             } else { Text(tr("记录已删除", "Entry was deleted", "Rekod telah dipadam")) }
-        }.navigationTitle(tr("退款记录", "Refunds", "Bayaran balik"))
+        }.navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
             .alert(tr("退款", "Refund", "Bayaran balik"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
             .confirmationDialog(tr("撤销退款？若已退钱给朋友，请先核对返款记录。", "Undo refund? Check any money already returned to friends first.", "Batalkan bayaran balik? Semak wang yang sudah dipulangkan kepada rakan dahulu."), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) { if let r = undo { model.change { try $0.removeRefund(expenseID: expenseID, refundID: r.id) } }; undo = nil }
@@ -333,7 +334,7 @@ struct FriendSummaryView: View {
                     FriendBalanceRow(friend: friend)
                 }
             }
-        }.navigationTitle(tr("朋友欠款汇总", "Friend balances", "Baki rakan"))
+        }.navigationTitle(tr("朋友欠款汇总", "Friend balances", "Baki rakan")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct FriendDetailView: View {
@@ -372,7 +373,7 @@ struct FriendDetailView: View {
                     }
                 }
             }
-        }.navigationTitle(tr("欠款明细", "Balance details", "Butiran baki"))
+        }.navigationTitle(tr("欠款明细", "Balance details", "Butiran baki")).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $target) { RepaymentView(target: $0) }
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
@@ -457,7 +458,7 @@ struct FuelCalculatorView: View {
                 }
             } else { Text(tr("填入有效里程、油耗和油价后显示结果。", "Enter valid distance, fuel use and price to calculate.", "Isi jarak, penggunaan dan harga sah untuk mengira.")) }
             Text(tr("停车费和过路费留空按零计算。保存到账本会打开确认页面，可修改行程名称、日期、金额并填写朋友姓名。朋友人数为 0 时全部记为个人花费。若加油或行程付款已经入账，请编辑原账目分账，避免重复计费。", "Blank parking and tolls count as zero. Save to ledger opens a review where you can edit the trip, date, amount and friends' names. With zero friends, the full amount is personal spending. If the fuel or trip payment is already recorded, split the existing entry to avoid double counting.", "Parkir dan tol kosong dikira sifar. Simpan ke lejar membuka semakan nama perjalanan, tarikh, amaun dan nama rakan. Dengan sifar rakan, semua kos ialah belanja sendiri. Jika bayaran minyak atau perjalanan sudah direkod, bahagikan rekod sedia ada supaya tidak dikira dua kali.")).font(.footnote)
-        }.navigationTitle(tr("油费计算器", "Fuel calculator", "Kalkulator minyak"))
+        }.navigationTitle(tr("油费计算器", "Fuel calculator", "Kalkulator minyak")).navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 guard !initialized else { return }; initialized = true
                 if let defaults = model.ledger.tripDefaults {
@@ -490,7 +491,7 @@ struct UpcomingView: View {
                 }
             }
             Text(tr("仅预览今天及以后、未入账且未暂停的固定项目；不会计入实际花费。逾期未记项目请在固定页检查。", "Preview of active, unrecorded schedules from today onward; excluded from actual spending. Review overdue entries in Recurring.", "Pratonton jadual aktif belum direkod mulai hari ini; tidak termasuk belanja sebenar. Semak rekod tertunggak dalam Berulang.")).font(.footnote)
-        }.navigationTitle(tr("固定消费预览", "Upcoming bills", "Bil akan datang")).onAppear { month = initialMonth }
+        }.navigationTitle(tr("固定消费预览", "Upcoming bills", "Bil akan datang")).navigationBarTitleDisplayMode(.inline).onAppear { month = initialMonth }
     }
 }
 struct AutomationStatusView: View {
@@ -519,7 +520,7 @@ struct AutomationStatusView: View {
                     if !event.detail.isEmpty { Text(event.detail).font(.footnote).foregroundStyle(event.outcome == "failed" ? Color.red : Color.secondary) }
                 }
             }
-        }.navigationTitle(tr("自动记账状态", "Automation status", "Status automasi"))
+        }.navigationTitle(tr("自动记账状态", "Automation status", "Status automasi")).navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -580,7 +581,7 @@ struct MerchantRulesView: View {
                     Text(categoryLabel(model.ledger.merchantCategories[merchant] ?? "其他"))
                 }.swipeActions { Button(role: .destructive) { model.change { $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("删除规则", "Delete rule", "Padam peraturan"), systemImage: "trash") } }
             }
-        }.navigationTitle(tr("商户分类规则", "Merchant rules", "Peraturan peniaga"))
+        }.navigationTitle(tr("商户分类规则", "Merchant rules", "Peraturan peniaga")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct FriendStatementView: View {
@@ -595,7 +596,7 @@ struct FriendStatementView: View {
             if !all { MonthPicker(month: $month) }
             Text(statement).textSelection(.enabled)
             ShareLink(item: statement) { Label(tr("分享账单", "Share statement", "Kongsi penyata"), systemImage: "square.and.arrow.up") }
-        }.navigationTitle(tr("朋友账单", "Friend statement", "Penyata rakan"))
+        }.navigationTitle(tr("朋友账单", "Friend statement", "Penyata rakan")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct RestorePreviewView: View {
@@ -623,7 +624,7 @@ struct RestorePreviewView: View {
                     Text(tr("恢复会替换账本。当前数据另存为「上次导入前的数据」，不受 30 份备份轮换影响；下次恢复时会更新这份副本。通知设置属于本机设置，不随账本恢复。", "Restoring replaces the ledger. Current data is kept separately as data before last restore, outside the 30-snapshot rotation. The next restore replaces that recovery copy. Notification preferences remain on this device.", "Pemulihan menggantikan lejar. Data semasa disimpan berasingan daripada 30 sandaran sebagai data sebelum pemulihan terakhir. Pemulihan seterusnya menggantikan salinan itu. Pilihan notifikasi kekal pada peranti ini."))
                     Button(tr("恢复这份备份", "Restore this backup", "Pulihkan sandaran ini"), role: .destructive) { confirm = true }
                 }
-            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan"))
+            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
                 .confirmationDialog(tr("确认替换当前账本？", "Replace the current ledger?", "Ganti lejar semasa?"), isPresented: $confirm, titleVisibility: .visible) {
                     Button(tr("确认恢复", "Restore", "Pulihkan"), role: .destructive) {
@@ -642,7 +643,8 @@ struct NotificationSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var daily = UserDefaults.standard.bool(forKey: "dailyReminder")
     @State private var results = UserDefaults.standard.bool(forKey: "automationNotifications")
-    @State private var budgetAlerts = UserDefaults.standard.bool(forKey: "budgetAlerts")
+    @AppStorage("budgetAlerts") private var budgetAlerts = false
+    @AppStorage("budgetAlertPercent") private var budgetPercent = 100
     @AppStorage("hideNotificationDetails") private var hideDetails = false
     @State private var time = Date()
     @State private var busy = false
@@ -652,13 +654,23 @@ struct NotificationSettingsView: View {
         Form {
             Section {
                 Toggle(tr("达到月度预算时提醒", "Alert when monthly budget is reached", "Maklum apabila bajet bulanan dicapai"), isOn: $budgetAlerts)
-                Text(tr("按本月个人实际消费计算，达到预算后每月最多提醒一次。需先在概览设置预算；开启时若已超额也会提醒。历史月份不提醒。", "Based on this month's personal spending, at most once per month at 100% of budget. Set a budget in Overview first. Enabling it while over budget also alerts. Past months are excluded.", "Berdasarkan belanja peribadi bulan ini, sekali sebulan apabila mencapai bajet. Tetapkan bajet dalam Ringkasan. Jika sudah melebihi bajet semasa diaktifkan, peringatan dihantar. Bulan lalu dikecualikan.")).font(.footnote).foregroundStyle(.secondary)
+                if budgetAlerts {
+                    Stepper(value: $budgetPercent, in: 1...200) {
+                        LabeledContent(tr("提醒比例", "Alert at", "Ingatkan pada"), value: "\(budgetPercent)%")
+                    }
+                    Text(tr("例如预算 RM1,000，设为 80% 时，个人消费达到 RM800 就提醒。", "For a RM1,000 budget, 80% alerts at RM800 of personal spending.", "Bagi bajet RM1,000, 80% mengingatkan pada belanja peribadi RM800."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Text(tr("预算开关和比例即时保存。每月最多提醒一次，修改比例不重置本月提醒；仅计算本月个人净消费。", "Budget toggle and percentage save immediately. One alert per month; changing the percentage does not reset it. Uses this month's net personal spending.", "Suis dan peratus bajet disimpan serta-merta. Sekali sebulan; perubahan peratus tidak menetapkan semula peringatan. Menggunakan belanja peribadi bersih bulan ini."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section(tr("其他通知", "Other notifications", "Notifikasi lain")) {
                 Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
                 if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
                 Toggle(tr("自动记账结果通知", "Automatic recording notifications", "Notifikasi rekod automatik"), isOn: $results)
                 Toggle(tr("隐藏通知金额和姓名", "Hide amounts and names", "Sembunyikan amaun dan nama"), isOn: $hideDetails)
                 Text(tr("结果通知包含金额、商户和分类；失败时显示原因。只有快捷指令实际调用月记后才能报告结果，无法检测未触发的付款。", "Result notifications include amount, merchant and category, or a failure reason. They require Shortcuts to call YueJi; payments that never trigger it cannot be detected.", "Notifikasi mengandungi amaun, peniaga dan kategori, atau sebab kegagalan. Pintasan mesti memanggil YueJi; bayaran yang tidak mencetuskannya tidak dapat dikesan.")).font(.footnote)
-                Button(tr("保存通知设置", "Save notification settings", "Simpan tetapan notifikasi")) {
+                Button(tr("保存其他通知设置", "Save other notification settings", "Simpan tetapan notifikasi lain")) {
                     busy = true
                     Task {
                         do {
@@ -679,15 +691,31 @@ struct NotificationSettingsView: View {
                 }
                 Text(tr("每日提醒每天一次，即使当天已有账目也会提醒。系统专注模式或通知摘要可能延后显示。首次开启请允许通知；修改 App 语言后重新保存可更新提醒语言。", "Reminds once daily even if entries already exist. Focus or Scheduled Summary may delay display. Allow notifications when enabling them. Save again after changing app language to update reminder text.", "Mengingatkan sekali sehari walaupun rekod sudah ada. Focus atau ringkasan berjadual mungkin melambatkan paparan. Benarkan notifikasi semasa mengaktifkan. Simpan semula selepas menukar bahasa aplikasi.")).font(.footnote)
             }
-        }.navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi"))
+        }.navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi")).navigationBarTitleDisplayMode(.inline)
             .task {
                 let d = UserDefaults.standard
                 let minutes = d.object(forKey: "reminderMinutes") == nil ? 21 * 60 : d.integer(forKey: "reminderMinutes")
                 time = Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date()
                 await refreshPermission()
             }
+            .onChange(of: budgetAlerts) { _, enabled in
+                if enabled { Task { await enableBudgetAlerts() } }
+            }
+            .onChange(of: budgetPercent) { _, _ in
+                Task { await BudgetAlertService.shared.check() }
+            }
             .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refreshPermission() } } }
             .alert(tr("通知设置", "Notification settings", "Tetapan notifikasi"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK") {} } message: { Text(message ?? "") }
+    }
+    private func enableBudgetAlerts() async {
+        do {
+            let allowed = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound])
+            if !allowed {
+                message = tr("偏好已保存，但系统通知未获允许。请在 iPhone 设置开启月记通知。", "Preference saved, but system notifications are blocked. Enable YueJi notifications in iPhone Settings.", "Pilihan disimpan tetapi notifikasi sistem disekat. Aktifkan notifikasi YueJi dalam Tetapan iPhone.")
+            }
+            await refreshPermission()
+            await BudgetAlertService.shared.check()
+        } catch { message = error.localizedDescription }
     }
     private func refreshPermission() async {
         let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
@@ -747,7 +775,7 @@ struct CategoriesView: View {
                 Button(tr("新增分类", "Add category", "Tambah kategori")) { editing = CustomCategory(name: "") }
             }
             Text(tr("改名会同步已有账目、固定消费和商户规则；正在使用的分类不能直接删除。自定义名称保留你输入的语言。", "Renaming updates entries, recurring bills and merchant rules. Categories in use cannot be deleted. Custom names retain the language you enter.", "Penamaan semula mengemas kini rekod, bil berulang dan peraturan peniaga. Kategori yang digunakan tidak boleh dipadam. Nama sendiri kekal dalam bahasa yang diisi.")).font(.footnote)
-        }.navigationTitle(tr("管理分类", "Manage categories", "Urus kategori"))
+        }.navigationTitle(tr("管理分类", "Manage categories", "Urus kategori")).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $editing) { CategoryEditor(initial: $0) }
     }
 }
@@ -770,7 +798,7 @@ struct CategoryEditor: View {
                     ForEach(CustomCategory.colors, id: \.self) { value in Label(categoryColorLabel(value), systemImage: "circle.fill").foregroundStyle(categoryColor(value)).tag(value) }
                 }
                 Label(name.isEmpty ? tr("分类预览", "Preview", "Pratonton") : name, systemImage: icon).foregroundStyle(categoryColor(color)).font(.title2).padding()
-            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri"))
+            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
                 .onAppear { name = initial.name; icon = initial.icon; color = initial.color }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
@@ -805,7 +833,7 @@ struct SpendingComparisonView: View {
                     if current > 0 || prior > 0 { ComparisonRow(name: categoryLabel(category), current: current, previous: prior) }
                 }
             }
-        }.navigationTitle(tr("月度对比", "Monthly comparison", "Perbandingan bulanan"))
+        }.navigationTitle(tr("月度对比", "Monthly comparison", "Perbandingan bulanan")).navigationBarTitleDisplayMode(.inline)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: month)
     }
 }
@@ -861,7 +889,7 @@ struct LedgerFilterEditor: View {
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
                 Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户可在账本搜索框输入。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants in the ledger search field.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dalam carian lejar.")).font(.footnote)
                 Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
-            }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod"))
+            }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna")) { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } } }
@@ -916,7 +944,7 @@ struct CSVExportView: View {
                 } label: { Label(tr("导出 CSV 文件", "Export CSV file", "Eksport fail CSV"), systemImage: "square.and.arrow.up") }
             }
             Text(tr("可用 Excel 打开。CSV 用于查看和整理，不是可恢复的完整备份；完整备份请使用 JSON 导出。", "Opens in Excel. CSV is for review, not full backup restoration; use JSON for backups.", "Boleh dibuka dalam Excel. CSV untuk semakan, bukan pemulihan penuh; gunakan JSON untuk sandaran.")).font(.footnote)
-        }.navigationTitle(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV"))
+        }.navigationTitle(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")).navigationBarTitleDisplayMode(.inline)
             .fileExporter(isPresented: $exporting, document: document, contentType: .commaSeparatedText, defaultFilename: "YueJi-\(splits ? "splits" : "expenses")-\(all ? "all" : monthKey(month))") { result in
                 if case .failure(let error) = result { model.error = error.localizedDescription }
             }
@@ -951,7 +979,7 @@ struct TNGInboxView: View {
             }
             if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入 TNG 通知。", "Waiting for TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
-        }.navigationTitle(tr("TNG 通知记录", "TNG inbox", "Peti TNG"))
+        }.navigationTitle(tr("TNG 通知记录", "TNG inbox", "Peti TNG")).navigationBarTitleDisplayMode(.inline)
             .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账和待确认保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers and pending notices remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
                 Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.status == "recorded" || $0.status == "ignored" } } }
             }
@@ -1025,6 +1053,6 @@ struct TNGSetupView: View {
             Text(tr("3. 删除原测试的 Text 和 Create Note 动作，设为立即运行并启用。首次允许快捷指令访问月记。", "3. Remove the old Text and Create Note test actions. Enable immediate running and allow access to YueJi when prompted.", "3. Buang tindakan ujian Text dan Create Note. Aktifkan jalan serta-merta dan benarkan akses YueJi apabila diminta."))
             Text(tr("4. 已验证的英文付款自动入账；转账不计消费；其他格式、充值、退款、收款及疑似重复通知先待确认。只支持已验证格式，不会读取 TNG 历史流水。", "4. Verified English payment format records automatically. Transfers are excluded. Other formats, top-ups, refunds, incoming money and suspected duplicates await review. Does not read TNG transaction history.", "4. Format bayaran Inggeris disahkan direkod automatik. Pindahan dikecualikan. Format lain, tambah nilai, pulangan, wang masuk dan pendua menunggu semakan. Tidak membaca sejarah transaksi TNG."))
             Text(tr("5. 在设置开启自动记账结果通知。先核对几笔正常付款，并分别测试锁屏和解锁；通知未送达、自动化未执行或侧载签名过期都会影响记账。", "5. Enable recording-result notifications in Settings. Check real payments with the phone locked and unlocked. Missing notifications, automation not running or expired signing can prevent recording.", "5. Aktifkan notifikasi hasil rekod dalam Tetapan. Semak bayaran ketika telefon dikunci dan dibuka. Notifikasi tiada, automasi tidak berjalan atau tandatangan tamat boleh menghalang rekod."))
-        }.navigationTitle(tr("TNG 接入", "TNG setup", "Persediaan TNG"))
+        }.navigationTitle(tr("TNG 接入", "TNG setup", "Persediaan TNG")).navigationBarTitleDisplayMode(.inline)
     }
 }

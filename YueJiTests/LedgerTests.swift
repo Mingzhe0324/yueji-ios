@@ -470,3 +470,21 @@ final class BudgetAlertTests: XCTestCase {
         XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
     }
 }
+
+
+final class BudgetPercentageTests: XCTestCase {
+    func testCustomPercentAndFractionalCentBoundary() {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.budgets[monthKey(now)] = 100001
+        ledger.expenses = [Expense(merchant: "Test", cents: 80000, date: now)]
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 80))
+        ledger.expenses[0].cents = 80001
+        XCTAssertNotNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 80))
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 100))
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 0))
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 201))
+        ledger.expenses[0].cents = 200002
+        XCTAssertNotNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 200))
+    }
+}

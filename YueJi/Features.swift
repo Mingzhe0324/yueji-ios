@@ -399,7 +399,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         let defaults = UserDefaults.standard
         defaults.set(daily, forKey: "dailyReminder"); defaults.set(results, forKey: "automationNotifications")
         defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
-        defaults.set(budgetAlerts, forKey: "budgetAlerts")
+
     }
     static func result(title: String, body: String) async {
         guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
@@ -540,17 +540,20 @@ struct BudgetAlertCandidate {
     let month: String
     let spent: Int
     let budget: Int
-    static func make(ledger: Ledger, now: Date = Date()) -> BudgetAlertCandidate? {
+    static func make(ledger: Ledger, now: Date = Date(), percent: Int = 100) -> BudgetAlertCandidate? {
         let key = monthKey(now)
         guard let budget = ledger.budgets[key], budget > 0 else { return nil }
         let spent = ledger.spending(in: now)
-        guard spent >= budget else { return nil }
+        guard (1...200).contains(percent), spent * 100 >= budget * percent else { return nil }
         return BudgetAlertCandidate(month: key, spent: spent, budget: budget)
     }
 }
 actor BudgetAlertService {
     static let shared = BudgetAlertService()
     private var checking = false
+    private static func percent(_ defaults: UserDefaults) -> Int {
+        defaults.object(forKey: "budgetAlertPercent") == nil ? 100 : min(200, max(1, defaults.integer(forKey: "budgetAlertPercent")))
+    }
     func check() async {
         guard !checking else { return }
         checking = true
@@ -558,7 +561,7 @@ actor BudgetAlertService {
         let defaults = UserDefaults.standard
         guard defaults.bool(forKey: "budgetAlerts"),
               let ledger = try? LocalStore.shared.read(),
-              let candidate = BudgetAlertCandidate.make(ledger: ledger) else { return }
+              let candidate = BudgetAlertCandidate.make(ledger: ledger, percent: Self.percent(defaults)) else { return }
         let key = "budgetAlertSent." + candidate.month
         guard !defaults.bool(forKey: key) else { return }
         let center = UNUserNotificationCenter.current()
@@ -566,7 +569,7 @@ actor BudgetAlertService {
         guard defaults.bool(forKey: "budgetAlerts"),
               settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
         let content = UNMutableNotificationContent()
-        content.title = tr("本月已达到预算", "Monthly budget reached", "Bajet bulanan dicapai")
+        content.title = tr("已达到预算提醒比例", "Budget alert threshold reached", "Ambang peringatan bajet dicapai")
         content.body = defaults.bool(forKey: "hideNotificationDetails")
             ? tr("打开月记查看本月预算。", "Open YueJi to review your budget.", "Buka YueJi untuk menyemak bajet.")
             : tr("个人消费：", "Personal spending: ", "Belanja peribadi: ") + money(candidate.spent)
