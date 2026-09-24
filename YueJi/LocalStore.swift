@@ -40,6 +40,7 @@ final class LocalStore {
                 let previous = try Self.encode(ledger)
                 let result = try action(&ledger)
                 let next = try Self.encode(ledger.validated())
+                guard next.count <= 20_000_000 else { throw LedgerError.invalid("备份不能超过 20 MB。") }
                 if previous != next {
                     let name = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString).json"
                     try Self.exportData(try Self.decode(previous)).write(to: self.backupFolder.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])

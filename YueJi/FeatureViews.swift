@@ -581,6 +581,7 @@ struct NotificationSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var daily = UserDefaults.standard.bool(forKey: "dailyReminder")
     @State private var results = UserDefaults.standard.bool(forKey: "automationNotifications")
+    @AppStorage("hideNotificationDetails") private var hideDetails = false
     @State private var time = Date()
     @State private var busy = false
     @State private var message: String?
@@ -591,6 +592,7 @@ struct NotificationSettingsView: View {
                 Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
                 if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
                 Toggle(tr("自动记账结果通知", "Automatic recording notifications", "Notifikasi rekod automatik"), isOn: $results)
+                Toggle(tr("隐藏通知金额和姓名", "Hide amounts and names", "Sembunyikan amaun dan nama"), isOn: $hideDetails)
                 Text(tr("结果通知包含金额、商户和分类；失败时显示原因。只有快捷指令实际调用月记后才能报告结果，无法检测未触发的付款。", "Result notifications include amount, merchant and category, or a failure reason. They require Shortcuts to call YueJi; payments that never trigger it cannot be detected.", "Notifikasi mengandungi amaun, peniaga dan kategori, atau sebab kegagalan. Pintasan mesti memanggil YueJi; bayaran yang tidak mencetuskannya tidak dapat dikesan.")).font(.footnote)
                 Button(tr("保存通知设置", "Save notification settings", "Simpan tetapan notifikasi")) {
                     busy = true
@@ -788,7 +790,7 @@ struct LedgerFilterEditor: View {
                 }
                 Picker(tr("来源", "Source", "Sumber"), selection: $value.source) {
                     Text(tr("全部", "All", "Semua")).tag("")
-                    ForEach(["手动", "Apple Pay", "固定消费"], id: \.self) { Text(sourceLabel($0)).tag($0) }
+                    ForEach(["手动", "Apple Pay", "TNG", "固定消费"], id: \.self) { Text(sourceLabel($0)).tag($0) }
                 }
                 TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
@@ -853,5 +855,111 @@ struct CSVExportView: View {
             .fileExporter(isPresented: $exporting, document: document, contentType: .commaSeparatedText, defaultFilename: "YueJi-\(splits ? "splits" : "expenses")-\(all ? "all" : monthKey(month))") { result in
                 if case .failure(let error) = result { model.error = error.localizedDescription }
             }
+    }
+}
+
+func tngStatus(_ notice: TNGNotice) -> String {
+    switch notice.status {
+    case "recorded": return tr("已记消费", "Expense recorded", "Belanja direkod")
+    case "transfer": return tr("转账 · 不计消费", "Transfer · excluded", "Pindahan · dikecualikan")
+    case "ignored": return tr("已排除消费", "Excluded", "Dikecualikan")
+    default: return notice.possibleDuplicate ? tr("疑似重复 · 待确认", "Possible duplicate · review", "Mungkin pendua · semak") : tr("待确认", "Needs review", "Perlu semakan")
+    }
+}
+struct TNGInboxView: View {
+    @EnvironmentObject var model: LedgerModel
+    @State private var pendingOnly = false
+    @State private var clearing = false
+    var body: some View {
+        List {
+            NavigationLink(tr("TNG 接入步骤", "TNG setup", "Persediaan TNG")) { TNGSetupView() }
+            Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
+            ForEach(model.ledger.tngNotices.filter { !pendingOnly || $0.status == "pending" }.sorted { $0.date > $1.date }) { item in
+                NavigationLink { TNGNoticeView(id: item.id) } label: {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(item.party ?? tr("TNG 通知", "TNG notification", "Notifikasi TNG")).font(.headline)
+                        Text(tngStatus(item)).foregroundStyle(item.status == "pending" ? Color.orange : Color.secondary)
+                        if let cents = item.cents { Text(money(cents)) }
+                        Text(dateLabel(item.date, time: true)).font(.caption)
+                    }
+                }
+            }
+            if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入 TNG 通知。", "Waiting for TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
+            Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
+        }.navigationTitle(tr("TNG 通知记录", "TNG inbox", "Peti TNG"))
+            .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账和待确认保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers and pending notices remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
+                Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.status == "recorded" || $0.status == "ignored" } } }
+            }
+    }
+}
+struct TNGNoticeView: View {
+    @EnvironmentObject var model: LedgerModel
+    let id: String
+    @State private var merchant = ""
+    @State private var amount = ""
+    @State private var date = Date()
+    @State private var category = "其他"
+    @State private var initialized = false
+    @State private var excluding = false
+    @State private var confirming = false
+    @State private var editing: Expense?
+    @State private var error: String?
+    private var notice: TNGNotice? { model.ledger.tngNotices.first { $0.id == id } }
+    var body: some View {
+        Form {
+            if let notice {
+                Section {
+                    Text(tngStatus(notice)).font(.headline)
+                    if !notice.title.isEmpty { Text(notice.title) }
+                    Text(notice.body).textSelection(.enabled)
+                    Text(dateLabel(notice.date, time: true)).font(.caption)
+                    if notice.usesReceivedDate { Text(tr("时间为接收时间，正文没有交易日期。补录旧通知时请修改账目日期。", "Uses received time; body has no transaction date. Edit the entry date when importing an old notice.", "Menggunakan masa diterima; teks tiada tarikh transaksi. Ubah tarikh rekod bagi notifikasi lama.")).font(.caption) }
+                    if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
+                }
+                if let expenseID = notice.expenseID {
+                    if let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
+                        ExpenseRow(entry: entry)
+                        Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) { editing = entry }
+                    } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
+                } else if notice.status != "ignored" {
+                    Section(tr("确认记为消费", "Confirm as expense", "Sahkan sebagai belanja")) {
+                        TextField(tr("商户 / 用途", "Merchant / purpose", "Peniaga / tujuan"), text: $merchant)
+                        TextField("MYR", text: $amount).keyboardType(.decimalPad)
+                        DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date)
+                        Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Button(tr("计入消费", "Record expense", "Rekod belanja")) { confirming = true }
+                    }
+                }
+                if notice.status != "ignored" {
+                    Button(tr("不计消费 / 排除此通知", "Exclude from spending", "Kecualikan daripada belanja"), role: .destructive) { excluding = true }
+                }
+            }
+        }.navigationTitle("TNG")
+            .onAppear {
+                guard !initialized, let n = notice else { return }; initialized = true
+                merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
+                category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant)
+            }
+            .sheet(item: $editing) { ExpenseEditor(original: $0) }
+            .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
+                Button(tr("确认入账", "Record", "Rekod")) {
+                    do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category) }; model.reload() } catch { self.error = error.localizedDescription }
+                }
+            }
+            .confirmationDialog(tr("排除此通知？如已自动入账，将移除关联消费；已有分账或退款时会阻止操作。", "Exclude this notice? Its linked expense will be removed unless splits or refunds exist.", "Kecualikan notifikasi? Belanja berkaitan dibuang kecuali bahagian atau pulangan wujud."), isPresented: $excluding, titleVisibility: .visible) {
+                Button(tr("确认排除", "Exclude", "Kecualikan"), role: .destructive) { do { try LocalStore.shared.change { try $0.excludeTNG(id: id) }; model.reload() } catch { self.error = error.localizedDescription } }
+            }
+            .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+    }
+}
+struct TNGSetupView: View {
+    var body: some View {
+        List {
+            Text(tr("1. 安装此版并打开月记一次。在你已测试成功的 TNG 通知自动化里，添加「记录 TNG 通知」。", "1. Install and open YueJi once. Add Record TNG notification to your working TNG notification automation.", "1. Pasang dan buka YueJi sekali. Tambah Rekod notifikasi TNG dalam automasi TNG yang berfungsi."))
+            Text(tr("2. 通知正文选蓝色 Notification → Body，不要传整张截图或手动输入 Body。标题可选；如果能取得通知日期可传入，拿不到就留空使用接收时间。交易标识没有就留空，不能填固定文字。", "2. Map Notification → Body to notification body. Do not pass screenshots or type Body literally. Title and notification date are optional; missing date uses receipt time. Leave transaction ID empty unless a genuine ID is available; never use a constant.", "2. Petakan Notification → Body ke teks notifikasi. Jangan hantar tangkap layar atau taip Body. Tajuk dan tarikh pilihan; tarikh kosong menggunakan masa diterima. Biarkan ID kosong kecuali ID sebenar tersedia; jangan guna nilai tetap."))
+            Text(tr("3. 删除原测试的 Text 和 Create Note 动作，设为立即运行并启用。首次允许快捷指令访问月记。", "3. Remove the old Text and Create Note test actions. Enable immediate running and allow access to YueJi when prompted.", "3. Buang tindakan ujian Text dan Create Note. Aktifkan jalan serta-merta dan benarkan akses YueJi apabila diminta."))
+            Text(tr("4. 已验证的英文付款自动入账；转账不计消费；其他格式、充值、退款、收款及疑似重复通知先待确认。只支持已验证格式，不会读取 TNG 历史流水。", "4. Verified English payment format records automatically. Transfers are excluded. Other formats, top-ups, refunds, incoming money and suspected duplicates await review. Does not read TNG transaction history.", "4. Format bayaran Inggeris disahkan direkod automatik. Pindahan dikecualikan. Format lain, tambah nilai, pulangan, wang masuk dan pendua menunggu semakan. Tidak membaca sejarah transaksi TNG."))
+            Text(tr("5. 在设置开启自动记账结果通知。先核对几笔正常付款，并分别测试锁屏和解锁；通知未送达、自动化未执行或侧载签名过期都会影响记账。", "5. Enable recording-result notifications in Settings. Check real payments with the phone locked and unlocked. Missing notifications, automation not running or expired signing can prevent recording.", "5. Aktifkan notifikasi hasil rekod dalam Tetapan. Semak bayaran ketika telefon dikunci dan dibuka. Notifikasi tiada, automasi tidak berjalan atau tandatangan tamat boleh menghalang rekod."))
+        }.navigationTitle(tr("TNG 接入", "TNG setup", "Persediaan TNG"))
     }
 }

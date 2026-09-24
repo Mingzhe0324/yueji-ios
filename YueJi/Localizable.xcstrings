@@ -208,6 +208,118 @@
           }
         }
       }
+    },
+    "记录 TNG 通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record TNG notification"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod notifikasi TNG"
+          }
+        }
+      }
+    },
+    "记录 TNG": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record TNG"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod TNG"
+          }
+        }
+      }
+    },
+    "通知正文": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification body"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Teks notifikasi"
+          }
+        }
+      }
+    },
+    "通知标题（可选）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification title (optional)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tajuk notifikasi (pilihan)"
+          }
+        }
+      }
+    },
+    "通知时间（可选）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notification date (optional)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tarikh notifikasi (pilihan)"
+          }
+        }
+      }
+    },
+    "解析 TNG 通知正文。已识别付款记为消费，转账和未知通知单独保存。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Parse TNG notification body. Recognized payments become expenses; transfers and unknown notices are stored separately."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hurai teks notifikasi TNG. Bayaran dikenal pasti menjadi belanja; pindahan dan notifikasi lain disimpan berasingan."
+          }
+        }
+      }
+    },
+    "TNG 通知已处理，请在月记查看结果。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "TNG notification processed. Check YueJi for the result."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Notifikasi TNG diproses. Semak hasil dalam YueJi."
+          }
+        }
+      }
     }
   },
   "version": "1.0"

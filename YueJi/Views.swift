@@ -169,6 +169,7 @@ struct ExpensesView: View {
         NavigationStack {
             List {
                 MonthPicker(month: monthBinding)
+                NavigationLink(tr("TNG 通知 / 待确认", "TNG inbox / review", "Peti TNG / semakan")) { TNGInboxView() }
                 NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
                 Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                 let entries = (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []
@@ -428,6 +429,7 @@ struct SettingsView: View {
                     NavigationLink(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")) { RatesView() }
                     Text(tr("统计本位币：MYR", "Accounting currency: MYR", "Mata wang perakaunan: MYR")).font(.caption)
                 }
+                Section("TNG") { NavigationLink(tr("通知记录与接入", "Inbox & setup", "Peti & persediaan")) { TNGInboxView() } }
                 Section("Apple Pay") {
                     NavigationLink(tr("自动记账状态", "Automation status", "Status automasi")) { AutomationStatusView() }
                     Text(tr("安装后在快捷指令配置交易自动化，传入金额、商户、币种和时间。App 不会直接读取钱包历史。", "After installation, configure a Transaction automation in Shortcuts with amount, merchant, currency and date. The app cannot read Wallet history directly.", "Selepas pemasangan, tetapkan automasi Transaction dalam Pintasan dengan amaun, peniaga, mata wang dan tarikh. Aplikasi tidak membaca sejarah Wallet secara langsung."))

@@ -50,7 +50,33 @@ struct PostRecurringIntent: AppIntent {
 }
 struct YueJiShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: RecordTNGIntent(), phrases: ["Record a TNG notification in \(.applicationName)"], shortTitle: "记录 TNG", systemImageName: "bell.badge")
         AppShortcut(intent: PostRecurringIntent(), phrases: ["Post recurring expenses in \(.applicationName)"], shortTitle: "补记固定消费", systemImageName: "repeat")
         AppShortcut(intent: RecordApplePayIntent(), phrases: ["用\(.applicationName)记录付款", "Record a payment in \(.applicationName)"], shortTitle: "记录 Apple Pay", systemImageName: "creditcard.fill")
+    }
+}
+
+struct RecordTNGIntent: AppIntent {
+    static var title: LocalizedStringResource = "记录 TNG 通知"
+    static var description = IntentDescription("解析 TNG 通知正文。已识别付款记为消费，转账和未知通知单独保存。")
+    static var openAppWhenRun = false
+    @Parameter(title: "通知正文") var body: String
+    @Parameter(title: "通知标题（可选）") var notificationTitle: String?
+    @Parameter(title: "通知时间（可选）") var notificationDate: Date?
+    @Parameter(title: "交易标识（可选）") var transactionID: String?
+    func perform() async throws -> some IntentResult & ProvidesDialog {
+        do {
+            let message = try LocalStore.shared.change { ledger in
+                let result = try ledger.receiveTNG(body: body, title: notificationTitle ?? "", date: notificationDate, eventID: transactionID)
+                ledger.logAutomation(source: "TNG", outcome: "checked", detail: result)
+                return result
+            }
+            await LedgerNotifications.result(title: "TNG", body: message)
+            return .result(dialog: "TNG 通知已处理，请在月记查看结果。")
+        } catch {
+            try? LocalStore.shared.change { $0.logAutomation(source: "TNG", outcome: "failed", detail: error.localizedDescription) }
+            await LedgerNotifications.result(title: tr("TNG 记录失败", "TNG recording failed", "Rekod TNG gagal"), body: error.localizedDescription)
+            throw error
+        }
     }
 }

@@ -383,3 +383,60 @@ final class Version16Tests: XCTestCase {
         XCTAssertTrue(split.contains("'=James")); XCTAssertTrue(split.contains("\"5.00\""))
     }
 }
+
+final class TNGTests: XCTestCase {
+    func testVerifiedSamplesAndUnknownFormats() {
+        let payment = parseTNG("You have paid RM2.55 for MySiswaPlace.")
+        XCTAssertEqual(payment?.cents, 255); XCTAssertEqual(payment?.party, "MySiswaPlace"); XCTAssertEqual(payment?.kind, "payment")
+        let transfer = parseTNG("RM 0.01 has been successfully transferred to CHONG YONG EN.")
+        XCTAssertEqual(transfer?.kind, "transfer"); XCTAssertEqual(transfer?.cents, 1)
+        for text in ["Payment failed RM2.55", "You received RM2.55", "Reload successful RM50", "You have paid RM-2.55 for Shop.", "You have paid RM2.555 for Shop.", "Offer: You have paid RM2.55 for Shop."] { XCTAssertNil(parseTNG(text)) }
+    }
+    func testPaymentTransferUnknownAndRoundTrip() throws {
+        var ledger = Ledger(); let now = Date()
+        _ = try ledger.receiveTNG(body: "You have paid RM2.55 for MySiswaPlace.", date: nil, eventID: nil, now: now)
+        _ = try ledger.receiveTNG(body: "RM 0.01 has been successfully transferred to CHONG YONG EN.", date: nil, eventID: nil, now: now)
+        _ = try ledger.receiveTNG(body: "Reload successful RM50", date: nil, eventID: nil, now: now)
+        XCTAssertEqual(ledger.expenses.count, 1); XCTAssertEqual(ledger.expenses[0].source, "TNG")
+        XCTAssertEqual(ledger.spending(in: now), 255)
+        XCTAssertEqual(ledger.tngNotices.map(\.status), ["recorded", "transfer", "pending"])
+        XCTAssertTrue(ledger.tngNotices[0].usesReceivedDate)
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).tngNotices.count, 3)
+    }
+    func testPossibleDuplicatePreservedAndCanConfirmDistinctPayment() throws {
+        var ledger = Ledger(); let now = Date(); let body = "You have paid RM2.55 for MySiswaPlace."
+        _ = try ledger.receiveTNG(body: body, date: now, eventID: nil)
+        _ = try ledger.receiveTNG(body: body, date: now.addingTimeInterval(60), eventID: nil)
+        XCTAssertEqual(ledger.expenses.count, 1); XCTAssertEqual(ledger.tngNotices.count, 2)
+        let id = ledger.tngNotices[1].id
+        XCTAssertTrue(ledger.tngNotices[1].possibleDuplicate)
+        try ledger.confirmTNGExpense(id: id, merchant: "MySiswaPlace", cents: 255, date: now, category: "餐饮")
+        XCTAssertEqual(ledger.expenses.count, 2)
+        XCTAssertThrowsError(try ledger.confirmTNGExpense(id: id, merchant: "MySiswaPlace", cents: 255, date: now, category: "餐饮"))
+        _ = try ledger.validated()
+    }
+    func testExplicitIDReplayAndExclusion() throws {
+        var ledger = Ledger(); let now = Date(); let body = "You have paid RM2.55 for MySiswaPlace."
+        _ = try ledger.receiveTNG(body: body, date: now, eventID: "receipt-1")
+        _ = try ledger.receiveTNG(body: body, date: now.addingTimeInterval(90000), eventID: "receipt-1")
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        let id = ledger.tngNotices[0].id
+        ledger.expenses[0].shares = [Share(name: "James", cents: 100)]
+        XCTAssertThrowsError(try ledger.excludeTNG(id: id))
+        XCTAssertEqual(ledger.expenses.count, 1)
+        ledger.expenses[0].shares = []
+        try ledger.excludeTNG(id: id)
+        XCTAssertEqual(ledger.expenses.count, 0)
+        XCTAssertEqual(ledger.tngNotices[0].status, "ignored")
+        _ = try ledger.receiveTNG(body: body, date: now, eventID: "receipt-1")
+        XCTAssertTrue(ledger.expenses.isEmpty)
+    }
+    func testEmptyBodyAndLegacyMigration() throws {
+        var ledger = Ledger()
+        XCTAssertThrowsError(try ledger.receiveTNG(body: " ", date: nil, eventID: nil))
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        json.removeValue(forKey: "tngNotices")
+        XCTAssertTrue(try LocalStore.decode(JSONSerialization.data(withJSONObject: json)).tngNotices.isEmpty)
+    }
+}

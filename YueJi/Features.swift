@@ -405,7 +405,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
-        let content = UNMutableNotificationContent(); content.title = title; content.body = body; content.sound = .default
+        let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = .default
         // Notification failure must never roll back or retry a successfully recorded payment.
         try? await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
     }

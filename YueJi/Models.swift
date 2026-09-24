@@ -68,11 +68,12 @@ struct Ledger: Codable {
     var backupCreatedAt: Date? = nil
     var customCategories: [CustomCategory] = []
     var tripDefaults: TripDefaults? = nil
+    var tngNotices: [TNGNotice] = []
     init(version: Int = 3, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -90,8 +91,16 @@ struct Ledger: Codable {
         backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
         customCategories = try c.decodeIfPresent([CustomCategory].self, forKey: .customCategories) ?? []
         tripDefaults = try c.decodeIfPresent(TripDefaults.self, forKey: .tripDefaults)
+        tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
     }
     func validated() throws -> Ledger {
+        guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
+        for n in tngNotices {
+            guard !n.id.isEmpty, !n.body.isEmpty, n.body.count <= 8000, n.title.count <= 500,
+                  n.date.timeIntervalSince1970 >= 0, n.date.timeIntervalSince1970 < 4_102_444_800,
+                  ["payment", "transfer", "unknown"].contains(n.kind), ["recorded", "transfer", "pending", "ignored"].contains(n.status),
+                  n.cents == nil || (n.cents! > 0 && n.cents! <= 10_000_000_000), (n.party?.count ?? 0) <= 200 else { throw LedgerError.invalid("账本格式或版本无效。") }
+        }
         guard customCategories.count <= 100,
               Set(customCategories.map(\.id)).count == customCategories.count,
               Set(categoryNames.map(friendKey)).count == categoryNames.count else { throw LedgerError.invalid("付款或分账数据无效。") }
@@ -156,4 +165,90 @@ func equalShares(total: Int, count: Int, includeMe: Bool) -> [Int] {
     let n = count + (includeMe ? 1 : 0)
     guard count > 0, n > 0 else { return [] }
     return (0..<count).map { total / n + ($0 < total % n ? 1 : 0) }
+}
+
+struct TNGNotice: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var body: String
+    var title: String
+    var date: Date
+    var usesReceivedDate: Bool
+    var kind: String // payment, transfer, unknown
+    var status: String // recorded, transfer, pending, ignored
+    var cents: Int?
+    var party: String?
+    var expenseID: String?
+    var possibleDuplicate = false
+}
+struct TNGParsed {
+    let kind: String
+    let cents: Int
+    let party: String
+}
+func parseTNG(_ body: String) -> TNGParsed? {
+    let text = body.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    let patterns = [
+        ("payment", #"\AYou have paid RM\s*([0-9]+(?:\.[0-9]{2})?) for (.{1,200})\.\z"#),
+        ("transfer", #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) has been successfully transferred to (.{1,200})\.\z"#)
+    ]
+    for (kind, pattern) in patterns {
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+              let amountRange = Range(match.range(at: 1), in: text), let nameRange = Range(match.range(at: 2), in: text),
+              let cents = try? toCents(String(text[amountRange])) else { continue }
+        let party = String(text[nameRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if !party.isEmpty { return TNGParsed(kind: kind, cents: cents, party: party) }
+    }
+    return nil
+}
+extension Ledger {
+    mutating func receiveTNG(body: String, title: String = "", date: Date?, eventID: String?, now: Date = Date()) throws -> String {
+        let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty, text.count <= 8000, title.count <= 500 else {
+            throw reviewError("通知正文为空或过长，请把 TNG 通知的 Body 传入。", "Notification body is empty or too long. Pass the TNG notification Body.", "Teks notifikasi kosong atau terlalu panjang. Hantar Body notifikasi TNG.")
+        }
+        let timestamp = date ?? now
+        guard timestamp.timeIntervalSince1970 >= 0, timestamp.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        let explicit = eventID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard explicit.count <= 500 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        let eventKey = explicit.isEmpty ? nil : "tng:" + SHA256.hash(data: Data(explicit.utf8)).map { String(format: "%02x", $0) }.joined()
+        if let eventKey, seenEvents.contains(eventKey) { return tr("相同交易标识已处理，未重复记录。", "This transaction ID was already processed.", "ID transaksi ini sudah diproses.") }
+        guard tngNotices.count < 5000 else { throw reviewError("TNG 通知记录已达上限，请先导出备份并清理已处理通知。", "TNG inbox is full. Export a backup and clear processed notices.", "Peti TNG penuh. Eksport sandaran dan kosongkan notifikasi selesai.") }
+        let titleKey = friendKey(title).trimmingCharacters(in: .punctuationCharacters)
+        let parsed = ["", "payment", "transfer successful"].contains(titleKey) ? parseTNG(text) : nil
+        let duplicate = tngNotices.contains { old in
+            abs(old.date.timeIntervalSince(timestamp)) <= 86400 &&
+            (friendKey(old.body) == friendKey(text) || (parsed != nil && old.kind == parsed?.kind && old.cents == parsed?.cents && friendKey(old.party ?? "") == friendKey(parsed?.party ?? "")))
+        }
+        var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: date == nil, kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate)
+        if let parsed, !duplicate {
+            if parsed.kind == "payment" {
+                let entry = Expense(merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party), source: "TNG")
+                expenses.append(entry); notice.expenseID = entry.id; notice.status = "recorded"
+            } else { notice.status = "transfer" }
+        }
+        tngNotices.append(notice)
+        if let eventKey { seenEvents.insert(eventKey) }
+        if duplicate { return tr("疑似重复，已保留待确认，未再次计入消费。", "Possible duplicate retained for review, not added to spending.", "Kemungkinan pendua disimpan untuk semakan, tidak ditambah kepada belanja.") }
+        if notice.status == "recorded" { return tr("已记消费：", "Expense recorded: ", "Belanja direkod: ") + money(notice.cents ?? 0) + " · " + (notice.party ?? "") }
+        if notice.status == "transfer" { return tr("已保存转账，未计入消费。", "Transfer saved, excluded from spending.", "Pindahan disimpan, tidak dikira sebagai belanja.") }
+        return tr("通知已保存到待确认，未计入消费。", "Notification saved for review, excluded from spending.", "Notifikasi disimpan untuk semakan, tidak dikira sebagai belanja.")
+    }
+    mutating func confirmTNGExpense(id: String, merchant: String, cents: Int, date: Date, category: String) throws {
+        guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].expenseID == nil,
+              cents > 0, cents <= 10_000_000_000, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              merchant.count <= 200, categoryNames.contains(category), date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("付款或分账数据无效。") }
+        let expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: "TNG")
+        expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
+    }
+    mutating func excludeTNG(id: String) throws {
+        guard let i = tngNotices.firstIndex(where: { $0.id == id }) else { return }
+        if let expenseID = tngNotices[i].expenseID, let entry = expenses.first(where: { $0.id == expenseID }) {
+            guard entry.shares.isEmpty, (entry.refunds ?? []).isEmpty else {
+                throw reviewError("此账目已有分账或退款，请先在账本处理，避免丢失记录。", "Resolve existing splits or refunds in the ledger first.", "Selesaikan bahagian atau pulangan dalam lejar dahulu.")
+            }
+            expenses.removeAll { $0.id == expenseID }
+        }
+        tngNotices[i].status = "ignored" // Keep linkage as a tombstone: no accidental replay.
+    }
 }
