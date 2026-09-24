@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import AppIntents
 import UserNotifications
 
@@ -15,6 +16,11 @@ struct YueJiApp: App {
     @Published var ledger = Ledger()
     @Published var error: String?
     @Published var loaded = false
+    @Published var savedNotice: UUID?
+    func showSaved() {
+        savedNotice = UUID()
+        UINotificationFeedbackGenerator().notificationOccurred(.success)
+    }
     func reload() { do { ledger = try LocalStore.shared.read(); loaded = true; try LocalStore.shared.change { try $0.postDue() }; ledger = try LocalStore.shared.read() } catch { self.error = error.localizedDescription } }
     func change(_ action: (inout Ledger) throws -> Void) {
         do { try LocalStore.shared.change(action); reload() } catch { self.error = error.localizedDescription }

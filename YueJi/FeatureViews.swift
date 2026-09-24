@@ -434,11 +434,11 @@ struct UpcomingView: View {
 }
 struct AutomationStatusView: View {
     @EnvironmentObject var model: LedgerModel
-    private func outcome(_ key: String) -> String {
+    private func outcome(_ key: String, source: String) -> String {
         switch key {
         case "saved": return tr("成功入账", "Saved", "Disimpan")
         case "duplicate": return tr("已拦截重复", "Duplicate blocked", "Pendua disekat")
-        case "checked": return tr("已检查到期项目", "Schedules checked", "Jadual disemak")
+        case "checked": return source == "TNG" ? tr("通知已处理", "Notification processed", "Notifikasi diproses") : tr("已检查到期项目", "Schedules checked", "Jadual disemak")
         default: return tr("失败", "Failed", "Gagal")
         }
     }
@@ -453,9 +453,9 @@ struct AutomationStatusView: View {
             }
             ForEach(model.ledger.automationEvents) { event in
                 VStack(alignment: .leading, spacing: 6) {
-                    Text(event.source + " · " + outcome(event.outcome)).font(.headline)
+                    Text(event.source + " · " + outcome(event.outcome, source: event.source)).font(.headline)
                     Text(dateLabel(event.date, time: true)).font(.caption)
-                    if !event.detail.isEmpty { Text(event.detail).font(.footnote).foregroundStyle(.red) }
+                    if !event.detail.isEmpty { Text(event.detail).font(.footnote).foregroundStyle(event.outcome == "failed" ? Color.red : Color.secondary) }
                 }
             }
         }.navigationTitle(tr("自动记账状态", "Automation status", "Status automasi"))
