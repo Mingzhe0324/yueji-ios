@@ -24,6 +24,8 @@ struct MainView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("completedUsageGuide") private var completedGuide = false
+    @State private var showingGuide = false
     @State private var selectedTab = 0
     var body: some View {
         TabView(selection: $selectedTab) {
@@ -32,7 +34,10 @@ struct MainView: View {
             RecurringView().tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
             FriendsView().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
-        }.tint(ink).task { model.reload() }
+        }.tint(ink).task { model.reload(postRecurring: false); if !completedGuide { showingGuide = true }; await AutomaticRates.shared.refreshSaved(); model.reload() }
+            .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true }) {
+                UsageGuideView()
+            }
             .onChange(of: selectedTab) { _, _ in UISelectionFeedbackGenerator().selectionChanged() }
             .overlay(alignment: .top) {
                 if model.savedNotice != nil {
@@ -50,7 +55,7 @@ struct MainView: View {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
-            .onChange(of: phase) { _, value in if value == .active { model.reload() } }
+            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }
@@ -100,6 +105,9 @@ struct DashboardView: View {
                     spendingCard
                     balancesCard
                     categoriesCard
+                    NavigationLink { ReceiptScanView() } label: { DashboardLinkLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "camera") }
+                    NavigationLink { AICoachView() } label: { DashboardLinkLabel(title: tr("AI 消费助手", "AI spending assistant", "Pembantu belanja AI"), symbol: "sparkles") }
+                    AICoachSuggestionCard()
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(14)
@@ -217,6 +225,8 @@ struct OverviewToolsView: View {
     var month: Date = Date()
     var body: some View {
         List {
+            NavigationLink(tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi")) { ReceiptScanView() }
+            NavigationLink(tr("AI 消费助手", "AI spending assistant", "Pembantu belanja AI")) { AICoachView() }
             Section(tr("分析", "Insights", "Analisis")) {
                 NavigationLink { SpendingComparisonView(month: month) } label: { Label(tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), systemImage: "chart.bar.xaxis") }
                 NavigationLink { UpcomingView(initialMonth: month) } label: { Label(tr("固定消费预览", "Upcoming bills", "Bil akan datang"), systemImage: "calendar") }
@@ -273,11 +283,12 @@ struct ExpenseRow: View {
                 CategoryBadge(name: entry.category).font(.caption)
                 Text("\(sourceLabel(entry.source)) · \(dateLabel(entry.date))").font(.caption).foregroundStyle(.secondary)
                 if let fx = entry.foreign { Text(Currency.display(fx.minor, fx.currency) + " · 1 \(fx.currency) = \(fx.quote.text) MYR").font(.caption) }
-                if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + money(entry.refunded)).font(.caption).foregroundStyle(.green) }
+                if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + "+" + money(entry.refunded)).font(.caption).foregroundStyle(.green) }
+                if entry.receiptSummary != nil { Label(tr("含收据税费", "Receipt charges included", "Termasuk caj resit"), systemImage: "doc.text").font(.caption).foregroundStyle(.secondary) }
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.caption) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            Text(money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            Text("−" + money(entry.cents)).foregroundStyle(.red).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
         }.padding(.vertical, 10)
     }
 }
@@ -398,6 +409,8 @@ struct ExpenseEditor: View {
     @State private var people = [FriendDraft()]
     @State private var error: String?
     @State private var initialized = false
+    @State private var rateLoading = false
+    @State private var rateNote = ""
     private func foreign() throws -> ForeignAmount? {
         if currency == "MYR" { return nil }
         let value = try parseRate(rate)
@@ -411,6 +424,9 @@ struct ExpenseEditor: View {
                     Section { NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: original.id) } }
                     if original.refunded > 0 { Text(tr("已有退款，金额、日期和分账已锁定。需修改时先撤销相关退款。", "Refunds exist. Amount, date and splits are locked. Undo refunds before changing these.", "Bayaran balik wujud. Amaun, tarikh dan pembahagian dikunci. Batalkan bayaran balik sebelum mengubahnya.")).font(.caption) }
                 }
+                if let summary = (original ?? initialDraft)?.receiptSummary {
+                    Section(tr("收据税费", "Receipt charges", "Caj resit")) { Text(summary).font(.caption) }
+                }
                 Section(tr("实际付款", "Payment", "Bayaran")) {
                     TextField(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), text: $name)
                     Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
@@ -420,8 +436,10 @@ struct ExpenseEditor: View {
                     })) { ForEach(Currency.codes, id: \.self) { Text($0).tag($0) } }
                     TextField(tr("原币金额", "Original amount", "Amaun asal"), text: $amount).keyboardType(.decimalPad)
                     if currency != "MYR" {
+                        if rateLoading { ProgressView() }
+                        if !rateNote.isEmpty { Text(rateNote).font(.caption).foregroundStyle(.secondary) }
                         Text("1 \(currency) = ? MYR").font(.caption)
-                        TextField(tr("汇率", "Exchange rate", "Kadar pertukaran"), text: $rate).keyboardType(.decimalPad)
+                        TextField(tr("汇率", "Exchange rate", "Kadar pertukaran"), text: $rate).keyboardType(.decimalPad).disabled(rateLoading)
                         Text(tr("可填写银行实际汇率。保存后不会随参考汇率变化。", "You may enter your bank's actual rate. Saved entries will not change with market rates.", "Anda boleh isi kadar sebenar bank. Rekod disimpan tidak berubah mengikut kadar pasaran.")).font(.caption)
                         if let n = try? total() { LabeledContent(tr("换算为", "Converted to", "Ditukar kepada"), value: money(n)) }
                     }
@@ -450,8 +468,21 @@ struct ExpenseEditor: View {
                     }
                 } footer: { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) }.disabled((original?.refunded ?? 0) > 0)
             }.navigationTitle(tr("记账 / 分账", "Expense / split", "Belanja / pembahagian")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { commit() } } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { commit() }.disabled(rateLoading) } }
                 .onAppear { load() }
+                .task(id: currency) {
+                    guard original == nil, currency != "MYR" else { return }
+                    rateLoading = true; defer { rateLoading = false }
+                    do {
+                        if let q = try await AutomaticRates.shared.refresh(currency) {
+                            try Task.checkCancellation()
+                            rate = q.text; rateDate = q.date; rateSource = q.source
+                            rateNote = q.source + " · " + dateLabel(q.date)
+                        }
+                    } catch {
+                        if !Task.isCancelled { rateNote = tr("更新失败，已保留现有汇率，请核对日期。", "Refresh failed. Review the existing rate and date.", "Kemas kini gagal. Semak kadar dan tarikh sedia ada.") }
+                    }
+                }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
     }
@@ -469,6 +500,7 @@ struct ExpenseEditor: View {
     private func commit() {
         do {
             let n = try total(); var entry = original ?? initialDraft ?? Expense(merchant: "", cents: n)
+            if entry.cents != n || currency != "MYR" { entry.receiptSummary = nil }
             entry.merchant = name.trimmingCharacters(in: .whitespacesAndNewlines); entry.cents = n; entry.date = date; entry.category = category; entry.fuel = fuel
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
@@ -679,6 +711,9 @@ struct SettingsView: View {
                     NavigationLink { OverviewToolsView() } label: {
                         SimpleSettingsRow(title: tr("更多工具", "More tools", "Alat lain"), subtitle: tr("月度对比、消费预览与查重", "Comparisons, upcoming bills & duplicates", "Perbandingan, bil & pendua"), symbol: "square.grid.2x2.fill", color: .blue)
                     }
+                    NavigationLink { UsageGuideView() } label: {
+                        SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("记账、自动化与朋友还款", "Expenses, automation and repayments", "Belanja, automasi dan bayaran balik"), symbol: "book.fill", color: .green)
+                    }
                 } header: { Text(tr("数据与帮助", "Data & help", "Data & bantuan")) }
             }.listStyle(.insetGrouped).navigationTitle(tr("设置", "Settings", "Tetapan"))
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
@@ -859,5 +894,42 @@ extension View {
     }
     func yuejiZoomSource(id: String, namespace: Namespace.ID) -> some View {
         modifier(YueJiZoomSource(id: id, namespace: namespace))
+    }
+}
+
+
+struct UsageGuideView: View {
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var step = 0
+    private var titles: [String] { [tr("记下自己的消费", "Track your spending", "Jejak belanja anda"), tr("连接自动记账", "Connect automatic recording", "Sambungkan rekod automatik"), tr("朋友分账与还款", "Split and settle", "Bahagi dan bayar balik"), tr("预算与备份", "Budget and back up", "Bajet dan sandaran"), tr("拍收据分账", "Scan and split", "Imbas dan bahagi"), tr("自动更新参考价格", "Automatic reference prices", "Harga rujukan automatik"), tr("本机 AI 助手", "On-device AI", "AI pada peranti")] }
+    private var symbols: [String] { ["plus.circle.fill", "bolt.fill", "person.2.fill", "externaldrive.fill", "camera.fill", "arrow.triangle.2.circlepath", "sparkles"] }
+    private var details: [String] { [
+        tr("在概览点「记一笔」，填写金额、商户和日期。补记旧消费时先切换月份，保存前核对日期。", "Tap Add expense in Overview. Enter amount, merchant and date. For past spending, select the month and check the date before saving.", "Ketik Tambah belanja. Isi amaun, peniaga dan tarikh. Untuk belanja lalu, pilih bulan dan semak tarikh."),
+        tr("从「自动记账」进入 Apple Pay 或 TNG 教程，在快捷指令完成设置。查看运行记录并核对账本，打开教程不代表已经接入。", "Open Automatic recording for Apple Pay or TNG instructions. Configure Shortcuts, then verify the activity log and ledger. Opening a guide does not enable recording.", "Buka Rekod automatik untuk panduan Apple Pay atau TNG. Sediakan Pintasan, kemudian semak log dan lejar."),
+        tr("已有付款请到账本编辑并开启分账，避免重复记账。朋友可以分次还款：输入本次实际收到的金额。收款日期不能早于消费日期。", "Split an existing payment by editing it in Ledger to avoid duplicates. Friends can repay in parts: enter only what you received. Receipt date cannot precede the expense.", "Edit bayaran sedia ada dalam Lejar untuk membahagi tanpa pendua. Rakan boleh bayar sebahagian; isi amaun diterima sahaja. Tarikh penerimaan tidak boleh mendahului belanja."),
+        tr("在概览设置预算，在提醒设置选择提醒比例。定期到「备份与导出」保存完整备份；卸载 App 会删除本机数据。", "Set a budget in Overview and an alert percentage in notification settings. Export full backups regularly; uninstalling removes local data.", "Tetapkan bajet dalam Ringkasan dan peratus peringatan dalam tetapan. Eksport sandaran penuh berkala; nyahpasang memadam data tempatan."),
+        tr("在概览选择拍收据分账，拍照或选照片。核对小计、税费和总额，再选择朋友。付款已入账时关联原付款，避免重复。", "Open Scan and split in Overview. Take or choose a photo, review subtotal, charges and total, then select friends. Link an existing payment to avoid duplicates.", "Buka Imbas dan bahagi. Ambil atau pilih foto, semak subjumlah, caj dan jumlah, kemudian pilih rakan. Pautkan bayaran asal untuk mengelakkan pendua."),
+        tr("选择外币时自动获取汇率；油费计算器自动获取所选油品的官方价格。会显示数据日期，断网时保留缓存。历史账目不会随汇率改变。", "Selecting a currency fetches its reference rate. The fuel calculator fetches official prices for your fuel type. Check the data date; offline caches remain. Existing entries keep their original rates.", "Memilih mata wang mengambil kadar rujukan. Kalkulator minyak mengambil harga rasmi. Semak tarikh data; cache kekal di luar talian. Kadar rekod lama tidak berubah."),
+        tr("从概览打开 AI 消费助手，可询问预算建议，并选择每天在概览显示一条建议。需要设备支持并启用 Apple Intelligence；建议不会自动修改账目。", "Open the AI assistant from Overview for budget advice. Optionally show one daily suggestion in Overview. Requires enabled Apple Intelligence on a compatible device. Suggestions never edit records.", "Buka pembantu AI untuk cadangan bajet. Pilih cadangan harian dalam Ringkasan jika mahu. Memerlukan Apple Intelligence aktif pada peranti serasi. Cadangan tidak mengubah rekod.")
+    ] }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 24) {
+                    Image(systemName: symbols[step]).font(.largeTitle).foregroundStyle(.blue).accessibilityHidden(true)
+                    Text(titles[step]).font(.largeTitle.bold())
+                    Text(details[step]).font(.body).foregroundStyle(.secondary)
+                    ProgressView(value: Double(step + 1), total: Double(titles.count))
+                    Text("\(step + 1) / \(titles.count)").font(.caption).foregroundStyle(.secondary)
+                    if step > 0 { Button(tr("上一步", "Back", "Kembali")) { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { step -= 1 } } }
+                    Button(step == titles.count - 1 ? tr("开始使用", "Get started", "Mula") : tr("下一步", "Next", "Seterusnya")) {
+                        if step == titles.count - 1 { dismiss() }
+                        else { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { step += 1 } }
+                    }.yuejiPrimaryButton().controlSize(.large)
+                }.padding(24)
+            }.navigationTitle(tr("欢迎使用月记", "Welcome to YueJi", "Selamat datang ke YueJi")).navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("跳过", "Skip", "Langkau")) { dismiss() } } }
+        }
     }
 }

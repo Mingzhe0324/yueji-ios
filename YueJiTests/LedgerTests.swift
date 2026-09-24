@@ -399,9 +399,9 @@ final class TNGTests: XCTestCase {
         _ = try ledger.receiveTNG(body: "Reload successful RM50", date: nil, eventID: nil, now: now)
         XCTAssertEqual(ledger.expenses.count, 1); XCTAssertEqual(ledger.expenses[0].source, "TNG")
         XCTAssertEqual(ledger.spending(in: now), 255)
-        XCTAssertEqual(ledger.tngNotices.map(\.status), ["recorded", "transfer", "pending"])
+        XCTAssertEqual(ledger.tngNotices.map(\.status), ["recorded", "transfer"])
         XCTAssertTrue(ledger.tngNotices[0].usesReceivedDate)
-        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).tngNotices.count, 3)
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).tngNotices.count, 2)
     }
     func testPossibleDuplicatePreservedAndCanConfirmDistinctPayment() throws {
         var ledger = Ledger(); let now = Date(); let body = "You have paid RM2.55 for MySiswaPlace."
@@ -486,5 +486,161 @@ final class BudgetPercentageTests: XCTestCase {
         XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 201))
         ledger.expenses[0].cents = 200002
         XCTAssertNotNil(BudgetAlertCandidate.make(ledger: ledger, now: now, percent: 200))
+    }
+}
+
+
+final class PartialRepaymentRegressionTests: XCTestCase {
+    func test1867PartialReceiptLeaves1467() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [Expense(merchant: "sandakan", cents: 1867, date: now.addingTimeInterval(-86400), shares: [Share(name: "ye", cents: 1867)])]
+        try ledger.batchRepay(friend: "ye", cents: 400, date: now)
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 1467)
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 400)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.friendSpending(friend: "ye", month: nil).owed, 1467)
+    }
+    func testFutureExpenseExplainsFailureAndCanBeCorrected() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [Expense(merchant: "sandakan", cents: 1867, date: shiftedMonth(now, by: 1), shares: [Share(name: "ye", cents: 1867)])]
+        XCTAssertThrowsError(try ledger.batchRepay(friend: "ye", cents: 400, date: now))
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 0)
+        XCTAssertEqual(ledger.friendSpending(friend: "ye", month: now).owed, 0)
+        XCTAssertEqual(ledger.friendSpending(friend: "ye", month: nil).owed, 1867)
+        ledger.expenses[0].date = now.addingTimeInterval(-86400)
+        try ledger.repay(expenseID: ledger.expenses[0].id, shareID: ledger.expenses[0].shares[0].id, cents: 400, date: now)
+        XCTAssertEqual(ledger.friendSpending(friend: "ye", month: nil).owed, 1467)
+        XCTAssertThrowsError(try ledger.batchRepay(friend: "ye", cents: 1468, date: now))
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 400)
+    }
+}
+
+final class ReceiptCalculationTests: XCTestCase {
+    func testTaxServiceAndDiscountPreserveExactCents() throws {
+        let service = try ReceiptCalculation.percentCharge(base: 10000, percent: 10)
+        let tax = try ReceiptCalculation.percentCharge(base: 11000, percent: 8)
+        let total = try ReceiptCalculation.total(subtotal: 10000, tax: tax, service: service, discount: 500)
+        XCTAssertEqual(service, 1000)
+        XCTAssertEqual(tax, 880)
+        XCTAssertEqual(total, 11380)
+        let parts = equalShares(total: total, count: 3, includeMe: false)
+        XCTAssertEqual(parts, [3794, 3793, 3793])
+        XCTAssertEqual(parts.reduce(0, +), total)
+    }
+    func testHalfCentRoundingAndInvalidCharges() throws {
+        XCTAssertEqual(try ReceiptCalculation.percentCharge(base: 5, percent: 10), 1)
+        XCTAssertThrowsError(try ReceiptCalculation.percentCharge(base: 100, percent: -1))
+        XCTAssertThrowsError(try ReceiptCalculation.percentCharge(base: 100, percent: 101))
+        XCTAssertThrowsError(try ReceiptCalculation.total(subtotal: 100, tax: 0, service: 0, discount: 101))
+        XCTAssertThrowsError(try ReceiptCalculation.total(subtotal: 10_000_000_000, tax: 1, service: 0, discount: 0))
+    }
+    func testReceiptBackupAndOlderMissingOptionalField() throws {
+        var ledger = Ledger()
+        ledger.expenses = [Expense(merchant: "Cafe", cents: 1080, category: "餐饮", shares: [Share(name: "Friend", cents: 540)], receiptSummary: "Subtotal RM10.00; tax RM0.80")]
+        let data = try LocalStore.encode(ledger)
+        let restored = try LocalStore.decode(data)
+        XCTAssertEqual(restored.expenses[0].receiptSummary, ledger.expenses[0].receiptSummary)
+        XCTAssertEqual(restored.friendBalances.first?.owed, 540)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        var expenses = try XCTUnwrap(json["expenses"] as? [[String: Any]])
+        expenses[0].removeValue(forKey: "receiptSummary")
+        json["expenses"] = expenses
+        let older = try LocalStore.decode(JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(older.expenses[0].receiptSummary)
+        XCTAssertEqual(older.expenses[0].cents, 1080)
+        ledger.expenses[0].receiptSummary = String(repeating: "x", count: 2001)
+        XCTAssertThrowsError(try ledger.validated())
+    }
+}
+
+final class TNGAllowlistTests: XCTestCase {
+    func testAdsAndUnsupportedNoticesDoNotChangeLedgerOrConsumeIDs() throws {
+        var ledger = Ledger()
+        let original = try LocalStore.encode(ledger)
+        let notices = [
+            ("Promotion", "Get RM10 cashback when you spend RM50 today!"),
+            ("Payment", "Payment failed RM2.55"),
+            ("", "Offer: You have paid RM2.55 for Shop."),
+            ("Promo", "You have paid RM2.55 for Shop."),
+            ("Transfer Successful", "You have paid RM2.55 for Shop."),
+            ("Payment", "RM 0.01 has been successfully transferred to FRIEND."),
+            ("", "Reload successful RM50"),
+            ("", "You received RM2.55")
+        ]
+        for (title, body) in notices {
+            _ = try ledger.receiveTNG(body: body, title: title, date: nil, eventID: "ignored-event")
+            XCTAssertEqual(try LocalStore.encode(ledger), original)
+        }
+        _ = try ledger.receiveTNG(body: "You have paid RM2.55 for Shop.", title: "Payment", date: nil, eventID: "ignored-event")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses[0].cents, 255)
+    }
+    func testSuccessfulTransferAndOptionalTitle() {
+        let body = "RM 0.01 has been successfully transferred to FRIEND."
+        XCTAssertEqual(parseTNG(body, title: "Transfer Successful.")?.kind, "transfer")
+        XCTAssertEqual(parseTNG(body)?.cents, 1)
+        XCTAssertNil(parseTNG(body, title: "Promotion"))
+    }
+}
+
+final class TNGIncomingTests: XCTestCase {
+    private let body = "RM 0.01 received from CHONG YONG EN for CHONG MING ZHE."
+    private let title = "Ka-ching! Incoming Money."
+    func testIncomingSampleAndTitleConsistency() {
+        let p = parseTNG(body, title: title)
+        XCTAssertEqual(p?.kind, "incoming")
+        XCTAssertEqual(p?.cents, 1)
+        XCTAssertEqual(p?.party, "CHONG YONG EN")
+        XCTAssertEqual(p?.recipient, "CHONG MING ZHE")
+        XCTAssertEqual(parseTNG(body)?.kind, "incoming")
+        XCTAssertNil(parseTNG(body, title: "Payment"))
+        XCTAssertNil(parseTNG(body, title: "Promotion"))
+        XCTAssertNil(parseTNG("Offer: " + body, title: title))
+        XCTAssertNil(parseTNG("RM -0.01 received from A for B.", title: title))
+        XCTAssertNil(parseTNG("RM 0.001 received from A for B.", title: title))
+    }
+    func testPendingPartialRepaymentRoundTripAndUndo() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [Expense(merchant: "Cafe", cents: 2000, date: now.addingTimeInterval(-86400), shares: [Share(name: "CHONG YONG EN", cents: 1867)])]
+        _ = try ledger.receiveTNG(body: "RM 4.00 received from CHONG YONG EN for CHONG MING ZHE.", title: title, date: now, eventID: "incoming-1")
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 1867)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertThrowsError(try ledger.confirmTNGExpense(id: id, merchant: "Sender", cents: 400, date: now, category: "其他"))
+        try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "CHONG YONG EN", date: now)
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 1467)
+        XCTAssertEqual(ledger.tngNotices[0].repaymentIDs?.count, 1)
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "CHONG YONG EN", date: now))
+        var restored = try LocalStore.decode(LocalStore.encode(ledger))
+        try restored.batchRepay(friend: "CHONG YONG EN", cents: 100, date: now)
+        try restored.reopenTNGIncoming(id: id)
+        XCTAssertEqual(restored.friendBalances.first?.owed, 1767)
+        XCTAssertEqual(restored.tngNotices[0].status, "pending")
+        try restored.resolveTNGIncoming(id: id, purpose: "income", date: now)
+        XCTAssertEqual(restored.friendBalances.first?.owed, 1767)
+        XCTAssertEqual(restored.spending(in: now), ledger.spending(in: now))
+    }
+    func testOverpaymentAndDuplicateAreNotAppliedSilently() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [Expense(merchant: "Cafe", cents: 100, date: now.addingTimeInterval(-86400), shares: [Share(name: "A", cents: 100)])]
+        let text = "RM 2.00 received from A for B."
+        _ = try ledger.receiveTNG(body: text, title: title, date: now, eventID: nil)
+        let id = ledger.tngNotices[0].id
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "A", date: now))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+        try ledger.resolveTNGIncoming(id: id, purpose: "ownTransfer", date: now)
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 100)
+        _ = try ledger.receiveTNG(body: text, title: title, date: now, eventID: nil)
+        let duplicate = ledger.tngNotices[1]
+        XCTAssertTrue(duplicate.possibleDuplicate)
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: duplicate.id, purpose: "income", date: now))
+        try ledger.resolveTNGIncoming(id: duplicate.id, purpose: "ignored", date: now)
+        XCTAssertEqual(ledger.tngNotices[1].status, "ignored")
     }
 }

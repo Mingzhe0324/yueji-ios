@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.13</string>
+	<string>1.17</string>
 	<key>CFBundleVersion</key>
-	<string>17</string>
+	<string>21</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -35,5 +35,7 @@
 	<array>
 		<string>UIInterfaceOrientationPortrait</string>
 	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>拍摄收据并在本机识别金额，用于确认记账和朋友分账。</string>
 </dict>
 </plist>

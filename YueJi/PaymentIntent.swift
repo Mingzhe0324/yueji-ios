@@ -12,6 +12,7 @@ struct RecordApplePayIntent: AppIntent {
     @Parameter(title: "交易标识（可选）") var transactionID: String?
     func perform() async throws -> some IntentResult & ProvidesDialog {
         do {
+            if currency.uppercased() != "MYR" { _ = try? await AutomaticRates.shared.refresh(currency.uppercased()) }
             let result = try LocalStore.shared.change { ledger -> (Bool, String) in
                 let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID)
                 ledger.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : "duplicate")
@@ -40,6 +41,7 @@ struct PostRecurringIntent: AppIntent {
     static var openAppWhenRun = false
     func perform() async throws -> some IntentResult & ProvidesDialog {
         do {
+            await AutomaticRates.shared.refreshSaved()
             try LocalStore.shared.change { ledger in try ledger.postDue(); ledger.logAutomation(source: "Recurring", outcome: "checked") }
         } catch {
             let failure = error
@@ -60,14 +62,20 @@ struct YueJiShortcuts: AppShortcutsProvider {
 
 struct RecordTNGIntent: AppIntent {
     static var title: LocalizedStringResource = "记录 TNG 通知"
-    static var description = IntentDescription("解析 TNG 通知正文。已识别付款记为消费，转账和未知通知单独保存。")
+    static var description = IntentDescription("解析 TNG 通知正文。已识别付款记为消费，转账单独保存，收款待确认用途；广告及其他未支持格式直接忽略。")
     static var openAppWhenRun = false
     @Parameter(title: "通知正文") var body: String
     @Parameter(title: "通知标题（可选）") var notificationTitle: String?
     @Parameter(title: "通知时间（可选）") var notificationDate: Date?
     @Parameter(title: "交易标识（可选）") var transactionID: String?
-    func perform() async throws -> some IntentResult & ProvidesDialog {
+    func perform() async throws -> some IntentResult {
         do {
+            let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !text.isEmpty, text.count <= 8000, (notificationTitle?.count ?? 0) <= 500 else {
+                throw LedgerError.invalid(tr("请传入有效的通知正文 Body。", "Pass a valid notification Body.", "Hantar Body notifikasi yang sah."))
+            }
+            // Exit before storage, logging, budget checks and result notifications.
+            guard parseTNG(text, title: notificationTitle ?? "") != nil else { return .result() }
             let message = try LocalStore.shared.change { ledger in
                 let result = try ledger.receiveTNG(body: body, title: notificationTitle ?? "", date: notificationDate, eventID: transactionID)
                 ledger.logAutomation(source: "TNG", outcome: "checked", detail: result)
@@ -75,7 +83,7 @@ struct RecordTNGIntent: AppIntent {
             }
             await BudgetAlertService.shared.check()
             await LedgerNotifications.result(title: "TNG", body: message)
-            return .result(dialog: "TNG 通知已处理，请在月记查看结果。")
+            return .result()
         } catch {
             try? LocalStore.shared.change { $0.logAutomation(source: "TNG", outcome: "failed", detail: error.localizedDescription) }
             await LedgerNotifications.result(title: tr("TNG 记录失败", "TNG recording failed", "Rekod TNG gagal"), body: error.localizedDescription)

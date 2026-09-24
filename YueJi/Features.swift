@@ -245,12 +245,16 @@ extension Ledger {
         return result.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     mutating func batchRepay(friend: String, cents: Int, date: Date) throws {
-        guard cents > 0, date <= Date() else { throw LedgerError.invalid("请检查还款金额和日期。") }
+        guard cents > 0 else { throw reviewError("请输入大于零的还款金额。", "Enter a positive repayment amount.", "Masukkan amaun bayaran balik positif.") }
+        guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         let indices = expenses.indices.sorted { expenses[$0].date == expenses[$1].date ? expenses[$0].id < expenses[$1].id : expenses[$0].date < expenses[$1].date }
         let eligible = indices.flatMap { i in expenses[i].shares.indices.compactMap { j -> (Int, Int)? in
             friendKey(expenses[i].shares[j].name) == friend && expenses[i].shares[j].owed > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
         } }
-        guard cents <= eligible.reduce(0, { $0 + expenses[$1.0].shares[$1.1].owed }) else { throw LedgerError.invalid("请检查还款金额和日期。") }
+        let available = eligible.reduce(0, { $0 + expenses[$1.0].shares[$1.1].owed })
+        guard cents <= available else {
+            throw reviewError("此收款日期可偿还的欠款只有 " + money(available) + "。请检查消费日期；还款不能早于消费。可在下方编辑原账目。", "Only " + money(available) + " is repayable on this date. Check expense dates; repayment cannot precede spending. Edit the original entry below.", "Hanya " + money(available) + " boleh dibayar pada tarikh ini. Semak tarikh belanja; bayaran balik tidak boleh mendahului belanja. Edit rekod asal di bawah.")
+        }
         var remaining = cents; let batch = UUID().uuidString
         for (i, j) in eligible where remaining > 0 {
             let part = min(remaining, expenses[i].shares[j].owed)
@@ -579,5 +583,84 @@ actor BudgetAlertService {
             try await center.add(UNNotificationRequest(identifier: "yueji.budget." + candidate.month, content: content, trigger: nil))
             defaults.set(true, forKey: key)
         } catch { /* Retry at a later check; a notification error never changes a payment. */ }
+    }
+}
+
+// Reference data is refreshed on use; stored transactions keep their original quotes.
+actor AutomaticRates {
+    static let shared = AutomaticRates()
+    private var last: [String: Date] = [:]
+    func refresh(_ code: String, force: Bool = false) async throws -> RateQuote? {
+        guard code != "MYR" else { return nil }
+        let cached = try LocalStore.shared.read().rates[code]
+        if !force, let cached, Date().timeIntervalSince(last[code] ?? .distantPast) < 3600 { return cached }
+        do {
+            let quote = try await FXService.fetch(code)
+            try LocalStore.shared.change { $0.rates[code] = quote }
+            last[code] = Date()
+            return quote
+        } catch {
+            // Keep the dated cache available, but surface refresh failures to interactive screens.
+            throw error
+        }
+    }
+    func refreshSaved() async {
+        guard let ledger = try? LocalStore.shared.read() else { return }
+        let codes = Set(Array(ledger.rates.keys) + ledger.recurring.filter { $0.active }.map(\.currency)).filter { $0 != "MYR" }
+        for code in codes { _ = try? await refresh(code) }
+    }
+}
+struct FuelQuote: Codable {
+    let price: Decimal
+    let effective: String
+    let fetched: Date
+}
+struct FuelPriceService {
+    static let types = ["ron95", "ron95_budi95", "ron97", "diesel", "diesel_eastmsia"]
+    static func label(_ type: String) -> String {
+        switch type {
+        case "ron95_budi95": return "RON95 · BUDI95"
+        case "ron97": return "RON97"
+        case "diesel": return tr("柴油 · 西马", "Diesel · Peninsular", "Diesel · Semenanjung")
+        case "diesel_eastmsia": return tr("柴油 · 东马", "Diesel · East Malaysia", "Diesel · Malaysia Timur")
+        default: return tr("RON95 · 普通价格", "RON95 · market price", "RON95 · harga pasaran")
+        }
+    }
+    static func cached(_ type: String) -> FuelQuote? {
+        guard let data = UserDefaults.standard.data(forKey: "fuelQuote." + type) else { return nil }
+        return try? JSONDecoder().decode(FuelQuote.self, from: data)
+    }
+    static func fetch(_ type: String) async throws -> FuelQuote {
+        guard types.contains(type) else { throw LedgerError.invalid("Invalid fuel type") }
+        if let q = cached(type), Date().timeIntervalSince(q.fetched) < 3600 { return q }
+        var parts = URLComponents(string: "https://api.data.gov.my/data-catalogue")!
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur"); f.dateFormat = "yyyy-MM-dd"
+        parts.queryItems = [URLQueryItem(name: "id", value: "fuelprice"), URLQueryItem(name: "filter", value: "level@series_type"), URLQueryItem(name: "sort", value: "-date"), URLQueryItem(name: "limit", value: "1"), URLQueryItem(name: "date_end", value: f.string(from: Date()) + "@date")]
+        var request = URLRequest(url: parts.url!); request.timeoutInterval = 15
+        let (data, response) = try await URLSession.shared.data(for: request)
+        guard (response as? HTTPURLResponse)?.statusCode == 200, data.count < 100_000,
+              let rows = try JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              let row = rows.first, row["series_type"] as? String == "level",
+              let number = row[type] as? NSNumber, let date = row["date"] as? String,
+              f.date(from: String(date.prefix(10))) != nil else { throw reviewError("官方油价暂不可用，请稍后再试。", "Official fuel prices are unavailable. Try again later.", "Harga minyak rasmi tidak tersedia. Cuba lagi.") }
+        let value = number.decimalValue
+        guard value > 0, value < 100 else { throw LedgerError.invalid("Invalid fuel price") }
+        let quote = FuelQuote(price: value, effective: String(date.prefix(10)), fetched: Date())
+        UserDefaults.standard.set(try JSONEncoder().encode(quote), forKey: "fuelQuote." + type)
+        return quote
+    }
+}
+struct ReceiptCalculation {
+    static func percentCharge(base: Int, percent: Decimal) throws -> Int {
+        guard base >= 0, base <= 10_000_000_000, percent >= 0, percent <= 100 else { throw LedgerError.invalid("Invalid receipt percentage") }
+        var value = Decimal(base) * percent / 100
+        var rounded = Decimal(); NSDecimalRound(&rounded, &value, 0, .plain)
+        return NSDecimalNumber(decimal: rounded).intValue
+    }
+    static func total(subtotal: Int, tax: Int, service: Int, discount: Int) throws -> Int {
+        guard [subtotal, tax, service, discount].allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }), subtotal > 0 else { throw LedgerError.invalid("Invalid receipt amount") }
+        let total = subtotal + tax + service - discount
+        guard total > 0, total <= 10_000_000_000 else { throw LedgerError.invalid("Invalid receipt total") }
+        return total
     }
 }
