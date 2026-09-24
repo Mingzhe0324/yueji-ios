@@ -861,11 +861,17 @@ private struct ComparisonRow: View {
 }
 struct AnimatedMoney: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
     let cents: Int
+    var animateOnAppear = false
     var body: some View {
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: cents)
+            .animation(reduceMotion ? nil : .spring(response: 0.46, dampingFraction: 0.9), value: cents)
+            .opacity(!animateOnAppear || appeared || reduceMotion ? 1 : 0)
+            .scaleEffect(!animateOnAppear || appeared || reduceMotion ? 1 : 0.96, anchor: .leading)
+            .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.9), value: appeared)
+            .onAppear { appeared = true }
     }
 }
 struct LedgerFilterEditor: View {

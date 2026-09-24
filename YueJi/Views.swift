@@ -80,6 +80,7 @@ struct MonthPicker: View {
     private func shift(_ n: Int) { UISelectionFeedbackGenerator().selectionChanged(); withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9)) { month = shiftedMonth(month, by: n) } }
 }
 struct DashboardView: View {
+    @Namespace private var navigationMotion
     @EnvironmentObject var model: LedgerModel
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
     @State private var adding = false
@@ -107,14 +108,18 @@ struct DashboardView: View {
                     NavigationLink { OverviewToolsView(month: month) } label: {
                         Label(tr("更多工具", "More tools", "Alat lain"), systemImage: "square.grid.2x2")
                             .frame(maxWidth: .infinity, minHeight: 44)
-                    }.buttonStyle(.bordered).buttonBorderShape(.capsule)
+                    }.yuejiPrimaryButton().buttonBorderShape(.capsule)
                 }.padding(20)
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle(tr("月记", "YueJi", "YueJi"))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    NavigationLink { OverviewToolsView(month: month) } label: { Image(systemName: "ellipsis.circle") }
+                    NavigationLink {
+                        OverviewToolsView(month: month).yuejiZoom(id: "overview-tools", namespace: navigationMotion)
+                    } label: {
+                        Image(systemName: "ellipsis.circle").yuejiZoomSource(id: "overview-tools", namespace: navigationMotion)
+                    }
                         .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
                 }
             }
@@ -142,7 +147,7 @@ struct DashboardView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Label(tr("本月 · 我的实际消费", "This month · my spending", "Bulan ini · belanja saya"), systemImage: "chart.pie.fill")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                AnimatedMoney(cents: personal)
+                AnimatedMoney(cents: personal, animateOnAppear: true)
                     .font(.system(.largeTitle, design: .default, weight: .bold))
                     .foregroundStyle(ink).minimumScaleFactor(0.5).lineLimit(1)
                 Text(tr("已扣除朋友承担的份额和属于你的退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan bayaran balik anda"))
@@ -647,7 +652,7 @@ struct SettingsView: View {
             List {
                 Section {
                     NavigationLink { appearancePage } label: {
-                        SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "paintpalette.fill", color: .purple)
+                        SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
                     }
                     NavigationLink { NotificationSettingsView() } label: {
                         SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("预算、每日记账", "Budget and daily reminders", "Bajet dan peringatan harian"), symbol: "bell.fill", color: .orange)
@@ -772,9 +777,9 @@ struct SimpleSettingsRow: View {
     let color: Color
     var body: some View {
         HStack(spacing: 14) {
-            Image(systemName: symbol).font(.body.weight(.semibold))
-                .foregroundStyle(color).frame(width: 38, height: 38)
-                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+            Image(systemName: symbol).font(.body.weight(.medium))
+                .foregroundStyle(.white).frame(width: 34, height: 34)
+                .background(color.gradient, in: RoundedRectangle(cornerRadius: 8))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.body).foregroundStyle(.primary)
@@ -806,7 +811,7 @@ private struct YueJiPrimaryButton: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glassProminent)
+            content.buttonStyle(.glass)
         } else { content.buttonStyle(.borderedProminent) }
     }
 }
@@ -825,5 +830,34 @@ private struct YueJiGlassSurface: ViewModifier {
         } else {
             content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26))
         }
+    }
+}
+
+
+private struct YueJiZoomDestination: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let id: String
+    let namespace: Namespace.ID
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), !reduceMotion {
+            content.navigationTransition(.zoom(sourceID: id, in: namespace))
+        } else { content }
+    }
+}
+private struct YueJiZoomSource: ViewModifier {
+    let id: String
+    let namespace: Namespace.ID
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.matchedTransitionSource(id: id, in: namespace)
+        } else { content }
+    }
+}
+extension View {
+    func yuejiZoom(id: String, namespace: Namespace.ID) -> some View {
+        modifier(YueJiZoomDestination(id: id, namespace: namespace))
+    }
+    func yuejiZoomSource(id: String, namespace: Namespace.ID) -> some View {
+        modifier(YueJiZoomSource(id: id, namespace: namespace))
     }
 }
