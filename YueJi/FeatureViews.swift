@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct RatesView: View {
     @EnvironmentObject var model: LedgerModel
@@ -111,7 +112,7 @@ struct RecurringEditor: View {
                 TextField(tr("名称，例如房租", "Name, e.g. rent", "Nama, contoh sewa"), text: $name)
                 Picker(tr("币种", "Currency", "Mata wang"), selection: $currency) { ForEach(Currency.codes, id: \.self) { Text($0).tag($0) } }
                 TextField(tr("金额", "Amount", "Amaun"), text: $amount).keyboardType(.decimalPad)
-                Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(categories, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
                 Picker(tr("周期", "Repeat", "Ulang"), selection: $cycle) { ForEach(RepeatCycle.allCases, id: \.self) { Text($0.label).tag($0) } }.disabled(original != nil)
                 DatePicker(tr("首次日期", "First date", "Tarikh pertama"), selection: $start, displayedComponents: .date).disabled(original != nil)
                 Toggle(tr("到期自动入账", "Automatically record when due", "Rekod automatik apabila tiba"), isOn: $autoPost)
@@ -128,7 +129,7 @@ struct RecurringEditor: View {
             let minor = try Currency.parse(amount, code: currency)
             var r = original ?? RecurringExpense(name: "", minor: minor, start: start)
             r.name = name.trimmingCharacters(in: .whitespacesAndNewlines); r.minor = minor; r.currency = currency; r.category = category; r.cycle = cycle; r.autoPost = autoPost
-            try r.validate()
+            try r.validate(allowedCategories: model.ledger.categoryNames)
             try LocalStore.shared.change { ledger in
                 if let original {
                     guard let i = ledger.recurring.firstIndex(where: { $0.id == original.id }), ledger.recurring[i] == original else { throw LedgerError.invalid(tr("项目已改变，请重新打开。", "Schedule changed. Reopen it.", "Jadual berubah. Buka semula.")) }
@@ -168,6 +169,8 @@ struct RefundsView: View {
     @EnvironmentObject var model: LedgerModel
     let expenseID: String
     @State private var amount = ""
+    @State private var custom = false
+    @State private var allocations: [String: String] = [:]
     @State private var date = Date()
     @State private var undo: RefundRecord?
     @State private var error: String?
@@ -184,16 +187,32 @@ struct RefundsView: View {
                     TextField(tr("实际收到的退款 · MYR", "Refund received · MYR", "Bayaran balik diterima · MYR"), text: $amount).keyboardType(.decimalPad)
                     DatePicker(tr("退款日期", "Refund date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                     Button(tr("填入剩余全额", "Fill remaining amount", "Isi baki penuh")) { amount = Currency.input(e.cents - e.refunded, "MYR") }.disabled(e.cents == e.refunded)
-                    RefundAllocationPreview(expense: e, amount: amount)
+                    Toggle(tr("指定退款分配", "Custom refund allocation", "Agihan bayaran balik sendiri"), isOn: $custom)
+                    if custom {
+                        RefundAllocationFields(expense: e, values: $allocations)
+                    } else { RefundAllocationPreview(expense: e, amount: amount) }
                     Button(tr("保存退款", "Save refund", "Simpan bayaran balik")) {
-                        do { let n = try toCents(amount); try LocalStore.shared.change { try $0.addRefund(expenseID: expenseID, cents: n, date: date) }; amount = ""; model.reload() } catch { self.error = error.localizedDescription }
+                        do {
+                            let n = try toCents(amount)
+                            let distribution: [String: Int]?
+                            if custom { distribution = try allocations.mapValues { try optionalMoney($0) ?? 0 } }
+                            else { distribution = nil }
+                            try LocalStore.shared.change { try $0.addRefund(expenseID: expenseID, cents: n, date: date, custom: distribution) }
+                            amount = ""; allocations = [:]; model.reload()
+                        } catch { self.error = error.localizedDescription }
                     }.disabled(e.cents == e.refunded)
                 } header: {
                     Text(tr("新增退款", "Add refund", "Tambah bayaran balik"))
-                } footer: { Text(tr("退款按各人剩余份额分配，并回算到原消费月份。朋友已经还款的部分会显示为你需退回的款项。外币退款按实际收到 MYR 填写，最多退至原入账额。", "Refunds are allocated proportionally to remaining shares and reduce the original spending month. Amounts already repaid by friends become payable back to them. Enter foreign refunds in actual MYR, capped at the original recorded amount.", "Bayaran balik diagih mengikut baki bahagian dan mengurangkan bulan belanja asal. Amaun yang sudah dibayar rakan perlu dipulangkan kepada mereka. Isi bayaran balik asing dalam MYR sebenar, terhad kepada amaun asal.")) }
+                } footer: { Text(tr("默认按各人剩余份额分配；开启指定分配后，填写每人的退款金额，合计须等于退款总额。退款回算原消费月份。朋友已经还款的部分会显示为你需退回的款项。外币退款按实际收到 MYR 填写，最多退至原入账额。", "Default allocation is proportional. Custom amounts must sum to the refund total. Refunds reduce the original spending month. Amounts already repaid by friends become payable back to them. Enter foreign refunds in actual MYR, capped at the original recorded amount.", "Agihan lalai mengikut baki bahagian. Amaun sendiri mesti berjumlah amaun pulangan. Pulangan mengurangkan bulan belanja asal. Amaun yang sudah dibayar rakan perlu dipulangkan kepada mereka. Isi bayaran balik asing dalam MYR sebenar, terhad kepada amaun asal.")) }
                 Section(tr("退款历史", "Refund history", "Sejarah bayaran balik")) {
                     ForEach(e.refunds ?? []) { r in
-                        HStack { Text(dateLabel(r.date)); Spacer(); Text(money(r.cents)); Button(tr("撤销", "Undo", "Batal")) { undo = r } }
+                        VStack(alignment: .leading, spacing: 5) {
+                            HStack { Text(dateLabel(r.date)); Spacer(); Text(money(r.cents)); Button(tr("撤销", "Undo", "Batal")) { undo = r } }
+                            Text(tr("我的退款：", "My refund: ", "Pulangan saya: ") + money(r.personalCents)).font(.caption)
+                            ForEach(e.shares) { share in
+                                if let cents = r.shares[share.id], cents > 0 { Text("\(share.name): \(money(cents))").font(.caption) }
+                            }
+                        }
                     }
                 }
             } else { Text(tr("记录已删除", "Entry was deleted", "Rekod telah dipadam")) }
@@ -299,6 +318,10 @@ struct FriendDetailView: View {
 }
 struct FuelCalculatorView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var model: LedgerModel
+    @State private var names = Array(repeating: "", count: 20)
+    @State private var initialized = false
+    @State private var feedback: String?
     @State private var draft: Expense?
     @State private var distance = ""
     @State private var consumption = ""
@@ -311,6 +334,15 @@ struct FuelCalculatorView: View {
         guard let km = try? parseRate(distance), let litres = try? parseRate(consumption), let unit = try? parseRate(price),
               let p = optionalCost(parking), let t = optionalCost(toll) else { return nil }
         return try? FuelEstimate(distance: km, litresPer100km: litres, pricePerLitre: unit, parking: p, toll: t).total()
+    }
+    private func shareText(total: Int, values: [Int]) -> String {
+        var lines = [tr("行程费用估算", "Trip cost estimate", "Anggaran kos perjalanan"), money(total)]
+        for index in values.indices {
+            let name = names[index].trimmingCharacters(in: .whitespacesAndNewlines)
+            let label = name.isEmpty ? tr("朋友 ", "Friend ", "Rakan ") + String(index + 1) : name
+            lines.append(label + ": " + money(values[index]))
+        }
+        return lines.joined(separator: "\n")
     }
     private func optionalCost(_ text: String) -> Int? { text == "0" || text == "0.00" || text.isEmpty ? 0 : try? toCents(text) }
     var body: some View {
@@ -326,7 +358,23 @@ struct FuelCalculatorView: View {
                     TextField(tr("选填", "Optional", "Pilihan"), text: $toll).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                 }
                 Stepper(tr("朋友人数：", "Friends: ", "Bilangan rakan: ") + String(friends), value: $friends, in: 0...20)
+                ForEach(0..<friends, id: \.self) { index in
+                    TextField(tr("朋友姓名 ", "Friend name ", "Nama rakan ") + String(index + 1), text: $names[index])
+                }
                 Toggle(tr("司机也参与分摊", "Include driver in split", "Pemandu turut berkongsi"), isOn: $includeMe).disabled(friends == 0)
+            }
+            Section(tr("常用行程资料", "Trip defaults", "Tetapan perjalanan")) {
+                Button(tr("保存油耗、油价和同行朋友", "Save fuel use, price and companions", "Simpan penggunaan minyak, harga dan rakan")) {
+                    do {
+                        let defaults = TripDefaults(consumption: consumption, price: price, companions: Array(names.prefix(friends)), includeDriver: includeMe)
+                        try defaults.validate(); try LocalStore.shared.change { $0.tripDefaults = defaults }; model.reload()
+                        feedback = tr("已保存，下次打开自动填入。", "Saved. Applied next time you open the calculator.", "Disimpan. Diisi apabila kalkulator dibuka semula.")
+                    } catch { feedback = error.localizedDescription }
+                }
+                if model.ledger.tripDefaults != nil {
+                    Button(tr("清除常用资料", "Clear defaults", "Kosongkan tetapan"), role: .destructive) { model.change { $0.tripDefaults = nil } }
+                }
+                Text(tr("只保存油耗、油价和同行朋友；里程、停车费及过路费每次重新填写。", "Only fuel use, price and companions are saved. Enter distance, parking and tolls for each trip.", "Hanya penggunaan minyak, harga dan rakan disimpan. Isi jarak, parkir dan tol setiap perjalanan.")).font(.caption)
             }
             if let total = estimate {
                 let values = equalShares(total: total, count: friends, includeMe: includeMe)
@@ -339,16 +387,24 @@ struct FuelCalculatorView: View {
                     }
                     LabeledContent(tr("司机份额", "Driver's share", "Bahagian pemandu"), value: money(total - values.reduce(0, +)))
                     Button {
-                        let shares: [Share] = values.map { Share(name: "", cents: $0) }
+                        let shares: [Share] = values.indices.map { Share(name: names[$0], cents: values[$0]) }
                         draft = Expense(merchant: tr("行程费用", "Trip cost", "Kos perjalanan"), cents: total, category: "交通", fuel: true, shares: shares)
                     } label: {
                         Label(tr("保存到账本", "Save to ledger", "Simpan ke lejar"), systemImage: "plus.circle")
                     }.disabled(total <= 0)
-                    ShareLink(item: tr("行程费用估算", "Trip cost estimate", "Anggaran kos perjalanan") + "\n" + money(total) + "\n" + values.enumerated().map { "\($0.offset + 1): \(money($0.element))" }.joined(separator: "\n")) { Label(tr("分享估算", "Share estimate", "Kongsi anggaran"), systemImage: "square.and.arrow.up") }
+                    ShareLink(item: shareText(total: total, values: values)) { Label(tr("分享估算", "Share estimate", "Kongsi anggaran"), systemImage: "square.and.arrow.up") }
                 }
             } else { Text(tr("填入有效里程、油耗和油价后显示结果。", "Enter valid distance, fuel use and price to calculate.", "Isi jarak, penggunaan dan harga sah untuk mengira.")) }
             Text(tr("停车费和过路费留空按零计算。保存到账本会打开确认页面，可修改行程名称、日期、金额并填写朋友姓名。朋友人数为 0 时全部记为个人花费。若加油或行程付款已经入账，请编辑原账目分账，避免重复计费。", "Blank parking and tolls count as zero. Save to ledger opens a review where you can edit the trip, date, amount and friends' names. With zero friends, the full amount is personal spending. If the fuel or trip payment is already recorded, split the existing entry to avoid double counting.", "Parkir dan tol kosong dikira sifar. Simpan ke lejar membuka semakan nama perjalanan, tarikh, amaun dan nama rakan. Dengan sifar rakan, semua kos ialah belanja sendiri. Jika bayaran minyak atau perjalanan sudah direkod, bahagikan rekod sedia ada supaya tidak dikira dua kali.")).font(.footnote)
         }.navigationTitle(tr("油费计算器", "Fuel calculator", "Kalkulator minyak"))
+            .onAppear {
+                guard !initialized else { return }; initialized = true
+                if let defaults = model.ledger.tripDefaults {
+                    consumption = defaults.consumption; price = defaults.price; friends = defaults.companions.count; includeMe = defaults.includeDriver
+                    for i in defaults.companions.indices { names[i] = defaults.companions[i] }
+                }
+            }
+            .alert(tr("行程资料", "Trip defaults", "Tetapan perjalanan"), isPresented: Binding(get: { feedback != nil }, set: { if !$0 { feedback = nil } })) { Button("OK") {} } message: { Text(feedback ?? "") }
             .sheet(item: $draft) { entry in
                 ExpenseEditor(original: nil, initialDraft: entry, onSaved: { dismiss() })
             }
@@ -427,11 +483,11 @@ struct FriendSpendingView: View {
             }
             Section(tr("分别花在哪里", "Where the money went", "Ke mana wang dibelanjakan")) {
                 if breakdown.net == 0 { Text(tr("暂无净消费", "No net spending", "Tiada belanja bersih")) }
-                ForEach(categories, id: \.self) { category in
+                ForEach(model.ledger.categoryNames, id: \.self) { category in
                     let n = breakdown.categories[category] ?? 0
                     if n > 0 {
                         VStack(alignment: .leading, spacing: 8) {
-                            HStack { Text(categoryLabel(category)); Spacer(); Text(money(n)) }
+                            HStack { CategoryBadge(name: category); Spacer(); AnimatedMoney(cents: n) }
                             ProgressView(value: Double(n), total: Double(max(breakdown.net, 1)))
                         }
                     }
@@ -496,6 +552,7 @@ struct RestorePreviewView: View {
                     LabeledContent(tr("账目数量", "Entries", "Rekod"), value: String(preview.ledger.expenses.count))
                     LabeledContent(tr("固定消费", "Recurring bills", "Bil berulang"), value: String(preview.ledger.recurring.count))
                     LabeledContent(tr("分类规则", "Category rules", "Peraturan kategori"), value: String(preview.ledger.merchantCategories.count))
+                    LabeledContent(tr("自定义分类", "Custom categories", "Kategori sendiri"), value: String(preview.ledger.customCategories.count))
                     if let first = preview.ledger.expenses.map(\.date).min(), let last = preview.ledger.expenses.map(\.date).max() {
                         Text(dateLabel(first) + " — " + dateLabel(last))
                     }
@@ -570,5 +627,231 @@ struct NotificationSettingsView: View {
         permission = status == .authorized || status == .provisional
             ? tr("系统通知权限：已允许", "System permission: allowed", "Kebenaran sistem: dibenarkan")
             : tr("系统通知权限：尚未允许", "System permission: not allowed yet", "Kebenaran sistem: belum dibenarkan")
+    }
+}
+
+struct CategoryBadge: View {
+    @EnvironmentObject var model: LedgerModel
+    let name: String
+    private var custom: CustomCategory? { model.ledger.customCategories.first { $0.name == name } }
+    private var symbol: String {
+        if let custom { return custom.icon }
+        switch name {
+        case "餐饮": return "fork.knife"
+        case "交通": return "car.fill"
+        case "购物": return "bag.fill"
+        case "账单": return "doc.text.fill"
+        case "娱乐": return "gamecontroller.fill"
+        default: return "tag.fill"
+        }
+    }
+    var body: some View {
+        Label { Text(categoryLabel(name)) } icon: {
+            Image(systemName: symbol).foregroundStyle(categoryColor(custom?.color ?? "teal"))
+        }
+    }
+}
+func categoryColor(_ name: String) -> Color {
+    switch name { case "blue": return .blue; case "purple": return .purple; case "pink": return .pink; case "orange": return .orange; case "green": return .green; default: return .teal }
+}
+func categoryColorLabel(_ name: String) -> String {
+    switch name {
+    case "blue": return tr("蓝色", "Blue", "Biru")
+    case "purple": return tr("紫色", "Purple", "Ungu")
+    case "pink": return tr("粉色", "Pink", "Merah jambu")
+    case "orange": return tr("橙色", "Orange", "Jingga")
+    case "green": return tr("绿色", "Green", "Hijau")
+    default: return tr("青色", "Teal", "Biru kehijauan")
+    }
+}
+struct CategoriesView: View {
+    @EnvironmentObject var model: LedgerModel
+    @State private var editing: CustomCategory?
+    var body: some View {
+        List {
+            Section(tr("内置分类", "Built-in categories", "Kategori terbina")) {
+                ForEach(categories, id: \.self) { CategoryBadge(name: $0) }
+            }
+            Section(tr("自定义分类", "Custom categories", "Kategori sendiri")) {
+                ForEach(model.ledger.customCategories) { item in
+                    Button { editing = item } label: { CategoryBadge(name: item.name) }
+                        .swipeActions { Button(role: .destructive) { model.change { try $0.deleteCategory(item.id) } } label: { Label(tr("删除", "Delete", "Padam"), systemImage: "trash") } }
+                }
+                Button(tr("新增分类", "Add category", "Tambah kategori")) { editing = CustomCategory(name: "") }
+            }
+            Text(tr("改名会同步已有账目、固定消费和商户规则；正在使用的分类不能直接删除。自定义名称保留你输入的语言。", "Renaming updates entries, recurring bills and merchant rules. Categories in use cannot be deleted. Custom names retain the language you enter.", "Penamaan semula mengemas kini rekod, bil berulang dan peraturan peniaga. Kategori yang digunakan tidak boleh dipadam. Nama sendiri kekal dalam bahasa yang diisi.")).font(.footnote)
+        }.navigationTitle(tr("管理分类", "Manage categories", "Urus kategori"))
+            .sheet(item: $editing) { CategoryEditor(initial: $0) }
+    }
+}
+struct CategoryEditor: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let initial: CustomCategory
+    @State private var name = ""
+    @State private var icon = "tag.fill"
+    @State private var color = "teal"
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(tr("分类名称", "Category name", "Nama kategori"), text: $name)
+                Picker(tr("图标", "Icon", "Ikon"), selection: $icon) {
+                    ForEach(CustomCategory.icons, id: \.self) { symbol in Image(systemName: symbol).tag(symbol) }
+                }
+                Picker(tr("颜色", "Color", "Warna"), selection: $color) {
+                    ForEach(CustomCategory.colors, id: \.self) { value in Label(categoryColorLabel(value), systemImage: "circle.fill").foregroundStyle(categoryColor(value)).tag(value) }
+                }
+                Label(name.isEmpty ? tr("分类预览", "Preview", "Pratonton") : name, systemImage: icon).foregroundStyle(categoryColor(color)).font(.title2).padding()
+            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri"))
+                .onAppear { name = initial.name; icon = initial.icon; color = initial.color }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) {
+                        do {
+                            var item = initial; item.name = name; item.icon = icon; item.color = color
+                            try LocalStore.shared.change { try $0.saveCategory(item) }; model.reload(); dismiss()
+                        } catch { self.error = error.localizedDescription }
+                    } }
+                }
+                .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        }
+    }
+}
+struct SpendingComparisonView: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State var month: Date
+    private var previous: Date { shiftedMonth(month, by: -1) }
+    var body: some View {
+        List {
+            MonthPicker(month: $month)
+            Section(tr("个人净消费", "Personal net spending", "Belanja bersih peribadi")) {
+                ComparisonRow(name: tr("总计", "Total", "Jumlah"), current: model.ledger.spending(in: month), previous: model.ledger.spending(in: previous))
+                Text(monthKey(month) + " / " + monthKey(previous)).font(.caption)
+                Text(tr("按两个完整自然月内已记录的账目比较；本月未结束时也不会按天折算。退款扣回原消费月份，朋友还款不算收入。", "Compares recorded entries in the two calendar months, without prorating an unfinished month. Refunds reduce the original month; repayments are not income.", "Membandingkan rekod dua bulan kalendar tanpa prorata bulan belum tamat. Pulangan mengurangkan bulan asal; bayaran balik hutang bukan pendapatan.")).font(.footnote)
+            }
+            Section(tr("分类变化", "Category changes", "Perubahan kategori")) {
+                ForEach(model.ledger.categoryNames, id: \.self) { category in
+                    let current = model.ledger.spending(in: month, category: category)
+                    let prior = model.ledger.spending(in: previous, category: category)
+                    if current > 0 || prior > 0 { ComparisonRow(name: categoryLabel(category), current: current, previous: prior) }
+                }
+            }
+        }.navigationTitle(tr("月度对比", "Monthly comparison", "Perbandingan bulanan"))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: month)
+    }
+}
+private struct ComparisonRow: View {
+    let name: String
+    let current: Int
+    let previous: Int
+    private var change: String {
+        let difference = current - previous
+        if previous == 0 { return current == 0 ? tr("无变化", "No change", "Tiada perubahan") : tr("上月为零，新增 ", "Previous month zero; added ", "Bulan lalu sifar; tambahan ") + money(current) }
+        let percent = String(format: "%.1f%%", Double(abs(difference)) / Double(previous) * 100)
+        let prefix = difference >= 0 ? "+" : "−"
+        return prefix + money(abs(difference)) + " · " + prefix + percent
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(name).font(.headline)
+            HStack { Text(tr("所选月", "Selected", "Dipilih")); Spacer(); AnimatedMoney(cents: current) }
+            ProgressView(value: Double(current), total: Double(max(1, max(current, previous)))).tint(.teal)
+            HStack { Text(tr("上个月", "Previous", "Bulan lalu")); Spacer(); Text(money(previous)) }.foregroundStyle(.secondary)
+            ProgressView(value: Double(previous), total: Double(max(1, max(current, previous)))).tint(.gray)
+            Text(change).font(.caption).foregroundStyle(current > previous ? Color.orange : Color.secondary)
+        }.padding(.vertical, 6)
+    }
+}
+struct AnimatedMoney: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let cents: Int
+    var body: some View {
+        Text(money(cents)).monospacedDigit()
+            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: cents)
+    }
+}
+struct LedgerFilterEditor: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @State var value: LedgerFilter
+    let apply: (LedgerFilter) -> Void
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Picker(tr("分类", "Category", "Kategori"), selection: $value.category) {
+                    Text(tr("全部", "All", "Semua")).tag("")
+                    ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                }
+                Picker(tr("来源", "Source", "Sumber"), selection: $value.source) {
+                    Text(tr("全部", "All", "Semua")).tag("")
+                    ForEach(["手动", "Apple Pay", "固定消费"], id: \.self) { Text(sourceLabel($0)).tag($0) }
+                }
+                TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
+                TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
+                Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户可在账本搜索框输入。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants in the ledger search field.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dalam carian lejar.")).font(.footnote)
+                Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
+            }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod"))
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna")) { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } } }
+                }
+                .alert(tr("筛选条件无效", "Invalid filter", "Penapis tidak sah"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        }
+    }
+}
+
+struct RefundAllocationFields: View {
+    let expense: Expense
+    @Binding var values: [String: String]
+    private func binding(_ key: String) -> Binding<String> {
+        Binding(get: { values[key] ?? "" }, set: { values[key] = $0 })
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(tr("填写每人的退款 · MYR（留空为零）", "Refund per person · MYR (blank is zero)", "Pulangan setiap orang · MYR (kosong ialah sifar)")).font(.caption)
+            LabeledContent(tr("我的退款", "My refund", "Pulangan saya")) {
+                TextField(money(expense.personal), text: binding("owner")).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+            }
+            Text(tr("我的可退上限：", "My remaining limit: ", "Had baki saya: ") + money(expense.personal)).font(.caption).foregroundStyle(.secondary)
+            ForEach(expense.shares) { share in
+                LabeledContent(share.name) {
+                    TextField(tr("退款金额", "Refund amount", "Amaun pulangan"), text: binding(share.id)).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                Text(tr("可退上限：", "Remaining limit: ", "Had baki: ") + money(share.cents - share.refunded)).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+}
+
+struct CSVExportView: View {
+    @EnvironmentObject var model: LedgerModel
+    @State private var month = Date()
+    @State private var all = false
+    @State private var splits = false
+    @State private var exporting = false
+    @State private var document: CSVDocument?
+    var body: some View {
+        Form {
+            Section {
+                Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $all)
+                if !all { MonthPicker(month: $month) }
+                Picker(tr("导出内容", "Export content", "Kandungan eksport"), selection: $splits) {
+                    Text(tr("消费明细", "Expense details", "Butiran belanja")).tag(false)
+                    Text(tr("朋友分账明细", "Friend split details", "Butiran bahagian rakan")).tag(true)
+                }
+                Text(tr("消费明细保留原币金额和汇率；分账明细包含每人的份额、退款、已还、已退回及剩余欠款。所有统计金额使用 MYR。按消费月份选取，还款余额为截至导出时的状态。", "Expenses include original currency and rate. Splits include each person's share, refunds, repayments, returns and outstanding balance in MYR. Filtered by spending month, with balances as of export.", "Belanja termasuk mata wang asal dan kadar. Bahagian termasuk amaun, pulangan, bayaran dan baki setiap rakan dalam MYR. Ditapis mengikut bulan belanja, dengan baki semasa eksport.")).font(.footnote)
+                Button {
+                    document = CSVDocument(data: model.ledger.csv(month: all ? nil : month, splits: splits)); exporting = true
+                } label: { Label(tr("导出 CSV 文件", "Export CSV file", "Eksport fail CSV"), systemImage: "square.and.arrow.up") }
+            }
+            Text(tr("可用 Excel 打开。CSV 用于查看和整理，不是可恢复的完整备份；完整备份请使用 JSON 导出。", "Opens in Excel. CSV is for review, not full backup restoration; use JSON for backups.", "Boleh dibuka dalam Excel. CSV untuk semakan, bukan pemulihan penuh; gunakan JSON untuk sandaran.")).font(.footnote)
+        }.navigationTitle(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV"))
+            .fileExporter(isPresented: $exporting, document: document, contentType: .commaSeparatedText, defaultFilename: "YueJi-\(splits ? "splits" : "expenses")-\(all ? "all" : monthKey(month))") { result in
+                if case .failure(let error) = result { model.error = error.localizedDescription }
+            }
     }
 }

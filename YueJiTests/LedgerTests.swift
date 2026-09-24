@@ -303,3 +303,83 @@ final class ConvenienceFeatureTests: XCTestCase {
         XCTAssertEqual(try store.backups().count, 30)
     }
 }
+
+final class Version16Tests: XCTestCase {
+    func testCustomCategoryRenameKeepsReferencesAndRoundTrips() throws {
+        var ledger = Ledger()
+        var category = CustomCategory(name: "学费", icon: "book.fill", color: "blue")
+        try ledger.saveCategory(category)
+        ledger.expenses = [Expense(merchant: "University", cents: 5000, category: "学费")]
+        var recurring = RecurringExpense(name: "Fees", minor: 5000, start: Date())
+        recurring.category = "学费"; ledger.recurring = [recurring]
+        ledger.merchantCategories["university"] = "学费"
+        category.name = "教育"; try ledger.saveCategory(category)
+        let copy = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(copy.expenses.first?.category, "教育")
+        XCTAssertEqual(copy.recurring.first?.category, "教育")
+        XCTAssertEqual(copy.merchantCategories["university"], "教育")
+        XCTAssertEqual(copy.customCategories.first?.icon, "book.fill")
+        XCTAssertThrowsError(try ledger.deleteCategory(category.id))
+        XCTAssertThrowsError(try ledger.saveCategory(CustomCategory(name: " 教育 ")))
+        XCTAssertThrowsError(try ledger.saveCategory(CustomCategory(name: "餐饮")))
+        XCTAssertEqual(categoryLabel("教育"), "教育")
+    }
+    func testCustomRefundOnlyTargetsChosenFriendAndRejectsOverAllocation() throws {
+        let date = Date().addingTimeInterval(-60)
+        let friend = Share(name: "James", cents: 1000, repayments: [Repayment(cents: 1000)])
+        let other = Share(name: "Jason", cents: 500)
+        var ledger = Ledger(expenses: [Expense(merchant: "Trip", cents: 2000, date: date, shares: [friend, other])])
+        let id = ledger.expenses[0].id
+        try ledger.addRefund(expenseID: id, cents: 400, date: Date(), custom: [friend.id: 400])
+        XCTAssertEqual(ledger.expenses[0].personal, 500)
+        XCTAssertEqual(ledger.expenses[0].shares[0].owed, -400)
+        XCTAssertEqual(ledger.expenses[0].shares[1].owed, 500)
+        _ = try ledger.validated()
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: id, cents: 700, date: Date(), custom: [friend.id: 700]))
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: id, cents: 100, date: Date(), custom: ["owner": 99]))
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: id, cents: 100, date: Date(), custom: ["unknown": 100]))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+    }
+    func testMonthComparisonUsesPersonalNetAndRefundMonth() throws {
+        let now = Date(), prior = shiftedMonth(now, by: -1)
+        var ledger = Ledger(expenses: [Expense(merchant: "Old", cents: 2000, date: prior, category: "餐饮", shares: [Share(name: "James", cents: 1000)]), Expense(merchant: "New", cents: 300, date: now, category: "交通")])
+        try ledger.addRefund(expenseID: ledger.expenses[0].id, cents: 200, date: now, custom: ["owner": 200])
+        XCTAssertEqual(ledger.spending(in: prior), 800)
+        XCTAssertEqual(ledger.spending(in: now), 300)
+        XCTAssertEqual(ledger.spending(in: prior, category: "交通"), 0)
+    }
+    func testFiltersIntersectAndValidateAmountRange() throws {
+        let date = Date()
+        let ledger = Ledger(expenses: [Expense(merchant: "Shell", cents: 2000, date: date, category: "交通", source: "Apple Pay"), Expense(merchant: "Shell", cents: 3000, date: date, category: "交通"), Expense(merchant: "Old Shell", cents: 2000, date: shiftedMonth(date, by: -1), category: "交通", source: "Apple Pay")])
+        let filter = LedgerFilter(category: "交通", source: "Apple Pay", minimum: "20", maximum: "20")
+        XCTAssertEqual(try ledger.filteredEntries(in: date, search: "shell", filter: filter).count, 1)
+        XCTAssertEqual(try ledger.filteredEntries(in: date, search: "missing", filter: filter).count, 0)
+        XCTAssertThrowsError(try LedgerFilter(minimum: "30", maximum: "20").validate())
+        XCTAssertThrowsError(try LedgerFilter(minimum: "oops").validate())
+        XCTAssertNoThrow(try LedgerFilter(minimum: "0").validate())
+    }
+    func testTripDefaultsAndOldData() throws {
+        var ledger = Ledger()
+        ledger.tripDefaults = TripDefaults(consumption: "7.5", price: "2.05", companions: ["James", "Jason"], includeDriver: true)
+        let copy = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(copy.tripDefaults, ledger.tripDefaults)
+        XCTAssertThrowsError(try TripDefaults(consumption: "7.5", price: "2.05", companions: ["James", " james "], includeDriver: true).validate())
+        XCTAssertThrowsError(try TripDefaults(consumption: "101", price: "2.05", companions: [], includeDriver: true).validate())
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(Ledger())) as? [String: Any])
+        object.removeValue(forKey: "customCategories"); object.removeValue(forKey: "tripDefaults")
+        let old = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(old.customCategories.isEmpty); XCTAssertNil(old.tripDefaults)
+    }
+    func testCSVQuotesUnicodeFormulaAndSelectedMonth() throws {
+        XCTAssertEqual(csvCell("a,\"b\"\nc"), "\"a,\"\"b\"\"\nc\"")
+        XCTAssertEqual(csvCell("=SUM(A1)"), "\"'=SUM(A1)\"")
+        XCTAssertEqual(csvCell("  @bad"), "\"'  @bad\"")
+        let now = Date()
+        let ledger = Ledger(expenses: [Expense(merchant: "中文,店", cents: 1000, date: now, shares: [Share(name: "=James", cents: 500)]), Expense(merchant: "OLDER-ONLY", cents: 2000, date: shiftedMonth(now, by: -1))])
+        let expense = String(decoding: ledger.csv(month: now, splits: false), as: UTF8.self)
+        XCTAssertTrue(expense.hasPrefix("\u{FEFF}")); XCTAssertTrue(expense.contains("中文,店")); XCTAssertFalse(expense.contains("OLDER-ONLY"))
+        let split = String(decoding: ledger.csv(month: now, splits: true), as: UTF8.self)
+        XCTAssertTrue(split.contains("'=James")); XCTAssertTrue(split.contains("\"5.00\""))
+    }
+}

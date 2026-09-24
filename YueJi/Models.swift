@@ -66,11 +66,13 @@ struct Ledger: Codable {
     var automationEvents: [AutomationEvent] = []
     var merchantCategories: [String: String] = [:]
     var backupCreatedAt: Date? = nil
+    var customCategories: [CustomCategory] = []
+    var tripDefaults: TripDefaults? = nil
     init(version: Int = 3, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -86,23 +88,30 @@ struct Ledger: Codable {
         automationEvents = try c.decodeIfPresent([AutomationEvent].self, forKey: .automationEvents) ?? []
         merchantCategories = try c.decodeIfPresent([String: String].self, forKey: .merchantCategories) ?? [:]
         backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
+        customCategories = try c.decodeIfPresent([CustomCategory].self, forKey: .customCategories) ?? []
+        tripDefaults = try c.decodeIfPresent(TripDefaults.self, forKey: .tripDefaults)
     }
     func validated() throws -> Ledger {
+        guard customCategories.count <= 100,
+              Set(customCategories.map(\.id)).count == customCategories.count,
+              Set(categoryNames.map(friendKey)).count == categoryNames.count else { throw LedgerError.invalid("付款或分账数据无效。") }
+        for category in customCategories { try category.validate() }
+        try tripDefaults?.validate()
         guard merchantCategories.count <= 50_000,
-              merchantCategories.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 200 && categories.contains($0.value) }) else {
+              merchantCategories.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 200 && categoryNames.contains($0.value) }) else {
             throw LedgerError.invalid("付款或分账数据无效。")
         }
         guard version == 3, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
-        for rule in recurring { try rule.validate() }
+        for rule in recurring { try rule.validate(allowedCategories: categoryNames) }
         guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for e in expenses {
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   e.merchant.count <= 200, e.cents > 0, e.cents <= 10_000_000_000,
-                  e.date.timeIntervalSince1970.isFinite, categories.contains(e.category), e.shares.count <= 100,
+                  e.date.timeIntervalSince1970.isFinite, categoryNames.contains(e.category), e.shares.count <= 100,
                   Set(e.shares.map(\.id)).count == e.shares.count,
                   Set(e.shares.map { friendKey($0.name) }).count == e.shares.count else { throw LedgerError.invalid("付款或分账数据无效。") }
             for s in e.shares {

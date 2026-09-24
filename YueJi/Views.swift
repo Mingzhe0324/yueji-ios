@@ -6,8 +6,15 @@ private let ink = Color(uiColor: UIColor { traits in
     traits.userInterfaceStyle == .dark ? UIColor(red: 0.45, green: 0.82, blue: 0.94, alpha: 1) : UIColor(red: 0.10, green: 0.26, blue: 0.37, alpha: 1)
 })
 struct GlassPanel<Content: View>: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
     @ViewBuilder var content: Content
-    var body: some View { content.padding(20).frame(maxWidth: .infinity, alignment: .leading).ledgerGlass() }
+    var body: some View {
+        content.padding(20).frame(maxWidth: .infinity, alignment: .leading).ledgerGlass()
+            .opacity(appeared || reduceMotion ? 1 : 0)
+            .offset(y: appeared || reduceMotion ? 0 : 8)
+            .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.32)) { appeared = true } }
+    }
 }
 extension View {
     @ViewBuilder func ledgerGlass() -> some View {
@@ -33,6 +40,7 @@ struct MainView: View {
     }
 }
 struct MonthPicker: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var month: Date
     var body: some View {
         HStack(spacing: 0) {
@@ -40,7 +48,7 @@ struct MonthPicker: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
             Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
-                .font(.headline).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                .font(.headline).contentTransition(.opacity).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 25).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
                     guard abs(dx) > 45, abs(dx) > abs(dy) * 1.5 else { return }
@@ -52,7 +60,7 @@ struct MonthPicker: View {
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
         }
     }
-    private func shift(_ n: Int) { month = shiftedMonth(month, by: n) }
+    private func shift(_ n: Int) { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { month = shiftedMonth(month, by: n) } }
 }
 struct DashboardView: View {
     @EnvironmentObject var model: LedgerModel
@@ -73,12 +81,13 @@ struct DashboardView: View {
             ScrollView {
                 VStack(spacing: 18) {
                     MonthPicker(month: monthBinding)
+                    NavigationLink { SpendingComparisonView(month: month) } label: { Label(tr("月度消费对比", "Compare monthly spending", "Banding belanja bulanan"), systemImage: "chart.bar.xaxis") }
                     NavigationLink { UpcomingView(initialMonth: month) } label: { Label(tr("查看固定消费预览", "Preview upcoming bills", "Pratonton bil akan datang"), systemImage: "calendar") }
                     NavigationLink { DuplicateReviewView() } label: { Label(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua"), systemImage: "doc.on.doc") }
                     GlassPanel {
                         VStack(alignment: .leading, spacing: 15) {
                             Label(tr("我的月度消费", "My monthly spending", "Belanja bulanan saya"), systemImage: "sparkles").foregroundStyle(.secondary)
-                            Text(money(personal)).font(.system(size: 38, weight: .semibold, design: .rounded)).minimumScaleFactor(0.5).lineLimit(1)
+                            AnimatedMoney(cents: personal).font(.system(size: 38, weight: .semibold, design: .rounded)).minimumScaleFactor(0.5).lineLimit(1)
                             if budget > 0 {
                                 ProgressView(value: min(Double(personal) / Double(budget), 1))
                                 Text((personal > budget ? tr("超出预算：", "Over budget: ", "Melebihi bajet: ") : tr("剩余预算：", "Remaining: ", "Baki: ")) + money(abs(budget - personal)))
@@ -100,10 +109,10 @@ struct DashboardView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(tr("钱花在哪里", "Spending by category", "Belanja mengikut kategori")).font(.headline)
                             if entries.isEmpty { Text(tr("这个月还没有记录", "No entries this month", "Tiada rekod bulan ini")).foregroundStyle(.secondary) }
-                            ForEach(categories, id: \.self) { category in
+                            ForEach(model.ledger.categoryNames, id: \.self) { category in
                                 let value = entries.filter { $0.category == category }.reduce(0) { $0 + $1.personal }
                                 if value > 0 {
-                                    HStack { Text(categoryLabel(category)); Spacer(); Text(money(value)) }
+                                    HStack { CategoryBadge(name: category); Spacer(); AnimatedMoney(cents: value) }
                                     ProgressView(value: Double(value), total: Double(max(personal, 1)))
                                 }
                             }
@@ -131,7 +140,8 @@ struct ExpenseRow: View {
             Image(systemName: entry.fuel ? "fuelpump.fill" : entry.recurringKey != nil ? "repeat" : "creditcard.fill").foregroundStyle(ink)
             VStack(alignment: .leading, spacing: 5) {
                 Text(entry.merchant).font(.headline)
-                Text("\(categoryLabel(entry.category)) · \(sourceLabel(entry.source)) · \(dateLabel(entry.date))").font(.caption).foregroundStyle(.secondary)
+                CategoryBadge(name: entry.category).font(.caption)
+                Text("\(sourceLabel(entry.source)) · \(dateLabel(entry.date))").font(.caption).foregroundStyle(.secondary)
                 if let fx = entry.foreign { Text(Currency.display(fx.minor, fx.currency) + " · 1 \(fx.currency) = \(fx.quote.text) MYR").font(.caption) }
                 if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + money(entry.refunded)).font(.caption).foregroundStyle(.green) }
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.caption) }
@@ -142,6 +152,9 @@ struct ExpenseRow: View {
 }
 struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var filter = LedgerFilter()
+    @State private var filtering = false
     @SceneStorage("ledgerMonth") private var monthTimestamp = Date().timeIntervalSince1970
     private var month: Date {
         get { Date(timeIntervalSince1970: monthTimestamp) }
@@ -157,13 +170,16 @@ struct ExpensesView: View {
             List {
                 MonthPicker(month: monthBinding)
                 NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
-                let entries = model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) && (search.isEmpty || $0.merchant.localizedCaseInsensitiveContains(search) || categoryLabel($0.category).localizedCaseInsensitiveContains(search)) }.sorted { $0.date > $1.date }
+                Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
+                let entries = (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []
                 if entries.isEmpty { ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray") }
                 ForEach(entries) { e in
                     Button { editing = e } label: { ExpenseRow(entry: e).foregroundStyle(.primary) }
                         .swipeActions { Button(tr("删除", "Delete", "Padam"), role: .destructive) { deleting = e } }
                 }
-            }.navigationTitle(tr("账本", "Ledger", "Lejar")).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
+            }.animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
+                .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
+                .navigationTitle(tr("账本", "Ledger", "Lejar")).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
                 .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
@@ -227,7 +243,7 @@ struct ExpenseEditor: View {
                         if let n = try? total() { LabeledContent(tr("换算为", "Converted to", "Ditukar kepada"), value: money(n)) }
                     }
                     DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
-                    Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(categories, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                    Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
                 }.disabled((original?.refunded ?? 0) > 0)
                 Section {
                     Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting)
@@ -407,6 +423,7 @@ struct SettingsView: View {
                         Text(tr("深色模式", "Dark mode", "Mod gelap")).tag("dark")
                     }
                     NavigationLink(tr("通知与每日提醒", "Notifications & daily reminder", "Notifikasi & peringatan harian")) { NotificationSettingsView() }
+                    NavigationLink(tr("管理分类", "Manage categories", "Urus kategori")) { CategoriesView() }
                     NavigationLink(tr("商户分类规则", "Merchant category rules", "Peraturan kategori peniaga")) { MerchantRulesView() }
                     NavigationLink(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")) { RatesView() }
                     Text(tr("统计本位币：MYR", "Accounting currency: MYR", "Mata wang perakaunan: MYR")).font(.caption)
@@ -419,6 +436,7 @@ struct SettingsView: View {
                 }
                 Section(tr("数据与备份", "Data & backups", "Data & sandaran")) {
                     Text(tr("每次修改前保留旧版，最多 30 份本地备份。卸载会删除本地数据，请定期导出到文件或 iCloud Drive。", "Keeps up to 30 local snapshots before changes. Uninstalling deletes local data. Export to Files or iCloud Drive regularly.", "Menyimpan sehingga 30 sandaran tempatan sebelum perubahan. Nyahpasang memadam data tempatan. Eksport ke Files atau iCloud Drive secara berkala.")).font(.footnote)
+                    NavigationLink(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")) { CSVExportView() }
                     Button(tr("导出完整备份", "Export full backup", "Eksport sandaran penuh")) { do { document = LedgerDocument(data: try LocalStore.exportData(LocalStore.shared.read())); exporting = true } catch { model.error = error.localizedDescription } }
                     Button(tr("恢复 JSON 备份", "Restore JSON backup", "Pulihkan sandaran JSON")) { importing = true }
                     if FileManager.default.fileExists(atPath: LocalStore.shared.recoveryFile.path) {
@@ -464,4 +482,12 @@ private var installedVersionLabel: String {
     let version = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
     let build = Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String
     return "YueJi · \(version ?? "-") (\(build ?? "-"))"
+}
+
+struct CSVDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.commaSeparatedText] }
+    var data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }

@@ -17,7 +17,8 @@ func categoryLabel(_ key: String) -> String {
     case "购物": return tr("购物", "Shopping", "Beli-belah")
     case "账单": return tr("账单", "Bills", "Bil")
     case "娱乐": return tr("娱乐", "Entertainment", "Hiburan")
-    default: return tr("其他", "Other", "Lain-lain")
+    case "其他": return tr("其他", "Other", "Lain-lain")
+    default: return key
     }
 }
 func sourceLabel(_ key: String) -> String { key == "手动" ? tr("手动", "Manual", "Manual") : key == "固定消费" ? tr("固定消费", "Recurring", "Berulang") : key }

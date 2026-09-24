@@ -71,9 +71,9 @@ struct RecurringExpense: Codable, Identifiable, Equatable {
         return c.date(byAdding: .day, value: min(original.day ?? 1, range.count) - 1, to: month)
     }
     var nextDate: Date { occurrence(nextIndex) ?? start }
-    func validate() throws {
+    func validate(allowedCategories: [String] = categories) throws {
         guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200,
-              Currency.codes.contains(currency), minor > 0, minor <= 10_000_000_000, categories.contains(category),
+              Currency.codes.contains(currency), minor > 0, minor <= 10_000_000_000, allowedCategories.contains(category),
               start.timeIntervalSince1970 >= 0, start.timeIntervalSince1970 < 4_102_444_800,
               TimeZone(identifier: timeZoneID) != nil, nextIndex >= 0, nextIndex < 10_000 else { throw LedgerError.invalid("固定消费资料无效。") }
     }
@@ -200,10 +200,22 @@ func validateRefunds(_ e: Expense) throws {
     }
 }
 extension Ledger {
-    mutating func addRefund(expenseID: String, cents: Int, date: Date) throws {
+    mutating func addRefund(expenseID: String, cents: Int, date: Date, custom: [String: Int]? = nil) throws {
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), date <= Date(), date >= Calendar.current.startOfDay(for: expenses[i].date) else { throw LedgerError.invalid("交易金额或日期无效。") }
         let e = expenses[i]
-        let allocation = try allocateRefund(cents, capacities: [e.personal] + e.shares.map { $0.cents - $0.refunded })
+        let allocation: [Int]
+        if let custom {
+            let keys = ["owner"] + e.shares.map(\.id)
+            let capacities = [e.personal] + e.shares.map { $0.cents - $0.refunded }
+            guard custom.keys.allSatisfy({ keys.contains($0) }), cents > 0 else { throw LedgerError.invalid("付款或分账数据无效。") }
+            let values = keys.map { custom[$0] ?? 0 }
+            guard zip(values, capacities).allSatisfy({ $0.0 >= 0 && $0.0 <= $0.1 }), values.reduce(0, +) == cents else {
+                throw reviewError("分配合计必须等于退款金额，且不能超过各人的可退份额。", "Allocation must equal the refund and stay within each person's remaining share.", "Jumlah agihan mesti sama dengan bayaran balik dan tidak melebihi baki bahagian setiap orang.")
+            }
+            allocation = values
+        } else {
+            allocation = try allocateRefund(cents, capacities: [e.personal] + e.shares.map { $0.cents - $0.refunded })
+        }
         var amounts: [String: Int] = [:]
         for j in e.shares.indices { amounts[e.shares[j].id] = allocation[j + 1] }
         let record = RefundRecord(cents: cents, date: date, personalCents: allocation[0], shares: amounts)
@@ -396,5 +408,127 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent(); content.title = title; content.body = body; content.sound = .default
         // Notification failure must never roll back or retry a successfully recorded payment.
         try? await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
+    }
+}
+
+struct CustomCategory: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var name: String
+    var icon: String = "tag.fill"
+    var color: String = "teal"
+    static let icons = ["tag.fill", "book.fill", "airplane", "cross.case.fill", "pawprint.fill", "house.fill", "gift.fill", "sportscourt.fill", "car.fill", "heart.fill"]
+    static let colors = ["teal", "blue", "purple", "pink", "orange", "green"]
+    func validate() throws {
+        guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 30,
+              Self.icons.contains(icon), Self.colors.contains(color) else { throw LedgerError.invalid("付款或分账数据无效。") }
+    }
+}
+struct TripDefaults: Codable, Equatable {
+    var consumption: String
+    var price: String
+    var companions: [String]
+    var includeDriver: Bool
+    func validate() throws {
+        let c = try parseRate(consumption), p = try parseRate(price)
+        guard c <= 100, p <= 1000, companions.count <= 20,
+              companions.allSatisfy({ !friendKey($0).isEmpty && $0.count <= 80 }),
+              Set(companions.map(friendKey)).count == companions.count else {
+            throw reviewError("请检查油耗、油价和朋友姓名，姓名不能重复。", "Check fuel use, price and unique friend names.", "Semak penggunaan minyak, harga dan nama rakan yang unik.")
+        }
+    }
+}
+extension Ledger {
+    var categoryNames: [String] { categories + customCategories.map(\.name) }
+    mutating func saveCategory(_ category: CustomCategory) throws {
+        var value = category; value.name = value.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        try value.validate()
+        guard !(categories + customCategories.filter { $0.id != value.id }.map(\.name)).map(friendKey).contains(friendKey(value.name)) else {
+            throw reviewError("分类名称已存在。", "Category name already exists.", "Nama kategori sudah wujud.")
+        }
+        if let i = customCategories.firstIndex(where: { $0.id == value.id }) {
+            let old = customCategories[i].name
+            for j in expenses.indices where expenses[j].category == old { expenses[j].category = value.name }
+            for j in recurring.indices where recurring[j].category == old { recurring[j].category = value.name }
+            for key in Array(merchantCategories.keys) where merchantCategories[key] == old { merchantCategories[key] = value.name }
+            customCategories[i] = value
+        } else { customCategories.append(value) }
+    }
+    mutating func deleteCategory(_ id: String) throws {
+        guard let value = customCategories.first(where: { $0.id == id }) else { return }
+        guard !expenses.contains(where: { $0.category == value.name }), !recurring.contains(where: { $0.category == value.name }), !merchantCategories.values.contains(value.name) else {
+            throw reviewError("此分类仍被账目、固定消费或商户规则使用，请先修改这些记录的分类。", "This category is used by entries, schedules or merchant rules. Reassign them before deleting it.", "Kategori digunakan oleh rekod, jadual atau peraturan peniaga. Tukar kategori dahulu.")
+        }
+        customCategories.removeAll { $0.id == id }
+    }
+    func spending(in month: Date, category: String? = nil) -> Int {
+        expenses.filter { monthKey($0.date) == monthKey(month) && (category == nil || $0.category == category) }.reduce(0) { $0 + $1.personal }
+    }
+}
+func optionalMoney(_ value: String) throws -> Int? {
+    let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    if text.isEmpty { return nil }
+    if text == "0" || text == "0.00" { return 0 }
+    return try toCents(text)
+}
+struct LedgerFilter: Equatable {
+    var category = ""
+    var source = ""
+    var minimum = ""
+    var maximum = ""
+    func validate() throws {
+        let low = try optionalMoney(minimum), high = try optionalMoney(maximum)
+        if let low, let high, low > high { throw reviewError("最低金额不能高于最高金额。", "Minimum cannot exceed maximum.", "Minimum tidak boleh melebihi maksimum.") }
+    }
+    var active: Bool { self != LedgerFilter() }
+}
+
+// Quote every cell and neutralize formula-like user strings for spreadsheet applications.
+func csvCell(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    let formula = trimmed.first.map { "=+-@".contains($0) } ?? false
+    let safe = formula || value.hasPrefix("\t") || value.hasPrefix("\r") ? "'" + value : value
+    return "\"" + safe.replacingOccurrences(of: "\"", with: "\"\"") + "\""
+}
+func csvData(_ rows: [[String]]) -> Data {
+    let text = "\u{FEFF}" + rows.map { $0.map(csvCell).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
+    return Data(text.utf8)
+}
+extension Ledger {
+    func csv(month: Date?, splits: Bool) -> Data {
+        let entries = expenses.filter { month == nil || monthKey($0.date) == monthKey(month!) }.sorted { $0.date < $1.date }
+        let formatter = ISO8601DateFormatter()
+        var rows: [[String]]
+        if splits {
+            rows = [["expense_id", "date", "merchant", "category", "friend", "share_MYR", "refund_MYR", "repaid_MYR", "returned_MYR", "owed_MYR", "payable_back_MYR"]]
+            for e in entries { for s in e.shares {
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, categoryLabel(e.category), s.name, Currency.input(s.cents, "MYR"), Currency.input(s.refunded, "MYR"), Currency.input(s.repaid, "MYR"), Currency.input(s.returned, "MYR"), Currency.input(max(0, s.owed), "MYR"), Currency.input(max(0, -s.owed), "MYR")])
+            } }
+        } else {
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR"]]
+            for e in entries {
+                let currency = e.foreign?.currency ?? "MYR"
+                let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, categoryLabel(e.category), sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1"])
+            }
+        }
+        return csvData(rows)
+    }
+}
+
+
+extension Ledger {
+    func filteredEntries(in month: Date, search: String, filter: LedgerFilter) throws -> [Expense] {
+        try filter.validate()
+        let low = try optionalMoney(filter.minimum), high = try optionalMoney(filter.maximum)
+        let period = monthKey(month)
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return expenses.filter { e in
+            guard monthKey(e.date) == period,
+                  filter.category.isEmpty || filter.category == e.category,
+                  filter.source.isEmpty || filter.source == e.source else { return false }
+            if let low, e.cents < low { return false }
+            if let high, e.cents > high { return false }
+            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || categoryLabel(e.category).localizedCaseInsensitiveContains(query)
+        }.sorted { $0.date > $1.date }
     }
 }
