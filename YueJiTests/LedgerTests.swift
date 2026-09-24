@@ -644,3 +644,19 @@ final class TNGIncomingTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices[1].status, "ignored")
     }
 }
+
+final class FriendNameNormalizationTests: XCTestCase {
+    func testBatchRepaymentAndSummaryAcceptDisplayNamesAndKeys() throws {
+        let now = Date()
+        for supplied in ["CHONG YONG EN", "chong yong en", "  Chong   Yong\tEn  "] {
+            var ledger = Ledger()
+            ledger.expenses = [Expense(merchant: "Cafe", cents: 2000, date: now.addingTimeInterval(-86400), shares: [Share(name: "CHONG YONG EN", cents: 1867)])]
+            XCTAssertEqual(ledger.friendSpending(friend: supplied).owed, 1867)
+            try ledger.batchRepay(friend: supplied, cents: 400, date: now)
+            XCTAssertEqual(ledger.friendSpending(friend: supplied).owed, 1467)
+            XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 400)
+            XCTAssertThrowsError(try ledger.batchRepay(friend: "Different person", cents: 100, date: now))
+            XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 400)
+        }
+    }
+}

@@ -245,11 +245,12 @@ extension Ledger {
         return result.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     mutating func batchRepay(friend: String, cents: Int, date: Date) throws {
+        let key = friendKey(friend)
         guard cents > 0 else { throw reviewError("请输入大于零的还款金额。", "Enter a positive repayment amount.", "Masukkan amaun bayaran balik positif.") }
         guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         let indices = expenses.indices.sorted { expenses[$0].date == expenses[$1].date ? expenses[$0].id < expenses[$1].id : expenses[$0].date < expenses[$1].date }
         let eligible = indices.flatMap { i in expenses[i].shares.indices.compactMap { j -> (Int, Int)? in
-            friendKey(expenses[i].shares[j].name) == friend && expenses[i].shares[j].owed > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
+            friendKey(expenses[i].shares[j].name) == key && expenses[i].shares[j].owed > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
         } }
         let available = eligible.reduce(0, { $0 + expenses[$1.0].shares[$1.1].owed })
         guard cents <= available else {
@@ -328,9 +329,10 @@ struct FriendSpending {
 }
 extension Ledger {
     func friendSpending(friend: String, month: Date? = nil) -> FriendSpending {
+        let key = friendKey(friend)
         var result = FriendSpending()
         for e in expenses where month == nil || monthKey(e.date) == monthKey(month!) {
-            for s in e.shares where friendKey(s.name) == friend {
+            for s in e.shares where friendKey(s.name) == key {
                 let net = s.cents - s.refunded
                 result.net += net; result.refunds += s.refunded
                 result.owed += max(0, s.owed); result.payable += max(0, -s.owed)
