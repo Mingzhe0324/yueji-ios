@@ -440,3 +440,33 @@ final class TNGTests: XCTestCase {
         XCTAssertTrue(try LocalStore.decode(JSONSerialization.data(withJSONObject: json)).tngNotices.isEmpty)
     }
 }
+
+
+final class BudgetAlertTests: XCTestCase {
+    func testThresholdUsesPersonalShareAndRefunds() {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.budgets[monthKey(now)] = 6000
+        ledger.expenses = [Expense(merchant: "Dinner", cents: 10000, date: now,
+                                   shares: [Share(name: "Amy", cents: 4000)])]
+        XCTAssertEqual(BudgetAlertCandidate.make(ledger: ledger, now: now)?.spent, 6000)
+        ledger.expenses[0].refunds = [RefundRecord(cents: 100, date: now, personalCents: 100, shares: [:])]
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+    }
+    func testNoBudgetOrHistoricalSpendingDoesNotAlert() {
+        let now = Date()
+        let previous = shiftedMonth(now, by: -1)
+        var ledger = Ledger()
+        ledger.expenses = [Expense(merchant: "Old purchase", cents: 99999, date: previous)]
+        ledger.budgets[monthKey(previous)] = 100
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+        ledger.budgets[monthKey(now)] = 100
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+        ledger.expenses.append(Expense(merchant: "Today", cents: 99, date: now))
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+        ledger.expenses[1].cents = 101
+        XCTAssertEqual(BudgetAlertCandidate.make(ledger: ledger, now: now)?.budget, 100)
+        ledger.budgets.removeValue(forKey: monthKey(now))
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+    }
+}

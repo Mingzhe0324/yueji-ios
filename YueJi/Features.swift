@@ -380,9 +380,9 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound, .list])
     }
-    static func configure(daily: Bool, results: Bool, hour: Int, minute: Int) async throws {
+    static func configure(daily: Bool, results: Bool, hour: Int, minute: Int, budgetAlerts: Bool = false) async throws {
         let center = UNUserNotificationCenter.current()
-        if daily || results {
+        if daily || results || budgetAlerts {
             guard try await center.requestAuthorization(options: [.alert, .sound]) else {
                 throw reviewError("通知未获允许，请到 iPhone 设置开启月记通知。", "Notifications are not allowed. Enable YueJi notifications in iPhone Settings.", "Notifikasi tidak dibenarkan. Aktifkan notifikasi YueJi dalam Tetapan iPhone.")
             }
@@ -399,6 +399,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         let defaults = UserDefaults.standard
         defaults.set(daily, forKey: "dailyReminder"); defaults.set(results, forKey: "automationNotifications")
         defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
+        defaults.set(budgetAlerts, forKey: "budgetAlerts")
     }
     static func result(title: String, body: String) async {
         guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
@@ -530,5 +531,50 @@ extension Ledger {
             if let high, e.cents > high { return false }
             return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || categoryLabel(e.category).localizedCaseInsensitiveContains(query)
         }.sorted { $0.date > $1.date }
+    }
+}
+
+
+// Current-month, net personal spending only. No alert for historical backfills.
+struct BudgetAlertCandidate {
+    let month: String
+    let spent: Int
+    let budget: Int
+    static func make(ledger: Ledger, now: Date = Date()) -> BudgetAlertCandidate? {
+        let key = monthKey(now)
+        guard let budget = ledger.budgets[key], budget > 0 else { return nil }
+        let spent = ledger.spending(in: now)
+        guard spent >= budget else { return nil }
+        return BudgetAlertCandidate(month: key, spent: spent, budget: budget)
+    }
+}
+actor BudgetAlertService {
+    static let shared = BudgetAlertService()
+    private var checking = false
+    func check() async {
+        guard !checking else { return }
+        checking = true
+        defer { checking = false }
+        let defaults = UserDefaults.standard
+        guard defaults.bool(forKey: "budgetAlerts"),
+              let ledger = try? LocalStore.shared.read(),
+              let candidate = BudgetAlertCandidate.make(ledger: ledger) else { return }
+        let key = "budgetAlertSent." + candidate.month
+        guard !defaults.bool(forKey: key) else { return }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard defaults.bool(forKey: "budgetAlerts"),
+              settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+        let content = UNMutableNotificationContent()
+        content.title = tr("本月已达到预算", "Monthly budget reached", "Bajet bulanan dicapai")
+        content.body = defaults.bool(forKey: "hideNotificationDetails")
+            ? tr("打开月记查看本月预算。", "Open YueJi to review your budget.", "Buka YueJi untuk menyemak bajet.")
+            : tr("个人消费：", "Personal spending: ", "Belanja peribadi: ") + money(candidate.spent)
+                + tr("；预算：", "; budget: ", "; bajet: ") + money(candidate.budget)
+        content.sound = .default
+        do {
+            try await center.add(UNNotificationRequest(identifier: "yueji.budget." + candidate.month, content: content, trigger: nil))
+            defaults.set(true, forKey: key)
+        } catch { /* Retry at a later check; a notification error never changes a payment. */ }
     }
 }

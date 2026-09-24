@@ -19,6 +19,7 @@ struct RecordApplePayIntent: AppIntent {
                 let detail = entry.map { money($0.cents) + " · " + $0.merchant + " · " + categoryLabel($0.category) } ?? ""
                 return (saved, detail)
             }
+            await BudgetAlertService.shared.check()
             if result.0 {
                 await LedgerNotifications.result(title: tr("已记账", "Recorded", "Direkod"), body: result.1)
                 return .result(dialog: "已保存到月记。")
@@ -45,6 +46,7 @@ struct PostRecurringIntent: AppIntent {
             try? LocalStore.shared.change { $0.logAutomation(source: "Recurring", outcome: "failed", detail: failure.localizedDescription) }
             throw failure
         }
+        await BudgetAlertService.shared.check()
         return .result(dialog: "已检查到期项目。缺少汇率的项目仍保留待记。")
     }
 }
@@ -71,6 +73,7 @@ struct RecordTNGIntent: AppIntent {
                 ledger.logAutomation(source: "TNG", outcome: "checked", detail: result)
                 return result
             }
+            await BudgetAlertService.shared.check()
             await LedgerNotifications.result(title: "TNG", body: message)
             return .result(dialog: "TNG 通知已处理，请在月记查看结果。")
         } catch {

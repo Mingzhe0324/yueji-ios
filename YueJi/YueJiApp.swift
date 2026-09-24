@@ -21,7 +21,7 @@ struct YueJiApp: App {
         savedNotice = UUID()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
-    func reload() { do { ledger = try LocalStore.shared.read(); loaded = true; try LocalStore.shared.change { try $0.postDue() }; ledger = try LocalStore.shared.read() } catch { self.error = error.localizedDescription } }
+    func reload() { do { ledger = try LocalStore.shared.read(); loaded = true; try LocalStore.shared.change { try $0.postDue() }; ledger = try LocalStore.shared.read(); Task { await BudgetAlertService.shared.check() } } catch { self.error = error.localizedDescription } }
     func change(_ action: (inout Ledger) throws -> Void) {
         do { try LocalStore.shared.change(action); reload() } catch { self.error = error.localizedDescription }
     }

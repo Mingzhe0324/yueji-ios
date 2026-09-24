@@ -84,7 +84,6 @@ struct MonthPicker: View {
 struct DashboardView: View {
     @EnvironmentObject var model: LedgerModel
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
-    @AppStorage("dismissedVisualGuide") private var dismissedGuide = false
     @State private var adding = false
     @State private var budgetText = ""
     @State private var budgeting = false
@@ -101,24 +100,31 @@ struct DashboardView: View {
                     MonthPicker(month: monthBinding)
                     spendingCard
                     balancesCard
-                    if !dismissedGuide { setupCard }
                     categoriesCard
-                    toolsCard
-                    Text(tr("统计使用 MYR；外币账目保留入账时的汇率。", "Totals use MYR; foreign entries keep their saved rate.", "Jumlah menggunakan MYR; rekod asing mengekalkan kadar tersimpan."))
-                        .font(.footnote).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
+                    if model.ledger.expenses.isEmpty {
+                        NavigationLink { OverviewToolsView(month: month) } label: {
+                            Label(tr("设置自动记账", "Set up automatic recording", "Sediakan rekod automatik"), systemImage: "bolt.circle")
+                        }.font(.subheadline)
+                    }
                 }.padding(20)
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle(tr("月记", "YueJi", "YueJi"))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    NavigationLink { OverviewToolsView(month: month) } label: { Image(systemName: "ellipsis.circle") }
+                        .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
+                }
+            }
             .safeAreaInset(edge: .bottom) {
-                HStack {
-                    Spacer()
-                    Button { adding = true } label: {
-                        Label(tr("记一笔", "Add expense", "Tambah belanja"), systemImage: "plus")
-                            .font(.headline).padding(.horizontal, 24).padding(.vertical, 16)
-                    }.buttonStyle(.plain).foregroundStyle(ink).ledgerGlass()
-                    Spacer()
-                }.padding(.horizontal, 20).padding(.bottom, 10).padding(.top, 6)
+                Button { adding = true } label: {
+                    Label(tr("记一笔", "Add expense", "Tambah belanja"), systemImage: "plus")
+                        .font(.headline).frame(maxWidth: .infinity, minHeight: 52)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
+                .padding(.horizontal, 24).padding(.vertical, 10)
+                .background(.bar)
             }
             .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
             .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
@@ -177,25 +183,6 @@ struct DashboardView: View {
             }.font(.subheadline)
         }
     }
-    private var setupCard: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 14) {
-                HStack {
-                    Text(tr("让记账更轻松", "Make recording easier", "Mudahkan rekod belanja")).font(.headline)
-                    Spacer()
-                    Button { dismissedGuide = true } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                        .accessibilityLabel(tr("隐藏引导", "Dismiss guide", "Tutup panduan"))
-                }
-                Text(tr("连接付款通知，或先记录第一笔。接入后可查看实际运行结果。", "Connect payment notifications or add an expense. Check actual results after setup.", "Sambungkan notifikasi bayaran atau tambah belanja. Semak hasil sebenar selepas persediaan."))
-                    .font(.subheadline).foregroundStyle(.secondary)
-                NavigationLink { ShortcutHelpView() } label: { DashboardLinkLabel(title: tr("设置 Apple Pay", "Set up Apple Pay", "Sediakan Apple Pay"), symbol: "creditcard") }
-                NavigationLink { TNGSetupView() } label: { DashboardLinkLabel(title: tr("设置 TNG 通知", "Set up TNG notifications", "Sediakan notifikasi TNG"), symbol: "bell.badge") }
-                NavigationLink { AutomationStatusView() } label: { DashboardLinkLabel(title: tr("查看运行记录", "View activity log", "Lihat log aktiviti"), symbol: "checkmark.circle") }
-                Text(tr("是否成功请以账本和运行记录为准。接入教程也可在设置找到。", "Verify entries and logs. Setup guides remain in Settings.", "Sahkan rekod dan log. Panduan kekal dalam Tetapan."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-        }
-    }
     private var categoriesCard: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 18) {
@@ -218,16 +205,25 @@ struct DashboardView: View {
             }
         }
     }
-    private var toolsCard: some View {
-        GlassPanel {
-            VStack(spacing: 16) {
-                NavigationLink { SpendingComparisonView(month: month) } label: { DashboardLinkLabel(title: tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), symbol: "chart.bar.xaxis") }
-                Divider()
-                NavigationLink { UpcomingView(initialMonth: month) } label: { DashboardLinkLabel(title: tr("即将到来的固定消费", "Upcoming bills", "Bil akan datang"), symbol: "calendar") }
-                Divider()
-                NavigationLink { DuplicateReviewView() } label: { DashboardLinkLabel(title: tr("检查重复账目", "Review duplicates", "Semak pendua"), symbol: "doc.on.doc") }
+}
+struct OverviewToolsView: View {
+    var month: Date = Date()
+    var body: some View {
+        List {
+            Section(tr("分析", "Insights", "Analisis")) {
+                NavigationLink { SpendingComparisonView(month: month) } label: { Label(tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), systemImage: "chart.bar.xaxis") }
+                NavigationLink { UpcomingView(initialMonth: month) } label: { Label(tr("固定消费预览", "Upcoming bills", "Bil akan datang"), systemImage: "calendar") }
+                NavigationLink { DuplicateReviewView() } label: { Label(tr("检查重复账目", "Review duplicates", "Semak pendua"), systemImage: "doc.on.doc") }
             }
-        }
+            Section(tr("自动记账", "Automatic recording", "Rekod automatik")) {
+                NavigationLink("Apple Pay") { ShortcutHelpView() }
+                NavigationLink("TNG") { TNGSetupView() }
+                NavigationLink(tr("查看运行记录", "View activity log", "Lihat log aktiviti")) { AutomationStatusView() }
+            }
+            Section {
+                NavigationLink(tr("预算与每日提醒", "Budget & daily reminders", "Peringatan bajet & harian")) { NotificationSettingsView() }
+            }
+        }.navigationTitle(tr("更多工具", "More tools", "Alat lain"))
     }
 }
 struct DashboardLinkLabel: View {
@@ -283,6 +279,11 @@ struct ExpenseRow: View {
         }.padding(.vertical, 10)
     }
 }
+private struct LedgerDayGroup: Identifiable {
+    let date: Date
+    let entries: [Expense]
+    var id: Date { date }
+}
 struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -298,14 +299,29 @@ struct ExpensesView: View {
     @State private var adding = false
     @State private var editing: Expense?
     @State private var deleting: Expense?
+    private var entries: [Expense] { (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? [] }
+    private var days: [LedgerDayGroup] {
+        Dictionary(grouping: entries, by: { Calendar.current.startOfDay(for: $0.date) })
+            .map { LedgerDayGroup(date: $0.key, entries: $0.value) }.sorted { $0.date > $1.date }
+    }
     var body: some View {
         NavigationStack {
             List {
-                MonthPicker(month: monthBinding)
-                NavigationLink(tr("TNG 通知 / 待确认", "TNG inbox / review", "Peti TNG / semakan")) { TNGInboxView() }
-                NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
-                Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
-                let entries = (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []
+                Section {
+                    MonthPicker(month: monthBinding)
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(filter.active || !search.isEmpty ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personal })
+                            .font(.system(.title2, design: .rounded, weight: .semibold)).foregroundStyle(ink)
+                        HStack {
+                            Text(String(entries.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
+                                .buttonStyle(.borderless).font(.subheadline)
+                        }
+                    }.padding(.vertical, 6)
+                }
                 if entries.isEmpty {
                     ContentUnavailableView {
                         Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
@@ -321,14 +337,30 @@ struct ExpensesView: View {
                         }
                     }.listRowBackground(Color.clear)
                 }
-                ForEach(entries) { e in
-                    Button { editing = e } label: { ExpenseRow(entry: e).foregroundStyle(.primary) }
-                        .swipeActions { Button(tr("删除", "Delete", "Padam"), role: .destructive) { deleting = e } }
+                ForEach(days) { day in
+                    Section {
+                        ForEach(day.entries) { entry in
+                            Button { editing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
+                                .swipeActions { Button(tr("删除", "Delete", "Padam"), role: .destructive) { deleting = entry } }
+                        }
+                    } header: { Text(dateLabel(day.date)) }
                 }
-            }.animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
+            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
                 .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
                 .navigationTitle(tr("账本", "Ledger", "Lejar")).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
-                .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
+                .toolbar {
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Menu {
+                            NavigationLink(tr("TNG 通知 / 待确认", "TNG inbox / review", "Peti TNG / semakan")) { TNGInboxView() }
+                            NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
+                        } label: { Image(systemName: "ellipsis.circle") }
+                            .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
+                    }
+                    ToolbarItem(placement: .topBarTrailing) {
+                        Button { adding = true } label: { Image(systemName: "plus") }
+                            .accessibilityLabel(tr("记一笔", "Add expense", "Tambah belanja"))
+                    }
+                }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .confirmationDialog(tr("删除付款及其分账和还款？", "Delete payment, splits and repayments?", "Padam bayaran, pembahagian dan bayaran balik?"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
@@ -347,6 +379,7 @@ struct ExpenseEditor: View {
     let original: Expense?
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
+    var startWithSplit = false
     var onSaved: (() -> Void)? = nil
     @State private var name = ""
     @State private var amount = ""
@@ -422,7 +455,7 @@ struct ExpenseEditor: View {
     }
     private func load() {
         guard !initialized else { return }; initialized = true
-        if original == nil { date = initialDate }
+        if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
@@ -479,15 +512,70 @@ struct ExpenseEditor: View {
 struct RepayTarget: Identifiable { var id: String { share.id }; let expense: Expense; let share: Share }
 struct FriendsView: View {
     @EnvironmentObject var model: LedgerModel
+    @State private var settled = false
+    @State private var adding = false
+    private var balances: [FriendBalance] { model.ledger.friendBalances }
+    private var visible: [FriendBalance] { balances.filter { ($0.owed == 0 && $0.payable == 0) == settled } }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(tr("朋友还欠你", "Friends owe you", "Rakan berhutang kepada anda")).font(.subheadline).foregroundStyle(.secondary)
+                        AnimatedMoney(cents: balances.reduce(0) { $0 + $1.owed }).font(.system(.title, design: .rounded, weight: .bold)).foregroundStyle(ink)
+                        let payable = balances.reduce(0) { $0 + $1.payable }
+                        if payable > 0 { Text(tr("你需退回：", "You owe back: ", "Anda perlu pulangkan: ") + money(payable)).font(.subheadline).foregroundStyle(.orange) }
+                        Text(tr("全部月份 · 点朋友查看明细和记录还款", "All months · tap a friend to settle up", "Semua bulan · ketik rakan untuk bayar balik")).font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical, 8)
+                }
+                Section {
+                    Picker(tr("显示", "Show", "Papar"), selection: $settled) {
+                        Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
+                        Text(tr("已结清", "Settled", "Selesai")).tag(true)
+                    }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+                }
+                Section {
+                    if visible.isEmpty {
+                        ContentUnavailableView(settled ? tr("还没有结清记录", "No settled balances", "Tiada baki selesai") : tr("目前没有待收款", "Nothing outstanding", "Tiada baki tertunggak"), systemImage: "person.2", description: Text(tr("新增代垫，或到账本为已有付款开启分账。", "Add an advance, or split an existing payment in Ledger.", "Tambah pendahuluan, atau bahagi bayaran sedia ada dalam Lejar.")))
+                    }
+                    ForEach(visible) { friend in
+                        NavigationLink { FriendDetailView(key: friend.id) } label: { FriendBalanceRow(friend: friend) }
+                    }
+                }
+                Section {
+                    NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: .teal) }
+                    NavigationLink { SplitHistoryView() } label: { Label(tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), systemImage: "list.bullet.rectangle") }
+                }
+            }.listStyle(.insetGrouped).navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi"))
+                .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
+                .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
+        }
+    }
+}
+struct FriendBalanceRow: View {
+    let friend: FriendBalance
+    var body: some View {
+        HStack(spacing: 14) {
+            Text(String(friend.name.prefix(1)).uppercased()).font(.headline)
+                .frame(width: 44, height: 44).foregroundStyle(.teal)
+                .background(Color.teal.opacity(0.12), in: Circle()).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(friend.name).font(.headline)
+                Text(friend.owed == 0 && friend.payable == 0 ? tr("已结清", "Settled", "Selesai") : tr("待收：", "To collect: ", "Belum diterima: ") + money(friend.owed))
+                    .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                if friend.payable > 0 { Text(tr("需退回：", "To return: ", "Perlu pulang: ") + money(friend.payable)).font(.caption).foregroundStyle(.orange) }
+            }
+        }.padding(.vertical, 8)
+    }
+}
+struct SplitHistoryView: View {
+    @EnvironmentObject var model: LedgerModel
     @State private var target: RepayTarget?
     @State private var editing: Expense?
     @State private var undo: (String, String, String, Bool)?
     @State private var settled = false
     var body: some View {
-        NavigationStack {
-            List {
-                NavigationLink(tr("按朋友汇总 / 一次还多笔", "Balances / batch repayment", "Baki / bayaran balik kelompok")) { FriendSummaryView() }
-                NavigationLink(tr("油费计算器", "Fuel calculator", "Kalkulator minyak")) { FuelCalculatorView() }
+        List {
                 Picker(tr("显示", "Show", "Papar"), selection: $settled) {
                     Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
                     Text(tr("已结清", "Settled", "Selesai")).tag(true)
@@ -509,7 +597,7 @@ struct FriendsView: View {
                         Button(tr("编辑分账", "Edit split", "Edit pembahagian")) { editing = e }
                     } header: { Text(e.merchant) } footer: { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(e.personal)) }
                 }
-            }.navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi"))
+            }.navigationTitle(tr("分账记录", "Split history", "Sejarah pembahagian"))
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .sheet(item: $target) { RepaymentView(target: $0) }
                 .confirmationDialog(tr("撤销还款？", "Undo repayment?", "Batalkan bayaran balik?"), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
@@ -517,7 +605,6 @@ struct FriendsView: View {
                         if let (ei, si, ri, isReturn) = undo { model.change { ledger in if let e = ledger.expenses.firstIndex(where: { $0.id == ei }), let s = ledger.expenses[e].shares.firstIndex(where: { $0.id == si }) { if isReturn { ledger.expenses[e].shares[s].returns?.removeAll { $0.id == ri } } else { ledger.expenses[e].shares[s].repayments.removeAll { $0.id == ri } } } } }; undo = nil
                     }
                 }
-        }
     }
 }
 struct RepaymentView: View {
@@ -559,8 +646,47 @@ struct SettingsView: View {
     @State private var backups: [URL] = []
     var body: some View {
         NavigationStack {
-            Form {
-                Section(tr("偏好设置", "Preferences", "Pilihan")) {
+            List {
+                Section {
+                    NavigationLink { appearancePage } label: {
+                        SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "paintpalette.fill", color: .purple)
+                    }
+                    NavigationLink { NotificationSettingsView() } label: {
+                        SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("预算、每日记账", "Budget and daily reminders", "Bajet dan peringatan harian"), symbol: "bell.fill", color: .orange)
+                    }
+                } header: { Text(tr("个人偏好", "Personalize", "Peribadikan")) }
+                Section {
+                    NavigationLink { automationPage } label: {
+                        SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
+                    }
+                    NavigationLink { categoriesPage } label: {
+                        SimpleSettingsRow(title: tr("分类与规则", "Categories & rules", "Kategori & peraturan"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)
+                    }
+                    NavigationLink { RatesView() } label: {
+                        SimpleSettingsRow(title: tr("币种与汇率", "Currencies & rates", "Mata wang & kadar"), subtitle: tr("统计币种 MYR", "Totals in MYR", "Jumlah dalam MYR"), symbol: "globe", color: .green)
+                    }
+                } header: { Text(tr("记账设置", "Recording", "Rekod")) }
+                Section {
+                    NavigationLink { backupPage } label: {
+                        SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: .indigo)
+                    }
+                    NavigationLink { aboutPage } label: {
+                        SimpleSettingsRow(title: tr("关于月记", "About YueJi", "Tentang YueJi"), subtitle: installedVersionLabel, symbol: "info.circle.fill", color: .gray)
+                    }
+                } header: { Text(tr("数据与帮助", "Data & help", "Data & bantuan")) }
+            }.listStyle(.insetGrouped).navigationTitle(tr("设置", "Settings", "Tetapan"))
+                .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
+                .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                    do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }
+                }
+                .sheet(item: $restorePreview) { preview in
+                    RestorePreviewView(preview: preview) { loadBackups() }
+                }
+        }
+    }
+    private var appearancePage: some View {
+        Form {
+            Section {
                     Picker(tr("语言", "Language", "Bahasa"), selection: $language) {
                         Text(tr("跟随系统", "System default", "Ikut sistem")).tag("system")
                         Text("简体中文").tag("zh"); Text("English").tag("en"); Text("Bahasa Melayu").tag("ms")
@@ -570,19 +696,31 @@ struct SettingsView: View {
                         Text(tr("浅色模式", "Light mode", "Mod cerah")).tag("light")
                         Text(tr("深色模式", "Dark mode", "Mod gelap")).tag("dark")
                     }
-                    NavigationLink(tr("通知与每日提醒", "Notifications & daily reminder", "Notifikasi & peringatan harian")) { NotificationSettingsView() }
-                    NavigationLink(tr("管理分类", "Manage categories", "Urus kategori")) { CategoriesView() }
-                    NavigationLink(tr("商户分类规则", "Merchant category rules", "Peraturan kategori peniaga")) { MerchantRulesView() }
-                    NavigationLink(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")) { RatesView() }
-                    Text(tr("统计本位币：MYR", "Accounting currency: MYR", "Mata wang perakaunan: MYR")).font(.caption)
-                }
-                Section("TNG") { NavigationLink(tr("通知记录与接入", "Inbox & setup", "Peti & persediaan")) { TNGInboxView() } }
-                Section("Apple Pay") {
-                    NavigationLink(tr("自动记账状态", "Automation status", "Status automasi")) { AutomationStatusView() }
-                    Text(tr("安装后在快捷指令配置交易自动化，传入金额、商户、币种和时间。App 不会直接读取钱包历史。", "After installation, configure a Transaction automation in Shortcuts with amount, merchant, currency and date. The app cannot read Wallet history directly.", "Selepas pemasangan, tetapkan automasi Transaction dalam Pintasan dengan amaun, peniaga, mata wang dan tarikh. Aplikasi tidak membaca sejarah Wallet secara langsung."))
-                    Text(tr("外币自动记账需先保存该币种汇率；缺失汇率会报错，不会偷偷按 MYR 入账。", "Save a rate before recording foreign Apple Pay payments. A missing rate causes an error, never a silent MYR conversion.", "Simpan kadar sebelum merekod Apple Pay asing. Kadar yang tiada menghasilkan ralat, bukan penukaran MYR secara senyap.")).font(.footnote)
-                    NavigationLink(tr("接入步骤", "Setup steps", "Langkah persediaan")) { ShortcutHelpView() }
-                }
+
+            }
+        }.navigationTitle(tr("外观与语言", "Appearance & language", "Paparan & bahasa"))
+    }
+    private var categoriesPage: some View {
+        List {
+            NavigationLink(tr("管理分类", "Manage categories", "Urus kategori")) { CategoriesView() }
+            NavigationLink(tr("商户分类规则", "Merchant category rules", "Peraturan kategori peniaga")) { MerchantRulesView() }
+        }.navigationTitle(tr("分类与规则", "Categories & rules", "Kategori & peraturan"))
+    }
+    private var automationPage: some View {
+        List {
+            Section(tr("连接付款", "Connect payments", "Sambungkan bayaran")) {
+                NavigationLink("Apple Pay") { ShortcutHelpView() }
+                NavigationLink("TNG") { TNGInboxView() }
+            }
+            Section {
+                NavigationLink(tr("查看运行记录", "View activity log", "Lihat log aktiviti")) { AutomationStatusView() }
+            } footer: {
+                Text(tr("需在快捷指令完成设置。月记不会直接读取钱包历史。", "Set up Shortcuts first. YueJi cannot read Wallet history directly.", "Sediakan Pintasan dahulu. YueJi tidak membaca sejarah Wallet secara langsung."))
+            }
+        }.navigationTitle(tr("自动记账", "Automatic recording", "Rekod automatik"))
+    }
+    private var backupPage: some View {
+        Form {
                 Section(tr("数据与备份", "Data & backups", "Data & sandaran")) {
                     Text(tr("每次修改前保留旧版，最多 30 份本地备份。卸载会删除本地数据，请定期导出到文件或 iCloud Drive。", "Keeps up to 30 local snapshots before changes. Uninstalling deletes local data. Export to Files or iCloud Drive regularly.", "Menyimpan sehingga 30 sandaran tempatan sebelum perubahan. Nyahpasang memadam data tempatan. Eksport ke Files atau iCloud Drive secara berkala.")).font(.footnote)
                     NavigationLink(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")) { CSVExportView() }
@@ -593,23 +731,20 @@ struct SettingsView: View {
                             do { restorePreview = try RestorePreview(data: Data(contentsOf: LocalStore.shared.recoveryFile)) } catch { model.error = error.localizedDescription }
                         }
                     }
+                    DisclosureGroup(tr("本机历史备份", "Local snapshot history", "Sejarah sandaran tempatan")) {
                     ForEach(backups, id: \.self) { url in Button { do { restorePreview = try RestorePreview(data: Data(contentsOf: url)) } catch { model.error = error.localizedDescription } } label: {
                         Text(tr("恢复：", "Restore: ", "Pulihkan: ") + backupTitle(url))
                     } }
+                    }
                 }
-                Section(tr("版本", "Version", "Versi")) {
-                    Text(installedVersionLabel)
-                    Text(tr("免费侧载签名每 7 天需要刷新；过期会影响 App 和自动记账。", "Free sideload signing needs renewal every 7 days. Expiry affects the app and automatic recording.", "Tandatangan sideload percuma perlu diperbaharui setiap 7 hari. Tamat tempoh menjejaskan aplikasi dan rekod automatik.")).font(.footnote)
-                }
-            }.navigationTitle(tr("设置", "Settings", "Tetapan")).onAppear { loadBackups() }
-                .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
-                .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                    do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }
-                }
-                .sheet(item: $restorePreview) { preview in
-                    RestorePreviewView(preview: preview) { loadBackups() }
-                }
-        }
+
+        }.navigationTitle(tr("备份与导出", "Backups & export", "Sandaran & eksport")).onAppear { loadBackups() }
+    }
+    private var aboutPage: some View {
+        List {
+            Text(installedVersionLabel)
+            Text(tr("免费侧载签名每 7 天需要刷新；过期会影响 App 和自动记账。", "Free sideload signing needs renewal every 7 days. Expiry affects the app and automatic recording.", "Tandatangan sideload percuma perlu diperbaharui setiap 7 hari. Tamat tempoh menjejaskan aplikasi dan rekod automatik."))
+        }.navigationTitle(tr("关于月记", "About YueJi", "Tentang YueJi"))
     }
     private func loadBackups() { do { backups = try LocalStore.shared.backups() } catch { model.error = error.localizedDescription } }
     private func backupTitle(_ url: URL) -> String { guard let s = url.lastPathComponent.split(separator: "-").first, let ms = Double(s) else { return url.lastPathComponent }; return dateLabel(Date(timeIntervalSince1970: ms / 1000), time: true) }
@@ -639,4 +774,24 @@ struct CSVDocument: FileDocument {
     init(data: Data) { self.data = data }
     init(configuration: ReadConfiguration) throws { data = configuration.file.regularFileContents ?? Data() }
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
+}
+
+
+struct SimpleSettingsRow: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let color: Color
+    var body: some View {
+        HStack(spacing: 14) {
+            Image(systemName: symbol).font(.body.weight(.semibold))
+                .foregroundStyle(color).frame(width: 38, height: 38)
+                .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.body).foregroundStyle(.primary)
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 6)
+    }
 }

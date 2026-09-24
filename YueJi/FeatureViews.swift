@@ -57,41 +57,97 @@ struct RecurringView: View {
     @State private var adding = false
     @State private var editing: RecurringExpense?
     @State private var deleting: RecurringExpense?
+    @State private var paused = false
+    private var rules: [RecurringExpense] {
+        model.ledger.recurring.filter { $0.active != paused }.sorted { $0.nextDate < $1.nextDate }
+    }
     var body: some View {
         NavigationStack {
             List {
                 Section {
-                    NavigationLink(tr("本月固定消费预览", "Preview this month's bills", "Pratonton bil bulan ini")) { UpcomingView(initialMonth: Date()) }
-                    Text(tr("房租、电话费、订阅等。自动入账在打开 App 或运行「补记固定消费」快捷指令时执行；不会自动付款。", "Rent, phone bills and subscriptions. Auto-recording runs when you open the app or run ‘Post recurring expenses’ in Shortcuts. It never makes payments.", "Sewa, bil telefon dan langganan. Rekod automatik berjalan apabila aplikasi dibuka atau Pintasan ‘Rekod belanja berulang’ dijalankan. Ia tidak membuat bayaran."))
+                    NavigationLink { UpcomingView(initialMonth: Date()) } label: {
+                        SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: .teal)
+                    }
+                } footer: { Text(tr("这里只记账，不会替你付款。", "Records expenses; never makes payments.", "Merekod belanja; tidak membuat bayaran.")) }
+                Section {
+                    Picker(tr("显示", "Show", "Papar"), selection: $paused) {
+                        Text(tr("进行中", "Active", "Aktif")).tag(false)
+                        Text(tr("已暂停", "Paused", "Dijeda")).tag(true)
+                    }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
                 }
-                if model.ledger.recurring.isEmpty { ContentUnavailableView(tr("还没有固定消费", "No recurring expenses", "Tiada belanja berulang"), systemImage: "repeat") }
-                ForEach(model.ledger.recurring.sorted { $0.nextDate < $1.nextDate }) { r in
+                if rules.isEmpty {
+                    ContentUnavailableView {
+                        Label(paused ? tr("没有暂停的项目", "No paused schedules", "Tiada jadual dijeda") : tr("把固定开销交给月记", "Keep track of regular bills", "Jejak bil tetap anda"), systemImage: "calendar.badge.clock")
+                    } description: {
+                        Text(tr("设置金额和周期，每次到期更好记。", "Set an amount and a repeat schedule.", "Tetapkan amaun dan jadual berulang."))
+                    } actions: {
+                        Button(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) { adding = true }.buttonStyle(.borderedProminent)
+                    }.listRowBackground(Color.clear)
+                }
+                ForEach(rules) { rule in
                     Section {
-                        Button { editing = r } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                HStack { Text(r.name).font(.headline); Spacer(); Text(Currency.display(r.minor, r.currency)) }
-                                Text(r.cycle.label + " · " + categoryLabel(r.category)).font(.caption)
-                                Text((r.active ? tr("下次：", "Next: ", "Seterusnya: ") : tr("已暂停 · ", "Paused · ", "Dijeda · ")) + dateLabel(r.nextDate)).font(.caption)
-                                Text(r.autoPost ? tr("到期自动入账", "Auto-record when due", "Rekod automatik apabila tiba") : tr("手动确认入账", "Manual recording", "Rekod manual")).font(.caption).foregroundStyle(.secondary)
-                            }.foregroundStyle(.primary)
-                        }
-                        if r.currency != "MYR", model.ledger.rates[r.currency] == nil { Text(tr("缺少汇率：保存汇率后才能入账。", "Rate missing: save a rate before recording.", "Kadar tiada: simpan kadar sebelum merekod.")).foregroundStyle(.orange).font(.caption) }
-                        if r.active && r.nextDate <= Date() {
-                            Button(tr("补记已到期项目", "Record due occurrences", "Rekod tempoh yang tiba")) { model.change { try $0.postDue(only: r.id, force: true) } }
-                        }
-                        Button(r.active ? tr("暂停", "Pause", "Jeda") : tr("恢复（跳过暂停期间）", "Resume (skip paused periods)", "Sambung (langkau tempoh dijeda)")) {
-                            model.change { ledger in if r.active { if let i = ledger.recurring.firstIndex(where: { $0.id == r.id }) { ledger.recurring[i].active = false } } else { ledger.resumeRule(r.id) } }
-                        }
-                    }.swipeActions { Button(tr("删除", "Delete", "Padam"), role: .destructive) { deleting = r } }
+                        RecurringScheduleRow(rule: rule, edit: { editing = rule }, delete: { deleting = rule })
+                    }
                 }
-            }.navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang"))
-                .toolbar { Button { adding = true } label: { Image(systemName: "plus") } }
+            }.listStyle(.insetGrouped).navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang"))
+                .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(isPresented: $adding) { RecurringEditor(original: nil) }
                 .sheet(item: $editing) { RecurringEditor(original: $0) }
                 .confirmationDialog(tr("删除固定项目？已入账记录会保留。", "Delete schedule? Recorded entries will stay.", "Padam jadual? Rekod sedia ada dikekalkan."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-                    Button(tr("删除", "Delete", "Padam"), role: .destructive) { if let r = deleting { model.change { $0.recurring.removeAll { $0.id == r.id } } }; deleting = nil }
+                    Button(tr("删除", "Delete", "Padam"), role: .destructive) { if let rule = deleting { model.change { $0.recurring.removeAll { $0.id == rule.id } } }; deleting = nil }
                 }
         }
+    }
+}
+struct RecurringScheduleRow: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let rule: RecurringExpense
+    let edit: () -> Void
+    let delete: () -> Void
+    private var layout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12)) }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button(action: edit) {
+                layout {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(rule.name).font(.headline)
+                        Text(rule.cycle.label + " · " + categoryLabel(rule.category)).font(.caption).foregroundStyle(.secondary)
+                    }
+                    if !typeSize.isAccessibilitySize { Spacer() }
+                    Text(Currency.display(rule.minor, rule.currency)).font(.headline).monospacedDigit()
+                }.foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 5) {
+                    Label(rule.active ? dateLabel(rule.nextDate) : tr("已暂停", "Paused", "Dijeda"), systemImage: rule.active ? "calendar" : "pause.circle")
+                        .font(.subheadline)
+                    Text(rule.autoPost ? tr("到期记账 · 打开 App 时处理", "Auto-record · when app opens", "Rekod automatik · apabila aplikasi dibuka") : tr("到期后手动入账", "Record manually when due", "Rekod manual apabila tiba"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Menu {
+                    Button(tr("编辑", "Edit", "Edit"), action: edit)
+                    Button(rule.active ? tr("暂停", "Pause", "Jeda") : tr("恢复（跳过暂停期间）", "Resume (skip paused periods)", "Sambung (langkau tempoh dijeda)")) {
+                        model.change { ledger in
+                            if rule.active {
+                                if let i = ledger.recurring.firstIndex(where: { $0.id == rule.id }) { ledger.recurring[i].active = false }
+                            } else { ledger.resumeRule(rule.id) }
+                        }
+                    }
+                    Button(tr("删除", "Delete", "Padam"), role: .destructive, action: delete)
+                } label: { Image(systemName: "ellipsis.circle").frame(width: 44, height: 44) }
+                    .buttonStyle(.borderless).accessibilityLabel(tr("项目操作", "Schedule actions", "Tindakan jadual"))
+            }
+            if rule.currency != "MYR", model.ledger.rates[rule.currency] == nil {
+                NavigationLink { RatesView() } label: { Label(tr("先设置汇率", "Set a rate first", "Tetapkan kadar dahulu"), systemImage: "exclamationmark.circle") }
+                    .foregroundStyle(.orange).font(.caption)
+            }
+            if rule.active && rule.nextDate <= Date() {
+                Button(tr("记录已到期消费", "Record due expenses", "Rekod belanja tiba")) { model.change { try $0.postDue(only: rule.id, force: true) } }
+                    .buttonStyle(.borderless).font(.subheadline.weight(.semibold))
+            }
+        }.padding(.vertical, 8)
     }
 }
 struct RecurringEditor: View {
@@ -117,7 +173,9 @@ struct RecurringEditor: View {
                 DatePicker(tr("首次日期", "First date", "Tarikh pertama"), selection: $start, displayedComponents: .date).disabled(original != nil)
                 Toggle(tr("到期自动入账", "Automatically record when due", "Rekod automatik apabila tiba"), isOn: $autoPost)
                 Text(tr("如果 Apple Pay 已自动记录这笔费用，请关闭此开关，避免重复。固定消费并非银行扣款确认。", "Turn this off if Apple Pay already records this bill, to avoid duplicates. A schedule is not confirmation of a bank charge.", "Matikan jika Apple Pay sudah merekod bil ini untuk elak pendua. Jadual bukan pengesahan caj bank.")).font(.footnote)
+                DisclosureGroup(tr("周期与修改说明", "Schedule details", "Butiran jadual")) {
                 Text(tr("编辑金额只影响未来未入账项目。更改周期或首次日期请暂停旧项目，再新增。每月 31 日会在短月份落到月底。", "Amount edits affect unrecorded occurrences only. To change cycle or start date, pause this schedule and create another. The 31st uses month-end in shorter months.", "Perubahan amaun hanya untuk tempoh belum direkod. Untuk ubah kitaran atau tarikh mula, jeda jadual ini dan cipta baharu. Tarikh 31 menggunakan hujung bulan bagi bulan pendek.")).font(.footnote)
+                }
             }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang"))
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() } } }
                 .onAppear { if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
@@ -136,7 +194,7 @@ struct RecurringEditor: View {
                     ledger.recurring[i] = r
                 } else { ledger.recurring.append(r) }
             }
-            model.reload(); dismiss()
+            model.reload(); model.showSaved(); dismiss()
         } catch { self.error = error.localizedDescription }
     }
 }
@@ -263,18 +321,16 @@ struct FriendSummaryView: View {
     @State private var settled = false
     var body: some View {
         List {
+            DisclosureGroup(tr("如何汇总", "How balances work", "Cara baki dikira")) {
             Text(tr("按姓名汇总，忽略大小写和多余空格。同名的不同朋友请使用不同备注名。一次收款按最旧欠款优先分配，不自动抵扣你需退回的款项。", "Grouped by name, ignoring case and extra spaces. Use distinct names for different people. Batch receipts settle oldest debts first and do not offset money you owe back.", "Dikumpulkan mengikut nama tanpa mengira huruf besar dan ruang tambahan. Gunakan nama berbeza untuk individu berlainan. Penerimaan kelompok melangsaikan hutang tertua dahulu tanpa menolak wang yang perlu dipulangkan.")).font(.footnote)
+            }
             Picker(tr("显示", "Show", "Papar"), selection: $settled) {
                 Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
                 Text(tr("已结清", "Settled", "Selesai")).tag(true)
             }.pickerStyle(.segmented)
             ForEach(model.ledger.friendBalances.filter { (($0.owed == 0) && ($0.payable == 0)) == settled }) { friend in
                 NavigationLink { FriendDetailView(key: friend.id) } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(friend.name).font(.headline)
-                        Text(tr("朋友待还：", "They owe: ", "Hutang rakan: ") + money(friend.owed))
-                        if friend.payable > 0 { Text(tr("我需退回：", "I owe back: ", "Saya perlu pulangkan: ") + money(friend.payable)).foregroundStyle(.orange) }
-                    }
+                    FriendBalanceRow(friend: friend)
                 }
             }
         }.navigationTitle(tr("朋友欠款汇总", "Friend balances", "Baki rakan"))
@@ -294,13 +350,18 @@ struct FriendDetailView: View {
                 Section { NavigationLink(tr("分享朋友账单", "Share friend statement", "Kongsi penyata rakan")) { FriendStatementView(key: key) } }
                 Section(friend.name) {
                     LabeledContent(tr("待收", "Receivable", "Belum diterima"), value: money(friend.owed))
+                    if friend.payable > 0 {
                     LabeledContent(tr("我需退给朋友", "I need to return", "Saya perlu pulangkan"), value: money(friend.payable))
+                    DisclosureGroup(tr("为什么需要退回？", "Why return money?", "Mengapa perlu pulangkan?")) {
                     Text(tr("此金额自动计算，不能直接填写。若朋友已还款，后来商家退款，多收的部分会列在这里；请在下方对应账目点「退回朋友」，记录实际返款。", "Calculated automatically. If a merchant refunds a payment after your friend repays you, their excess payment appears here. Use Return to friend on the entry below to record money returned.", "Dikira automatik. Jika peniaga memulangkan bayaran selepas rakan membayar anda, lebihan muncul di sini. Gunakan Pulangkan kepada rakan pada rekod di bawah untuk merekod wang dipulangkan.")).font(.footnote).foregroundStyle(.secondary)
+                    }
+                    }
                     TextField(tr("本次收到 · MYR", "Received now · MYR", "Diterima kini · MYR"), text: $amount).keyboardType(.decimalPad)
                     DatePicker(tr("收到日期", "Date received", "Tarikh diterima"), selection: $date, displayedComponents: .date)
-                    Button(tr("分配到最旧欠款", "Allocate to oldest debts", "Agih kepada hutang tertua")) {
+                    Button(tr("记录收款", "Record money received", "Rekod wang diterima")) {
                         do { let n = try toCents(amount); try LocalStore.shared.change { try $0.batchRepay(friend: key, cents: n, date: date) }; model.reload(); amount = "" } catch { self.error = error.localizedDescription }
                     }.disabled(friend.owed == 0)
+                    Text(tr("收到的款项会优先抵扣最早的欠款。", "Receipts settle the oldest outstanding entries first.", "Penerimaan melangsaikan hutang tertua dahulu.")).font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(model.ledger.expenses.filter { $0.shares.contains { friendKey($0.name) == key } }.sorted { $0.date < $1.date }) { e in
                     ForEach(e.shares.filter { friendKey($0.name) == key }) { share in
@@ -581,6 +642,7 @@ struct NotificationSettingsView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var daily = UserDefaults.standard.bool(forKey: "dailyReminder")
     @State private var results = UserDefaults.standard.bool(forKey: "automationNotifications")
+    @State private var budgetAlerts = UserDefaults.standard.bool(forKey: "budgetAlerts")
     @AppStorage("hideNotificationDetails") private var hideDetails = false
     @State private var time = Date()
     @State private var busy = false
@@ -589,6 +651,8 @@ struct NotificationSettingsView: View {
     var body: some View {
         Form {
             Section {
+                Toggle(tr("达到月度预算时提醒", "Alert when monthly budget is reached", "Maklum apabila bajet bulanan dicapai"), isOn: $budgetAlerts)
+                Text(tr("按本月个人实际消费计算，达到预算后每月最多提醒一次。需先在概览设置预算；开启时若已超额也会提醒。历史月份不提醒。", "Based on this month's personal spending, at most once per month at 100% of budget. Set a budget in Overview first. Enabling it while over budget also alerts. Past months are excluded.", "Berdasarkan belanja peribadi bulan ini, sekali sebulan apabila mencapai bajet. Tetapkan bajet dalam Ringkasan. Jika sudah melebihi bajet semasa diaktifkan, peringatan dihantar. Bulan lalu dikecualikan.")).font(.footnote).foregroundStyle(.secondary)
                 Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
                 if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
                 Toggle(tr("自动记账结果通知", "Automatic recording notifications", "Notifikasi rekod automatik"), isOn: $results)
@@ -599,7 +663,8 @@ struct NotificationSettingsView: View {
                     Task {
                         do {
                             let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-                            try await LedgerNotifications.configure(daily: daily, results: results, hour: c.hour ?? 21, minute: c.minute ?? 0)
+                            try await LedgerNotifications.configure(daily: daily, results: results, hour: c.hour ?? 21, minute: c.minute ?? 0, budgetAlerts: budgetAlerts)
+                            await BudgetAlertService.shared.check()
                             message = tr("设置已保存", "Settings saved", "Tetapan disimpan")
                         } catch { message = error.localizedDescription }
                         await refreshPermission(); busy = false
