@@ -106,8 +106,6 @@ struct DashboardView: View {
                     balancesCard
                     categoriesCard
                     NavigationLink { ReceiptScanView() } label: { DashboardLinkLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "camera") }
-                    NavigationLink { AICoachView() } label: { DashboardLinkLabel(title: tr("AI 消费助手", "AI spending assistant", "Pembantu belanja AI"), symbol: "sparkles") }
-                    AICoachSuggestionCard()
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
                             .frame(maxWidth: .infinity, alignment: .leading).padding(14)
@@ -226,7 +224,6 @@ struct OverviewToolsView: View {
     var body: some View {
         List {
             NavigationLink(tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi")) { ReceiptScanView() }
-            NavigationLink(tr("AI 消费助手", "AI spending assistant", "Pembantu belanja AI")) { AICoachView() }
             Section(tr("分析", "Insights", "Analisis")) {
                 NavigationLink { SpendingComparisonView(month: month) } label: { Label(tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), systemImage: "chart.bar.xaxis") }
                 NavigationLink { UpcomingView(initialMonth: month) } label: { Label(tr("固定消费预览", "Upcoming bills", "Bil akan datang"), systemImage: "calendar") }

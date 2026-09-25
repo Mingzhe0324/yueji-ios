@@ -660,3 +660,41 @@ final class FriendNameNormalizationTests: XCTestCase {
         }
     }
 }
+
+final class ReceiptParsingTests: XCTestCase {
+    func testReceiptWithMalaysianCommaDecimalsAndRounding() {
+        let receipt = ScannedReceipt.parse("""
+        ROYAL DINING HALL
+        Description Amount (RM)
+        DAAL CHANA FRY 1.00 @ 25.00 25.00
+        PLAIN NAAN 11.00 @ 3.00 33.00
+        Sub Total 208.00
+        SST 13,73
+        Service Charges 20.80
+        Total(RM) 242,53
+        Rounding Adjustment 0.02
+        Net Total(RM) 242.55
+        """)
+        XCTAssertEqual(receipt.items.map(\.amount), ["25.00", "33.00"])
+        XCTAssertEqual(receipt.subtotal, "208.00")
+        XCTAssertEqual(receipt.tax, "13.73")
+        XCTAssertEqual(receipt.service, "20.80")
+        XCTAssertEqual(receipt.rounding, "0.02")
+        XCTAssertEqual(receipt.total, "242.55")
+    }
+
+    func testReceiptWithThousandSeparators() {
+        let receipt = ScannedReceipt.parse("""
+        RESTAURANT
+        Lobster Salad @138.00 414.00 S
+        Subtotal: 67,306.00
+        10% Srv Chg: 6,730.60
+        GST @6%: 4,442.20
+        Amt Due 78,478.80
+        """)
+        XCTAssertEqual(receipt.subtotal, "67306.00")
+        XCTAssertEqual(receipt.service, "6730.60")
+        XCTAssertEqual(receipt.tax, "4442.20")
+        XCTAssertEqual(receipt.total, "78478.80")
+    }
+}
