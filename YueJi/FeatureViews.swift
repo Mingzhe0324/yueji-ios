@@ -42,6 +42,7 @@ struct RatesView: View {
             }
         }.navigationTitle(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")).navigationBarTitleDisplayMode(.inline).onAppear { load() }
             .task(id: currency) {
+                guard !model.isPreview else { return }
                 busy = true; defer { busy = false }
                 do {
                     if let q = try await AutomaticRates.shared.refresh(currency) {
@@ -196,6 +197,7 @@ struct RecurringEditor: View {
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() }.disabled(rateBusy) } }
                 .onAppear { if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
                 .task(id: currency) {
+                guard !model.isPreview else { return }
                     guard currency != "MYR" else { rateStatus = ""; return }
                     rateBusy = true; defer { rateBusy = false }
                     do {
@@ -516,6 +518,7 @@ struct FuelCalculatorView: View {
                 }
             }
             .task(id: fuelType + String(autoPrice)) {
+                guard !model.isPreview else { return }
                 guard autoPrice else { return }
                 let type = fuelType
                 fetchingFuel = true; defer { fetchingFuel = false }
@@ -1128,15 +1131,8 @@ struct TNGNoticeView: View {
     }
 }
 struct TNGSetupView: View {
-    var body: some View {
-        List {
-            Text(tr("1. 安装此版并打开月记一次。在你已测试成功的 TNG 通知自动化里，添加「记录 TNG 通知」。", "1. Install and open YueJi once. Add Record TNG notification to your working TNG notification automation.", "1. Pasang dan buka YueJi sekali. Tambah Rekod notifikasi TNG dalam automasi TNG yang berfungsi."))
-            Text(tr("2. 通知正文选蓝色 Notification → Body，不要传整张截图或手动输入 Body。建议把 Notification → Title 传给标题；如果能取得通知日期可传入，拿不到就留空使用接收时间。交易标识没有就留空，不能填固定文字。", "2. Map Notification → Body to notification body. Do not pass screenshots or type Body literally. Map Notification → Title as well when available; notification date is optional; missing date uses receipt time. Leave transaction ID empty unless a genuine ID is available; never use a constant.", "2. Petakan Notification → Body ke teks notifikasi. Jangan hantar tangkap layar atau taip Body. Petakan Notification → Title jika tersedia; tarikh pilihan; tarikh kosong menggunakan masa diterima. Biarkan ID kosong kecuali ID sebenar tersedia; jangan guna nilai tetap."))
-            Text(tr("3. 删除原测试的 Text 和 Create Note 动作，设为立即运行并启用。首次允许快捷指令访问月记。", "3. Remove the old Text and Create Note test actions. Enable immediate running and allow access to YueJi when prompted.", "3. Buang tindakan ujian Text dan Create Note. Aktifkan jalan serta-merta dan benarkan akses YueJi apabila diminta."))
-            Text(tr("4. 只处理已验证的英文付款和转账成功通知。付款记消费，转账单独保存；已识别收款等待选择用途；广告、充值、退款及其他格式直接忽略，疑似重复交易仍待确认。若 TNG 改变通知格式，可能漏记，请核对账本。不会读取历史流水。", "4. Only verified English successful payments and transfers are processed. Payments record expenses; transfers stay separate. Verified incoming money awaits purpose confirmation. Ads, top-ups, refunds and other formats are ignored. Suspected duplicates await review. Changed formats may be missed; check your ledger. No transaction history access.", "4. Hanya format Inggeris bayaran dan pindahan berjaya yang disahkan diproses. Pindahan disimpan berasingan. Wang masuk disahkan menunggu pemilihan tujuan. Iklan, tambah nilai, pulangan dan format lain diabaikan. Pendua disemak. Format berubah mungkin terlepas; semak lejar. Sejarah tidak dibaca."))
-            Text(tr("5. 在设置开启自动记账结果通知。先核对几笔正常付款，并分别测试锁屏和解锁；通知未送达、自动化未执行或侧载签名过期都会影响记账。", "5. Enable recording-result notifications in Settings. Check real payments with the phone locked and unlocked. Missing notifications, automation not running or expired signing can prevent recording.", "5. Aktifkan notifikasi hasil rekod dalam Tetapan. Semak bayaran ketika telefon dikunci dan dibuka. Notifikasi tiada, automasi tidak berjalan atau tandatangan tamat boleh menghalang rekod."))
-        }.navigationTitle(tr("TNG 接入", "TNG setup", "Persediaan TNG")).navigationBarTitleDisplayMode(.inline)
-    }
+    var previewStep: Int? = nil
+    var body: some View { ShortcutSetupGuide(provider: .tng, previewStep: previewStep) }
 }
 
 import Vision
@@ -1680,6 +1676,7 @@ struct ReceiptCamera: UIViewControllerRepresentable {
 }
 
 struct ReceiptScanView: View {
+    var guideSection: Int? = nil
     @EnvironmentObject var model: LedgerModel
     @State private var photo: PhotosPickerItem?
     @State private var camera = false
@@ -1900,15 +1897,16 @@ struct ReceiptScanView: View {
         return (fields + rows + friends.map { $0.id.uuidString + $0.name }).joined(separator: "|")
     }
     var body: some View {
+        ScrollViewReader { proxy in
         Form {
             Section { PageIntroduction(title: tr("一张收据，分得清楚", "One receipt. Clear shares.", "Satu resit, bahagian jelas."), subtitle: tr("先核对，再分给一起吃的人。", "Review first, then share with your table.", "Semak dahulu, kemudian bahagi bersama.")) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            captureSection
+            captureSection.id(0)
             if hasReceipt {
-                reviewSection
-                peopleSection
-                itemsSection
-                resultSection
+                reviewSection.id(1)
+                peopleSection.id(2)
+                itemsSection.id(3)
+                resultSection.id(4)
             }
         }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
             .onChange(of: reviewKey) { _, _ in reviewed = false }
@@ -1925,6 +1923,22 @@ struct ReceiptScanView: View {
                 Task { do { if let data = try await item?.loadTransferable(type: Data.self) { await recognize(data) } } catch { self.error = error.localizedDescription } }
             }
             .alert(tr("收据", "Receipt", "Resit"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+            .task(id: guideSection) {
+                guard model.isPreview, let section = guideSection else { return }
+                if section > 0 {
+                    let amy = ReceiptPerson(name: "Amy")
+                    merchant = "Lunch Cafe"; subtotal = "40.00"; tax = "2.64"; service = "4.00"
+                    discount = "0.00"; rounding = "0.00"; printedTotal = "46.64"
+                    friends = [amy]
+                    items = [ScannedReceipt.Item(name: "Chicken rice", amount: "25.00", people: [myID]),
+                             ScannedReceipt.Item(name: "Noodles", amount: "15.00", people: [amy.id])]
+                    hasReceipt = true
+                }
+                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
+                proxy.scrollTo(section, anchor: .top)
+            }
+        }
+
     }
     @MainActor private func recognize(_ data: Data) async {
         guard !busy else { return }

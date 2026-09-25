@@ -13,6 +13,11 @@ struct YueJiApp: App {
     var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
+    let isPreview: Bool
+    init(previewLedger: Ledger? = nil) {
+        isPreview = previewLedger != nil
+        if let previewLedger { ledger = previewLedger; loaded = true }
+    }
     @Published var ledger = Ledger()
     @Published var error: String?
     @Published var loaded = false
@@ -21,8 +26,9 @@ struct YueJiApp: App {
         savedNotice = UUID()
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
-    func reload(postRecurring: Bool = true) { do { ledger = try LocalStore.shared.read(); loaded = true; if postRecurring { try LocalStore.shared.change { try $0.postDue() } }; ledger = try LocalStore.shared.read(); Task { await BudgetAlertService.shared.check() } } catch { self.error = error.localizedDescription } }
+    func reload(postRecurring: Bool = true) { guard !isPreview else { return }; do { ledger = try LocalStore.shared.read(); loaded = true; if postRecurring { try LocalStore.shared.change { try $0.postDue() } }; ledger = try LocalStore.shared.read(); Task { await BudgetAlertService.shared.check() } } catch { self.error = error.localizedDescription } }
     func change(_ action: (inout Ledger) throws -> Void) {
+        guard !isPreview else { return }
         do { try LocalStore.shared.change(action); reload() } catch { self.error = error.localizedDescription }
     }
 }

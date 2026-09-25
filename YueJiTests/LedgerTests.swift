@@ -2,19 +2,14 @@ import XCTest
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
-    func testSmartLedgerFiltersMonthMerchantAndPersonalShare() {
-        let calendar = Calendar(identifier: .gregorian)
-        let selected = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15))!
-        let previous = calendar.date(from: DateComponents(year: 2026, month: 8, day: 12))!
-        let entries = [
-            Expense(merchant: "Shopee Malaysia", cents: 690, date: selected, category: "购物"),
-            Expense(merchant: "Shopee MarketPlace", cents: 5667, date: previous, category: "购物", shares: [Share(name: "Amy", cents: 2000)]),
-            Expense(merchant: "Cafe", cents: 3000, date: previous, category: "餐饮")
-        ]
-        let query = LedgerInsightQuery(monthOffset: -1, category: "购物", merchant: "Shopee")
-        let found = LedgerInsightQuery.matching(entries, month: selected, query: query)
-        XCTAssertEqual(found.map(\.merchant), ["Shopee MarketPlace"])
-        XCTAssertEqual(found.reduce(0) { $0 + $1.personal }, 3667)
+    @MainActor func testGuideUsesValidIsolatedSampleLedger() throws {
+        let sample = try GuideSample.ledger().validated()
+        let preview = LedgerModel(previewLedger: sample)
+        preview.reload()
+        preview.change { $0.expenses.removeAll() }
+        XCTAssertTrue(preview.isPreview)
+        XCTAssertEqual(preview.ledger.expenses, sample.expenses)
+        XCTAssertEqual(preview.ledger.tngNotices, sample.tngNotices)
     }
     func testMoney() throws {
         XCTAssertEqual(try toCents("18.50"), 1850)
