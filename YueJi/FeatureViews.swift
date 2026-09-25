@@ -73,6 +73,9 @@ struct RecurringView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section { PageIntroduction(title: tr("让日常有条理", "A little more organized", "Harian lebih teratur"), subtitle: tr("固定消费，提前安排。", "Keep recurring expenses in view.", "Rancang belanja berulang.")) }
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
                 Section {
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
                         SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: .teal)
@@ -98,7 +101,7 @@ struct RecurringView: View {
                         RecurringScheduleRow(rule: rule, edit: { editing = rule }, delete: { deleting = rule })
                     }
                 }
-            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: paused).navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang"))
+            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: paused).yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(isPresented: $adding) { RecurringEditor(original: nil) }
                 .sheet(item: $editing) { RecurringEditor(original: $0) }
@@ -1137,6 +1140,8 @@ struct TNGSetupView: View {
 }
 
 import Vision
+import VisionKit
+import CoreImage
 import PhotosUI
 import UIKit
 
@@ -1354,12 +1359,12 @@ struct ReceiptGrid {
             var header = false
             for cell in ordered {
                 let label = normalized(cell.text)
-                if ["description", "item", "item name", "particulars", "商品", "品名"].contains(label) {
+                if ["description", "desc", "desc.", "item description", "item", "item name", "particulars", "商品", "品名"].contains(label) {
                     // A merged description+price cell cannot establish a trustworthy column.
                     if cell.columns.count == 1 { descriptionColumn = cell.columns.lowerBound }
                     header = true
                 }
-                if ["amount", "amount (rm)", "amount(rm)", "line total", "total (rm)", "金额"].contains(label) {
+                if ["amount", "amt", "amt.", "amount (rm)", "amount(rm)", "amt (rm)", "line total", "total (rm)", "金额"].contains(label) {
                     amountColumn = cell.columns.upperBound
                     header = true
                 }
@@ -1381,11 +1386,55 @@ struct ReceiptGrid {
 }
 
 struct ReceiptOCR {
+    // Compare complete passes; never stitch purchases from different passes together.
+    static func quality(_ receipt: ScannedReceipt) -> Int {
+        guard !receipt.items.isEmpty else { return 0 }
+        let values = receipt.items.compactMap { item -> Int? in
+            guard !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  !item.amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+            return try? optionalMoney(item.amount)
+        }
+        guard values.count == receipt.items.count else { return 1 }
+        guard let base = try? toCents(receipt.subtotal), values.reduce(0, +) == base else { return 2 }
+        do {
+            let tax = try optionalMoney(receipt.tax) ?? 0, service = try optionalMoney(receipt.service) ?? 0
+            let discount = try optionalMoney(receipt.discount) ?? 0
+            let raw = receipt.rounding.trimmingCharacters(in: .whitespacesAndNewlines)
+            let rounding = (try optionalMoney(raw.hasPrefix("-") ? String(raw.dropFirst()) : raw) ?? 0) * (raw.hasPrefix("-") ? -1 : 1)
+            let calculated = try ReceiptCalculation.total(subtotal: base, tax: tax, service: service, discount: discount) + rounding
+            return calculated == (try toCents(receipt.total)) ? 4 : 3
+        } catch { return 3 }
+    }
+    private static func enhanced(_ data: Data) -> Data? {
+        guard let image = CIImage(data: data, options: [.applyOrientationProperty: true]),
+              image.extent.width * image.extent.height <= 60_000_000 else { return nil }
+        let adjusted = image.applyingFilter("CIColorControls", parameters: [kCIInputSaturationKey: 0, kCIInputContrastKey: 1.15])
+            .applyingFilter("CISharpenLuminance", parameters: [kCIInputSharpnessKey: 0.3])
+        return CIContext().jpegRepresentation(of: adjusted, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:])
+    }
     static func scan(_ data: Data) async throws -> ScannedReceipt {
         if #available(iOS 26.0, *) {
-            do { return try await structured(data) }
+            var best: ScannedReceipt?
+            do { best = try await structured(data) }
             catch is CancellationError { throw CancellationError() }
-            catch { /* Preserve readable header values if document recognition fails. */ }
+            catch { }
+            // Faded printing may respond differently to contrast enhancement.
+            if best == nil || quality(best!) < 4 {
+                try Task.checkCancellation()
+                if let image = await Task.detached(priority: .userInitiated, operation: { enhanced(data) }).value {
+                    do {
+                        let retry = try await structured(image)
+                        if best == nil || quality(retry) > quality(best!) { best = retry }
+                    } catch is CancellationError { throw CancellationError() }
+                    catch { }
+                }
+            }
+            if var best {
+                if quality(best) < 4 && best.scanNotice.isEmpty {
+                    best.scanNotice = tr("识别金额尚未对齐，请对照照片核对漏项、税费和总额。", "Amounts do not reconcile yet. Check missing items, charges and the total against the photo.", "Amaun belum sepadan. Semak item tertinggal, caj dan jumlah dengan foto.")
+                }
+                return best
+            }
         }
         var receipt = ScannedReceipt.parse(try await read(data))
         receipt.items = []
@@ -1461,26 +1510,33 @@ struct ReceiptOCR {
     }
 }
 struct ReceiptCamera: UIViewControllerRepresentable {
-    let receive: (Data?) -> Void
+    let receive: (Result<Data?, Error>) -> Void
     func makeCoordinator() -> Coordinator { Coordinator(receive: receive) }
-    func makeUIViewController(context: Context) -> UIImagePickerController {
-        let picker = UIImagePickerController(); picker.sourceType = .camera; picker.delegate = context.coordinator; return picker
+    func makeUIViewController(context: Context) -> VNDocumentCameraViewController {
+        let controller = VNDocumentCameraViewController()
+        controller.delegate = context.coordinator
+        return controller
     }
-    func updateUIViewController(_ uiViewController: UIImagePickerController, context: Context) {}
-    final class Coordinator: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
-        let receive: (Data?) -> Void
-        init(receive: @escaping (Data?) -> Void) { self.receive = receive }
-        func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { receive(nil) }
-        func imagePickerController(_ picker: UIImagePickerController, didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
-            guard let image = info[.originalImage] as? UIImage else { receive(nil); return }
-            let scale = min(1, 2400 / max(image.size.width, image.size.height))
-            let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-            let format = UIGraphicsImageRendererFormat(); format.scale = 1
-            let normalized = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
-            receive(normalized.jpegData(compressionQuality: 0.88))
+    func updateUIViewController(_ uiViewController: VNDocumentCameraViewController, context: Context) {}
+    final class Coordinator: NSObject, VNDocumentCameraViewControllerDelegate {
+        let receive: (Result<Data?, Error>) -> Void
+        init(receive: @escaping (Result<Data?, Error>) -> Void) { self.receive = receive }
+        func documentCameraViewControllerDidCancel(_ controller: VNDocumentCameraViewController) { receive(.success(nil)) }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFailWithError error: Error) { receive(.failure(error)) }
+        func documentCameraViewController(_ controller: VNDocumentCameraViewController, didFinishWith scan: VNDocumentCameraScan) {
+            guard scan.pageCount == 1 else {
+                receive(.failure(reviewError("一次请扫描一张收据，避免把不同付款合在一起。", "Scan one receipt at a time so separate payments are not combined.", "Imbas satu resit pada satu masa supaya bayaran tidak bercampur.")))
+                return
+            }
+            let image = scan.imageOfPage(at: 0)
+            guard let data = image.jpegData(compressionQuality: 0.96) else {
+                receive(.failure(LedgerError.invalid("Unable to read receipt image"))); return
+            }
+            receive(.success(data))
         }
     }
 }
+
 struct ReceiptScanView: View {
     @EnvironmentObject var model: LedgerModel
     @State private var photo: PhotosPickerItem?
@@ -1552,10 +1608,11 @@ struct ReceiptScanView: View {
     }
     private var captureSection: some View {
         Section {
-            Button { camera = true } label: { Label(tr("拍收据", "Take photo", "Ambil foto"), systemImage: "camera") }
-                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera) || busy)
+            Button { camera = true } label: { Label(tr("扫描收据", "Scan receipt", "Imbas resit"), systemImage: "doc.viewfinder") }
+                .disabled(!VNDocumentCameraViewController.isSupported || busy)
             PhotosPicker(selection: $photo, matching: .images) { Label(tr("选择收据照片", "Choose receipt photo", "Pilih foto resit"), systemImage: "photo") }.disabled(busy)
-            if busy { ProgressView(tr("正在识别收据…", "Reading receipt…", "Membaca resit…")) }
+            Text(tr("把整张收据放入画面，调整四角再保存；每次只扫描一张。", "Fit the full receipt in the frame, adjust its corners, then save. Scan one page at a time.", "Letakkan seluruh resit dalam bingkai, laraskan penjuru dan simpan. Imbas satu halaman sahaja.")).font(.caption).foregroundStyle(.secondary)
+            if busy { ProgressView(tr("正在识别并核对金额…", "Reading and checking amounts…", "Membaca dan menyemak amaun…")) }
             if let receiptImage {
                 DisclosureGroup(tr("查看收据照片", "View receipt photo", "Lihat foto resit")) {
                     Image(uiImage: receiptImage).resizable().scaledToFit().accessibilityLabel(tr("原收据照片", "Receipt photo", "Foto resit"))
@@ -1678,6 +1735,8 @@ struct ReceiptScanView: View {
     }
     var body: some View {
         Form {
+            Section { PageIntroduction(title: tr("一张收据，分得清楚", "One receipt. Clear shares.", "Satu resit, bahagian jelas."), subtitle: tr("先核对，再分给一起吃的人。", "Review first, then share with your table.", "Semak dahulu, kemudian bahagi bersama.")) }
+                .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             captureSection
             if hasReceipt {
                 reviewSection
@@ -1687,7 +1746,15 @@ struct ReceiptScanView: View {
             }
         }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
             .onChange(of: reviewKey) { _, _ in reviewed = false }
-            .sheet(isPresented: $camera) { ReceiptCamera { data in camera = false; if let data { Task { await recognize(data) } } } }
+            .sheet(isPresented: $camera) {
+                ReceiptCamera { result in
+                    camera = false
+                    switch result {
+                    case .success(let data): if let data { Task { await recognize(data) } }
+                    case .failure(let failure): error = failure.localizedDescription
+                    }
+                }
+            }
             .onChange(of: photo) { _, item in
                 Task { do { if let data = try await item?.loadTransferable(type: Data.self) { await recognize(data) } } catch { self.error = error.localizedDescription } }
             }

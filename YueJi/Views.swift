@@ -8,18 +8,39 @@ struct GlassPanel<Content: View>: View {
     @State private var appeared = false
     @ViewBuilder var content: Content
     var body: some View {
-        content.padding(20).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 26))
+        content.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            .ledgerGlass()
             .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.primary.opacity(0.06)))
             .opacity(appeared || reduceMotion ? 1 : 0)
             .offset(y: appeared || reduceMotion ? 0 : 4)
-            .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.95)) { appeared = true } }
+            .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.94)) { appeared = true } }
     }
 }
 extension View {
     func ledgerGlass() -> some View { modifier(YueJiGlassSurface()) }
 
 }
+struct PageIntroduction: View {
+    let title: String
+    let subtitle: String
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("YUEJI").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
+            Text(title).font(.largeTitle.weight(.bold)).tracking(-0.8).fixedSize(horizontal: false, vertical: true)
+            Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10)
+    }
+}
+private struct YueJiListSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        content.listStyle(.insetGrouped).listSectionSpacing(22)
+            .scrollContentBackground(.hidden).background(Color(uiColor: .systemGroupedBackground))
+    }
+}
+extension View {
+    func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
+}
+
 struct MainView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.scenePhase) private var phase
@@ -100,25 +121,32 @@ struct DashboardView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(spacing: 20) {
+                VStack(spacing: 24) {
+                    PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
                     MonthPicker(month: monthBinding)
                     spendingCard
                     balancesCard
                     categoriesCard
-                    NavigationLink { ReceiptScanView() } label: { DashboardLinkLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "camera") }
-                    NavigationLink { AutomationSetupView() } label: {
-                        SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(14)
-                            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22))
-                    }.buttonStyle(.plain)
+                    GlassPanel {
+                        VStack(alignment: .leading, spacing: 16) {
+                            Text(tr("日常工具", "Everyday tools", "Alat harian")).font(.headline)
+                            NavigationLink { ReceiptScanView() } label: {
+                                SimpleSettingsRow(title: tr("收据分账", "Receipt split", "Bahagi resit"), subtitle: tr("扫一张收据，按各自点的菜分", "Scan a receipt and split by dishes", "Imbas resit, bahagi ikut item"), symbol: "doc.viewfinder", color: .blue)
+                            }
+                            Divider()
+                            NavigationLink { AutomationSetupView() } label: {
+                                SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
+                            }
+                        }.buttonStyle(.plain)
+                    }
                     NavigationLink { OverviewToolsView(month: month) } label: {
                         Label(tr("更多工具", "More tools", "Alat lain"), systemImage: "square.grid.2x2")
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }.yuejiPrimaryButton().buttonBorderShape(.capsule)
-                }.padding(20)
+                }.padding(24).frame(maxWidth: 640).frame(maxWidth: .infinity)
             }
             .background(Color(uiColor: .systemGroupedBackground))
-            .navigationTitle(tr("月记", "YueJi", "YueJi"))
+            .navigationTitle(tr("概览", "Overview", "Ringkasan")).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
@@ -155,7 +183,7 @@ struct DashboardView: View {
                     .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                 AnimatedMoney(cents: personal, animateOnAppear: true)
                     .font(.system(.largeTitle, design: .default, weight: .bold))
-                    .foregroundStyle(ink).minimumScaleFactor(0.5).lineLimit(1)
+                    .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
                 Text(tr("已扣除朋友承担的份额和属于你的退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan bayaran balik anda"))
                     .font(.caption).foregroundStyle(.secondary)
                 Divider()
@@ -317,6 +345,9 @@ struct ExpensesView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section { PageIntroduction(title: tr("账本", "Your ledger", "Lejar anda"), subtitle: tr("按月份整理，随时回看。", "Organized by month, ready to review.", "Disusun mengikut bulan, mudah disemak.")) }
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
                 Section {
                     MonthPicker(month: monthBinding)
                     VStack(alignment: .leading, spacing: 8) {
@@ -357,7 +388,7 @@ struct ExpensesView: View {
                 }
             }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
                 .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
-                .navigationTitle(tr("账本", "Ledger", "Lejar")).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
+                .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
@@ -551,6 +582,9 @@ struct FriendsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section { PageIntroduction(title: tr("一起吃，各自分", "Shared, fairly", "Kongsi dengan adil"), subtitle: tr("谁应付多少，一目了然。", "See who owes what at a glance.", "Lihat bahagian setiap orang dengan jelas.")) }
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
                 Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(tr("朋友还欠你", "Friends owe you", "Rakan berhutang kepada anda")).font(.subheadline).foregroundStyle(.secondary)
@@ -578,7 +612,7 @@ struct FriendsView: View {
                     NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: .teal) }
                     NavigationLink { SplitHistoryView() } label: { Label(tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), systemImage: "list.bullet.rectangle") }
                 }
-            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: settled).navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi"))
+            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: settled).yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
         }
@@ -679,6 +713,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section { PageIntroduction(title: tr("让月记更适合你", "Make it yours", "Sesuaikan YueJi"), subtitle: tr("外观、提醒与备份，都在这里。", "Appearance, reminders and backups in one place.", "Paparan, peringatan dan sandaran di sini.")) }
+                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+
                 Section {
                     NavigationLink { appearancePage } label: {
                         SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
@@ -712,7 +749,7 @@ struct SettingsView: View {
                         SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("记账、自动化与朋友还款", "Expenses, automation and repayments", "Belanja, automasi dan bayaran balik"), symbol: "book.fill", color: .green)
                     }
                 } header: { Text(tr("数据与帮助", "Data & help", "Data & bantuan")) }
-            }.listStyle(.insetGrouped).navigationTitle(tr("设置", "Settings", "Tetapan"))
+            }.yuejiListSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.inline)
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                     do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }

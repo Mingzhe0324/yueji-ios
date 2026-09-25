@@ -838,3 +838,28 @@ final class ReceiptGridTests: XCTestCase {
         XCTAssertFalse(ReceiptGrid.parse([[cell("Lunch", 0), cell("25.00", 1)]]).foundColumns)
     }
 }
+
+final class ReceiptRetryTests: XCTestCase {
+    func testCompleteReconciledPassWinsOverMoreUnreconciledItems() {
+        var good = ScannedReceipt()
+        good.subtotal = "40.00"; good.tax = "3.20"; good.service = "4.00"; good.total = "47.20"
+        good.items = [.init(name: "Noodles", amount: "15.00"), .init(name: "Rice", amount: "25.00")]
+        XCTAssertEqual(ReceiptOCR.quality(good), 4)
+        var extra = good
+        extra.items.append(.init(name: "False extra row", amount: "25.00"))
+        XCTAssertLessThan(ReceiptOCR.quality(extra), ReceiptOCR.quality(good))
+        var missing = good; missing.items[0].amount = ""
+        XCTAssertEqual(ReceiptOCR.quality(missing), 1)
+        var noItems = good; noItems.items = []
+        XCTAssertEqual(ReceiptOCR.quality(noItems), 0)
+        var missingTax = good; missingTax.tax = ""
+        XCTAssertEqual(ReceiptOCR.quality(missingTax), 3)
+    }
+    func testShortHeadersStillUseAmountNotPrice() {
+        let parsed = ReceiptGrid.parse([
+            [.init(text: "Desc.", columns: 0...0), .init(text: "Price", columns: 1...1), .init(text: "Amt.", columns: 2...2)],
+            [.init(text: "Naan", columns: 0...0), .init(text: "3.00", columns: 1...1), .init(text: "33.00", columns: 2...2)]
+        ])
+        XCTAssertEqual(parsed.items.first?.amount, "33.00")
+    }
+}
