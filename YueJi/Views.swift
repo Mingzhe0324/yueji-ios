@@ -898,35 +898,234 @@ extension View {
 struct UsageGuideView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var step = 0
-    private var titles: [String] { [tr("记下自己的消费", "Track your spending", "Jejak belanja anda"), tr("连接自动记账", "Connect automatic recording", "Sambungkan rekod automatik"), tr("朋友分账与还款", "Split and settle", "Bahagi dan bayar balik"), tr("预算与备份", "Budget and back up", "Bajet dan sandaran"), tr("拍收据分账", "Scan and split", "Imbas dan bahagi"), tr("自动更新参考价格", "Automatic reference prices", "Harga rujukan automatik"), tr("本机 AI 助手", "On-device AI", "AI pada peranti")] }
-    private var symbols: [String] { ["plus.circle.fill", "bolt.fill", "person.2.fill", "externaldrive.fill", "camera.fill", "arrow.triangle.2.circlepath", "sparkles"] }
-    private var details: [String] { [
-        tr("在概览点「记一笔」，填写金额、商户和日期。补记旧消费时先切换月份，保存前核对日期。", "Tap Add expense in Overview. Enter amount, merchant and date. For past spending, select the month and check the date before saving.", "Ketik Tambah belanja. Isi amaun, peniaga dan tarikh. Untuk belanja lalu, pilih bulan dan semak tarikh."),
-        tr("从「自动记账」进入 Apple Pay 或 TNG 教程，在快捷指令完成设置。查看运行记录并核对账本，打开教程不代表已经接入。", "Open Automatic recording for Apple Pay or TNG instructions. Configure Shortcuts, then verify the activity log and ledger. Opening a guide does not enable recording.", "Buka Rekod automatik untuk panduan Apple Pay atau TNG. Sediakan Pintasan, kemudian semak log dan lejar."),
-        tr("已有付款请到账本编辑并开启分账，避免重复记账。朋友可以分次还款：输入本次实际收到的金额。收款日期不能早于消费日期。", "Split an existing payment by editing it in Ledger to avoid duplicates. Friends can repay in parts: enter only what you received. Receipt date cannot precede the expense.", "Edit bayaran sedia ada dalam Lejar untuk membahagi tanpa pendua. Rakan boleh bayar sebahagian; isi amaun diterima sahaja. Tarikh penerimaan tidak boleh mendahului belanja."),
-        tr("在概览设置预算，在提醒设置选择提醒比例。定期到「备份与导出」保存完整备份；卸载 App 会删除本机数据。", "Set a budget in Overview and an alert percentage in notification settings. Export full backups regularly; uninstalling removes local data.", "Tetapkan bajet dalam Ringkasan dan peratus peringatan dalam tetapan. Eksport sandaran penuh berkala; nyahpasang memadam data tempatan."),
-        tr("在概览选择拍收据分账，拍照或选照片。核对小计、税费和总额，再选择朋友。付款已入账时关联原付款，避免重复。", "Open Scan and split in Overview. Take or choose a photo, review subtotal, charges and total, then select friends. Link an existing payment to avoid duplicates.", "Buka Imbas dan bahagi. Ambil atau pilih foto, semak subjumlah, caj dan jumlah, kemudian pilih rakan. Pautkan bayaran asal untuk mengelakkan pendua."),
-        tr("选择外币时自动获取汇率；油费计算器自动获取所选油品的官方价格。会显示数据日期，断网时保留缓存。历史账目不会随汇率改变。", "Selecting a currency fetches its reference rate. The fuel calculator fetches official prices for your fuel type. Check the data date; offline caches remain. Existing entries keep their original rates.", "Memilih mata wang mengambil kadar rujukan. Kalkulator minyak mengambil harga rasmi. Semak tarikh data; cache kekal di luar talian. Kadar rekod lama tidak berubah."),
-        tr("从概览打开 AI 消费助手，可询问预算建议，并选择每天在概览显示一条建议。需要设备支持并启用 Apple Intelligence；建议不会自动修改账目。", "Open the AI assistant from Overview for budget advice. Optionally show one daily suggestion in Overview. Requires enabled Apple Intelligence on a compatible device. Suggestions never edit records.", "Buka pembantu AI untuk cadangan bajet. Pilih cadangan harian dalam Ringkasan jika mahu. Memerlukan Apple Intelligence aktif pada peranti serasi. Cadangan tidak mengubah rekod.")
+    private var titles: [String] { [
+        tr("记下今天的一笔", "Your first expense", "Belanja pertama anda"),
+        tr("让收据变得清楚", "A receipt, made clear", "Resit yang lebih jelas"),
+        tr("各点各的，也好分", "Different dishes. Easy splits.", "Item berbeza, mudah dibahagi"),
+        tr("还了多少，记多少", "Record what comes back", "Rekod amaun dibayar balik"),
+        tr("少一点手动输入", "A little less typing", "Kurangkan menaip"),
+        tr("照顾预算，也留备份", "Plan and keep a copy", "Rancang dan simpan salinan")
     ] }
+    private var details: [String] { [
+        tr("概览 → 记一笔。填金额、商家与日期，再保存。", "Overview → Add expense. Enter the amount, merchant and date, then save.", "Ringkasan → Tambah belanja. Isi amaun, peniaga dan tarikh, kemudian simpan."),
+        tr("概览 → 拍收据分账。选择照片后，对照收据核对日期、商品和实付总额。", "Overview → Scan and split. Choose a photo, then check the date, items and paid total.", "Ringkasan → Imbas dan bahagi. Pilih foto, kemudian semak tarikh, item dan jumlah akhir."),
+        tr("添加朋友，再为每道菜选择谁吃。共享的菜可选多人；税费会随餐费分摊。", "Add friends and choose who had each dish. Shared dishes can have several people; charges follow their food shares.", "Tambah rakan dan pilih pemakan setiap item. Item boleh dikongsi; caj mengikut bahagian makanan."),
+        tr("分账 → 选择朋友 → 记录还款。只填本次实际收到的金额，余款会保留。", "Friends → Choose a friend → Record repayment. Enter only what you received; the balance stays outstanding.", "Rakan → Pilih rakan → Rekod bayaran balik. Isi amaun diterima sahaja; baki masih belum dibayar."),
+        tr("概览 → 自动记账。选择 Apple Pay 或 TNG，按教程设置快捷指令，再检查运行记录。", "Overview → Automatic recording. Choose Apple Pay or TNG, configure Shortcuts using the guide, then check the activity log.", "Ringkasan → Rekod automatik. Pilih Apple Pay atau TNG, sediakan Pintasan mengikut panduan, kemudian semak log."),
+        tr("在概览设置预算。到设置 → 备份与导出保存完整备份，换机时可恢复。", "Set a budget in Overview. Save a full backup in Settings → Backup & export so you can restore it later.", "Tetapkan bajet dalam Ringkasan. Simpan sandaran penuh di Tetapan → Sandaran & eksport untuk dipulihkan kemudian.")
+    ] }
+    private var motion: Animation? { reduceMotion ? nil : .spring(response: 0.48, dampingFraction: 0.94) }
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 24) {
-                    Image(systemName: symbols[step]).font(.largeTitle).foregroundStyle(.blue).accessibilityHidden(true)
-                    Text(titles[step]).font(.largeTitle.bold())
-                    Text(details[step]).font(.body).foregroundStyle(.secondary)
-                    ProgressView(value: Double(step + 1), total: Double(titles.count))
-                    Text("\(step + 1) / \(titles.count)").font(.caption).foregroundStyle(.secondary)
-                    if step > 0 { Button(tr("上一步", "Back", "Kembali")) { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { step -= 1 } } }
-                    Button(step == titles.count - 1 ? tr("开始使用", "Get started", "Mula") : tr("下一步", "Next", "Seterusnya")) {
-                        if step == titles.count - 1 { dismiss() }
-                        else { withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) { step += 1 } }
-                    }.yuejiPrimaryButton().controlSize(.large)
-                }.padding(24)
-            }.navigationTitle(tr("欢迎使用月记", "Welcome to YueJi", "Selamat datang ke YueJi")).navigationBarTitleDisplayMode(.inline)
+                    HStack {
+                        Text("YUEJI").font(.caption.weight(.semibold)).tracking(3)
+                        Spacer()
+                        Text(String(format: "%02d / %02d", step + 1, titles.count)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }.padding(.top, 8)
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(titles[step]).font(.largeTitle.weight(.bold)).tracking(-0.8).fixedSize(horizontal: false, vertical: true)
+                        Text(details[step]).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    GuideDemoScene(step: step).id(step)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 10)))
+                    HStack(spacing: 6) {
+                        ForEach(titles.indices, id: \.self) { index in
+                            Capsule().fill(index == step ? Color.accentColor : Color.secondary.opacity(0.18))
+                                .frame(width: index == step ? 24 : 6, height: 6)
+                        }
+                        Spacer()
+                        Text(tr("点一下画面，试试看", "Tap the demo to try it", "Ketik demo untuk mencuba")).font(.caption).foregroundStyle(.secondary)
+                    }.accessibilityElement(children: .ignore).accessibilityLabel("\(step + 1) / \(titles.count)")
+                }.padding(24).frame(maxWidth: 580)
+                    .frame(maxWidth: .infinity)
+            }.background(Color(uiColor: .systemGroupedBackground))
+                .safeAreaInset(edge: .bottom) {
+                    HStack(spacing: 14) {
+                        if step > 0 {
+                            Button { withAnimation(motion) { step -= 1 } } label: {
+                                Image(systemName: "chevron.left").frame(width: 44, height: 44)
+                            }.accessibilityLabel(tr("上一步", "Back", "Kembali"))
+                        }
+                        Button {
+                            if step == titles.count - 1 { dismiss() }
+                            else { withAnimation(motion) { step += 1 } }
+                        } label: {
+                            HStack {
+                                Text(step == titles.count - 1 ? tr("开始使用月记", "Start using YueJi", "Mula menggunakan YueJi") : tr("继续", "Continue", "Teruskan"))
+                                Spacer()
+                                Image(systemName: "arrow.right")
+                            }.font(.body.weight(.semibold)).padding(.vertical, 10).padding(.horizontal, 8).frame(maxWidth: .infinity)
+                        }.yuejiPrimaryButton().controlSize(.large).buttonBorderShape(.capsule)
+                    }.padding(.horizontal, 24).padding(.vertical, 12).background {
+                        if reduceTransparency { Color(uiColor: .systemGroupedBackground) }
+                        else { Rectangle().fill(.regularMaterial) }
+                    }
+                }
+                .navigationTitle(tr("认识月记", "Meet YueJi", "Kenali YueJi")).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("跳过", "Skip", "Langkau")) { dismiss() } } }
+        }
+    }
+}
+
+private struct GuideDemoScene: View {
+    let step: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var stage = 0
+    @State private var appeared = false
+    @State private var firstOwner = 0
+    @State private var secondOwner = 1
+    @State private var budget = 800.0
+    @State private var provider = "Apple Pay"
+    private var animation: Animation? { reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.92) }
+    private func advance() { withAnimation(animation) { stage += 1 } }
+    private var foodShares: [Int] {
+        var me = 0
+        for (value, owner) in [(1500, firstOwner), (2500, secondOwner)] {
+            me += owner == 0 ? value : (owner == 2 ? value / 2 : 0)
+        }
+        return [me, 4000 - me]
+    }
+    private var totals: [Int] { (try? ReceiptSplit.allocate(4720, weights: foodShares)) ?? [0, 0] }
+    private func line(_ name: String, _ amount: String, symbol: String = "") -> some View {
+        HStack(spacing: 10) {
+            if !symbol.isEmpty { Image(systemName: symbol).foregroundStyle(Color.accentColor).frame(width: 24) }
+            Text(name).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 12)
+            Text(amount).monospacedDigit().fontWeight(.medium)
+        }.font(.subheadline).padding(.vertical, 7)
+    }
+    private func action(_ title: String, symbol: String, perform: @escaping () -> Void) -> some View {
+        Button(action: perform) {
+            Label(title, systemImage: symbol).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
+        }.yuejiPrimaryButton().buttonBorderShape(.capsule)
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Label(tr("互动演示", "Interactive demo", "Demo interaktif"), systemImage: "hand.tap")
+                Spacer()
+                Button { withAnimation(animation) { stage = 0; firstOwner = 0; secondOwner = 1; budget = 800 } } label: { Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 44) }
+                    .accessibilityLabel(tr("重播演示", "Replay demo", "Ulang demo"))
+            }.font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Group {
+                switch step {
+                case 0: expenseDemo
+                case 1: receiptDemo
+                case 2: splitDemo
+                case 3: repaymentDemo
+                case 4: automationDemo
+                default: budgetDemo
+                }
+            }
+            Text(tr("示例数据 · 不会改动你的账本", "Sample data · Your ledger stays unchanged", "Data contoh · Lejar anda tidak berubah"))
+                .font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+        }.padding(22).ledgerGlass()
+            .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(Color.primary.opacity(0.05)))
+            .opacity(appeared || reduceMotion ? 1 : 0).offset(y: appeared || reduceMotion ? 0 : 6)
+            .onAppear { withAnimation(animation) { appeared = true } }
+    }
+    private var expenseDemo: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill").font(.headline)
+            if stage == 0 {
+                Text(tr("本月消费", "This month", "Bulan ini")).font(.caption).foregroundStyle(.secondary)
+                Text("RM 420.00").font(.largeTitle.weight(.semibold)).monospacedDigit()
+                action(tr("记一笔", "Add expense", "Tambah belanja"), symbol: "plus") { advance() }
+            } else if stage == 1 {
+                line(tr("金额", "Amount", "Amaun"), "RM 18.00")
+                line(tr("商家", "Merchant", "Peniaga"), tr("午餐小馆", "Lunch cafe", "Kafe makan tengah hari"))
+                line(tr("日期", "Date", "Tarikh"), tr("今天", "Today", "Hari ini"))
+                action(tr("保存这笔示例", "Save sample expense", "Simpan contoh belanja"), symbol: "checkmark") { advance() }
+            } else {
+                Label(tr("示例已保存", "Sample saved", "Contoh disimpan"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                Text("RM 438.00").font(.largeTitle.weight(.semibold)).monospacedDigit()
+                line(tr("午餐小馆", "Lunch cafe", "Kafe makan tengah hari"), "RM 18.00", symbol: "fork.knife")
+                Text(tr("金额会计入所选日期的月份。", "The expense belongs to the month of its selected date.", "Belanja dikira dalam bulan tarikh yang dipilih.")).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private var receiptDemo: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(tr("收据分账", "Receipt split", "Bahagi resit"), systemImage: "doc.viewfinder").font(.headline)
+            VStack(spacing: 5) {
+                Text("LUNCH CAFE").font(.caption.weight(.bold)).tracking(2)
+                Divider().padding(.vertical, 8)
+                HStack { Text("Description"); Spacer(); Text("Amount") }.font(.caption.weight(.semibold)).foregroundStyle(stage > 0 ? Color.accentColor : .secondary)
+                line("Chicken rice", "25.00")
+                line("Noodles", "15.00")
+                Divider()
+                line("Total (RM)", "47.20")
+            }.padding(16).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
+                .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(stage > 0 ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
+            if stage == 0 { action(tr("试试读取收据", "Try reading the receipt", "Cuba baca resit"), symbol: "viewfinder") { advance() } }
+            else {
+                line(tr("商品小计", "Items subtotal", "Subjumlah item"), "RM 40.00")
+                line(tr("税费与服务费", "Tax & service", "Cukai & caj"), "RM 7.20")
+                Text(tr("逐项核对：商品取 Description，行金额取 Amount。看不清的内容需手动补充。", "Check each item: Description gives the name, Amount gives the line total. Fill unclear values manually.", "Semak setiap item: Description ialah nama, Amount ialah jumlah item. Isi nilai kabur secara manual.")).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+    private func dish(_ name: String, amount: String, owner: Binding<Int>) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            line(name, amount)
+            Picker(tr("谁吃这道菜", "Who had this dish", "Siapa makan item ini"), selection: owner) {
+                Text(tr("我", "Me", "Saya")).tag(0)
+                Text(tr("朋友", "Friend", "Rakan")).tag(1)
+                Text(tr("共享", "Shared", "Kongsi")).tag(2)
+            }.pickerStyle(.segmented)
+        }
+    }
+    private var splitDemo: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(tr("按各自点的菜", "Split by items", "Bahagi ikut item"), systemImage: "person.2.fill").font(.headline)
+            dish(tr("面条", "Noodles", "Mi"), amount: "RM 15.00", owner: $firstOwner)
+            dish(tr("鸡饭", "Chicken rice", "Nasi ayam"), amount: "RM 25.00", owner: $secondOwner)
+            Divider()
+            VStack(spacing: 2) {
+                line(tr("我应付", "I pay", "Saya bayar"), money(totals[0]))
+                line(tr("朋友应付", "Friend pays", "Rakan bayar"), money(totals[1]))
+            }.contentTransition(.numericText()).animation(animation, value: firstOwner).animation(animation, value: secondOwner)
+            Text(tr("已含 RM 7.20 税费和服务费。试着切换“共享”。", "Includes RM 7.20 in tax and service. Try choosing Shared.", "Termasuk cukai dan caj RM 7.20. Cuba pilih Kongsi.")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var repaymentDemo: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label(tr("朋友明细", "Friend details", "Butiran rakan"), systemImage: "person.crop.circle").font(.headline)
+            Text(tr("尚欠", "Outstanding", "Belum dibayar")).font(.caption).foregroundStyle(.secondary)
+            Text(stage == 0 ? "RM 29.50" : "RM 19.50").font(.largeTitle.weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+            line(tr("本次收到", "Received this time", "Diterima kali ini"), "RM 10.00")
+            if stage == 0 { action(tr("记录这次还款", "Record this repayment", "Rekod bayaran ini"), symbol: "arrow.down.circle") { advance() } }
+            else { Label(tr("示例：还款已扣除，余款保留", "Demo: repayment applied, balance remains", "Demo: bayaran ditolak, baki kekal"), systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(.green) }
+        }
+    }
+    private var automationDemo: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label(tr("自动记账", "Automatic recording", "Rekod automatik"), systemImage: "bolt.fill").font(.headline)
+            Picker(tr("付款方式", "Payment method", "Kaedah bayaran"), selection: $provider) {
+                Text("Apple Pay").tag("Apple Pay")
+                Text("TNG").tag("TNG")
+            }.pickerStyle(.segmented)
+            line(tr("打开对应教程", "Open its setup guide", "Buka panduan persediaan"), provider, symbol: "1.circle")
+            line(tr("设置快捷指令", "Configure Shortcuts", "Sediakan Pintasan"), "", symbol: "2.circle")
+            line(tr("检查运行记录", "Check activity log", "Semak log aktiviti"), "", symbol: "3.circle")
+            action(tr("查看演示提示", "Show demo tip", "Lihat petua demo"), symbol: "hand.tap") { advance() }
+            if stage > 0 { Text(tr("首次设置后，用一笔真实付款核对日志和账本。此演示不会开启自动记账。", "After setup, verify a real payment in the log and ledger. This demo does not enable recording.", "Selepas persediaan, sahkan bayaran sebenar dalam log dan lejar. Demo ini tidak mengaktifkan rekod.")).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+    private var budgetDemo: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Label(tr("本月预算", "Monthly budget", "Bajet bulanan"), systemImage: "chart.bar.fill").font(.headline)
+            Text(money(Int(budget) * 100)).font(.largeTitle.weight(.semibold)).monospacedDigit().contentTransition(.numericText())
+            Slider(value: $budget, in: 500...2000, step: 100).accessibilityLabel(tr("示例预算", "Sample budget", "Bajet contoh"))
+            ProgressView(value: 420, total: budget).tint(.accentColor)
+            line(tr("已用", "Spent", "Digunakan"), "RM 420.00")
+            Divider()
+            action(tr("了解备份", "See how backup works", "Lihat cara sandaran"), symbol: "externaldrive") { advance() }
+            if stage > 0 { Text(tr("设置 → 备份与导出 → 导出完整备份，保存到“文件”。此处仅演示，不会创建备份。", "Settings → Backup & export → Full backup, then save to Files. This demo does not create a backup.", "Tetapan → Sandaran & eksport → Sandaran penuh, kemudian simpan ke Files. Demo ini tidak mencipta sandaran.")).font(.caption).foregroundStyle(.secondary) }
         }
     }
 }

@@ -1156,6 +1156,7 @@ struct ScannedReceipt {
     var rounding = ""
     var total = ""
     var items: [Item] = []
+    var scanNotice = ""
 
     static func receiptDate(_ text: String) -> Date? {
         let formats = [(#"\b\d{4}-\d{1,2}-\d{1,2}\b"#, "yyyy-M-d"),
@@ -1291,7 +1292,7 @@ enum ReceiptSplit {
         var sum = 0
         for item in items {
             let cents = try optionalMoney(item.amount) ?? 0
-            guard !item.amount.isEmpty, !item.name.trimmingCharacters(in: .whitespaces).isEmpty else {
+            guard !item.amount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !item.name.trimmingCharacters(in: .whitespaces).isEmpty else {
                 throw reviewError("请填写商品名称和金额。", "Enter each item name and amount.", "Isi nama dan amaun setiap item.")
             }
             let owners = people.indices.filter { item.people.contains(people[$0]) }
@@ -1311,7 +1312,123 @@ enum ReceiptSplit {
     }
 }
 
+// Preserve column identity until Description and Amount are mapped.
+struct ReceiptGrid {
+    struct Cell {
+        let text: String
+        let columns: ClosedRange<Int>
+    }
+    struct Result {
+        var items: [ScannedReceipt.Item] = []
+        var summaries: [String] = []
+        var foundColumns = false
+    }
+    static func normalized(_ text: String) -> String {
+        text.lowercased().replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static func summaryLabel(_ text: String) -> Bool {
+        normalized(text).range(of: #"^(?:sub\s*total|bill amount|net total|grand total|total|amount due|amt due|sst|gst|tax|service|srv chg|svc chg|discount|rounding|round off|\d+\s*%\s*(?:srv|svc|service|tax|gst|sst))\b"#, options: .regularExpression) != nil
+    }
+    // One monetary value per Amount cell. Never substitute Unit Price or Quantity.
+    static func amount(_ text: String) -> String? {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: #"^(?:RM|MYR)\s*"#, with: "", options: [.regularExpression, .caseInsensitive])
+            .replacingOccurrences(of: #"\s+[A-Za-z]$"#, with: "", options: .regularExpression)
+        guard clean.range(of: #"^[+-]?(?:\d{1,3}(?:,\d{3})+|\d*)[.,]\d{2}$"#, options: .regularExpression) != nil,
+              let separator = clean.lastIndex(where: { $0 == "." || $0 == "," }) else { return nil }
+        let integer = clean[..<separator].filter(\.isNumber)
+        return (clean.hasPrefix("-") ? "-" : "") + (integer.isEmpty ? "0" : String(integer)) + "." + clean[clean.index(after: separator)...]
+    }
+    static func parse(_ rows: [[Cell]]) -> Result {
+        var result = Result()
+        var descriptionColumn: Int?
+        var amountColumn: Int?
+        var reachedSummary = false
+        for row in rows {
+            let ordered = row.sorted { $0.columns.lowerBound < $1.columns.lowerBound }
+            if let first = ordered.first(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }), summaryLabel(first.text) {
+                result.summaries.append(ordered.map(\.text).joined(separator: " "))
+                reachedSummary = true
+                continue
+            }
+            var header = false
+            for cell in ordered {
+                let label = normalized(cell.text)
+                if ["description", "item", "item name", "particulars", "商品", "品名"].contains(label) {
+                    // A merged description+price cell cannot establish a trustworthy column.
+                    if cell.columns.count == 1 { descriptionColumn = cell.columns.lowerBound }
+                    header = true
+                }
+                if ["amount", "amount (rm)", "amount(rm)", "line total", "total (rm)", "金额"].contains(label) {
+                    amountColumn = cell.columns.upperBound
+                    header = true
+                }
+            }
+            if header { reachedSummary = false; continue }
+            guard !reachedSummary, let d = descriptionColumn, let a = amountColumn, d != a else { continue }
+            result.foundColumns = true
+            let description = ordered.first { $0.columns == (d...d) }?.text
+                .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let amountText = ordered.first { $0.columns == (a...a) }?.text ?? ""
+            if description.isEmpty && amountText.isEmpty { continue }
+            let value = amount(amountText) ?? ""
+            // Keep incomplete rows visible instead of joining unrelated purchases.
+            result.items.append(ScannedReceipt.Item(name: description, amount: value))
+        }
+        return result
+    }
+}
+
 struct ReceiptOCR {
+    static func scan(_ data: Data) async throws -> ScannedReceipt {
+        if #available(iOS 26.0, *) {
+            do { return try await structured(data) }
+            catch is CancellationError { throw CancellationError() }
+            catch { /* Preserve readable header values if document recognition fails. */ }
+        }
+        var receipt = ScannedReceipt.parse(try await read(data))
+        receipt.items = []
+        receipt.scanNotice = tr("未能可靠读取商品表格，请重拍清晰照片或手动补充商品。", "Could not read the item table reliably. Retake a clear photo or add items manually.", "Jadual item tidak dapat dibaca dengan pasti. Ambil foto jelas atau tambah item secara manual.")
+        return receipt
+    }
+    @available(iOS 26.0, *)
+    private static func structured(_ data: Data) async throws -> ScannedReceipt {
+        let observations = try await RecognizeDocumentsRequest().perform(on: data)
+        guard let document = observations.first?.document else { throw LedgerError.invalid("No receipt found") }
+        let text = document.text.transcript
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("No receipt found") }
+        var receipt = ScannedReceipt.parse(text)
+        receipt.items = []
+        var candidates: [ReceiptGrid.Result] = []
+        var summaries: [String] = []
+        for table in document.tables {
+            let rows = table.rows.enumerated().map { index, row in
+                row.filter { $0.rowRange.lowerBound == index }.map {
+                    ReceiptGrid.Cell(text: $0.content.text.transcript, columns: $0.columnRange)
+                }
+            }
+            let candidate = ReceiptGrid.parse(rows)
+            summaries += candidate.summaries
+            if candidate.foundColumns { candidates.append(candidate) }
+        }
+        // A second detected table may be payment details, not more purchases.
+        if candidates.count == 1 { receipt.items = candidates[0].items }
+        let totals = ScannedReceipt.parse(summaries.joined(separator: "\n"))
+        if !totals.subtotal.isEmpty { receipt.subtotal = totals.subtotal }
+        if !totals.tax.isEmpty { receipt.tax = totals.tax }
+        if !totals.service.isEmpty { receipt.service = totals.service }
+        if !totals.discount.isEmpty { receipt.discount = totals.discount }
+        if !totals.rounding.isEmpty { receipt.rounding = totals.rounding }
+        if !totals.total.isEmpty { receipt.total = totals.total }
+        if receipt.items.isEmpty {
+            receipt.scanNotice = tr("没有可靠配对 Description 与 Amount，请重拍或补充商品。", "Description and Amount could not be matched reliably. Retake or add items.", "Description dan Amount tidak dapat dipadankan dengan pasti. Ambil semula atau tambah item.")
+        } else if receipt.items.contains(where: { $0.name.isEmpty || $0.amount.isEmpty }) {
+            receipt.scanNotice = tr("部分商品的名称或金额不清楚，已留空，请对照照片补上。", "Some names or amounts are unclear and left blank. Fill them from the photo.", "Sesetengah nama atau amaun tidak jelas dan dibiarkan kosong. Isi berdasarkan foto.")
+        }
+        return receipt
+    }
+
     static func read(_ data: Data) async throws -> String {
         try await Task.detached(priority: .userInitiated) {
             let request = VNRecognizeTextRequest()
@@ -1386,6 +1503,7 @@ struct ReceiptScanView: View {
     @State private var existingID = ""
     @State private var error: String?
     @State private var reviewed = false
+    @State private var scanNotice = ""
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
 
@@ -1513,6 +1631,7 @@ struct ReceiptScanView: View {
     }
     private var itemsSection: some View {
         Section(tr("3. 菜品明细", "3. Items", "3. Butiran item")) {
+            if !scanNotice.isEmpty { Text(scanNotice).font(.caption).foregroundStyle(.orange) }
             ForEach($items) { item in itemRow(item) }
             Button(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal")) { items.append(ScannedReceipt.Item(name: "", amount: "")) }
             if !items.isEmpty {
@@ -1579,9 +1698,8 @@ struct ReceiptScanView: View {
         busy = true; reviewed = false; defer { busy = false }
         do {
             guard data.count < 25_000_000 else { throw LedgerError.invalid("Image too large") }
-            let text = try await ReceiptOCR.read(data)
-            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw reviewError("没有识别到文字，请重新拍摄。", "No text found. Retake the photo.", "Tiada teks. Ambil foto semula.") }
-            let receipt = ScannedReceipt.parse(text)
+            let receipt = try await ReceiptOCR.scan(data)
+            scanNotice = receipt.scanNotice
             merchant = receipt.merchant; subtotal = receipt.subtotal; tax = receipt.tax
             service = receipt.service; discount = receipt.discount; rounding = receipt.rounding
             printedTotal = receipt.total; items = receipt.items; date = receipt.date ?? Date()

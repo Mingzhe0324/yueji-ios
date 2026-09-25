@@ -790,3 +790,51 @@ extension ReceiptItemSplitTests {
         XCTAssertEqual(ScannedReceipt.parse("Rounding Adjustment -0.02").rounding, "-0.02")
     }
 }
+
+final class ReceiptGridTests: XCTestCase {
+    private func cell(_ text: String, _ column: Int) -> ReceiptGrid.Cell {
+        ReceiptGrid.Cell(text: text, columns: column...column)
+    }
+    func testAmountColumnWinsOverQuantityAndUnitPriceEvenWhenReordered() {
+        let result = ReceiptGrid.parse([
+            [cell("Amount (RM)", 0), cell("Description", 1), cell("Unit Price", 2), cell("Qty", 3)],
+            [cell("33.00", 0), cell("PLAIN NAAN", 1), cell("3.00", 2), cell("11.00", 3)],
+            [cell("30.00", 0), cell("CHICKEN CHEESY\nKOFTA", 1), cell("30.00", 2), cell("1.00", 3)]
+        ])
+        XCTAssertTrue(result.foundColumns)
+        XCTAssertEqual(result.items.map(\.name), ["PLAIN NAAN", "CHICKEN CHEESY KOFTA"])
+        XCTAssertEqual(result.items.map(\.amount), ["33.00", "30.00"])
+    }
+    func testMissingAmountStaysBlankRatherThanTakingUnitPrice() {
+        let result = ReceiptGrid.parse([
+            [cell("Description", 0), cell("Unit price", 1), cell("Amount", 2)],
+            [cell("Lunch", 0), cell("12.00", 1)],
+            [cell("Dinner", 0), cell("18.00", 1), cell("18.00 36.00", 2)]
+        ])
+        XCTAssertEqual(result.items.map(\.amount), ["", ""])
+        XCTAssertEqual(result.items.count, 2)
+    }
+    func testSummaryRowsAreNotFoodAndZeroAmountsArePreserved() {
+        let result = ReceiptGrid.parse([
+            [cell("Description", 0), cell("Amount (RM)", 1)],
+            [cell("Water", 0), cell(".00", 1)],
+            [cell("Subtotal", 0), cell("208.00", 1)],
+            [cell("SST", 0), cell("13,73", 1)],
+            [cell("Net Total", 0), cell("242.55", 1)]
+        ])
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items.first?.amount, "0.00")
+        XCTAssertEqual(result.summaries.count, 3)
+        XCTAssertEqual(ScannedReceipt.parse(result.summaries.joined(separator: "\n")).total, "242.55")
+        XCTAssertEqual(ReceiptGrid.amount("RM 1,234.56"), "1234.56")
+        XCTAssertNil(ReceiptGrid.amount("3.00 @ 11.00"))
+    }
+    func testMergedDescriptionAndAmountIsNotGuessed() {
+        let result = ReceiptGrid.parse([
+            [cell("Description", 0), cell("Amount", 1)],
+            [ReceiptGrid.Cell(text: "Lunch 25.00", columns: 0...1)]
+        ])
+        XCTAssertTrue(result.items.isEmpty)
+        XCTAssertFalse(ReceiptGrid.parse([[cell("Lunch", 0), cell("25.00", 1)]]).foundColumns)
+    }
+}
