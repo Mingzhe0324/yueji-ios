@@ -74,7 +74,7 @@ struct MainView: View {
             .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: model.savedNotice)
             .task(id: model.savedNotice) {
                 guard let token = model.savedNotice else { return }
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
             .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } }
@@ -878,10 +878,8 @@ struct ShortcutSetupGuide: View {
                                         .frame(height: min(470, max(280, geometry.size.height * 0.65)))
                                     Text(provider == .applePay ? tr("启用 Apple Pay 自动记账", "Set up Apple Pay recording", "Sediakan rekod Apple Pay") : tr("启用 TNG 自动记账", "Set up TNG recording", "Sediakan rekod TNG"))
                                         .font(.title2.bold())
-                                    Text(provider == .applePay
-                                         ? tr("在快捷指令选择交易触发器，添加月记动作，完成后核对记录。", "In Shortcuts, choose a transaction trigger, add YueJi's action and check the result.", "Pilih pencetus transaksi, tambah tindakan YueJi dan semak hasil.")
-                                         : tr("在快捷指令选择 TNG 通知触发器，添加月记动作，完成后核对记录。", "In Shortcuts, choose TNG notifications, add YueJi's action and check the result.", "Pilih notifikasi TNG, tambah tindakan YueJi dan semak hasil."))
-                                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                                    Text(GuideCue.text(provider == .applePay ? .applePay(index) : .tngSetup(index)))
+                                        .font(.headline).foregroundStyle(.secondary).lineLimit(3)
                                     Button(tr("打开快捷指令", "Open Shortcuts", "Buka Pintasan")) {
                                         if let url = URL(string: "shortcuts://") { openURL(url) }
                                     }.buttonStyle(.bordered).buttonBorderShape(.capsule)
@@ -902,16 +900,16 @@ struct ShortcutSetupGuide: View {
         .task(id: "\(step)-\(scenePhase)") {
             gesturePhase = 0
             gestureStep = 0
-            guard !model.isPreview, !unavailable, scenePhase == .active, let chapter else { return }
+            guard !model.isPreview, !unavailable, scenePhase == .active, step < 4, let chapter else { return }
             let actions = GuideGesture.actions(chapter: chapter, stage: step + 1)
             if actions.isEmpty {
-                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
             } else {
                 for index in actions.indices {
                     guard !Task.isCancelled else { return }
                     gestureStep = index
                     gesturePhase = 0
-                    do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
+                    do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.65)) { gesturePhase = 1 }
                     do { try await Task.sleep(for: .milliseconds(720)) } catch { return }
                     withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) { gesturePhase = 2 }
@@ -919,7 +917,7 @@ struct ShortcutSetupGuide: View {
                 }
             }
             guard !Task.isCancelled else { return }
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.42)) { step = (step + 1) % 5 }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.42)) { step += 1 }
         }
     }
 
@@ -1106,7 +1104,7 @@ struct UsageGuideView: View {
                                 }
                                 VStack(spacing: 10) {
                                     Text(chapter.title).font(.title2.bold())
-                                    Text(chapter.detail).font(.subheadline).foregroundStyle(.secondary)
+                                    Text(GuideCue.text(chapter.screens[min(index == page ? stage : 0, chapter.screens.count - 1)])).font(.headline).foregroundStyle(.secondary)
                                 }
                                 .multilineTextAlignment(.center)
                                 .fixedSize(horizontal: false, vertical: true)
@@ -1132,16 +1130,16 @@ struct UsageGuideView: View {
             .task(id: "\(page)-\(stage)-\(scenePhase)") {
                 gesturePhase = 0
                 gestureStep = 0
-                guard scenePhase == .active else { return }
+                guard scenePhase == .active, stage + 1 < chapters[page].screens.count else { return }
                 let actions = GuideGesture.actions(chapter: chapters[page], stage: stage)
                 if actions.isEmpty {
-                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                    do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
                 } else {
                     for index in actions.indices {
                         guard !Task.isCancelled else { return }
                         gestureStep = index
                         gesturePhase = 0
-                        do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
+                        do { try await Task.sleep(for: .milliseconds(1200)) } catch { return }
                         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.65)) { gesturePhase = 1 }
                         do { try await Task.sleep(for: .milliseconds(720)) } catch { return }
                         withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) { gesturePhase = 2 }
@@ -1150,7 +1148,7 @@ struct UsageGuideView: View {
                 }
                 guard !Task.isCancelled else { return }
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.42)) {
-                    stage = (stage + 1) % chapters[page].screens.count
+                    stage += 1
                 }
             }
         }
@@ -1174,39 +1172,70 @@ extension View {
 }
 
 private struct GuideGesture {
-    let start: CGPoint
-    let target: CGPoint
     let targetID: String
     let position: CGFloat
     let swipe: Bool
     static func actions(chapter: GuideChapter, stage: Int) -> [GuideGesture] {
-        guard chapter.screens.indices.contains(stage) else { return [] }
-        let points: [(String, CGFloat, CGFloat, CGFloat)]
-        var swipe = false
+        let target: String
         switch (chapter.id, stage) {
-        case ("expense", 0): points = [("dashboard.add", 195, 665, 0.5)]
-        case ("ledger", 0): points = [("ledger.filter", 300, 268, 0.5)]
-        case ("receipt", 0): points = [("dashboard.receipt", 145, 375, 0.5)]
-        case ("receipt", 1): points = [("receipt.photo", 145, 212, 0.5)]
-        case ("receipt", 2): points = [("receipt.merchant", 285, 148, 0.5), ("receipt.date", 285, 235, 0.5), ("receipt.total", 285, 360, 0.5)]
-        case ("receipt", 3): points = [("receipt.people", 195, 470, 0.5)]; swipe = true
-        case ("receipt", 4): points = [("receipt.item0", 140, 200, 0.5), ("receipt.item1", 140, 300, 0.5), ("receipt.items", 195, 470, 0.5)]
-        case ("split", 0): points = [("ledger.expense", 164, 370, 0.5)]
-        case ("split", 1): points = [("expense.split", 245, 440, 0.5)]
-        case ("repayment", 0): points = [("friends.person", 146, 380, 0.5)]
-        case ("repayment", 1): points = [("friend.repay", 158, 350, 0.5)]
-        case ("recurring", 0): points = [("recurring.add", 355, 55, 0.5)]
-        case ("applePay", 0): points = [("automation.apple", 150, 156, 0.5)]
-        case ("tng", 0): points = [("automation.tng", 150, 242, 0.5)]
-        case ("applePay", 1...5), ("tng", 1...5): points = [("shortcut.steps", 200, 140, 0.25), ("shortcut.steps", 200, 210, 0.50), ("shortcut.steps", 200, 280, 0.75)]
-        case ("tng", 6): points = [("tng.incoming", 140, 300, 0.5)]
-        case ("settings", 0): points = [("settings.appearance", 145, 185, 0.5)]
-        case ("backup", 0): points = [("settings.backup", 145, 570, 0.5)]
-        default: return []
+        case ("expense", 0): target = "dashboard.add"
+        case ("ledger", 0): target = "ledger.filter"
+        case ("receipt", 0): target = "dashboard.receipt"
+        case ("receipt", 1): target = "receipt.photo"
+        case ("split", 0): target = "ledger.expense"
+        case ("split", 1): target = "expense.split"
+        case ("repayment", 0): target = "friends.person"
+        case ("repayment", 1): target = "friend.repay"
+        case ("recurring", 0): target = "recurring.add"
+        case ("applePay", 0): target = "automation.apple"
+        case ("tng", 0): target = "automation.tng"
+        case ("tng", 6): target = "tng.incoming"
+        case ("settings", 0): target = "settings.appearance"
+        case ("backup", 0): target = "settings.backup"
+        default: return [] // Reading and reviewing are not tap actions.
         }
-        return points.map { key, x, y, relative in
-            let point = CGPoint(x: x, y: y)
-            return GuideGesture(start: swipe ? CGPoint(x: x, y: y + 120) : CGPoint(x: x + 70, y: y + 95), target: point, targetID: key, position: relative, swipe: swipe)
+        return [GuideGesture(targetID: target, position: 0.5, swipe: false)]
+    }
+}
+
+private enum GuideCue {
+    static func text(_ screen: GuideScreen) -> String {
+        switch screen {
+        case .overview: return tr("点“记一笔”，开始记录消费。", "Tap Add expense to start an entry.", "Ketik Tambah belanja untuk bermula.")
+        case .newExpense: return tr("填写商家、金额和日期，这就是一笔消费。", "Enter the merchant, amount and date for this expense.", "Isi peniaga, amaun dan tarikh belanja.")
+        case .ledger: return tr("在账本找到记录，可打开查看或筛选。", "Find an entry in Ledger to review or filter.", "Cari rekod dalam Lejar untuk semak atau tapis.")
+        case .filter: return tr("用金额范围和分账状态缩小查找范围。", "Narrow the results by amount and split status.", "Tapis hasil mengikut amaun dan status pembahagian.")
+        case .receiptEntry: return tr("打开“收据分账”。", "Open Receipt split.", "Buka Bahagi resit.")
+        case .receipt(0): return tr("选择一张完整的收据照片。", "Choose a photo of the full receipt.", "Pilih foto resit yang lengkap.")
+        case .receipt(1): return tr("先核对日期、税费和实付总额。", "Check the date, charges and paid total first.", "Semak tarikh, caj dan jumlah akhir dahulu.")
+        case .receipt(2): return tr("添加一起吃的朋友，选择按菜品分账。", "Add your friends and choose to split by items.", "Tambah rakan dan pilih bahagi mengikut item.")
+        case .receipt(3): return tr("每道菜分给吃它的人，共享菜可选多人。", "Assign each dish to the people who had it.", "Agihkan setiap hidangan kepada pemakannya.")
+        case .receipt(4): return tr("这里显示每人应付，税费已计入。", "Each person's total includes their share of charges.", "Jumlah setiap orang termasuk bahagian cajnya.")
+        case .editExpense: return tr("开启这笔消费的“朋友分账”。", "Enable splitting for this expense.", "Aktifkan pembahagian untuk belanja ini.")
+        case .splitEditor: return tr("填好朋友份额，剩下的就是你的消费。", "Set each friend's share; the remainder is yours.", "Tetapkan bahagian rakan; bakinya milik anda.")
+        case .friends: return tr("点朋友，查看他还欠多少。", "Tap a friend to see their outstanding balance.", "Ketik rakan untuk melihat baki hutangnya.")
+        case .friendDetail: return tr("收到 RM 10 后，记录这次收款。", "After receiving RM 10, record the repayment.", "Selepas menerima RM 10, rekod bayaran itu.")
+        case .repaymentDone: return tr("已收 RM 10，Amy 剩余欠款为 RM 7.49。", "RM 10 received. Amy now owes RM 7.49.", "RM 10 diterima. Amy masih berhutang RM 7.49.")
+        case .recurring: return tr("新增一项固定消费。", "Add a recurring expense.", "Tambah belanja berulang.")
+        case .recurringEditor: return tr("设置金额、周期和开始日期。", "Set its amount, frequency and start date.", "Tetapkan amaun, kekerapan dan tarikh mula.")
+        case .applePay(let step): return shortcut(step, tng: false)
+        case .tngSetup(let step): return shortcut(step, tng: true)
+        case .automation: return tr("选择你要设置的自动记账方式。", "Choose the recording method to set up.", "Pilih cara rekod yang ingin disediakan.")
+        case .tng: return tr("点开待确认的收款通知。", "Open the incoming payment for review.", "Buka wang masuk untuk semakan.")
+        case .tngIncoming: return tr("收到的钱显示＋，再确认这笔钱的用途。", "Incoming money shows +. Confirm what it is for.", "Wang masuk bertanda +. Sahkan tujuannya.")
+        case .settings: return tr("从设置打开你需要的选项。", "Open the option you need in Settings.", "Buka pilihan yang diperlukan dalam Tetapan.")
+        case .appearance: return tr("在这里选择语言与浅色、深色外观。", "Choose your language and light or dark appearance.", "Pilih bahasa serta paparan cerah atau gelap.")
+        case .backups: return tr("完整备份用于恢复，CSV 用于查看账单。", "Use a full backup to restore; CSV to view statements.", "Sandaran penuh untuk pemulihan; CSV untuk penyata.")
+        default: return tr("查看结果，再左右滑动浏览其他主题。", "Review the result, then swipe to another topic.", "Semak hasil, kemudian leret ke topik lain.")
+        }
+    }
+    private static func shortcut(_ step: Int, tng: Bool) -> String {
+        switch step {
+        case 0: return tr("第一步：在快捷指令添加月记动作。", "1. Add YueJi's action in Shortcuts.", "1. Tambah tindakan YueJi dalam Pintasan.")
+        case 1: return tng ? tr("第二步：选通知触发器，来源设为 TNG。", "2. Choose a notification trigger from TNG.", "2. Pilih pencetus notifikasi daripada TNG.") : tr("第二步：选交易触发器和付款卡片。", "2. Choose a transaction trigger and your card.", "2. Pilih pencetus transaksi dan kad anda.")
+        case 2: return tr("第三步：把输入变量接到月记参数。", "3. Connect the input variables to YueJi's fields.", "3. Sambungkan pemboleh ubah ke medan YueJi.")
+        case 3: return tr("第四步：按系统选项允许自动运行。", "4. Enable automatic runs using the system options.", "4. Benarkan jalan automatik mengikut pilihan sistem.")
+        default: return tr("最后：回月记核对运行结果。演示不会替你启用。", "Finally, check YueJi's activity log. This demo does not enable it.", "Akhir sekali, semak log YueJi. Demo ini tidak mengaktifkannya.")
         }
     }
 }
@@ -1355,7 +1384,7 @@ private struct GuideDemoScene: View {
     }
 
     private func heading(_ text: String) -> some View {
-        Text(text).font(.system(size: 25, weight: .bold)).frame(maxWidth: .infinity, alignment: .leading)
+        Text(text).font(.system(size: 28, weight: .bold)).frame(maxWidth: .infinity, alignment: .leading)
     }
     private func section<Content: View>(_ title: String? = nil, @ViewBuilder content: () -> Content) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1374,7 +1403,7 @@ private struct GuideDemoScene: View {
             Spacer(minLength: 10)
             if !value.isEmpty { Text(value).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing) }
         }
-        .font(.system(size: 16))
+        .font(.system(size: 20))
         .padding(.horizontal, 15).frame(minHeight: 53)
         .guideTarget(target ?? "demo.decorative")
     }
