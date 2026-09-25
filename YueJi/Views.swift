@@ -842,27 +842,22 @@ struct SettingsView: View {
     private func backupTitle(_ url: URL) -> String { guard let s = url.lastPathComponent.split(separator: "-").first, let ms = Double(s) else { return url.lastPathComponent }; return dateLabel(Date(timeIntervalSince1970: ms / 1000), time: true) }
 }
 struct ShortcutHelpView: View {
-    var previewStep: Int? = nil
-    var body: some View { ShortcutSetupGuide(provider: .applePay, previewStep: previewStep) }
+    var body: some View { ShortcutSetupGuide(provider: .applePay) }
 }
 
 enum ShortcutSetupProvider: Equatable { case applePay, tng }
 
 struct ShortcutSetupGuide: View {
     let provider: ShortcutSetupProvider
-    var previewStep: Int? = nil
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
-    @StateObject private var demo = LedgerModel(previewLedger: GuideSample.ledger())
     @State private var step = 0
     @State private var gesturePhase = 0
     @State private var gestureStep = 0
     private var modern: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 }
     private var title: String { provider == .applePay ? tr("Apple Pay 设置演示", "Apple Pay walkthrough", "Panduan Apple Pay") : tr("TNG 设置演示", "TNG walkthrough", "Panduan TNG") }
-    private var actionName: String { provider == .applePay ? tr("记录 Apple Pay 支出", "Record Apple Pay expense", "Rekod belanja Apple Pay") : tr("记录 TNG 通知", "Record TNG notification", "Rekod notifikasi TNG") }
-    private var headings: [String] { [tr("添加月记动作", "Add YueJi's action", "Tambah tindakan YueJi"), tr("选择触发方式", "Choose the trigger", "Pilih pencetus"), tr("接好交易资料", "Connect the fields", "Sambungkan medan"), tr("允许自动运行", "Allow automatic runs", "Benarkan jalan automatik"), tr("回月记核对", "Check in YueJi", "Semak dalam YueJi")] }
     private var selection: Binding<Int> { Binding(get: { step }, set: { step = $0 }) }
     private var unavailable: Bool { provider == .tng && !modern }
     private var chapter: GuideChapter? { GuideChapter.all.first { $0.id == (provider == .applePay ? "applePay" : "tng") } }
@@ -872,22 +867,21 @@ struct ShortcutSetupGuide: View {
     }
     var body: some View {
         Group {
-            if let previewStep {
-                ScrollView { slide(previewStep).padding(24) }
-            } else if unavailable {
+            if unavailable {
                 ContentUnavailableView(tr("需要通知触发器", "Notification trigger required", "Pencetus notifikasi diperlukan"), systemImage: "bell.badge", description: Text(tr("此演示使用 iOS 27 的通知自动化。当前系统没有这个入口时，可继续手动记账。", "This walkthrough uses iOS 27 notification automations. If your system does not have this trigger, use manual recording.", "Panduan ini menggunakan automasi notifikasi iOS 27. Jika pencetus tiada, guna rekod manual.")))
             } else {
                 GeometryReader { geometry in
                     TabView(selection: selection) {
                         ForEach(0..<5) { index in
-                            ScrollView {
-                                VStack(spacing: 18) {
+                            VStack(spacing: 18) {
                                     GuideScreenFrame(screen: provider == .applePay ? .applePay(index) : .tngSetup(index), action: index == step ? action(for: index) : nil, gesturePhase: index == step ? gesturePhase : 0)
-                                        .environmentObject(demo)
                                         .frame(height: min(470, max(280, geometry.size.height * 0.65)))
-                                    Text(headings[index]).font(.title2.bold())
-                                    Text(note(index)).font(.subheadline).foregroundStyle(.secondary)
-                                        .lineLimit(3)
+                                    Text(provider == .applePay ? tr("启用 Apple Pay 自动记账", "Set up Apple Pay recording", "Sediakan rekod Apple Pay") : tr("启用 TNG 自动记账", "Set up TNG recording", "Sediakan rekod TNG"))
+                                        .font(.title2.bold())
+                                    Text(provider == .applePay
+                                         ? tr("在快捷指令选择交易触发器，添加月记动作，完成后核对记录。", "In Shortcuts, choose a transaction trigger, add YueJi's action and check the result.", "Pilih pencetus transaksi, tambah tindakan YueJi dan semak hasil.")
+                                         : tr("在快捷指令选择 TNG 通知触发器，添加月记动作，完成后核对记录。", "In Shortcuts, choose TNG notifications, add YueJi's action and check the result.", "Pilih notifikasi TNG, tambah tindakan YueJi dan semak hasil."))
+                                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
                                     Button(tr("打开快捷指令", "Open Shortcuts", "Buka Pintasan")) {
                                         if let url = URL(string: "shortcuts://") { openURL(url) }
                                     }.buttonStyle(.bordered).buttonBorderShape(.capsule)
@@ -895,7 +889,7 @@ struct ShortcutSetupGuide: View {
                                 .multilineTextAlignment(.center)
                                 .padding(.horizontal, 26).padding(.vertical, 16)
                                 .frame(maxWidth: .infinity)
-                            }.tag(index)
+                            .tag(index)
                         }
                     }
                     .tabViewStyle(.page(indexDisplayMode: .always))
@@ -908,7 +902,7 @@ struct ShortcutSetupGuide: View {
         .task(id: "\(step)-\(scenePhase)") {
             gesturePhase = 0
             gestureStep = 0
-            guard previewStep == nil, !model.isPreview, !unavailable, scenePhase == .active, let chapter else { return }
+            guard !model.isPreview, !unavailable, scenePhase == .active, let chapter else { return }
             let actions = GuideGesture.actions(chapter: chapter, stage: step + 1)
             if actions.isEmpty {
                 do { try await Task.sleep(for: .seconds(2)) } catch { return }
@@ -929,85 +923,7 @@ struct ShortcutSetupGuide: View {
         }
     }
 
-    private func row(_ label: String, _ value: String = "", focused: Bool = false, symbol: String = "") -> some View {
-        HStack(spacing: 10) {
-            if !symbol.isEmpty { Image(systemName: symbol).foregroundStyle(.blue) }
-            Text(label).foregroundStyle(.primary)
-            Spacer(minLength: 10)
-            Text(value).foregroundStyle(focused ? Color.blue : .secondary).multilineTextAlignment(.trailing)
-            if focused { Image(systemName: "hand.tap.fill").foregroundStyle(.blue).accessibilityHidden(true) }
-        }.font(.subheadline).padding(14)
-            .background(focused ? Color.blue.opacity(0.08) : Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 14))
-            .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(focused ? Color.blue.opacity(0.35) : .clear))
-    }
 
-    private func slide(_ index: Int) -> some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Text(headings[index]).font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
-            Label(tr("快捷指令设置示意", "Shortcuts setup illustration", "Ilustrasi tetapan Pintasan"), systemImage: "square.stack.3d.up.fill")
-                .font(.caption).foregroundStyle(.secondary)
-            VStack(spacing: 12) {
-                switch index {
-                case 0:
-                    row(tr("快捷指令", "Shortcuts", "Pintasan"), "+", focused: true, symbol: "square.stack.3d.up.fill")
-                    row(tr("搜索操作", "Search actions", "Cari tindakan"), "月记 / YueJi", focused: true, symbol: "magnifyingglass")
-                    row(actionName, "", focused: true, symbol: provider == .applePay ? "creditcard.fill" : "bell.badge.fill")
-                case 1:
-                    row(modern ? tr("编辑", "Edit", "Edit") : tr("快捷指令", "Shortcuts", "Pintasan"), tr("自动化", "Automation", "Automasi"), focused: true)
-                    if provider == .applePay {
-                        row(tr("触发方式", "Trigger", "Pencetus"), tr("交易", "Transaction", "Transaksi"), focused: true, symbol: "creditcard")
-                        row(tr("卡片", "Card", "Kad"), tr("选择付款卡片", "Choose your card", "Pilih kad"), focused: true)
-                    } else {
-                        row(tr("触发方式", "Trigger", "Pencetus"), tr("通知", "Notification", "Notifikasi"), focused: true, symbol: "bell")
-                        row("App", "TNG eWallet", focused: true)
-                    }
-                case 2:
-                    Text(actionName).font(.headline).frame(maxWidth: .infinity, alignment: .leading)
-                    if provider == .applePay {
-                        row(tr("金额", "Amount", "Amaun"), tr("交易金额变量", "Transaction amount", "Amaun transaksi"), focused: true)
-                        row(tr("商户", "Merchant", "Peniaga"), tr("商户变量", "Merchant variable", "Pemboleh ubah peniaga"), focused: true)
-                        row(tr("币种", "Currency", "Mata wang"), tr("交易币种", "Transaction currency", "Mata wang transaksi"))
-                        row(tr("交易时间", "Transaction date", "Tarikh transaksi"), tr("原交易时间", "Original transaction date", "Tarikh transaksi asal"))
-                    } else {
-                        row(tr("通知正文", "Notification body", "Teks notifikasi"), tr("通知的正文变量", "Notification text variable", "Pemboleh ubah teks notifikasi"), focused: true)
-                        row(tr("通知标题（可选）", "Title (optional)", "Tajuk (pilihan)"), tr("通知标题变量", "Notification title", "Tajuk notifikasi"))
-                        row(tr("通知时间（可选）", "Date (optional)", "Tarikh (pilihan)"), tr("通知时间变量", "Notification date", "Tarikh notifikasi"))
-                    }
-                case 3:
-                    if modern {
-                        row(tr("编辑", "Edit", "Edit"), "ⓘ", focused: true)
-                        row(tr("隐私", "Privacy", "Privasi"), tr("锁定时允许运行", "Allow Running When Locked", "Benarkan ketika dikunci"), focused: true)
-                    } else {
-                        row(tr("运行方式", "Run mode", "Cara jalan"), tr("立即运行", "Run Immediately", "Jalan serta-merta"), focused: true)
-                    }
-                    row(tr("系统请求访问月记时", "When access to YueJi is requested", "Apabila akses YueJi diminta"), tr("允许", "Allow", "Benarkan"), focused: true)
-                default:
-                    row(provider == .applePay ? "Apple Pay" : "TNG eWallet", tr("传入资料", "Pass event data", "Hantar data"), symbol: "arrow.down")
-                    row("月记 / YueJi", tr("运行记录", "Activity log", "Log aktiviti"), focused: true, symbol: "list.bullet.rectangle")
-                    row(tr("账本", "Ledger", "Lejar"), tr("核对金额和商户", "Check amount and merchant", "Semak amaun dan peniaga"), symbol: "checkmark.circle")
-                }
-            }.padding(16).ledgerGlass().guideTarget("shortcut.steps")
-            Text(note(index)).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            if index == 4 && previewStep == nil {
-                NavigationLink(tr("查看运行记录", "View activity log", "Lihat log aktiviti")) { AutomationStatusView() }
-                if provider == .tng { NavigationLink(tr("打开 TNG 待确认", "Open TNG review", "Buka semakan TNG")) { TNGInboxView() } }
-            }
-        }.frame(maxWidth: 560).frame(maxWidth: .infinity)
-    }
-
-    private func note(_ index: Int) -> String {
-        switch index {
-        case 0: return tr("先打开月记一次，再添加这个动作。", "Open YueJi once before adding its action.", "Buka YueJi sekali sebelum menambah tindakannya.")
-        case 1: return provider == .applePay
-            ? tr("用 Wallet 的交易触发；不同卡片和付款方式需分别核对。", "Use the Wallet transaction trigger; verify each card and payment method.", "Guna pencetus transaksi Wallet; semak setiap kad dan cara bayaran.")
-            : tr("iOS 27：选择 TNG 为通知来源。设置筛选时别漏掉需要记录的收款通知。", "On iOS 27, choose TNG as the notification source. Filters must also include incoming money if needed.", "Pada iOS 27, pilih TNG sebagai sumber. Penapis perlu termasuk wang masuk jika diperlukan.")
-        case 2: return tr("点参数选择真实输入变量。交易标识拿不到就留空，不要填固定文字。", "Select actual input variables. Leave transaction ID empty unless a genuine ID is available.", "Pilih pemboleh ubah input sebenar. Biarkan ID kosong jika ID sebenar tiada.")
-        case 3: return tr("按系统提供的选项启用并保存；演示本身不会激活自动化。", "Enable and save using the options your system provides. This walkthrough does not activate an automation.", "Aktifkan dan simpan mengikut pilihan sistem. Panduan ini tidak mengaktifkan automasi.")
-        default: return provider == .applePay
-            ? tr("对照实际记录确认成功；未触发的交易和退款仍需补记。", "Verify against actual records; missed events and refunds still need review.", "Sahkan dengan rekod sebenar; peristiwa terlepas dan pulangan perlu disemak.")
-            : tr("已识别付款记为支出；收款显示＋并等待确认用途。不支持的格式可能被忽略。", "Recognized payments are expenses; incoming money shows + and awaits purpose review. Unsupported formats may be ignored.", "Bayaran dikenal pasti ialah belanja; wang masuk bertanda + menunggu semakan. Format lain mungkin diabaikan.")
-        }
-    }
 }
 
 private var installedVersionLabel: String {
@@ -1119,7 +1035,7 @@ extension View {
 
 private enum GuideScreen: Hashable {
     case overview, receiptEntry, tools, newExpense, foreignExpense, ledger, filter, editExpense, refund, receipt(Int), splitEditor
-    case friends, friendSummary, friendDetail, repayment, history, friendSpending, statement, trip
+    case friends, friendSummary, friendDetail, repayment, repaymentDone, history, friendSpending, statement, trip
     case recurring, recurringEditor, upcoming, comparison, duplicates
     case automation, applePay(Int), tng, tngPayment, tngIncoming, tngSetup(Int), logs
     case settings, appearance, notifications, categoriesMenu, categories, categoryEditor, rules, rates
@@ -1138,7 +1054,7 @@ private struct GuideChapter: Identifiable {
             .init(id: "ledger", title: tr("看账本", "Find an entry", "Cari rekod"), path: "", detail: tr("到账本查找记录，再按需要筛选。", "Find entries in Ledger and narrow them down with filters.", "Cari rekod dalam Lejar dan tapis jika perlu."), screens: [.ledger, .filter]),
             .init(id: "receipt", title: tr("扫描收据", "Scan a receipt", "Imbas resit"), path: "", detail: tr("选照片后核对金额和日期，再按菜品分给每个人。画面使用示例收据数据。", "Choose a photo, check the amounts and date, then assign each item. This demonstration uses sample data.", "Pilih foto, semak amaun dan tarikh, lalu bahagi item. Demonstrasi menggunakan data contoh."), screens: [.receiptEntry, .receipt(0), .receipt(1), .receipt(2), .receipt(3), .receipt(4)]),
             .init(id: "split", title: tr("朋友分账", "Split with friends", "Bahagi bersama rakan"), path: "", detail: tr("从账本打开一笔消费，再按各自份额分账。", "Open an entry in Ledger and assign each friend's share.", "Buka rekod dalam Lejar dan tetapkan bahagian setiap rakan."), screens: [.ledger, .editExpense, .splitEditor]),
-            .init(id: "repayment", title: tr("朋友还款", "Record a repayment", "Rekod bayaran rakan"), path: "", detail: tr("打开朋友的欠款，按实际收到的金额记录还款。", "Open a friend's balance and record the amount received.", "Buka baki rakan dan rekod amaun yang diterima."), screens: [.friends, .friendDetail, .repayment]),
+            .init(id: "repayment", title: tr("朋友还款", "Record a repayment", "Rekod bayaran rakan"), path: "", detail: tr("打开朋友的欠款，按实际收到的金额记录还款。", "Open a friend's balance and record the amount received.", "Buka baki rakan dan rekod amaun yang diterima."), screens: [.friends, .friendDetail, .repaymentDone]),
             .init(id: "recurring", title: tr("固定消费", "Recurring bills", "Belanja berulang"), path: "", detail: tr("新增计划，设置金额、周期和开始日期。", "Add a schedule with its amount, frequency and start date.", "Tambah jadual bersama amaun, kekerapan dan tarikh mula."), screens: [.recurring, .recurringEditor]),
             .init(id: "applePay", title: tr("Apple Pay 自动记账", "Apple Pay automation", "Automasi Apple Pay"), path: "", detail: tr("在快捷指令选交易触发器，接入月记动作，并核对运行结果。系统画面为设置示意。", "Choose a transaction trigger in Shortcuts, connect YueJi's action and check the result. The system setup is illustrated.", "Pilih pencetus transaksi dalam Pintasan, sambung tindakan YueJi dan semak hasil. Tetapan sistem ialah ilustrasi."), screens: [.automation, .applePay(0), .applePay(1), .applePay(2), .applePay(3), .applePay(4)]),
             .init(id: "tng", title: tr("TNG 自动记账", "TNG automation", "Automasi TNG"), path: "", detail: tr("在快捷指令选通知触发器，接入月记动作；收到款项记为＋并由你确认。系统画面为设置示意。", "Choose a notification trigger and YueJi's action; incoming money appears as + for your review. The system setup is illustrated.", "Pilih pencetus notifikasi dan tindakan YueJi; wang masuk bertanda + untuk disemak. Tetapan sistem ialah ilustrasi."), screens: [.automation, .tngSetup(0), .tngSetup(1), .tngSetup(2), .tngSetup(3), .tngSetup(4), .tng, .tngIncoming]),
@@ -1168,7 +1084,6 @@ struct UsageGuideView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var preview = LedgerModel(previewLedger: GuideSample.ledger())
     @State private var page = 0
     @State private var stage = 0
     @State private var gesturePhase = 0
@@ -1182,11 +1097,9 @@ struct UsageGuideView: View {
             GeometryReader { geometry in
                 TabView(selection: selection) {
                     ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
-                        ScrollView {
-                            VStack(spacing: 22) {
+                        VStack(spacing: 22) {
                                 if abs(index - page) <= 1 {
                                     GuideScreenFrame(screen: chapter.screens[min(index == page ? stage : 0, chapter.screens.count - 1)], action: index == page ? GuideGesture.actions(chapter: chapter, stage: stage).dropFirst(gestureStep).first : nil, gesturePhase: index == page ? gesturePhase : 0)
-                                        .environmentObject(preview)
                                         .frame(height: min(480, max(280, geometry.size.height * 0.65)))
                                 } else {
                                     Color.clear.frame(height: min(480, max(280, geometry.size.height * 0.65)))
@@ -1201,7 +1114,7 @@ struct UsageGuideView: View {
                             }
                             .padding(.horizontal, 28).padding(.top, 12).padding(.bottom, 52)
                             .frame(maxWidth: 560).frame(maxWidth: .infinity)
-                        }.tag(index)
+                            .tag(index)
                     }
                 }
                 .tabViewStyle(.page(indexDisplayMode: .always))
@@ -1214,14 +1127,7 @@ struct UsageGuideView: View {
                     Button { dismiss() } label: { Image(systemName: "chevron.left") }
                         .accessibilityLabel(tr("关闭指南", "Close guide", "Tutup panduan"))
                 }
-                ToolbarItem(placement: .primaryAction) {
-                    Menu {
-                        ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
-                            Button(chapter.title) { selection.wrappedValue = index }
-                        }
-                    } label: { Image(systemName: "list.bullet") }
-                        .accessibilityLabel(tr("目录", "Contents", "Kandungan"))
-                }
+
             }
             .task(id: "\(page)-\(stage)-\(scenePhase)") {
                 gesturePhase = 0
@@ -1308,10 +1214,9 @@ private struct GuideGesture {
 private struct GuideTouchIndicator: View {
     let phase: Int
     let action: GuideGesture
-    let measured: CGRect?
+    let measured: CGRect
     private var destination: CGPoint {
-        guard let measured, measured.width > 0, measured.height > 0 else { return action.target }
-        return CGPoint(x: measured.midX, y: measured.minY + measured.height * action.position)
+        CGPoint(x: measured.midX, y: measured.minY + measured.height * action.position)
     }
     var body: some View {
         ZStack {
@@ -1320,13 +1225,10 @@ private struct GuideTouchIndicator: View {
                     .frame(width: 62, height: 62)
                     .transition(.scale.combined(with: .opacity))
             }
-            Circle().fill(.white.opacity(0.86))
-                .frame(width: 46, height: 46)
-                .overlay(Circle().strokeBorder(.blue.opacity(0.55), lineWidth: 1.5))
-                .shadow(color: .black.opacity(0.17), radius: 9, y: 4)
-                .overlay(Image(systemName: "hand.point.up.left.fill")
-                    .font(.system(size: 20, weight: .medium))
-                    .foregroundStyle(.blue))
+            Circle().fill(.white.opacity(0.70))
+                .frame(width: 44, height: 44)
+                .overlay(Circle().strokeBorder(.gray.opacity(0.32), lineWidth: 1))
+                .shadow(color: .black.opacity(0.14), radius: 9, y: 3)
                 .scaleEffect(phase == 2 && !action.swipe ? 0.78 : 1)
         }
         .position(phase == 1 ? (action.swipe ? CGPoint(x: destination.x, y: destination.y + 120) : CGPoint(x: destination.x + 70, y: destination.y + 95)) : destination)
@@ -1353,11 +1255,12 @@ private struct GuideScreenFrame: View {
                     Image(systemName: "battery.100percent")
                 }.padding(.horizontal, 25).frame(height: 38)
                 ZStack {
-                    GuideActualScreen(screen: screen)
+                    GuideDemoScene(screen: screen)
                         .id(screen)
                         .transition(reduceMotion ? .identity : .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
-                    if let action, gesturePhase > 0 {
-                        GuideTouchIndicator(phase: gesturePhase, action: action, measured: measuredTargets[action.targetID])
+                    if let action, gesturePhase > 0, let measured = measuredTargets[action.targetID], measured.height > 0 {
+                        GuideTouchIndicator(phase: gesturePhase, action: action, measured: measured)
+                            .transition(reduceMotion ? .identity : .opacity.combined(with: .scale(scale: 0.7)))
                     }
                 }.frame(width: 390, height: 740).clipped()
                     .coordinateSpace(name: "guidePreview")
@@ -1378,83 +1281,356 @@ private struct GuideScreenFrame: View {
     }
 }
 
-// The five root screens and their tab labels are the same views used by MainView.
-// MainView's live-data, rates and first-launch tasks are deliberately not invoked.
-private struct GuideRootScreen: View {
-    let tab: Int
-    var body: some View {
-        TabView(selection: .constant(tab)) {
-            DashboardView().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView().tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
-            RecurringView().tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
-            FriendsView().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
-            SettingsView().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
-        }.tabViewStyle(.automatic)
-    }
-}
 
-private struct GuideActualScreen: View {
-    @EnvironmentObject private var model: LedgerModel
+// A read-only Tips scene. It borrows the app's labels and workflow, while keeping
+// editor toolbars, sheets, keyboards and system menus out of the demonstration.
+private struct GuideDemoScene: View {
     let screen: GuideScreen
-    private var expense: Expense { model.ledger.expenses[0] }
-    var body: some View {
-        Group {
-            switch screen {
-            case .overview: GuideRootScreen(tab: 0)
-            case .receiptEntry: DashboardView(guideFocus: "dashboard.receipt")
-            case .ledger: GuideRootScreen(tab: 1)
-            case .recurring: GuideRootScreen(tab: 2)
-            case .friends: GuideRootScreen(tab: 3)
-            case .settings: GuideRootScreen(tab: 4)
-            case .newExpense: ExpenseEditor(original: nil, initialDraft: Expense(merchant: "Lunch Cafe", cents: 1800, category: "餐饮"))
-            case .foreignExpense:
-                ExpenseEditor(original: nil, initialDraft: Expense(merchant: "Book shop", cents: 4200, category: "购物", foreign: ForeignAmount(currency: "USD", minor: 1000, quote: RateQuote(value: 4.2, date: Date(), source: "Demo"))))
-            case .categoryEditor: CategoryEditor(initial: CustomCategory(name: tr("学习", "Study", "Belajar"), icon: "book.fill"))
-            case .editExpense: ExpenseEditor(original: expense)
-            case .splitEditor: ExpenseEditor(original: expense, startWithSplit: true)
-            case .filter: LedgerFilterEditor(value: LedgerFilter()) { _ in }
-            case .repayment: RepaymentView(target: RepayTarget(expense: expense, share: expense.shares[0]))
-            case .recurringEditor: RecurringEditor(original: nil)
-            case .appearance: SettingsView(guideDestination: "appearance")
-            case .categoriesMenu: SettingsView(guideDestination: "categories")
-            case .backups: SettingsView(guideDestination: "backup")
-            case .about: SettingsView(guideDestination: "about")
-            case .restore:
-                if let data = try? LocalStore.encode(model.ledger), let preview = try? RestorePreview(data: data) {
-                    RestorePreviewView(preview: preview) { }
-                }
-            default:
-                NavigationStack { destination }
-            }
-        }.id(screen)
-    }
-    @ViewBuilder private var destination: some View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var title: String {
         switch screen {
-        case .tools: OverviewToolsView()
-        case .friendSummary: FriendSummaryView()
-        case .tngPayment: TNGNoticeView(id: "guide-payment")
-        case .refund: RefundsView(expenseID: expense.id)
-        case .receipt(let section): ReceiptScanView(guideSection: section)
-        case .friendDetail: FriendDetailView(key: "amy")
-        case .history: SplitHistoryView()
-        case .friendSpending: FriendSpendingView(friend: "amy")
-        case .statement: FriendStatementView(key: "amy")
-        case .trip: FuelCalculatorView()
-        case .upcoming: UpcomingView(initialMonth: Date())
-        case .comparison: SpendingComparisonView(month: Date())
-        case .duplicates: DuplicateReviewView()
-        case .automation: AutomationSetupView()
-        case .applePay(let step): ShortcutHelpView(previewStep: step)
-        case .tng: TNGInboxView()
-        case .tngIncoming: TNGIncomingView(id: "guide-incoming")
-        case .tngSetup(let step): TNGSetupView(previewStep: step)
-        case .logs: AutomationStatusView()
-        case .notifications: NotificationSettingsView()
-        case .categories: CategoriesView()
-        case .rules: MerchantRulesView()
-        case .rates: RatesView()
-        case .csv: CSVExportView()
+        case .overview, .receiptEntry: return tr("概览", "Overview", "Ringkasan")
+        case .newExpense, .editExpense, .splitEditor: return tr("记账 / 分账", "Expense / split", "Belanja / pembahagian")
+        case .ledger: return tr("账本", "Ledger", "Lejar")
+        case .filter: return tr("筛选", "Filters", "Penapis")
+        case .receipt(_): return tr("收据分账", "Receipt split", "Bahagi resit")
+        case .friends: return tr("朋友分账", "Shared expenses", "Belanja dikongsi")
+        case .friendDetail, .repayment, .repaymentDone: return tr("欠款明细", "Balance details", "Butiran baki")
+        case .recurring, .recurringEditor: return tr("固定消费", "Recurring expenses", "Belanja berulang")
+        case .automation: return tr("自动记账", "Automatic recording", "Rekod automatik")
+        case .applePay(_), .tngSetup(_): return tr("快捷指令 · 设置示意", "Shortcuts · illustration", "Pintasan · ilustrasi")
+        case .tng, .tngIncoming: return tr("TNG 通知记录", "TNG inbox", "Peti TNG")
+        case .settings: return tr("设置", "Settings", "Tetapan")
+        case .appearance: return tr("外观与语言", "Appearance & language", "Paparan & bahasa")
+        case .backups: return tr("备份与导出", "Backups & export", "Sandaran & eksport")
+        default: return tr("月记", "YueJi", "YueJi")
+        }
+    }
+    private var tab: Int? {
+        switch screen {
+        case .overview, .receiptEntry: return 0
+        case .ledger: return 1
+        case .recurring: return 2
+        case .friends: return 3
+        case .settings: return 4
+        default: return nil
+        }
+    }
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                if tab == nil { Image(systemName: "chevron.left").frame(width: 42, alignment: .leading) }
+                Spacer(minLength: 0)
+                Text(title).font(.system(size: 17, weight: .semibold)).lineLimit(1)
+                Spacer(minLength: 0)
+                if tab == nil { Color.clear.frame(width: 42) }
+            }
+            .padding(.horizontal, 18).frame(height: 52)
+            .background(Color(uiColor: .systemBackground))
+            ScrollViewReader { reader in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 16) { content }
+                        .padding(.horizontal, 20).padding(.vertical, 18)
+                }
+                .scrollIndicators(.hidden)
+                .task(id: screen) {
+                    if screen == .receiptEntry {
+                        do { try await Task.sleep(for: .milliseconds(360)) } catch { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.8)) {
+                            reader.scrollTo("demo.receipt", anchor: .center)
+                        }
+                    } else if screen == .receipt(3) {
+                        do { try await Task.sleep(for: .seconds(3)) } catch { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.7)) {
+                            reader.scrollTo("demo.items", anchor: .center)
+                        }
+                    }
+                }
+            }
+            if let tab { tabs(selected: tab) }
+        }
+        .frame(width: 390, height: 740)
+        .background(Color(uiColor: .systemGroupedBackground))
+    }
+
+    private func heading(_ text: String) -> some View {
+        Text(text).font(.system(size: 25, weight: .bold)).frame(maxWidth: .infinity, alignment: .leading)
+    }
+    private func section<Content: View>(_ title: String? = nil, @ViewBuilder content: () -> Content) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if let title { Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 4) }
+            VStack(spacing: 0) { content() }
+                .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 18))
+        }
+    }
+    private func row(_ name: String, _ value: String = "", icon: String = "", target: String? = nil, tint: Color = .blue) -> some View {
+        HStack(spacing: 12) {
+            if !icon.isEmpty {
+                Image(systemName: icon).font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(tint).frame(width: 26)
+            }
+            Text(name).lineLimit(2)
+            Spacer(minLength: 10)
+            if !value.isEmpty { Text(value).foregroundStyle(.secondary).lineLimit(2).multilineTextAlignment(.trailing) }
+        }
+        .font(.system(size: 16))
+        .padding(.horizontal, 15).frame(minHeight: 53)
+        .guideTarget(target ?? "demo.decorative")
+    }
+    private func divider() -> some View { Divider().padding(.leading, 16) }
+    private func tabs(selected: Int) -> some View {
+        HStack {
+            ForEach(0..<5) { index in
+                let icons = ["chart.pie.fill", "list.bullet.rectangle", "repeat", "person.2.fill", "slider.horizontal.3"]
+                let labels = [tr("概览", "Overview", "Ringkasan"), tr("账本", "Ledger", "Lejar"), tr("固定", "Recurring", "Berulang"), tr("分账", "Split", "Bahagi"), tr("设置", "Settings", "Tetapan")]
+                VStack(spacing: 4) {
+                    Image(systemName: icons[index]).font(.system(size: 19))
+                    Text(labels[index]).font(.system(size: 10))
+                }
+                .foregroundStyle(selected == index ? Color.blue : Color.secondary)
+                .frame(maxWidth: .infinity)
+            }
+        }.padding(.top, 10).frame(height: 62).background(Color(uiColor: .systemBackground))
+    }
+    @ViewBuilder private var content: some View {
+        switch screen {
+        case .overview, .receiptEntry:
+            heading(tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"))
+            section {
+                row(tr("本月 · 我的实际消费", "This month · my spending", "Bulan ini · belanja saya"), "RM 85.82", icon: "chart.pie.fill")
+                divider()
+                row(tr("预算剩余", "Budget remaining", "Baki bajet"), "RM 914.18")
+            }
+            section(tr("分类", "Categories", "Kategori")) {
+                row(tr("餐饮", "Dining", "Makanan"), "RM 29.15", icon: "fork.knife")
+                divider()
+                row(tr("购物", "Shopping", "Beli-belah"), "RM 56.67", icon: "bag")
+            }
+            section(tr("日常工具", "Everyday tools", "Alat harian")) {
+                row(tr("收据分账", "Receipt split", "Bahagi resit"), icon: "doc.viewfinder", target: "dashboard.receipt")
+                    .id("demo.receipt")
+                divider()
+                row(tr("自动记账", "Automatic recording", "Rekod automatik"), "Apple Pay · TNG", icon: "bolt.fill")
+            }
+            section { row(tr("记一笔", "Add expense", "Tambah belanja"), icon: "plus", target: "dashboard.add") }
+        case .newExpense:
+            heading(tr("记一笔", "Add expense", "Tambah belanja"))
+            section(tr("实际付款", "Payment", "Bayaran")) {
+                row(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), "Lunch Cafe")
+                divider(); row(tr("原币金额", "Amount", "Amaun"), "RM 18.00")
+                divider(); row(tr("日期", "Date", "Tarikh"), dateLabel(Date()))
+                divider(); row(tr("分类", "Category", "Kategori"), tr("餐饮", "Dining", "Makanan"))
+            }
+            section { row(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), "○") }
+        case .ledger:
+            heading(tr("账本", "Your ledger", "Lejar anda"))
+            section {
+                row(tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"), "RM 85.82")
+                divider()
+                row(tr("筛选", "Filter", "Tapis"), icon: "line.3.horizontal.decrease.circle", target: "ledger.filter")
+            }
+            section(tr("今天", "Today", "Hari ini")) {
+                row("Lunch Cafe", "RM 46.64", icon: "fork.knife", target: "ledger.expense")
+                divider(); row("Shopee", "RM 56.67", icon: "bag")
+            }
+        case .filter:
+            heading(tr("查找账目", "Find entries", "Cari rekod"))
+            section {
+                row(tr("商户、分类", "Merchant, category", "Peniaga, kategori"), icon: "magnifyingglass")
+                divider(); row(tr("金额范围", "Amount range", "Julat amaun"), "RM 0 – 100")
+                divider(); row(tr("分账状态", "Split status", "Status pembahagian"), tr("全部", "All", "Semua"))
+            }
+        case .receipt(let step): receiptContent(step)
+        case .editExpense, .splitEditor:
+            heading(tr("朋友分账", "Split with friends", "Bahagi bersama rakan"))
+            section(tr("实际付款", "Payment", "Bayaran")) {
+                row("Lunch Cafe", "RM 46.64")
+                divider(); row(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), screen == .splitEditor ? "●" : "○", target: "expense.split")
+            }
+            if screen == .splitEditor {
+                section {
+                    row(tr("分摊方式", "Split method", "Cara pembahagian"), tr("自定", "Custom", "Tersuai"))
+                    divider(); row("Amy", "RM 17.49")
+                    divider(); row(tr("我的份额", "My share", "Bahagian saya"), "RM 29.15")
+                }
+            }
+        case .friends:
+            heading(tr("一起吃，各自分", "Shared, fairly", "Kongsi dengan adil"))
+            section {
+                row(tr("朋友还欠你", "Friends owe you", "Rakan berhutang"), "RM 17.49")
+            }
+            section(tr("未结清", "Outstanding", "Belum selesai")) {
+                row("Amy", "RM 17.49", icon: "person.crop.circle", target: "friends.person")
+            }
+        case .friendDetail:
+            heading("Amy")
+            section {
+                row(tr("待收", "Receivable", "Belum diterima"), "RM 17.49")
+                divider(); row(tr("本次收到", "Received now", "Diterima kini"), "RM 10.00")
+                divider(); row(tr("记录收款", "Record money received", "Rekod wang diterima"), icon: "arrow.down.circle", target: "friend.repay")
+            }
+        case .repayment:
+            heading(tr("记录还款", "Record repayment", "Rekod bayaran"))
+            section {
+                row("Amy", "RM 17.49")
+                divider(); row(tr("本次收到", "Received now", "Diterima kini"), "RM 10.00")
+                divider(); row(tr("收到日期", "Date received", "Tarikh diterima"), dateLabel(Date()))
+                divider(); row(tr("收款后尚欠", "Balance after receipt", "Baki selepas penerimaan"), "RM 7.49")
+            }
+        case .repaymentDone:
+            heading("Amy")
+            section {
+                row(tr("待收", "Receivable", "Belum diterima"), "RM 7.49")
+                divider(); row(tr("本次已收", "Received", "Diterima"), "RM 10.00", icon: "checkmark.circle", tint: .green)
+            }
+        case .recurring:
+            heading(tr("固定消费", "Recurring expenses", "Belanja berulang"))
+            section {
+                row(tr("本月安排", "This month's plan", "Rancangan bulan ini"), icon: "calendar")
+                divider(); row("Internet", "RM 99.00", icon: "repeat")
+                divider(); row(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang"), icon: "plus", target: "recurring.add")
+            }
+        case .recurringEditor:
+            heading(tr("新增固定消费", "Add recurring expense", "Tambah belanja berulang"))
+            section {
+                row(tr("名称", "Name", "Nama"), "Internet")
+                divider(); row(tr("金额", "Amount", "Amaun"), "RM 99.00")
+                divider(); row(tr("周期", "Frequency", "Kekerapan"), tr("每月", "Monthly", "Bulanan"))
+                divider(); row(tr("首次日期", "Start date", "Tarikh mula"), dateLabel(Date()))
+            }
+        case .automation:
+            heading(tr("自动记账", "Automatic recording", "Rekod automatik"))
+            section {
+                row("Apple Pay", tr("付款后记录", "Record after payment", "Rekod selepas bayaran"), icon: "creditcard", target: "automation.apple")
+                divider(); row("TNG eWallet", tr("通知接入", "Notifications", "Notifikasi"), icon: "bell.badge", target: "automation.tng")
+            }
+        case .applePay(let step): shortcut(provider: .applePay, step: step)
+        case .tngSetup(let step): shortcut(provider: .tng, step: step)
+        case .tng:
+            heading(tr("TNG 待确认", "TNG to review", "TNG perlu disemak"))
+            section {
+                row("Amy", "+ RM 10.00", icon: "arrow.down.circle", target: "tng.incoming", tint: .green)
+                divider(); row("Lunch Cafe", "− RM 18.00", icon: "arrow.up.circle")
+            }
+        case .tngIncoming:
+            heading(tr("收到款项", "Incoming money", "Wang masuk"))
+            section {
+                row("Amy", "+ RM 10.00", icon: "arrow.down.circle", tint: .green)
+                divider(); row(tr("朋友还款", "Friend repayment", "Bayaran rakan"), icon: "person.2")
+                divider(); row(tr("其他收入", "Other income", "Pendapatan lain"), icon: "plus.circle")
+            }
+        case .settings:
+            heading(tr("让月记更适合你", "Make it yours", "Sesuaikan YueJi"))
+            section {
+                row(tr("外观与语言", "Appearance & language", "Paparan dan bahasa"), icon: "circle.lefthalf.filled", target: "settings.appearance")
+                divider(); row(tr("提醒与通知", "Reminders & notifications", "Peringatan"), icon: "bell")
+            }
+            section {
+                row(tr("自动记账", "Automatic recording", "Rekod automatik"), icon: "bolt")
+                divider(); row(tr("备份与导出", "Backups & export", "Sandaran & eksport"), icon: "externaldrive", target: "settings.backup")
+            }
+        case .appearance:
+            heading(tr("外观与语言", "Appearance & language", "Paparan dan bahasa"))
+            section {
+                row(tr("语言", "Language", "Bahasa"), tr("简体中文", "Chinese", "Cina"))
+                divider(); row(tr("外观", "Appearance", "Paparan"), tr("跟随系统", "System", "Sistem"))
+            }
+        case .backups:
+            heading(tr("备份与导出", "Backups & export", "Sandaran & eksport"))
+            section {
+                row(tr("完整备份", "Full backup", "Sandaran penuh"), "JSON", icon: "externaldrive")
+                divider(); row(tr("导出账单", "Export statements", "Eksport penyata"), "CSV", icon: "square.and.arrow.up")
+            }
+        default: heading(tr("月记", "YueJi", "YueJi"))
+        }
+    }
+    @ViewBuilder private func receiptContent(_ step: Int) -> some View {
+        switch step {
+        case 0:
+            heading(tr("一张收据，分得清楚", "One receipt. Clear shares.", "Satu resit, bahagian jelas."))
+            section {
+                row(tr("扫描收据", "Scan receipt", "Imbas resit"), icon: "doc.viewfinder")
+                divider()
+                row(tr("选择收据照片", "Choose receipt photo", "Pilih foto resit"), icon: "photo", target: "receipt.photo")
+            }
+        case 1:
+            heading(tr("核对收据", "Review receipt", "Semak resit"))
+            section {
+                row(tr("商家", "Merchant", "Peniaga"), "RESTAURANT KHAN JEE", target: "receipt.merchant")
+                divider(); row(tr("消费日期", "Receipt date", "Tarikh resit"), "03/11/2025", target: "receipt.date")
+                divider(); row(tr("商品小计", "Items subtotal", "Subjumlah item"), "RM 208.00")
+                divider(); row(tr("税费（SST）", "Tax (SST)", "Cukai SST"), "RM 13.73")
+                divider(); row(tr("服务费", "Service charge", "Caj perkhidmatan"), "RM 20.80")
+                divider(); row(tr("舍入调整", "Rounding", "Pembundaran"), "RM 0.02")
+                divider(); row(tr("实付总额", "Paid total", "Jumlah akhir"), "RM 242.55", target: "receipt.total")
+            }
+        case 2:
+            heading(tr("谁一起吃？", "Who is sharing?", "Siapa berkongsi?"))
+            section {
+                row(tr("包括我", "Include me", "Termasuk saya"), "✓")
+                divider(); row(tr("朋友姓名", "Friend's name", "Nama rakan"), "Amy")
+                divider(); row(tr("添加朋友", "Add friend", "Tambah rakan"), icon: "person.badge.plus", target: "receipt.people")
+                divider(); row(tr("怎样分账", "Split method", "Cara bahagi"), tr("按各自点的菜", "By items", "Ikut item"))
+            }
+        case 3:
+            heading(tr("菜品明细", "Items", "Butiran item"))
+            section {
+                row("DAAL CHANA FRY", "RM 25.00", target: "receipt.item0")
+                divider(); row("PLAIN NAAN", "RM 33.00", target: "receipt.item1")
+                divider(); row("PALAK PANEER", "RM 50.00")
+                divider(); row("CHICKEN CHEESY KOFTA", "RM 30.00")
+                divider(); row("DAAL MASH FRY", "RM 25.00")
+                divider(); row("CH TANDOORI LEG", "RM 30.00")
+                divider(); row("PLAIN PARATHA", "RM 5.00")
+                divider(); row("FRESH LIME JUICE", "RM 10.00")
+                divider(); row(tr("谁吃这道菜？", "Who had this?", "Siapa makan ini?"), "Amy", icon: "person.2")
+                divider(); row(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal"), icon: "plus", target: "receipt.items")
+                    .id("demo.items")
+            }
+        case 4:
+            heading(tr("每人应付", "Each person pays", "Bayaran setiap orang"))
+            section {
+                row(tr("商品合计", "Items total", "Jumlah item"), "RM 208.00")
+                divider(); row(tr("税费和服务费", "Tax and service", "Cukai dan caj"), "RM 34.53")
+                divider(); row(tr("舍入调整", "Rounding", "Pembundaran"), "RM 0.02")
+            }
+            section {
+                row(tr("我", "Me", "Saya"), "RM 125.94", icon: "person.fill")
+                divider(); row("Amy", "RM 116.61", icon: "person.fill")
+                divider(); row(tr("实付总额", "Paid total", "Jumlah akhir"), "RM 242.55")
+            }
         default: EmptyView()
+        }
+    }
+    @ViewBuilder private func shortcut(provider: ShortcutSetupProvider, step: Int) -> some View {
+        let action = provider == .applePay ? tr("记录 Apple Pay 支出", "Record Apple Pay expense", "Rekod belanja Apple Pay") : tr("记录 TNG 通知", "Record TNG notification", "Rekod notifikasi TNG")
+        heading(provider == .applePay ? "Apple Pay" : "TNG eWallet")
+        section(tr("快捷指令设置示意", "Shortcuts setup illustration", "Ilustrasi tetapan Pintasan")) {
+            VStack(spacing: 0) {
+                switch step {
+                case 0:
+                    row(tr("快捷指令", "Shortcuts", "Pintasan"), "+", icon: "square.stack.3d.up")
+                    divider(); row(tr("搜索操作", "Search actions", "Cari tindakan"), "月记 / YueJi", icon: "magnifyingglass")
+                    divider(); row(action, icon: "bolt")
+                case 1:
+                    row(tr("编辑", "Edit", "Edit"), tr("自动化", "Automation", "Automasi"), icon: "slider.horizontal.3")
+                    divider(); row(tr("触发方式", "Trigger", "Pencetus"), provider == .applePay ? tr("交易", "Transaction", "Transaksi") : tr("通知", "Notification", "Notifikasi"), icon: provider == .applePay ? "creditcard" : "bell")
+                    divider(); row(provider == .applePay ? tr("选择卡片", "Choose card", "Pilih kad") : "App", provider == .applePay ? "Apple Pay" : "TNG eWallet")
+                case 2:
+                    row(action, icon: "square.stack.3d.up")
+                    divider(); row(provider == .applePay ? tr("金额", "Amount", "Amaun") : tr("通知正文", "Notification body", "Teks notifikasi"), tr("输入变量", "Input variable", "Pemboleh ubah"))
+                    divider(); row(provider == .applePay ? tr("商户", "Merchant", "Peniaga") : tr("通知时间", "Notification date", "Tarikh notifikasi"), tr("输入变量", "Input variable", "Pemboleh ubah"))
+                case 3:
+                    row(tr("编辑", "Edit", "Edit"), "ⓘ", icon: "slider.horizontal.3")
+                    divider(); row(tr("隐私", "Privacy", "Privasi"), tr("锁定时允许运行", "Allow Running When Locked", "Benarkan semasa dikunci"), icon: "lock.shield")
+                    divider(); row(tr("系统请求访问月记时", "When access is requested", "Apabila akses diminta"), tr("允许", "Allow", "Benarkan"))
+                default:
+                    row(provider == .applePay ? "Apple Pay" : "TNG eWallet", tr("传入资料", "Pass event data", "Hantar data"), icon: "arrow.down")
+                    divider(); row(tr("月记运行记录", "YueJi activity log", "Log aktiviti YueJi"), icon: "list.bullet.rectangle")
+                    divider(); row(tr("核对金额与商户", "Check amount and merchant", "Semak amaun dan peniaga"), icon: "checkmark.circle")
+                }
+            }.guideTarget("shortcut.steps")
         }
     }
 }

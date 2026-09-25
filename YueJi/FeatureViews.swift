@@ -1131,8 +1131,7 @@ struct TNGNoticeView: View {
     }
 }
 struct TNGSetupView: View {
-    var previewStep: Int? = nil
-    var body: some View { ShortcutSetupGuide(provider: .tng, previewStep: previewStep) }
+    var body: some View { ShortcutSetupGuide(provider: .tng) }
 }
 
 import Vision
