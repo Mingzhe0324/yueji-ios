@@ -1,6 +1,9 @@
 import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 
 private let ink = Color(uiColor: .systemBlue)
 struct GlassPanel<Content: View>: View {
@@ -138,6 +141,10 @@ struct DashboardView: View {
                             NavigationLink { AutomationSetupView() } label: {
                                 SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
                             }
+                            Divider()
+                            NavigationLink { LedgerInsightsView() } label: {
+                                SimpleSettingsRow(title: tr("智能查账", "Smart ledger", "Lejar pintar"), subtitle: tr("问账本、看月度回顾", "Ask your ledger and review the month", "Tanya lejar dan semak bulan"), symbol: "sparkle.magnifyingglass", color: .indigo)
+                            }
                         }.buttonStyle(.plain)
                     }
                     NavigationLink { OverviewToolsView(month: month) } label: {
@@ -209,6 +216,15 @@ struct DashboardView: View {
                 LabeledContent(tr("本月实际付款", "Paid this month", "Dibayar bulan ini"), value: money(entries.reduce(0) { $0 + $1.cents }))
                 if entries.contains(where: { $0.refunded > 0 }) {
                     LabeledContent(tr("这些付款已退金额", "Refunded on these payments", "Bayaran ini dipulangkan"), value: money(entries.reduce(0) { $0 + $1.refunded }))
+                }
+                let incoming = model.ledger.tngNotices.filter {
+                    $0.kind == "incoming" && $0.status != "ignored" && (!$0.possibleDuplicate || $0.status != "pending") && monthKey($0.date) == monthKey(month)
+                }.reduce(0) { $0 + ($1.cents ?? 0) }
+                if incoming > 0 {
+                    NavigationLink { TNGInboxView() } label: {
+                        LabeledContent(tr("TNG 本月收到 · 单独记录", "TNG received this month · separate", "TNG diterima bulan ini · berasingan"), value: "+" + money(incoming))
+                            .foregroundStyle(.green)
+                    }.buttonStyle(.plain)
                 }
                 Divider()
                 NavigationLink { FriendSummaryView() } label: {
@@ -411,6 +427,239 @@ struct ExpensesView: View {
         }
     }
 }
+// AI interprets only the user's question. All matching, arithmetic and the
+// displayed evidence come from the saved ledger, never from generated text.
+struct LedgerInsightQuery {
+    let monthOffset: Int
+    let category: String
+    let merchant: String
+    static func matching(_ expenses: [Expense], month: Date, query: LedgerInsightQuery) -> [Expense] {
+        guard let date = Calendar.current.date(byAdding: .month, value: query.monthOffset, to: month) else { return [] }
+        return expenses.filter { expense in
+            monthKey(expense.date) == monthKey(date)
+                && (query.category.isEmpty || expense.category == query.category)
+                && (query.merchant.isEmpty || expense.merchant.localizedCaseInsensitiveContains(query.merchant))
+        }.sorted { $0.date > $1.date }
+    }
+}
+
+#if canImport(FoundationModels)
+@available(iOS 26.0, *)
+@Generable
+private struct LedgerQuestionFields {
+    @Guide(description: "Months relative to the selected month: 0 for selected or this month, -1 for last month. Only -12 through 0.")
+    var monthOffset: Int
+    @Guide(description: "Exact category from the provided category list, or an empty string if not mentioned.")
+    var category: String
+    @Guide(description: "A merchant name mentioned in the question, or an empty string. Never invent a merchant.")
+    var merchant: String
+    @Guide(description: "True only if the user asks for spending in one month, optionally filtered by category or merchant.")
+    var supported: Bool
+}
+
+@available(iOS 26.0, *)
+@Generable
+private struct MerchantAliasGroup {
+    @Guide(description: "Two or more exact merchant names from the provided list that may refer to the same brand.")
+    var names: [String]
+}
+
+@available(iOS 26.0, *)
+@Generable
+private struct MerchantAliasSuggestions {
+    @Guide(description: "Only clear possible brand name variations; omit uncertain or unrelated merchants.")
+    var groups: [MerchantAliasGroup]
+}
+
+@available(iOS 26.0, *)
+private enum LedgerQuestionAI {
+    static func parse(_ question: String, categories: [String]) async -> LedgerInsightQuery? {
+        guard SystemLanguageModel.default.availability == .available else { return nil }
+        let session = LanguageModelSession(instructions: "Extract filters from a question about a person's recorded spending. Do not answer or calculate a number. Months are relative to the user's selected month. Use only a listed category. Do not infer a merchant unless the name appears in the question. If ambiguous or about debt, income, transfers or multiple months, set supported to false.")
+        do {
+            let response = try await session.respond(to: "Categories: \(categories.joined(separator: ", "))\nQuestion: \(question)", generating: LedgerQuestionFields.self)
+            let fields = response.content
+            let merchant = fields.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard fields.supported, (-12...0).contains(fields.monthOffset),
+                  fields.category.isEmpty || categories.contains(fields.category),
+                  merchant.isEmpty || question.localizedCaseInsensitiveContains(merchant) else { return nil }
+            return LedgerInsightQuery(monthOffset: fields.monthOffset, category: fields.category, merchant: merchant)
+        } catch { return nil }
+    }
+    static func aliases(_ names: [String]) async -> [[String]]? {
+        guard SystemLanguageModel.default.availability == .available, names.count >= 2, names.count <= 80 else { return nil }
+        let session = LanguageModelSession(instructions: "Suggest merchant names that may be variants of the same brand. Use only exact names from the input list. Do not assume separate merchants are identical. Never change or combine ledger entries.")
+        do {
+            let response = try await session.respond(to: "Merchant names:\n" + names.joined(separator: "\n"), generating: MerchantAliasSuggestions.self)
+            let allowed = Set(names)
+            return Array(response.content.groups.prefix(8)).compactMap { suggestion in
+                let group = Array(Set(suggestion.names)).sorted()
+                return group.count >= 2 && group.allSatisfy({ allowed.contains($0) }) ? group : nil
+            }
+        } catch { return nil }
+    }
+}
+#endif
+
+struct LedgerInsightsView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var month = Date()
+    @State private var question = ""
+    @State private var matches: [Expense] = []
+    @State private var answered = false
+    @State private var resultMonth = Date()
+    @State private var working = false
+    @State private var message = ""
+    @State private var editing: Expense?
+    @State private var aliasGroups: [[String]] = []
+    @State private var lookingForAliases = false
+    @State private var aliasMessage = ""
+
+    private var current: [Expense] { model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) } }
+    private var previous: [Expense] {
+        guard let date = Calendar.current.date(byAdding: .month, value: -1, to: month) else { return [] }
+        return model.ledger.expenses.filter { monthKey($0.date) == monthKey(date) }
+    }
+    private var categoryTotals: [(String, Int)] {
+        Dictionary(grouping: current, by: \.category)
+            .map { ($0.key, $0.value.reduce(0) { $0 + $1.personal }) }
+            .filter { $0.1 > 0 }.sorted { $0.1 > $1.1 }
+    }
+    private var monthTitle: String { month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))) }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                PageIntroduction(title: tr("智能查账", "Smart ledger", "Lejar pintar"), subtitle: tr("问一句，核对每一笔。", "Ask a question. Check each entry.", "Tanya soalan. Semak setiap rekod."))
+                    .padding(.horizontal, -24)
+                MonthPicker(month: $month)
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(tr("月度回顾", "Monthly review", "Ringkasan bulanan")).font(.headline)
+                        let total = current.reduce(0) { $0 + $1.personal }
+                        Text(monthTitle + " · " + money(total)).font(.title2.weight(.semibold))
+                        Text(tr("我的消费 · ", "My spending · ", "Belanja saya · ") + String(current.count) + tr(" 笔", " entries", " rekod"))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        if let top = categoryTotals.first {
+                            Text(tr("最多：", "Largest category: ", "Kategori terbesar: ") + top.0 + " · " + money(top.1))
+                                .font(.subheadline)
+                        }
+                        let prior = previous.reduce(0) { $0 + $1.personal }
+                        if !current.isEmpty || !previous.isEmpty {
+                            Text(tr("上个月：", "Previous month: ", "Bulan lalu: ") + money(prior))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                        Text(tr("依据账本计算；不包含朋友承担的份额。", "Calculated from your ledger; excludes friends’ shares.", "Dikira daripada lejar; tidak termasuk bahagian rakan."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(tr("相似商家", "Similar merchants", "Peniaga serupa")).font(.headline)
+                        Text(tr("检查最近 80 个商家名称；账目不会被合并。", "Checks 80 recent merchant names; entries stay separate.", "Semak 80 nama peniaga terkini; rekod kekal berasingan."))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Button(tr("查找相似名称", "Find similar names", "Cari nama serupa")) {
+                            Task { await findAliases() }
+                        }.disabled(lookingForAliases).buttonStyle(.bordered)
+                        if lookingForAliases { ProgressView() }
+                        if !aliasMessage.isEmpty { Text(aliasMessage).font(.caption).foregroundStyle(.secondary) }
+                        ForEach(aliasGroups.indices, id: \.self) { index in
+                            Text(aliasGroups[index].joined(separator: " · ")).font(.subheadline)
+                        }
+                    }
+                }
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        Text(tr("问账本", "Ask your ledger", "Tanya lejar")).font(.headline)
+                        TextField(tr("例如：上个月餐饮花了多少？", "E.g. How much did I spend on food last month?", "Contoh: Berapa saya belanja makan bulan lalu?"), text: $question)
+                            .textFieldStyle(.roundedBorder).submitLabel(.search).onSubmit { Task { await ask() } }
+                        Button {
+                            Task { await ask() }
+                        } label: {
+                            if working { ProgressView() }
+                            else { Label(tr("查找记录", "Find entries", "Cari rekod"), systemImage: "sparkle.magnifyingglass") }
+                        }
+                        .disabled(working || question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .buttonStyle(.borderedProminent)
+                        Text(tr("只查询单个月份的消费；AI 不修改账本。", "Ask about spending in one month; AI never edits your ledger.", "Tanya belanja untuk satu bulan; AI tidak mengubah lejar."))
+                            .font(.caption).foregroundStyle(.secondary)
+                        if !message.isEmpty { Text(message).font(.subheadline).foregroundStyle(.secondary) }
+                    }
+                }
+                if answered {
+                    GlassPanel {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(tr("查账结果", "Ledger result", "Hasil carian")).font(.headline)
+                            Text(money(matches.reduce(0) { $0 + $1.personal })).font(.title2.weight(.bold))
+                            Text(resultMonth.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))) + " · " + String(matches.count) + tr(" 笔 · 我的消费", " entries · my spending", " rekod · belanja saya"))
+                                .font(.caption).foregroundStyle(.secondary)
+                            ForEach(matches) { entry in
+                                Divider()
+                                Button { editing = entry } label: {
+                                    HStack {
+                                        VStack(alignment: .leading) {
+                                            Text(entry.merchant).foregroundStyle(.primary)
+                                            Text(entry.date.formatted(date: .abbreviated, time: .omitted) + " · " + entry.category)
+                                                .font(.caption).foregroundStyle(.secondary)
+                                        }
+                                        Spacer()
+                                        Text(money(entry.personal)).foregroundStyle(.primary).monospacedDigit()
+                                    }
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                    }
+                }
+            }.padding(24).frame(maxWidth: 640).frame(maxWidth: .infinity)
+        }
+        .background(Color(uiColor: .systemGroupedBackground))
+        .navigationTitle(tr("智能查账", "Smart ledger", "Lejar pintar"))
+        .navigationBarTitleDisplayMode(.inline)
+        .sheet(item: $editing) { ExpenseEditor(original: $0) }
+        .onChange(of: month) { _, _ in answered = false; message = "" }
+    }
+
+    private func findAliases() async {
+        var seen = Set<String>()
+        let names = Array(model.ledger.expenses.sorted { $0.date > $1.date }
+            .map(\.merchant).filter { seen.insert($0).inserted }.prefix(80))
+        lookingForAliases = true
+        aliasGroups = []
+        aliasMessage = ""
+        defer { lookingForAliases = false }
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *),
+           let groups = await LedgerQuestionAI.aliases(names) {
+            aliasGroups = groups
+            aliasMessage = groups.isEmpty ? tr("没有找到明显相似的名称。", "No clear similar names found.", "Tiada nama serupa yang jelas.") : ""
+            return
+        }
+        #endif
+        aliasMessage = tr("设备端 AI 暂不可用，或商家名称不足两种。", "On-device AI is unavailable or fewer than two merchant names exist.", "AI pada peranti tidak tersedia atau kurang daripada dua nama peniaga.")
+    }
+
+    private func ask() async {
+        let prompt = question.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !prompt.isEmpty, prompt.count <= 180 else { return }
+        working = true
+        answered = false
+        message = ""
+        defer { working = false }
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            let categories = model.ledger.categoryNames
+            if let query = await LedgerQuestionAI.parse(prompt, categories: categories) {
+                matches = LedgerInsightQuery.matching(model.ledger.expenses, month: month, query: query)
+                resultMonth = Calendar.current.date(byAdding: .month, value: query.monthOffset, to: month) ?? month
+                answered = true
+                return
+            }
+        }
+        #endif
+        message = tr("设备端 AI 不可用，或这个问题暂时无法准确查找。可在账本按月份、商家及分类筛选。", "On-device AI is unavailable or this question cannot be searched reliably. Filter by month, merchant and category in Ledger.", "AI pada peranti tidak tersedia atau soalan ini belum dapat dicari dengan tepat. Tapis mengikut bulan, peniaga dan kategori dalam Lejar.")
+    }
+}
+
 struct FriendDraft: Identifiable {
     var id: String; var name: String; var amount: String; var repayments: [Repayment]
     init(_ s: Share = Share(name: "", cents: 0)) { id = s.id; name = s.name; amount = Currency.input(s.cents, "MYR"); repayments = s.repayments }
@@ -986,11 +1235,11 @@ struct UsageGuideView: View {
                     .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 39))
                     .overlay(RoundedRectangle(cornerRadius: 39).strokeBorder(.primary.opacity(0.18), lineWidth: 3))
                     .shadow(color: .black.opacity(0.1), radius: 24, y: 12)
-                    .accessibilityLabel(tr("可操作的应用示范画面", "Interactive app preview", "Pratonton aplikasi interaktif"))
+                    .accessibilityLabel(tr("自动播放的应用操作演示", "Automatic app walkthrough", "Demonstrasi aplikasi automatik"))
                     VStack(alignment: .leading, spacing: 10) {
                         Text(titles[step]).font(.title.weight(.bold)).fixedSize(horizontal: false, vertical: true)
                         Text(details[step]).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                        Text(tr("点按上方画面体验操作", "Tap the screen above to try the steps", "Ketik skrin di atas untuk mencuba"))
+                        Text(tr("正在自动演示操作步骤", "Playing the steps automatically", "Langkah dimainkan secara automatik"))
                             .font(.caption).foregroundStyle(.secondary)
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 6) {
@@ -1004,17 +1253,11 @@ struct UsageGuideView: View {
             }.background(Color(uiColor: .systemGroupedBackground))
                 .safeAreaInset(edge: .bottom) {
                     HStack(spacing: 14) {
-                        if step > 0 {
-                            Button { withAnimation(motion) { step -= 1 } } label: {
-                                Image(systemName: "chevron.left").frame(width: 44, height: 44)
-                            }.accessibilityLabel(tr("上一步", "Back", "Kembali"))
-                        }
                         Button {
-                            if step == titles.count - 1 { dismiss() }
-                            else { withAnimation(motion) { step += 1 } }
+                            dismiss()
                         } label: {
                             HStack {
-                                Text(step == titles.count - 1 ? tr("开始使用月记", "Start using YueJi", "Mula menggunakan YueJi") : tr("继续", "Continue", "Teruskan"))
+                                Text(step == titles.count - 1 ? tr("开始使用月记", "Start using YueJi", "Mula menggunakan YueJi") : tr("结束指南", "Close guide", "Tutup panduan"))
                                 Spacer()
                                 Image(systemName: "arrow.right")
                             }.font(.body.weight(.semibold)).padding(.vertical, 10).padding(.horizontal, 8).frame(maxWidth: .infinity)
@@ -1026,6 +1269,12 @@ struct UsageGuideView: View {
                 }
                 .navigationTitle(tr("认识月记", "Meet YueJi", "Kenali YueJi")).navigationBarTitleDisplayMode(.inline)
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("跳过", "Skip", "Langkau")) { dismiss() } } }
+                .task(id: step) {
+                    guard step < titles.count - 1 else { return }
+                    try? await Task.sleep(for: .seconds(reduceMotion ? 5 : 8))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(motion) { step += 1 }
+                }
         }
     }
 }
@@ -1035,12 +1284,11 @@ private struct GuideDemoScene: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var stage = 0
     @State private var appeared = false
-    @State private var firstOwner = 0
-    @State private var secondOwner = 1
-    @State private var budget = 800.0
-    @State private var provider = "Apple Pay"
+    private var firstOwner: Int { stage == 0 ? 0 : 2 }
+    private var secondOwner: Int { 1 }
+    private var budget: Double { stage == 0 ? 800 : 1000 }
+    private var provider: String { stage == 0 ? "Apple Pay" : "TNG" }
     private var animation: Animation? { reduceMotion ? nil : .spring(response: 0.4, dampingFraction: 0.92) }
-    private func advance() { withAnimation(animation) { stage += 1 } }
     private var foodShares: [Int] {
         var me = 0
         for (value, owner) in [(1500, firstOwner), (2500, secondOwner)] {
@@ -1057,19 +1305,15 @@ private struct GuideDemoScene: View {
             Text(amount).monospacedDigit().fontWeight(.medium)
         }.font(.subheadline).padding(.vertical, 7)
     }
-    private func action(_ title: String, symbol: String, perform: @escaping () -> Void) -> some View {
-        Button(action: perform) {
-            Label(title, systemImage: symbol).font(.subheadline.weight(.semibold)).frame(maxWidth: .infinity, minHeight: 44)
-        }.yuejiPrimaryButton().buttonBorderShape(.capsule)
+    private func action(_ title: String, symbol: String) -> some View {
+        Label(title, systemImage: symbol).font(.subheadline.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .background(Color.accentColor, in: Capsule()).foregroundStyle(.white)
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack {
-                Label(tr("互动演示", "Interactive demo", "Demo interaktif"), systemImage: "hand.tap")
-                Spacer()
-                Button { withAnimation(animation) { stage = 0; firstOwner = 0; secondOwner = 1; budget = 800 } } label: { Image(systemName: "arrow.counterclockwise").frame(width: 44, height: 44) }
-                    .accessibilityLabel(tr("重播演示", "Replay demo", "Ulang demo"))
-            }.font(.caption.weight(.medium)).foregroundStyle(.secondary)
+            Label(tr("操作演示", "App walkthrough", "Demonstrasi aplikasi"), systemImage: "play.rectangle")
+                .font(.caption.weight(.medium)).foregroundStyle(.secondary)
             Group {
                 switch step {
                 case 0: expenseDemo
@@ -1086,6 +1330,13 @@ private struct GuideDemoScene: View {
             .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(Color.primary.opacity(0.05)))
             .opacity(appeared || reduceMotion ? 1 : 0).offset(y: appeared || reduceMotion ? 0 : 6)
             .onAppear { withAnimation(animation) { appeared = true } }
+            .task {
+                for next in 1...2 {
+                    try? await Task.sleep(for: .seconds(reduceMotion ? 1.2 : 2.4))
+                    guard !Task.isCancelled else { return }
+                    withAnimation(animation) { stage = next }
+                }
+            }
     }
     private var expenseDemo: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -1093,12 +1344,12 @@ private struct GuideDemoScene: View {
             if stage == 0 {
                 Text(tr("本月消费", "This month", "Bulan ini")).font(.caption).foregroundStyle(.secondary)
                 Text("RM 420.00").font(.largeTitle.weight(.semibold)).monospacedDigit()
-                action(tr("记一笔", "Add expense", "Tambah belanja"), symbol: "plus") { advance() }
+                action(tr("记一笔", "Add expense", "Tambah belanja"), symbol: "plus")
             } else if stage == 1 {
                 line(tr("金额", "Amount", "Amaun"), "RM 18.00")
                 line(tr("商家", "Merchant", "Peniaga"), tr("午餐小馆", "Lunch cafe", "Kafe makan tengah hari"))
                 line(tr("日期", "Date", "Tarikh"), tr("今天", "Today", "Hari ini"))
-                action(tr("保存这笔示例", "Save sample expense", "Simpan contoh belanja"), symbol: "checkmark") { advance() }
+                action(tr("保存", "Save", "Simpan"), symbol: "checkmark")
             } else {
                 Label(tr("示例已保存", "Sample saved", "Contoh disimpan"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
                 Text("RM 438.00").font(.largeTitle.weight(.semibold)).monospacedDigit()
@@ -1120,7 +1371,7 @@ private struct GuideDemoScene: View {
                 line("Total (RM)", "47.20")
             }.padding(16).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 16))
                 .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(stage > 0 ? Color.accentColor.opacity(0.6) : .clear, lineWidth: 1))
-            if stage == 0 { action(tr("试试读取收据", "Try reading the receipt", "Cuba baca resit"), symbol: "viewfinder") { advance() } }
+            if stage == 0 { action(tr("扫描收据", "Scan receipt", "Imbas resit"), symbol: "viewfinder") }
             else {
                 line(tr("商品小计", "Items subtotal", "Subjumlah item"), "RM 40.00")
                 line(tr("税费与服务费", "Tax & service", "Cukai & caj"), "RM 7.20")
@@ -1128,27 +1379,29 @@ private struct GuideDemoScene: View {
             }
         }
     }
-    private func dish(_ name: String, amount: String, owner: Binding<Int>) -> some View {
+    private func dish(_ name: String, amount: String, owner: Int) -> some View {
         VStack(alignment: .leading, spacing: 7) {
             line(name, amount)
-            Picker(tr("谁吃这道菜", "Who had this dish", "Siapa makan item ini"), selection: owner) {
-                Text(tr("我", "Me", "Saya")).tag(0)
-                Text(tr("朋友", "Friend", "Rakan")).tag(1)
-                Text(tr("共享", "Shared", "Kongsi")).tag(2)
-            }.pickerStyle(.segmented)
+            HStack(spacing: 4) {
+                ForEach(0..<3, id: \.self) { choice in
+                    Text([tr("我", "Me", "Saya"), tr("朋友", "Friend", "Rakan"), tr("共享", "Shared", "Kongsi")][choice])
+                        .font(.caption).frame(maxWidth: .infinity).padding(.vertical, 8)
+                        .background(choice == owner ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                }
+            }
         }
     }
     private var splitDemo: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label(tr("按各自点的菜", "Split by items", "Bahagi ikut item"), systemImage: "person.2.fill").font(.headline)
-            dish(tr("面条", "Noodles", "Mi"), amount: "RM 15.00", owner: $firstOwner)
-            dish(tr("鸡饭", "Chicken rice", "Nasi ayam"), amount: "RM 25.00", owner: $secondOwner)
+            dish(tr("面条", "Noodles", "Mi"), amount: "RM 15.00", owner: firstOwner)
+            dish(tr("鸡饭", "Chicken rice", "Nasi ayam"), amount: "RM 25.00", owner: secondOwner)
             Divider()
             VStack(spacing: 2) {
                 line(tr("我应付", "I pay", "Saya bayar"), money(totals[0]))
                 line(tr("朋友应付", "Friend pays", "Rakan bayar"), money(totals[1]))
             }.contentTransition(.numericText()).animation(animation, value: firstOwner).animation(animation, value: secondOwner)
-            Text(tr("已含 RM 7.20 税费和服务费。试着切换“共享”。", "Includes RM 7.20 in tax and service. Try choosing Shared.", "Termasuk cukai dan caj RM 7.20. Cuba pilih Kongsi.")).font(.caption).foregroundStyle(.secondary)
+            Text(tr("已含按餐费分摊的 RM 7.20 税费和服务费。", "Includes RM 7.20 in charges, shared by food cost.", "Termasuk caj RM 7.20 mengikut bahagian makanan.")).font(.caption).foregroundStyle(.secondary)
         }
     }
     private var repaymentDemo: some View {
@@ -1157,21 +1410,18 @@ private struct GuideDemoScene: View {
             Text(tr("尚欠", "Outstanding", "Belum dibayar")).font(.caption).foregroundStyle(.secondary)
             Text(stage == 0 ? "RM 29.50" : "RM 19.50").font(.largeTitle.weight(.semibold)).monospacedDigit().contentTransition(.numericText())
             line(tr("本次收到", "Received this time", "Diterima kali ini"), "RM 10.00")
-            if stage == 0 { action(tr("记录这次还款", "Record this repayment", "Rekod bayaran ini"), symbol: "arrow.down.circle") { advance() } }
+            if stage == 0 { action(tr("记录还款", "Record repayment", "Rekod bayaran"), symbol: "arrow.down.circle") }
             else { Label(tr("示例：还款已扣除，余款保留", "Demo: repayment applied, balance remains", "Demo: bayaran ditolak, baki kekal"), systemImage: "checkmark.circle.fill").font(.subheadline).foregroundStyle(.green) }
         }
     }
     private var automationDemo: some View {
         VStack(alignment: .leading, spacing: 18) {
             Label(tr("自动记账", "Automatic recording", "Rekod automatik"), systemImage: "bolt.fill").font(.headline)
-            Picker(tr("付款方式", "Payment method", "Kaedah bayaran"), selection: $provider) {
-                Text("Apple Pay").tag("Apple Pay")
-                Text("TNG").tag("TNG")
-            }.pickerStyle(.segmented)
+            line(tr("付款方式", "Payment method", "Kaedah bayaran"), provider)
             line(tr("打开对应教程", "Open its setup guide", "Buka panduan persediaan"), provider, symbol: "1.circle")
             line(tr("设置快捷指令", "Configure Shortcuts", "Sediakan Pintasan"), "", symbol: "2.circle")
             line(tr("检查运行记录", "Check activity log", "Semak log aktiviti"), "", symbol: "3.circle")
-            action(tr("查看演示提示", "Show demo tip", "Lihat petua demo"), symbol: "hand.tap") { advance() }
+            action(tr("查看设置说明", "View setup instructions", "Lihat panduan persediaan"), symbol: "book")
             if stage > 0 { Text(tr("首次设置后，用一笔真实付款核对日志和账本。此演示不会开启自动记账。", "After setup, verify a real payment in the log and ledger. This demo does not enable recording.", "Selepas persediaan, sahkan bayaran sebenar dalam log dan lejar. Demo ini tidak mengaktifkan rekod.")).font(.caption).foregroundStyle(.secondary) }
         }
     }
@@ -1179,11 +1429,11 @@ private struct GuideDemoScene: View {
         VStack(alignment: .leading, spacing: 18) {
             Label(tr("本月预算", "Monthly budget", "Bajet bulanan"), systemImage: "chart.bar.fill").font(.headline)
             Text(money(Int(budget) * 100)).font(.largeTitle.weight(.semibold)).monospacedDigit().contentTransition(.numericText())
-            Slider(value: $budget, in: 500...2000, step: 100).accessibilityLabel(tr("示例预算", "Sample budget", "Bajet contoh"))
+            ProgressView(value: budget, total: 2000).accessibilityLabel(tr("示例预算", "Sample budget", "Bajet contoh"))
             ProgressView(value: 420, total: budget).tint(.accentColor)
             line(tr("已用", "Spent", "Digunakan"), "RM 420.00")
             Divider()
-            action(tr("了解备份", "See how backup works", "Lihat cara sandaran"), symbol: "externaldrive") { advance() }
+            action(tr("备份与导出", "Backup & export", "Sandaran & eksport"), symbol: "externaldrive")
             if stage > 0 { Text(tr("设置 → 备份与导出 → 导出完整备份，保存到“文件”。此处仅演示，不会创建备份。", "Settings → Backup & export → Full backup, then save to Files. This demo does not create a backup.", "Tetapan → Sandaran & eksport → Sandaran penuh, kemudian simpan ke Files. Demo ini tidak mencipta sandaran.")).font(.caption).foregroundStyle(.secondary) }
         }
     }

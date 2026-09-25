@@ -2,6 +2,20 @@ import XCTest
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    func testSmartLedgerFiltersMonthMerchantAndPersonalShare() {
+        let calendar = Calendar(identifier: .gregorian)
+        let selected = calendar.date(from: DateComponents(year: 2026, month: 9, day: 15))!
+        let previous = calendar.date(from: DateComponents(year: 2026, month: 8, day: 12))!
+        let entries = [
+            Expense(merchant: "Shopee Malaysia", cents: 690, date: selected, category: "购物"),
+            Expense(merchant: "Shopee MarketPlace", cents: 5667, date: previous, category: "购物", shares: [Share(name: "Amy", cents: 2000)]),
+            Expense(merchant: "Cafe", cents: 3000, date: previous, category: "餐饮")
+        ]
+        let query = LedgerInsightQuery(monthOffset: -1, category: "购物", merchant: "Shopee")
+        let found = LedgerInsightQuery.matching(entries, month: selected, query: query)
+        XCTAssertEqual(found.map(\.merchant), ["Shopee MarketPlace"])
+        XCTAssertEqual(found.reduce(0) { $0 + $1.personal }, 3667)
+    }
     func testMoney() throws {
         XCTAssertEqual(try toCents("18.50"), 1850)
         XCTAssertThrowsError(try toCents("1.234"))
@@ -601,6 +615,13 @@ final class TNGIncomingTests: XCTestCase {
         XCTAssertNil(parseTNG("RM -0.01 received from A for B.", title: title))
         XCTAssertNil(parseTNG("RM 0.001 received from A for B.", title: title))
     }
+    func testIncomingDisplaysPositiveAndOutgoingTransferNegativeWithoutChangingSpending() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: body, title: title, date: Date(), eventID: "incoming-sign")
+        _ = try ledger.receiveTNG(body: "RM 2.00 has been successfully transferred to FRIEND.", title: "Transfer Successful.", date: Date(), eventID: "outgoing-sign")
+        XCTAssertEqual(ledger.tngNotices.map(tngSignedAmount), ["+RM 0.01", "−RM 2.00"])
+        XCTAssertTrue(ledger.expenses.isEmpty)
+    }
     func testPendingPartialRepaymentRoundTripAndUndo() throws {
         let now = Date()
         var ledger = Ledger()
@@ -836,6 +857,21 @@ final class ReceiptGridTests: XCTestCase {
         ])
         XCTAssertEqual(parsed.items.map(\.name), ["Unclear soup", "Rice"])
         XCTAssertEqual(parsed.items.map(\.amount), ["", "12.00"])
+    }
+    func testTwoColumnReceiptsWithPriceAsLineTotalAndMalayLabels() {
+        let simple = ReceiptGrid.parse([
+            [cell("Item", 0), cell("Price", 1)],
+            [cell("Noodles", 0), cell("12.00", 1)],
+            [cell("Rice", 0), cell("15.00", 1)],
+            [cell("Total", 0), cell("27.00", 1)]
+        ])
+        XCTAssertEqual(simple.items.map(\.amount), ["12.00", "15.00"])
+        let malay = ReceiptGrid.parse([
+            [cell("Butiran", 0), cell("Jumlah", 1)],
+            [cell("Nasi", 0), cell("8.50", 1)]
+        ])
+        XCTAssertEqual(malay.items.first?.name, "Nasi")
+        XCTAssertEqual(malay.items.first?.amount, "8.50")
     }
     func testAmountColumnWinsOverQuantityAndUnitPriceEvenWhenReordered() {
         let result = ReceiptGrid.parse([

@@ -196,6 +196,11 @@ struct TNGParsed {
     let party: String
     var recipient: String? = nil
 }
+// A confirmed incoming notification changes the wallet in the positive
+// direction even if its purpose (repayment, income, own transfer) is pending.
+func tngSignedAmount(_ notice: TNGNotice) -> String {
+    (notice.kind == "incoming" ? "+" : "−") + money(notice.cents ?? 0)
+}
 func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
     let titleKey = friendKey(title).trimmingCharacters(in: .punctuationCharacters)
     guard ["", "payment", "transfer successful", "ka-ching! incoming money"].contains(titleKey) else { return nil }

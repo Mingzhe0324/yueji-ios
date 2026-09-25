@@ -1054,7 +1054,7 @@ struct TNGInboxView: View {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(item.party ?? tr("TNG 通知", "TNG notification", "Notifikasi TNG")).font(.headline)
                         Text(tngStatus(item)).foregroundStyle(item.status == "pending" ? Color.orange : Color.secondary)
-                        if let cents = item.cents { Text((item.kind == "incoming" ? "+" : "") + money(cents)).foregroundStyle(item.kind == "incoming" ? Color.green : Color.primary) }
+                        if item.cents != nil { Text(tngSignedAmount(item)).foregroundStyle(item.kind == "incoming" ? Color.green : Color.primary) }
                         Text(dateLabel(item.date, time: true)).font(.caption)
                     }
                 }
@@ -1141,6 +1141,9 @@ struct TNGSetupView: View {
 
 import Vision
 import VisionKit
+#if canImport(FoundationModels)
+import FoundationModels
+#endif
 import CoreImage
 import PhotosUI
 import UIKit
@@ -1362,19 +1365,26 @@ struct ReceiptGrid {
             var header = false
             for cell in ordered {
                 let label = normalized(cell.text)
-                if ["description", "desc", "desc.", "item description", "item", "item name", "particulars", "商品", "品名"].contains(label) {
+                if ["description", "desc", "desc.", "item description", "item", "item name", "items", "product", "particulars", "butiran", "keterangan", "商品", "品名", "名称"].contains(label) {
                     // A merged description+price cell cannot establish a trustworthy column.
                     if cell.columns.count == 1 { descriptionColumn = cell.columns.lowerBound }
                     header = true
                 }
-                if ["amount", "amt", "amt.", "amount (rm)", "amount(rm)", "amt (rm)", "line total", "total (rm)", "金额"].contains(label) {
+                if ["amount", "amt", "amt.", "amount (rm)", "amount(rm)", "amt (rm)", "line total", "total (rm)", "jumlah", "jumlah (rm)", "金额", "总价"].contains(label) {
                     amountColumn = cell.columns.upperBound
                     header = true
                 }
-                if ["price", "unit price", "unit cost", "harga seunit", "单价"].contains(label) {
+                if ["price", "harga", "unit price", "unit cost", "harga seunit", "单价"].contains(label) {
                     unitPriceColumn = cell.columns.lowerBound
                     header = true
                 }
+            }
+            // On two-column receipts Price is the paid line amount. On receipts
+            // with Quantity or Unit Price it cannot be used as the Amount column.
+            if header && amountColumn == nil, let d = descriptionColumn, let p = unitPriceColumn,
+               d != p && Set(ordered.flatMap { Array($0.columns) }).count == 2 {
+                amountColumn = p
+                unitPriceColumn = nil
             }
             if header { reachedSummary = false; pendingName = ""; previousZeroWithUnitPrice = false; continue }
             guard !reachedSummary, let d = descriptionColumn, let a = amountColumn, d != a else { continue }
@@ -1417,6 +1427,56 @@ struct ReceiptGrid {
         return result
     }
 }
+
+#if canImport(FoundationModels)
+@available(iOS 26.0, *)
+@Generable
+struct ReceiptAIItem {
+    @Guide(description: "Full description on the receipt, including wrapped continuation lines")
+    var name: String
+    @Guide(description: "Printed line amount from the Amount column, including two decimal places")
+    var amount: String
+}
+
+@available(iOS 26.0, *)
+@Generable
+struct ReceiptAIItems {
+    @Guide(description: "Every purchased line item in printed order; exclude subtotal, service, tax and final total")
+    var items: [ReceiptAIItem]
+}
+
+@available(iOS 26.0, *)
+enum ReceiptAI {
+    // The model receives text only; no receipt image, credentials or bank data
+    // leave the device. A generated answer is used only when it reconciles.
+    static func interpret(_ transcript: String, base: ScannedReceipt) async -> ScannedReceipt? {
+        guard SystemLanguageModel.default.availability == .available,
+              transcript.count <= 10_000, !base.subtotal.isEmpty, !base.total.isEmpty else { return nil }
+        let session = LanguageModelSession(instructions: "Read receipt OCR text. Return only printed food or product descriptions and their line totals. Join wrapped descriptions. Never invent an item, amount, unit price or tax. Keep original item order. A line amount is different from quantity and unit price.")
+        do {
+            let response = try await session.respond(to: "Receipt:\n\(transcript)", generating: ReceiptAIItems.self)
+            let suggestions = response.content.items
+            guard !suggestions.isEmpty, suggestions.count <= 80 else { return nil }
+            let evidence = Set(transcript.uppercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty })
+            var candidate = base
+            candidate.items = []
+            for suggestion in suggestions {
+                let name = suggestion.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                let tokens = name.uppercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
+                guard !tokens.isEmpty, name.count <= 200,
+                      tokens.allSatisfy({ evidence.contains($0) }),
+                      !ReceiptGrid.summaryLabel(name),
+                      let amount = ReceiptGrid.amount(suggestion.amount),
+                      let cents = try? toCents(amount), cents >= 0 else { return nil }
+                candidate.items.append(ScannedReceipt.Item(name: name, amount: amount))
+            }
+            guard ReceiptOCR.quality(candidate) == 4 else { return nil }
+            candidate.scanNotice = tr("设备端 AI 已整理商品；请对照照片核对名称和每项金额。", "On-device AI organized the items. Check every name and amount against the photo.", "AI pada peranti menyusun item. Semak setiap nama dan amaun pada foto.")
+            return candidate
+        } catch { return nil }
+    }
+}
+#endif
 
 struct ReceiptOCR {
     // Use the plain-text pass only to restore a missing label when every row
@@ -1463,8 +1523,8 @@ struct ReceiptOCR {
         return CIContext().jpegRepresentation(of: adjusted, colorSpace: CGColorSpaceCreateDeviceRGB(), options: [:])
     }
     static func scan(_ data: Data) async throws -> ScannedReceipt {
+        var best: ScannedReceipt?
         if #available(iOS 26.0, *) {
-            var best: ScannedReceipt?
             do { best = try await structured(data) }
             catch is CancellationError { throw CancellationError() }
             catch { }
@@ -1479,19 +1539,32 @@ struct ReceiptOCR {
                     catch { }
                 }
             }
-            if var best {
-                if quality(best) < 4 && best.scanNotice.isEmpty {
-                    best.scanNotice = tr("识别金额尚未对齐，请对照照片核对漏项、税费和总额。", "Amounts do not reconcile yet. Check missing items, charges and the total against the photo.", "Amaun belum sepadan. Semak item tertinggal, caj dan jumlah dengan foto.")
-                }
-                return best
-            }
         }
-        var receipt = ScannedReceipt.parse(try await read(data))
-        if quality(receipt) == 4 {
-            receipt.scanNotice = tr("已按金额核对文字识别结果，请仍对照照片确认商品名称与日期。", "Text reading balances. Check names and date against the photo.", "Jumlah teks sepadan. Semak nama dan tarikh dengan foto.")
-        } else {
-            receipt.items = []
-            receipt.scanNotice = tr("未能可靠读取商品表格，请重拍清晰照片或手动补充商品。", "Could not read the item table reliably. Retake a clear photo or add items manually.", "Jadual item tidak dapat dibaca dengan pasti. Ambil foto jelas atau tambah item secara manual.")
+        if best == nil || quality(best!) < 4 {
+            do {
+                let transcript = try await read(data)
+                var text = ScannedReceipt.parse(transcript)
+                if quality(text) == 4 {
+                    text.scanNotice = tr("商品与总额已核对，请对照照片确认名称和日期。", "Items and totals balance. Check names and date against the photo.", "Item dan jumlah sepadan. Semak nama dan tarikh dengan foto.")
+                    best = text
+                } else if best == nil || quality(text) > quality(best!) {
+                    // Show uncertain items for correction, never treat a partial
+                    // text pass as an automatically verified receipt.
+                    text.scanNotice = tr("识别不完整，请对照照片修正漏项和金额。", "Reading is incomplete. Check missing items and amounts against the photo.", "Bacaan tidak lengkap. Semak item dan amaun pada foto.")
+                    best = text
+                }
+                #if canImport(FoundationModels)
+                if #available(iOS 26.0, *), quality(best ?? text) < 4,
+                   let interpreted = await ReceiptAI.interpret(transcript, base: best ?? text) {
+                    best = interpreted
+                }
+                #endif
+            } catch is CancellationError { throw CancellationError() }
+            catch { if best == nil { throw error } }
+        }
+        guard var receipt = best else { throw LedgerError.invalid("No receipt found") }
+        if quality(receipt) < 4 && receipt.scanNotice.isEmpty {
+            receipt.scanNotice = tr("识别金额尚未对齐，请对照照片核对漏项、税费和总额。", "Amounts do not reconcile yet. Check missing items, charges and total against the photo.", "Amaun belum sepadan. Semak item, caj dan jumlah pada foto.")
         }
         return receipt
     }
@@ -1516,8 +1589,6 @@ struct ReceiptOCR {
             summaries += candidate.summaries
             if candidate.foundColumns { candidates.append(candidate) }
         }
-        // A second detected table may be payment details, not more purchases.
-        if candidates.count == 1 { receipt.items = recoverNames(candidates[0].items, from: textItems) }
         let totals = ScannedReceipt.parse(summaries.joined(separator: "\n"))
         if !totals.subtotal.isEmpty { receipt.subtotal = totals.subtotal }
         if !totals.tax.isEmpty { receipt.tax = totals.tax }
@@ -1525,6 +1596,22 @@ struct ReceiptOCR {
         if !totals.discount.isEmpty { receipt.discount = totals.discount }
         if !totals.rounding.isEmpty { receipt.rounding = totals.rounding }
         if !totals.total.isEmpty { receipt.total = totals.total }
+        // A second table may contain payment details. Select an item table only
+        // when it is the sole candidate or uniquely balances the receipt.
+        if candidates.count == 1 {
+            receipt.items = recoverNames(candidates[0].items, from: textItems)
+        } else if candidates.count > 1 {
+            let matches = candidates.map { recoverNames($0.items, from: textItems) }
+                .filter { rows in
+                    guard let subtotal = try? toCents(receipt.subtotal), !rows.isEmpty else { return false }
+                    let cents = rows.compactMap { row -> Int? in
+                        guard !row.name.isEmpty, !row.amount.isEmpty else { return nil }
+                        return try? toCents(row.amount)
+                    }
+                    return cents.count == rows.count && cents.reduce(0, +) == subtotal
+                }
+            if matches.count == 1 { receipt.items = matches[0] }
+        }
         if receipt.items.isEmpty {
             receipt.scanNotice = tr("没有可靠配对 Description 与 Amount，请重拍或补充商品。", "Description and Amount could not be matched reliably. Retake or add items.", "Description dan Amount tidak dapat dipadankan dengan pasti. Ambil semula atau tambah item.")
         } else if receipt.items.contains(where: { $0.name.isEmpty || $0.amount.isEmpty }) {
