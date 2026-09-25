@@ -1142,11 +1142,13 @@ import UIKit
 
 struct ScannedReceipt {
     struct Item: Identifiable {
-        let id = UUID()
-        let name: String
-        let amount: String
+        var id = UUID()
+        var name: String
+        var amount: String
+        var people: Set<UUID> = []
     }
     var merchant = ""
+    var date: Date?
     var subtotal = ""
     var tax = ""
     var service = ""
@@ -1155,38 +1157,155 @@ struct ScannedReceipt {
     var total = ""
     var items: [Item] = []
 
+    static func receiptDate(_ text: String) -> Date? {
+        let formats = [(#"\b\d{4}-\d{1,2}-\d{1,2}\b"#, "yyyy-M-d"),
+                       (#"\b\d{1,2}/\d{1,2}/\d{4}\b"#, "d/M/yyyy"),
+                       (#"\b\d{1,2}-\d{1,2}-\d{4}\b"#, "d-M-yyyy"),
+                       (#"\b\d{1,2}/\d{1,2}/\d{2}\b"#, "d/M/yy"),
+                       (#"\b\d{1,2}[ -][A-Za-z]{3}[ -]\d{2,4}\b"#, "d MMM yy")]
+        for (pattern, format) in formats {
+            guard let range = text.range(of: pattern, options: .regularExpression) else { continue }
+            let value = String(text[range]).replacingOccurrences(of: "-", with: format.contains("MMM") ? " " : "-")
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.isLenient = false
+            formatter.dateFormat = format
+            formatter.twoDigitStartDate = Calendar(identifier: .gregorian).date(from: DateComponents(year: 2000, month: 1, day: 1))
+            if let date = formatter.date(from: value) { return date }
+        }
+        return nil
+    }
+
     static func parse(_ text: String) -> ScannedReceipt {
         var result = ScannedReceipt()
         let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        result.merchant = lines.first(where: { $0.rangeOfCharacter(from: .letters) != nil && !$0.lowercased().contains("receipt") }) ?? ""
-        // OCR sometimes reads Malaysian comma decimals (13,73) or separates the amount column.
-        let moneyPattern = #"(?<![0-9])(?:RM\s*)?([0-9][0-9,.]*[.,][0-9]{2})(?![0-9])"#
-        guard let regex = try? NSRegularExpression(pattern: moneyPattern, options: .caseInsensitive) else { return result }
-        var inItems = true
-        for line in lines {
+        result.merchant = lines.first(where: { $0.rangeOfCharacter(from: .letters) != nil }) ?? ""
+        let dated = lines.filter { $0.lowercased().contains("date") && !$0.lowercased().contains("printed") }
+        result.date = (dated + lines).compactMap { receiptDate($0) }.first
+        let regex = try! NSRegularExpression(pattern: #"(?<![\d.,])([+-]?(?:\d[\d,.]*)?[.,]\d{2})(?!\d)"#)
+        var inItems = false
+        var finishedItems = false
+        var pendingName = ""
+        var pendingField = ""
+        var totalPriority = 0
+        func field(_ line: String) -> String {
+            let l = line.lowercased().replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            if l.contains("rounding") || l.contains("round off") { return "rounding" }
+            if l.contains("sub total") || l.contains("subtotal") { return "subtotal" }
+            if l.contains("net total") || l.contains("grand total") || l.contains("amt due") || l.contains("amount due") { return "final" }
+            if l.contains("service") || l.contains("srv chg") || l.contains("svc chg") { return "service" }
+            if l.range(of: #"\b(sst|gst|tax)\b"#, options: .regularExpression) != nil { return "tax" }
+            if l.contains("discount") { return "discount" }
+            if l.contains("total") && !l.contains("qty") && !l.contains("quantity") { return "total" }
+            if l.contains("bill amount") { return "subtotal" }
+            return ""
+        }
+        for (lineIndex, line) in lines.enumerated() {
             let lower = line.lowercased()
+            if receiptDate(line) != nil || lower.contains("printed") { continue }
+            if lower.contains("description") || lower.contains("item name") || lower == "qty" || lower.contains("unit price") {
+                inItems = true; pendingName = ""; continue
+            }
+            if lower == "amount (rm)" || lower == "amount" || lower == "price" { continue }
+            // Registration numbers, contact details and table numbers are not purchases.
+            if lower.contains("sst#") || lower.contains("gst id") || lower.contains("tel") || lower.contains("table") || lower.contains("check:") || lower.contains("cover:") || lower.contains("www.") || lower.contains("@gmail") { continue }
+            let kind = field(line)
             let matches = regex.matches(in: line, range: NSRange(line.startIndex..., in: line))
-            guard let match = matches.last, let range = Range(match.range(at: 1), in: line) else {
-                if lower.contains("description") && lower.contains("amount") { inItems = true }
+            guard let last = matches.last, let range = Range(last.range(at: 1), in: line) else {
+                if !kind.isEmpty { pendingField = kind; finishedItems = true; pendingName = ""; continue }
+                if !finishedItems && inItems && line.rangeOfCharacter(from: .letters) != nil && !lower.contains("amount") {
+                    let next = lineIndex + 1 < lines.count ? lines[lineIndex + 1] : ""
+                    let nextHasAmount = regex.firstMatch(in: next, range: NSRange(next.startIndex..., in: next)) != nil
+                    let nextIsNumbers = next.replacingOccurrences(of: "RM", with: "", options: .caseInsensitive).rangeOfCharacter(from: .letters) == nil
+                    if nextHasAmount && nextIsNumbers {
+                        pendingName = pendingName.isEmpty ? line : pendingName + " " + line
+                    } else if pendingName.isEmpty, let i = result.items.indices.last {
+                        result.items[i].name += " " + line
+                    } else { pendingName = pendingName.isEmpty ? line : pendingName + " " + line }
+                }
                 continue
             }
-            let token = String(line[range]); let value: String
-            if let last = token.lastIndex(where: { $0 == "." || $0 == "," }) {
-                let digits = token[..<last].filter(\.isNumber)
-                value = String(digits) + "." + token[token.index(after: last)...]
-            } else { continue }
-            let label = String(line[..<range.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
-            if lower.contains("rounding") { result.rounding = value }
-            else if lower.contains("net total") || lower.contains("amt due") || lower.contains("amount due") || lower.contains("grand total") { result.total = value; inItems = false }
-            else if lower.contains("subtotal") || lower.contains("sub total") { result.subtotal = value; inItems = false }
-            else if lower.contains("service") || lower.contains("srv chg") || lower.contains("svc chg") { result.service = value; inItems = false }
-            else if lower.contains("sst") || lower.contains("gst") || lower.contains("tax") { result.tax = value; inItems = false }
-            else if lower.contains("discount") { result.discount = value; inItems = false }
-            else if lower.contains("total") || lower.contains("bill amount") { if result.total.isEmpty { result.total = value }; inItems = false }
-            else if inItems && label.rangeOfCharacter(from: .letters) != nil && !lower.contains("date") && !lower.contains("check") && !lower.contains("table") {
-                let name = label.components(separatedBy: .decimalDigits).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? label
-                if !name.isEmpty { result.items.append(Item(name: name, amount: value)) }
+            let token = String(line[range])
+            guard let decimal = token.lastIndex(where: { $0 == "." || $0 == "," }) else { continue }
+            let integer = token[..<decimal].filter(\.isNumber)
+            let value = (token.hasPrefix("-") ? "-" : "") + (integer.isEmpty ? "0" : String(integer)) + "." + token[token.index(after: decimal)...]
+            let effective = kind.isEmpty ? pendingField : kind
+            pendingField = ""
+            if !effective.isEmpty {
+                finishedItems = true; pendingName = ""
+                switch effective {
+                case "subtotal": result.subtotal = value
+                case "tax": result.tax = value
+                case "service": result.service = value
+                case "discount": result.discount = value
+                case "rounding": result.rounding = value
+                case "final": result.total = value; totalPriority = 2
+                case "total": if totalPriority < 2 { result.total = value; totalPriority = 1 }
+                default: break
+                }
+                continue
             }
+            guard !finishedItems else { continue }
+            let firstRange = Range(matches[0].range(at: 1), in: line)!
+            var label = String(line[..<firstRange.lowerBound]).replacingOccurrences(of: #"\bRM\s*$"#, with: "", options: [.regularExpression, .caseInsensitive])
+            label = label.replacingOccurrences(of: #"^\s*\d+\s+"#, with: "", options: .regularExpression)
+            label = label.replacingOccurrences(of: #"\s+\d+(?:[.,]\d+)?\s*@?\s*$|\s*@\s*$"#, with: "", options: .regularExpression).trimmingCharacters(in: .whitespaces)
+            let name = [pendingName, label].filter { !$0.isEmpty }.joined(separator: " ")
+            guard name.rangeOfCharacter(from: .letters) != nil else { continue }
+            inItems = true; pendingName = ""
+            result.items.append(Item(name: name, amount: value))
+        }
+        return result
+    }
+}
+
+struct ReceiptPerson: Identifiable {
+    var id = UUID()
+    var name: String
+}
+
+// Largest-remainder allocation conserves every cent, including shared dishes and charges.
+enum ReceiptSplit {
+    static func allocate(_ total: Int, weights: [Int]) throws -> [Int] {
+        guard !weights.isEmpty, weights.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }),
+              total >= 0, total <= 10_000_000_000, weights.reduce(0, +) > 0 else { throw LedgerError.invalid("Invalid receipt amount") }
+        let sum = weights.reduce(0, +)
+        let exact = weights.map { Decimal(total) * Decimal($0) / Decimal(sum) }
+        var parts = exact.map { value -> Int in
+            var v = value; var rounded = Decimal(); NSDecimalRound(&rounded, &v, 0, .down)
+            return NSDecimalNumber(decimal: rounded).intValue
+        }
+        let order = weights.indices.sorted {
+            let a = exact[$0] - Decimal(parts[$0]), b = exact[$1] - Decimal(parts[$1])
+            return a == b ? $0 < $1 : a > b
+        }
+        for i in order.prefix(total - parts.reduce(0, +)) { parts[i] += 1 }
+        return parts
+    }
+    static func food(items: [ScannedReceipt.Item], people: [UUID], subtotal: Int) throws -> [Int] {
+        guard !items.isEmpty, !people.isEmpty, Set(people).count == people.count else {
+            throw reviewError("请添加商品和参与者。", "Add items and people.", "Tambah item dan peserta.")
+        }
+        var result = Array(repeating: 0, count: people.count)
+        var sum = 0
+        for item in items {
+            let cents = try optionalMoney(item.amount) ?? 0
+            guard !item.amount.isEmpty, !item.name.trimmingCharacters(in: .whitespaces).isEmpty else {
+                throw reviewError("请填写商品名称和金额。", "Enter each item name and amount.", "Isi nama dan amaun setiap item.")
+            }
+            let owners = people.indices.filter { item.people.contains(people[$0]) }
+            guard cents == 0 || (!owners.isEmpty && item.people.isSubset(of: Set(people))) else {
+                throw reviewError("请为每道菜选择由谁付款。", "Choose who pays for each item.", "Pilih pembayar setiap item.")
+            }
+            sum += cents
+            if cents > 0 {
+                let parts = try allocate(cents, weights: Array(repeating: 1, count: owners.count))
+                for (offset, index) in owners.enumerated() { result[index] += parts[offset] }
+            }
+        }
+        guard sum == subtotal else {
+            throw reviewError("商品合计与小计不一致，请补上漏识别的商品或修正金额。", "Items do not match the subtotal. Add missing items or correct amounts.", "Jumlah item berbeza daripada subjumlah. Tambah item tertinggal atau betulkan amaun.")
         }
         return result
     }
@@ -1199,13 +1318,25 @@ struct ReceiptOCR {
             request.recognitionLevel = .accurate
             request.usesLanguageCorrection = true
             try VNImageRequestHandler(data: data).perform([request])
-            let blocks = (request.results ?? []).compactMap { observation -> (CGFloat, CGFloat, String)? in
+            let observations = request.results ?? []
+            let heights = observations.map { $0.boundingBox.height }.sorted()
+            let tolerance: CGFloat = heights.isEmpty ? 0.005 : max(0.002, heights[heights.count / 2] * 0.55)
+            // Correct the overall tilt before matching names to their amount column.
+            let slopes: [CGFloat] = observations.compactMap { observation in
+                guard let candidate = observation.topCandidates(1).first,
+                      let box = try? candidate.boundingBox(for: candidate.string.startIndex..<candidate.string.endIndex),
+                      box.topRight.x - box.topLeft.x > 0.08 else { return nil }
+                return (box.topRight.y - box.topLeft.y) / (box.topRight.x - box.topLeft.x)
+            }.sorted()
+            let slope: CGFloat = slopes.isEmpty ? 0 : slopes[slopes.count / 2]
+            let blocks = observations.compactMap { observation -> (CGFloat, CGFloat, String)? in
                 guard let text = observation.topCandidates(1).first?.string else { return nil }
-                return (observation.boundingBox.midY, observation.boundingBox.minX, text)
+                let box = observation.boundingBox
+                return (box.midY - slope * box.midX, box.minX, text)
             }.sorted { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 > $1.0 }
             var rows: [[(CGFloat, CGFloat, String)]] = []
             for block in blocks {
-                if let last = rows.indices.last, abs(rows[last][0].0 - block.0) < 0.012 { rows[last].append(block) }
+                if let last = rows.indices.last, abs(rows[last][0].0 - block.0) < tolerance { rows[last].append(block) }
                 else { rows.append([block]) }
             }
             return rows.map { $0.sorted { $0.1 < $1.1 }.map { $0.2 }.joined(separator: "  ") }.joined(separator: "\n")
@@ -1238,144 +1369,253 @@ struct ReceiptScanView: View {
     @State private var photo: PhotosPickerItem?
     @State private var camera = false
     @State private var busy = false
-    @State private var raw = ""
     @State private var merchant = ""
     @State private var subtotal = ""
     @State private var tax = ""
     @State private var service = ""
     @State private var discount = ""
     @State private var rounding = ""
-    @State private var scannedItems: [ScannedReceipt.Item] = []
     @State private var printedTotal = ""
-    @State private var percentMode = false
-    @State private var taxOnService = false
-    @State private var names = ""
+    @State private var items: [ScannedReceipt.Item] = []
+    @State private var friends: [ReceiptPerson] = []
+    @State private var myID = UUID()
     @State private var includeMe = true
+    @State private var byItem = true
     @State private var date = Date()
-    @State private var draft: Expense?
-    @State private var error: String?
+    @State private var dateMissing = false
     @State private var existingID = ""
+    @State private var error: String?
     @State private var reviewed = false
-    private func costs() throws -> (Int, Int, Int, Int, Int) {
-        let base = try toCents(subtotal)
-        let fee: Int
-        let t: Int
-        if percentMode {
-            fee = try ReceiptCalculation.percentCharge(base: base, percent: percentage(service))
-            t = try ReceiptCalculation.percentCharge(base: base + (taxOnService ? fee : 0), percent: percentage(tax))
-        } else {
-            fee = try optionalMoney(service) ?? 0
-            t = try optionalMoney(tax) ?? 0
-        }
-        let off = try optionalMoney(discount) ?? 0
-        let adjustment = try optionalMoney(rounding) ?? 0
-        let total = try ReceiptCalculation.total(subtotal: base, tax: t, service: fee, discount: off)
-        guard total <= 10_000_000_000 - adjustment else { throw LedgerError.invalid("Invalid receipt total") }
-        return (base, t, fee, off, total + adjustment)
+    @State private var hasReceipt = false
+    @State private var receiptImage: UIImage?
+
+    private var people: [ReceiptPerson] {
+        (includeMe ? [ReceiptPerson(id: myID, name: tr("我", "Me", "Saya"))] : []) + friends
     }
-    private func percentage(_ input: String) throws -> Decimal {
-        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
-        if text.isEmpty { return 0 }
-        guard text.range(of: #"^[0-9]+(?:\.[0-9]{1,4})?$"#, options: .regularExpression) != nil,
-              let value = Decimal(string: text, locale: Locale(identifier: "en_US_POSIX")) else { throw LedgerError.invalid("Invalid percentage") }
-        return value
+    private func costs() throws -> (base: Int, total: Int) {
+        let base = try toCents(subtotal)
+        let t = try optionalMoney(tax) ?? 0, fee = try optionalMoney(service) ?? 0
+        let off = try optionalMoney(discount) ?? 0
+        let text = rounding.trimmingCharacters(in: .whitespaces)
+        let adjustment = (try optionalMoney(text.hasPrefix("-") ? String(text.dropFirst()) : text) ?? 0) * (text.hasPrefix("-") ? -1 : 1)
+        let total = try ReceiptCalculation.total(subtotal: base, tax: t, service: fee, discount: off) + adjustment
+        guard total > 0, total <= 10_000_000_000 else { throw LedgerError.invalid("Invalid receipt total") }
+        return (base, total)
+    }
+    private func breakdown() throws -> (food: [Int], totals: [Int]) {
+        let amounts = try costs()
+        guard try toCents(printedTotal) == amounts.total else {
+            throw reviewError("小计加税费、减折扣及加舍入后，与实付总额不一致，请核对。", "Subtotal, charges, discount and rounding do not match the paid total.", "Subjumlah, caj, diskaun dan pembundaran tidak sepadan dengan jumlah akhir.")
+        }
+        guard !people.isEmpty, friends.count <= 20,
+              friends.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              Set(friends.map { friendKey($0.name) }).count == friends.count else {
+            throw reviewError("请填写朋友姓名，姓名不能重复。", "Enter a unique name for each friend.", "Isi nama unik untuk setiap rakan.")
+        }
+        let food: [Int]
+        if byItem { food = try ReceiptSplit.food(items: items, people: people.map(\.id), subtotal: amounts.base) }
+        else { food = try ReceiptSplit.allocate(amounts.base, weights: Array(repeating: 1, count: people.count)) }
+        let weights = byItem ? food : Array(repeating: 1, count: people.count)
+        return (food, try ReceiptSplit.allocate(amounts.total, weights: weights))
     }
     private var matching: [Expense] {
-        guard let total = (try? costs())?.4 else { return [] }
+        guard let total = try? toCents(printedTotal) else { return [] }
         return model.ledger.expenses.filter { $0.cents == total && $0.foreign == nil && $0.shares.isEmpty && $0.refunded == 0 }.sorted { $0.date > $1.date }
     }
+    private func amountRow(_ title: String, _ value: Binding<String>, signed: Bool = false) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text("RM").foregroundStyle(.secondary)
+            TextField("0.00", text: value).keyboardType(signed ? .numbersAndPunctuation : .decimalPad)
+                .multilineTextAlignment(.trailing).frame(minWidth: 75, maxWidth: 130)
+                .accessibilityLabel(title)
+        }
+    }
     private var captureSection: some View {
-            Section {
-                Button { camera = true } label: { Label(tr("拍收据", "Snap receipt", "Ambil resit"), systemImage: "camera") }.disabled(!UIImagePickerController.isSourceTypeAvailable(.camera) || busy)
-                PhotosPicker(selection: $photo, matching: .images) { Label(tr("从照片选择", "Choose photo", "Pilih foto"), systemImage: "photo") }.disabled(busy)
-                if busy { ProgressView(tr("正在本机识别…", "Reading on device…", "Membaca pada peranti…")) }
-                Text(tr("仅识别 MYR 收据；图片不上传。识别后请核对金额，未显示的税费不会猜测。", "MYR receipts only. Images stay on device. Review amounts; missing charges are not guessed.", "Resit MYR sahaja. Gambar kekal pada peranti. Semak amaun; caj tiada tidak diteka.")).font(.caption)
+        Section {
+            Button { camera = true } label: { Label(tr("拍收据", "Take photo", "Ambil foto"), systemImage: "camera") }
+                .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera) || busy)
+            PhotosPicker(selection: $photo, matching: .images) { Label(tr("选择收据照片", "Choose receipt photo", "Pilih foto resit"), systemImage: "photo") }.disabled(busy)
+            if busy { ProgressView(tr("正在识别收据…", "Reading receipt…", "Membaca resit…")) }
+            if let receiptImage {
+                DisclosureGroup(tr("查看收据照片", "View receipt photo", "Lihat foto resit")) {
+                    Image(uiImage: receiptImage).resizable().scaledToFit().accessibilityLabel(tr("原收据照片", "Receipt photo", "Foto resit"))
+                }
             }
+        }
     }
     private var reviewSection: some View {
-            Section(tr("核对收据", "Review receipt", "Semak resit")) {
-                TextField(tr("商家", "Merchant", "Peniaga"), text: $merchant)
-                DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: .date)
-                if !scannedItems.isEmpty {
-                    DisclosureGroup(tr("识别商品（请核对）", "Detected items (review)", "Item dikesan (semak)")) {
-                        ForEach(scannedItems) { item in LabeledContent(item.name, value: item.amount) }
+        Section(tr("1. 核对收据", "1. Review receipt", "1. Semak resit")) {
+            LabeledContent(tr("商家", "Merchant", "Peniaga")) {
+                TextField(tr("商家名称", "Merchant name", "Nama peniaga"), text: $merchant).multilineTextAlignment(.trailing)
+            }
+            DatePicker(tr("消费日期", "Receipt date", "Tarikh resit"), selection: Binding(get: { date }, set: { date = $0; dateMissing = false }), displayedComponents: .date)
+            if dateMissing { Text(tr("没有识别到日期，请按收据调整日期。", "Date not found. Set the date shown on the receipt.", "Tarikh tidak dikesan. Tetapkan tarikh pada resit.")).font(.caption).foregroundStyle(.orange) }
+            amountRow(tr("商品小计", "Items subtotal", "Subjumlah item"), $subtotal)
+            amountRow(tr("税费（SST / GST）", "Tax (SST / GST)", "Cukai (SST / GST)"), $tax)
+            amountRow(tr("服务费", "Service charge", "Caj perkhidmatan"), $service)
+            DisclosureGroup(tr("折扣与舍入", "Discount & rounding", "Diskaun & pembundaran")) {
+                amountRow(tr("折扣", "Discount", "Diskaun"), $discount)
+                amountRow(tr("舍入调整（可为负数）", "Rounding (+ / −)", "Pembundaran (+ / −)"), $rounding, signed: true)
+            }
+            amountRow(tr("实付总额", "Paid total", "Jumlah akhir"), $printedTotal)
+            Text(tr("金额均为 RM；请对照照片核对。", "All amounts are in RM. Check against your photo.", "Semua amaun dalam RM. Semak dengan foto.")).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private var peopleSection: some View {
+        Section(tr("2. 谁一起吃？", "2. Who is sharing?", "2. Siapa berkongsi?")) {
+            Toggle(tr("包括我", "Include me", "Termasuk saya"), isOn: $includeMe)
+                .onChange(of: includeMe) { _, value in if !value { for i in items.indices { items[i].people.remove(myID) } } }
+            ForEach($friends) { $friend in
+                HStack {
+                    TextField(tr("朋友姓名", "Friend's name", "Nama rakan"), text: $friend.name)
+                    Button(role: .destructive) {
+                        for i in items.indices { items[i].people.remove(friend.id) }
+                        friends.removeAll { $0.id == friend.id }
+                    } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
+                        .accessibilityLabel(tr("移除朋友", "Remove friend", "Buang rakan"))
+                }
+            }
+            Button(tr("添加朋友", "Add friend", "Tambah rakan")) { friends.append(ReceiptPerson(name: "")) }.disabled(friends.count >= 20)
+            Picker(tr("怎样分账", "Split method", "Cara bahagi"), selection: $byItem) {
+                Text(tr("按各自点的菜", "By items", "Ikut item")).tag(true)
+                Text(tr("全部均分", "Split equally", "Sama rata")).tag(false)
+            }.pickerStyle(.segmented)
+        }
+    }
+    private func itemRow(_ item: Binding<ScannedReceipt.Item>) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                TextField(tr("菜名 / 商品名", "Item name", "Nama item"), text: item.name, axis: .vertical)
+                Button(role: .destructive) { items.removeAll { $0.id == item.wrappedValue.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
+                    .accessibilityLabel(tr("删除商品", "Remove item", "Buang item"))
+            }
+            amountRow(tr("这项金额", "Line total", "Jumlah item"), item.amount)
+            if byItem {
+                Menu {
+                    ForEach(people) { person in
+                        Button {
+                            if item.wrappedValue.people.contains(person.id) { item.wrappedValue.people.remove(person.id) }
+                            else { item.wrappedValue.people.insert(person.id) }
+                        } label: {
+                            Label(person.name.isEmpty ? tr("请先填写姓名", "Enter name first", "Isi nama dahulu") : person.name,
+                                  systemImage: item.wrappedValue.people.contains(person.id) ? "checkmark.circle.fill" : "circle")
+                        }.disabled(person.name.isEmpty)
+                    }
+                    Button(tr("大家共享", "Everyone shares", "Semua berkongsi")) { item.wrappedValue.people = Set(people.map(\.id)) }
+                } label: {
+                    let selected = people.filter { item.wrappedValue.people.contains($0.id) }.map(\.name).joined(separator: "、")
+                    Label(selected.isEmpty ? tr("谁吃这道菜？", "Who had this?", "Siapa makan ini?") : selected, systemImage: "person.2")
+                }
+            }
+        }.padding(.vertical, 4)
+    }
+    private var itemsSection: some View {
+        Section(tr("3. 菜品明细", "3. Items", "3. Butiran item")) {
+            ForEach($items) { item in itemRow(item) }
+            Button(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal")) { items.append(ScannedReceipt.Item(name: "", amount: "")) }
+            if !items.isEmpty {
+                let sum = items.reduce(0) { $0 + ((try? optionalMoney($1.amount)) ?? 0) }
+                LabeledContent(tr("商品合计", "Items total", "Jumlah item"), value: money(sum))
+                if let base = try? toCents(subtotal), base != sum {
+                    Text(tr("与小计相差：", "Difference from subtotal: ", "Beza daripada subjumlah: ") + money(base - sum)).foregroundStyle(.orange).font(.caption)
+                }
+            }
+            if byItem { Text(tr("共享的菜可选择多人；所选的人均分这道菜。", "Select several people for a shared dish; they split that item equally.", "Pilih beberapa orang untuk berkongsi item sama rata.")).font(.caption).foregroundStyle(.secondary) }
+        }
+    }
+    private var resultSection: some View {
+        Section(tr("4. 每人应付", "4. Each person pays", "4. Bayaran setiap orang")) {
+            if let result = try? breakdown() {
+                ForEach(Array(people.enumerated()), id: \.element.id) { index, person in
+                    VStack(alignment: .leading, spacing: 4) {
+                        LabeledContent(person.name, value: money(result.totals[index])).fontWeight(.semibold)
+                        Text(tr("餐费 ", "Food ", "Makanan ") + money(result.food[index]) + " · " + tr("税费等调整 ", "Charges / adjustments ", "Caj / pelarasan ") + money(result.totals[index] - result.food[index])).font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                TextField(tr("税前小计 · MYR", "Subtotal · MYR", "Subjumlah · MYR"), text: $subtotal).keyboardType(.decimalPad)
-                Toggle(tr("按百分比计算税费", "Calculate charges by percent", "Kira caj mengikut peratus"), isOn: $percentMode)
-                TextField(percentMode ? tr("税率 %", "Tax %", "Cukai %") : tr("税额 · MYR", "Tax · MYR", "Cukai · MYR"), text: $tax).keyboardType(.decimalPad)
-                TextField(percentMode ? tr("服务费 %", "Service %", "Perkhidmatan %") : tr("服务费 · MYR", "Service · MYR", "Perkhidmatan · MYR"), text: $service).keyboardType(.decimalPad)
-                if percentMode { Toggle(tr("税基包含服务费", "Tax includes service charge", "Asas cukai termasuk caj perkhidmatan"), isOn: $taxOnService) }
-                TextField(tr("折扣 · MYR（选填）", "Discount · MYR (optional)", "Diskaun · MYR (pilihan)"), text: $discount).keyboardType(.decimalPad)
-                TextField(tr("舍入调整 · MYR（选填）", "Rounding adjustment · MYR (optional)", "Pelarasan pembundaran · MYR (pilihan)"), text: $rounding).keyboardType(.decimalPad)
-                TextField(tr("收据实付总额 · MYR", "Printed total · MYR", "Jumlah pada resit · MYR"), text: $printedTotal).keyboardType(.decimalPad)
-                if let result = try? costs() { LabeledContent(tr("计算合计", "Calculated total", "Jumlah dikira"), value: money(result.4)) }
-                Text(tr("含税价不要再次加税。比例模式需自行确认税率和计税基础；若有舍入或未识别项目，请核对实际金额。", "Do not add tax again to tax-inclusive prices. Confirm rates and tax basis. Reconcile rounding or unrecognized items with the receipt.", "Jangan tambah cukai sekali lagi pada harga termasuk cukai. Sahkan kadar dan asas cukai serta pembundaran.")).font(.caption)
-                DisclosureGroup(tr("识别原文", "Recognized text", "Teks dikenali")) { TextEditor(text: $raw).frame(minHeight: 160) }
+                Text(tr("税费、服务费、折扣和舍入按餐费比例分摊，尾数自动补齐。", "Charges, discounts and rounding follow each person's food share; cents are balanced automatically.", "Caj, diskaun dan pembundaran mengikut bahagian makanan; baki sen diseimbangkan.")).font(.caption).foregroundStyle(.secondary)
+            } else {
+                Text(validationMessage).font(.caption).foregroundStyle(.orange)
             }
-    }
-    private var splitSection: some View {
-            Section(tr("分给朋友", "Split with friends", "Bahagi dengan rakan")) {
-                TextField(tr("朋友姓名，以逗号分隔", "Friends, separated by commas", "Nama rakan, dipisahkan koma"), text: $names)
-                Toggle(tr("包括我的份额", "Include my share", "Termasuk bahagian saya"), isOn: $includeMe)
-                Text(tr("按实付总额平均分摊，税费已包含在内。", "Split the paid total equally, including tax and service.", "Bahagi jumlah akhir sama rata, termasuk cukai dan caj.")).font(.caption)
-                Picker(tr("入账方式", "Record to", "Rekod ke"), selection: $existingID) {
-                    Text(tr("新增付款", "New payment", "Bayaran baharu")).tag("")
-                    ForEach(matching) { e in Text(e.merchant + " · " + dateLabel(e.date)).tag(e.id) }
+            if !matching.isEmpty || !existingID.isEmpty {
+                Picker(tr("保存到", "Save to", "Simpan ke"), selection: $existingID) {
+                    Text(tr("新增账目", "New expense", "Belanja baharu")).tag("")
+                    ForEach(matching) { entry in Text(entry.merchant + " · " + dateLabel(entry.date)).tag(entry.id) }
                 }
-                Text(tr("付款已自动入账时，请选同金额的原付款，避免重复。仅列出尚未分账且未退款的 MYR 付款。", "If already auto-recorded, choose that payment to avoid duplicates. Only unsplit, unrefunded MYR payments with the same amount are listed.", "Jika sudah direkod automatik, pilih bayaran asal. Hanya bayaran MYR amaun sama tanpa pembahagian atau bayaran balik disenaraikan.")).font(.caption)
-                Toggle(tr("已核对收据和金额", "I reviewed the receipt and amounts", "Saya telah menyemak resit dan amaun"), isOn: $reviewed)
-                Button(tr("确认并分账", "Confirm and split", "Sahkan dan bahagi")) { prepare() }.disabled(!reviewed || busy)
+                Text(tr("这笔付款已入账？选原账目，避免重复。", "Already recorded? Choose the original payment to avoid duplicates.", "Sudah direkod? Pilih bayaran asal supaya tidak berganda.")).font(.caption)
             }
+            Toggle(tr("已核对日期、商品和金额", "Date, items and amounts checked", "Tarikh, item dan amaun disemak"), isOn: $reviewed)
+            Button(tr("保存分账", "Save split", "Simpan pembahagian")) { save() }.disabled(!reviewed || busy || (try? breakdown()) == nil)
+        }
+    }
+    private var validationMessage: String {
+        do { _ = try breakdown(); return "" } catch { return error.localizedDescription }
+    }
+    private var reviewKey: String {
+        let fields = [merchant, subtotal, tax, service, discount, rounding, printedTotal, existingID, String(date.timeIntervalSince1970), String(includeMe), String(byItem)]
+        let rows = items.map { $0.id.uuidString + $0.name + $0.amount + $0.people.map(\.uuidString).sorted().joined(separator: ",") }
+        return (fields + rows + friends.map { $0.id.uuidString + $0.name }).joined(separator: "|")
     }
     var body: some View {
         Form {
             captureSection
-            reviewSection
-            splitSection
-        }.navigationTitle(tr("拍收据分账", "Scan & split", "Imbas & bahagi")).navigationBarTitleDisplayMode(.inline)
+            if hasReceipt {
+                reviewSection
+                peopleSection
+                itemsSection
+                resultSection
+            }
+        }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
+            .onChange(of: reviewKey) { _, _ in reviewed = false }
             .sheet(isPresented: $camera) { ReceiptCamera { data in camera = false; if let data { Task { await recognize(data) } } } }
-            .sheet(item: $draft) { ExpenseEditor(original: nil, initialDraft: $0, onSaved: { clearReceipt() }) }
-            .onChange(of: photo) { _, item in Task { do { if let data = try await item?.loadTransferable(type: Data.self) { await recognize(data) } } catch { self.error = error.localizedDescription } } }
+            .onChange(of: photo) { _, item in
+                Task { do { if let data = try await item?.loadTransferable(type: Data.self) { await recognize(data) } } catch { self.error = error.localizedDescription } }
+            }
             .alert(tr("收据", "Receipt", "Resit"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
-    private func clearReceipt() {
-        reviewed = false; existingID = ""; merchant = ""; subtotal = ""; tax = ""; service = ""
-        discount = ""; rounding = ""; scannedItems = []; printedTotal = ""; names = ""; raw = ""; photo = nil
-    }
-    private func recognize(_ data: Data) async {
+    @MainActor private func recognize(_ data: Data) async {
+        guard !busy else { return }
         busy = true; reviewed = false; defer { busy = false }
         do {
             guard data.count < 25_000_000 else { throw LedgerError.invalid("Image too large") }
-            raw = try await ReceiptOCR.read(data)
-            let parsed = ScannedReceipt.parse(raw)
-            merchant = parsed.merchant; subtotal = parsed.subtotal; tax = parsed.tax
-            service = parsed.service; discount = parsed.discount; rounding = parsed.rounding
-            printedTotal = parsed.total; scannedItems = parsed.items
-            percentMode = false; existingID = ""
-            if raw.isEmpty { error = tr("未识别到文字，请重新拍摄。", "No text found. Retake the photo.", "Tiada teks ditemui. Ambil foto semula.") }
+            let text = try await ReceiptOCR.read(data)
+            guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw reviewError("没有识别到文字，请重新拍摄。", "No text found. Retake the photo.", "Tiada teks. Ambil foto semula.") }
+            let receipt = ScannedReceipt.parse(text)
+            merchant = receipt.merchant; subtotal = receipt.subtotal; tax = receipt.tax
+            service = receipt.service; discount = receipt.discount; rounding = receipt.rounding
+            printedTotal = receipt.total; items = receipt.items; date = receipt.date ?? Date()
+            dateMissing = receipt.date == nil; existingID = ""; hasReceipt = true; receiptImage = UIImage(data: data)
         } catch { self.error = error.localizedDescription }
     }
-    private func prepare() {
+    private func save() {
         do {
-            let values = try costs(); let expected = try toCents(printedTotal)
-            guard expected == values.4 else { throw reviewError("计算合计与收据总额不一致，请先核对税费、折扣或小计。", "Calculated and printed totals differ. Check subtotal, charges and discounts.", "Jumlah dikira berbeza daripada resit. Semak subjumlah, caj dan diskaun.") }
-            let people = names.replacingOccurrences(of: "，", with: ",").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
-            guard people.count <= 20, Set(people.map(friendKey)).count == people.count, !people.contains(where: { $0.isEmpty }), !people.isEmpty || includeMe else { throw LedgerError.invalid("Check friend names") }
-            let amounts = equalShares(total: expected, count: people.count, includeMe: includeMe)
-            let shares = zip(people, amounts).map { Share(name: $0.0, cents: $0.1) }
-            let summary = "Subtotal " + money(values.0) + "; tax " + money(values.1) + "; service " + money(values.2) + "; discount " + money(values.3) + "; rounding " + (rounding.isEmpty ? "0.00" : rounding)
+            let result = try breakdown(), total = try toCents(printedTotal)
+            guard !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("Enter merchant") }
+            let shares = people.enumerated().compactMap { index, person -> Share? in
+                guard person.id != myID, result.totals[index] > 0 else { return nil }
+                return Share(name: person.name.trimmingCharacters(in: .whitespacesAndNewlines), cents: result.totals[index])
+            }
+            var details = items.map { item -> String in
+                let owners = byItem ? people.filter { item.people.contains($0.id) } : people
+                return item.name + " · RM " + item.amount + " → " + owners.map(\.name).joined(separator: ", ")
+            }
+            details.append("Subtotal RM \(subtotal); tax RM \(tax.isEmpty ? "0.00" : tax); service RM \(service.isEmpty ? "0.00" : service); discount RM \(discount.isEmpty ? "0.00" : discount); rounding RM \(rounding.isEmpty ? "0.00" : rounding)")
+            for (i, person) in people.enumerated() { details.append(person.name + ": " + money(result.totals[i])) }
+            let summary = details.joined(separator: "\n")
+            guard summary.count <= 20_000 else { throw reviewError("收据明细过长，请缩短商品或朋友名称。", "Receipt details are too long. Shorten item or friend names.", "Butiran resit terlalu panjang. Pendekkan nama item atau rakan.") }
             if !existingID.isEmpty {
                 guard let original = matching.first(where: { $0.id == existingID }) else { throw LedgerError.invalid("Re-select the original payment") }
                 try LocalStore.shared.change { ledger in
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid("Record changed. Reopen it.") }
                     ledger.expenses[i].shares = shares; ledger.expenses[i].receiptSummary = summary
+                    ledger.expenses[i].date = date
                 }
-                model.reload(); model.showSaved(); clearReceipt()
             } else {
-                guard !merchant.trimmingCharacters(in: .whitespaces).isEmpty else { throw LedgerError.invalid("Enter merchant") }
-                draft = Expense(merchant: merchant, cents: expected, date: date, category: "餐饮", source: "Receipt", shares: shares, receiptSummary: summary)
+                let expense = Expense(merchant: merchant, cents: total, date: date, category: "餐饮", source: "Receipt", shares: shares, receiptSummary: summary)
+                try LocalStore.shared.change { $0.expenses.append(expense) }
             }
+            model.reload(); model.showSaved(); hasReceipt = false; photo = nil; receiptImage = nil; items = []; existingID = ""; reviewed = false
         } catch { self.error = error.localizedDescription }
     }
 }

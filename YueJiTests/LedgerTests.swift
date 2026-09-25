@@ -550,7 +550,7 @@ final class ReceiptCalculationTests: XCTestCase {
         let older = try LocalStore.decode(JSONSerialization.data(withJSONObject: json))
         XCTAssertNil(older.expenses[0].receiptSummary)
         XCTAssertEqual(older.expenses[0].cents, 1080)
-        ledger.expenses[0].receiptSummary = String(repeating: "x", count: 2001)
+        ledger.expenses[0].receiptSummary = String(repeating: "x", count: 20_001)
         XCTAssertThrowsError(try ledger.validated())
     }
 }
@@ -696,5 +696,97 @@ final class ReceiptParsingTests: XCTestCase {
         XCTAssertEqual(receipt.service, "6730.60")
         XCTAssertEqual(receipt.tax, "4442.20")
         XCTAssertEqual(receipt.total, "78478.80")
+    }
+}
+
+final class ReceiptItemSplitTests: XCTestCase {
+    func testDateAndSplitLinesWithLeadingQuantityAndWrappedName() throws {
+        let receipt = ScannedReceipt.parse("""
+        RESTAURANT
+        Date 03/11/2025 01:14 PM
+        Description Amount (RM)
+        DAAL CHANA FRY
+        1.00 @ 25.00 25.00
+        PLAIN NAAN
+        11.00 @ 3.00 33.00
+        1 CHICKEN CHEESY 30.00
+        KOFTA
+        Sub Total
+        88.00
+        SST 5,28
+        Net Total 93.28
+        Printed 04/11/2025
+        """)
+        XCTAssertEqual(receipt.items.map(\.name), ["DAAL CHANA FRY", "PLAIN NAAN", "CHICKEN CHEESY KOFTA"])
+        XCTAssertEqual(receipt.items.map(\.amount), ["25.00", "33.00", "30.00"])
+        XCTAssertEqual(receipt.subtotal, "88.00")
+        let components = Calendar(identifier: .gregorian).dateComponents([.year, .month, .day], from: try XCTUnwrap(receipt.date))
+        XCTAssertEqual(components.year, 2025)
+        XCTAssertEqual(components.month, 11)
+        XCTAssertEqual(components.day, 3)
+        XCTAssertNotNil(ScannedReceipt.receiptDate("10 May 17 08:17 PM"))
+        XCTAssertNil(ScannedReceipt.receiptDate("31/02/2025"))
+        XCTAssertNil(ScannedReceipt.parse("CAFE\nSubtotal 20.00").date)
+    }
+    func testDifferentDishesAndSharedDishWithProportionalCharges() throws {
+        let me = UUID(), friend = UUID()
+        let items = [ScannedReceipt.Item(name: "Noodles", amount: "10.00", people: [me]),
+                     ScannedReceipt.Item(name: "Rice", amount: "20.00", people: [friend]),
+                     ScannedReceipt.Item(name: "Shared side", amount: "5.00", people: [me, friend])]
+        let food = try ReceiptSplit.food(items: items, people: [me, friend], subtotal: 3500)
+        XCTAssertEqual(food, [1250, 2250])
+        // RM3.50 service + RM2.31 tax + RM0.04 rounding.
+        let total = try ReceiptSplit.allocate(4085, weights: food)
+        XCTAssertEqual(total, [1459, 2626])
+        XCTAssertEqual(total.reduce(0, +), 4085)
+        XCTAssertEqual(try ReceiptSplit.allocate(3501, weights: [1, 1]), [1751, 1750])
+    }
+    func testMissingItemsAndMissingAssignmentBlockSaving() throws {
+        let me = UUID()
+        let item = ScannedReceipt.Item(name: "Lunch", amount: "10.00", people: [me])
+        XCTAssertThrowsError(try ReceiptSplit.food(items: [item], people: [me], subtotal: 2000))
+        let unassigned = ScannedReceipt.Item(name: "Lunch", amount: "10.00")
+        XCTAssertThrowsError(try ReceiptSplit.food(items: [unassigned], people: [me], subtotal: 1000))
+        XCTAssertThrowsError(try ReceiptSplit.food(items: [item], people: [UUID()], subtotal: 1000))
+        XCTAssertEqual(try ReceiptSplit.allocate(100, weights: [0, 1]), [0, 100])
+        XCTAssertEqual(try ReceiptSplit.allocate(9_999_999_999, weights: [5_000_000_000, 4_999_999_999]).reduce(0, +), 9_999_999_999)
+    }
+}
+
+extension ReceiptItemSplitTests {
+    func testCompleteDiningReceiptKeepsZeroItemsAndWrappedNames() {
+        let parsed = ScannedReceipt.parse("""
+        ROYAL DINING HALL
+        Date 03/11/2025 01:14 PM
+        Description Amount (RM)
+        DAAL CHANA FRY 1.00 @ 25.00 25.00
+        PLAIN NAAN 11.00 @ 3.00 33.00
+        PALAK PANEER 2.00 @ 25.00 50.00
+        CHICKEN CHEESY 1.00 @ 30.00 30.00
+        KOFTA
+        DAAL MASH FRY 1.00 @ 25.00 25.00
+        CH TANDOORI LEG 2.00 @ 15.00 30.00
+        PLAIN PARATHA 1.00 @ 5.00 5.00
+        SOFT DRINK ( LARGE ) .00 @ 6.00 .00
+        COKE
+        FRESH LIME JUICE 1.00 @ 10.00 10.00
+        MINERAL WATER .00 @ 4.00 .00
+        ( LARGE )
+        Bill Amount 208.00
+        Discount 0.00
+        Sub Total 208.00
+        SST 13,73
+        Service Charges 20.80
+        Total(RM) 242,53
+        Rounding Adjustment 0.02
+        Net Total(RM) 242.55
+        """)
+        XCTAssertEqual(parsed.items.count, 10)
+        XCTAssertEqual(parsed.items[3].name, "CHICKEN CHEESY KOFTA")
+        XCTAssertEqual(parsed.items[7].amount, "0.00")
+        XCTAssertEqual(parsed.items[9].name, "MINERAL WATER ( LARGE )")
+        XCTAssertEqual(parsed.items.reduce(0) { $0 + ((try? optionalMoney($1.amount)) ?? 0) }, 20800)
+        XCTAssertEqual(parsed.total, "242.55")
+        XCTAssertEqual(ScannedReceipt.parse("Rounding Adjustment -0.02").rounding, "-0.02")
     }
 }

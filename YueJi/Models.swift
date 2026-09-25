@@ -125,7 +125,7 @@ struct Ledger: Codable {
         for e in expenses {
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  e.merchant.count <= 200, (e.receiptSummary?.count ?? 0) <= 2000, e.cents > 0, e.cents <= 10_000_000_000,
+                  e.merchant.count <= 200, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
                   e.date.timeIntervalSince1970.isFinite, categoryNames.contains(e.category), e.shares.count <= 100,
                   Set(e.shares.map(\.id)).count == e.shares.count,
                   Set(e.shares.map { friendKey($0.name) }).count == e.shares.count else { throw LedgerError.invalid("付款或分账数据无效。") }
