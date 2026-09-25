@@ -1348,6 +1348,7 @@ struct ReceiptGrid {
         var result = Result()
         var descriptionColumn: Int?
         var amountColumn: Int?
+        var unitPriceColumn: Int?
         var reachedSummary = false
         var pendingName = ""
         var previousZeroWithUnitPrice = false
@@ -1370,17 +1371,23 @@ struct ReceiptGrid {
                     amountColumn = cell.columns.upperBound
                     header = true
                 }
+                if ["price", "unit price", "unit cost", "harga seunit", "单价"].contains(label) {
+                    unitPriceColumn = cell.columns.lowerBound
+                    header = true
+                }
             }
             if header { reachedSummary = false; pendingName = ""; previousZeroWithUnitPrice = false; continue }
             guard !reachedSummary, let d = descriptionColumn, let a = amountColumn, d != a else { continue }
             result.foundColumns = true
-            let description = ordered.first { $0.columns.lowerBound <= d && $0.columns.upperBound >= d && $0.columns.upperBound < a }?.text
+            let description = ordered.first { $0.columns.contains(d) && !$0.columns.contains(a) }?.text
                 .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             let amountText = ordered.first { $0.columns.lowerBound == a && $0.columns.upperBound == a }?.text ?? ""
             if description.isEmpty && amountText.isEmpty { continue }
             let value = amount(amountText) ?? ""
-            let hasUnitPrice = ordered.contains { $0.columns.upperBound != a && $0.columns.lowerBound != d && amount($0.text) != nil }
+            let hasUnitPrice = unitPriceColumn.map { column in
+                ordered.contains { $0.columns.contains(column) && !$0.columns.contains(a) && amount($0.text) != nil }
+            } ?? false
             if value.isEmpty && amountText.isEmpty && !description.isEmpty {
                 // Wrapped descriptions often occupy their own table row. An already
                 // priced item owns the following description-only continuation.
