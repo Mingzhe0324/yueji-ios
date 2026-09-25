@@ -26,9 +26,10 @@ struct PageIntroduction: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("YUEJI").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
-            Text(title).font(.largeTitle.weight(.bold)).tracking(-0.8).fixedSize(horizontal: false, vertical: true)
+            Text(title).font(.largeTitle.weight(.bold)).fixedSize(horizontal: false, vertical: true)
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10)
+            .padding(.horizontal, 24)
     }
 }
 private struct YueJiListSurface: ViewModifier {
@@ -957,27 +958,48 @@ struct UsageGuideView: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
+                VStack(spacing: 22) {
                     HStack {
                         Text("YUEJI").font(.caption.weight(.semibold)).tracking(3)
                         Spacer()
                         Text(String(format: "%02d / %02d", step + 1, titles.count)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }.padding(.top, 8)
-                    VStack(alignment: .leading, spacing: 12) {
-                        Text(titles[step]).font(.largeTitle.weight(.bold)).tracking(-0.8).fixedSize(horizontal: false, vertical: true)
-                        Text(details[step]).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    VStack(spacing: 0) {
+                        Capsule().fill(.primary).frame(width: 75, height: 15).padding(.top, 9).padding(.bottom, 8)
+                        HStack {
+                            Text("9:41").font(.caption.weight(.semibold))
+                            Spacer()
+                            Image(systemName: "wifi")
+                            Image(systemName: "battery.100percent")
+                        }.font(.caption2).padding(.horizontal, 24).padding(.bottom, 12)
+                        Text([tr("概览", "Overview", "Ringkasan"), tr("收据分账", "Receipt split", "Bahagi resit"), tr("收据分账", "Receipt split", "Bahagi resit"), tr("朋友分账", "Shared expenses", "Belanja dikongsi"), tr("自动记账", "Automatic recording", "Rekod automatik"), tr("概览", "Overview", "Ringkasan")][step])
+                            .font(.subheadline.weight(.semibold)).padding(.bottom, 10)
+                        ScrollView {
+                            GuideDemoScene(step: step).id(step)
+                                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 10)))
+                                .padding(12)
+                        }.frame(height: 360)
+                            .background(Color(uiColor: .systemGroupedBackground))
+                        Capsule().fill(.primary).frame(width: 100, height: 4).padding(.vertical, 10)
                     }
-                    GuideDemoScene(step: step).id(step)
-                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 10)))
+                    .frame(maxWidth: 350)
+                    .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 39))
+                    .overlay(RoundedRectangle(cornerRadius: 39).strokeBorder(.primary.opacity(0.18), lineWidth: 3))
+                    .shadow(color: .black.opacity(0.1), radius: 24, y: 12)
+                    .accessibilityLabel(tr("可操作的应用示范画面", "Interactive app preview", "Pratonton aplikasi interaktif"))
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(titles[step]).font(.title.weight(.bold)).fixedSize(horizontal: false, vertical: true)
+                        Text(details[step]).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                        Text(tr("点按上方画面体验操作", "Tap the screen above to try the steps", "Ketik skrin di atas untuk mencuba"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                     HStack(spacing: 6) {
                         ForEach(titles.indices, id: \.self) { index in
-                            Capsule().fill(index == step ? Color.accentColor : Color.secondary.opacity(0.18))
-                                .frame(width: index == step ? 24 : 6, height: 6)
+                            Circle().fill(index == step ? Color.primary : Color.secondary.opacity(0.3))
+                                .frame(width: 7, height: 7)
                         }
-                        Spacer()
-                        Text(tr("点一下画面，试试看", "Tap the demo to try it", "Ketik demo untuk mencuba")).font(.caption).foregroundStyle(.secondary)
                     }.accessibilityElement(children: .ignore).accessibilityLabel("\(step + 1) / \(titles.count)")
-                }.padding(24).frame(maxWidth: 580)
+                }.padding(24).frame(maxWidth: 480)
                     .frame(maxWidth: .infinity)
             }.background(Color(uiColor: .systemGroupedBackground))
                 .safeAreaInset(edge: .bottom) {

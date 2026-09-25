@@ -795,6 +795,48 @@ final class ReceiptGridTests: XCTestCase {
     private func cell(_ text: String, _ column: Int) -> ReceiptGrid.Cell {
         ReceiptGrid.Cell(text: text, columns: column...column)
     }
+    func testWrappedDescriptionAndZeroPricedContinuationsFromRestaurantReceipt() {
+        let rows: [[ReceiptGrid.Cell]] = [
+            [cell("Description", 0), cell("Qty", 1), cell("Unit price", 2), cell("Amount (RM)", 3)],
+            [cell("DAAL CHANA FRY", 0), cell("1.00", 1), cell("25.00", 2), cell("25.00", 3)],
+            [cell("PLAIN NAAN", 0), cell("11.00", 1), cell("3.00", 2), cell("33.00", 3)],
+            [cell("PALAK PANEER", 0), cell("2.00", 1), cell("25.00", 2), cell("50.00", 3)],
+            [cell("CHICKEN CHEESY", 0), cell("1.00", 1), cell("30.00", 2), cell("30.00", 3)],
+            [cell("KOFTA", 0)],
+            [cell("DAAL MASH FRY", 0), cell("25.00", 3)],
+            [cell("CH TANDOORI LEG", 0), cell("30.00", 3)],
+            [cell("PLAIN PARATHA", 0), cell("5.00", 3)],
+            [cell("SOFT DRINK (LARGE)", 0), cell("6.00", 2), cell(".00", 3)],
+            [cell("COKE", 0), cell(".00", 3)],
+            [cell("FRESH LIME JUICE", 0), cell("10.00", 3)],
+            [cell("MINERAL WATER", 0), cell("4.00", 2), cell(".00", 3)],
+            [cell("(LARGE)", 0)],
+            [cell("Bill Amount", 0), cell("208.00", 3)],
+            [cell("SST", 0), cell("13,73", 3)],
+            [cell("Service Charges", 0), cell("20.80", 3)],
+            [cell("Rounding Adjustment", 0), cell("0.02", 3)],
+            [cell("Net Total(RM)", 0), cell("242.55", 3)]
+        ]
+        let parsed = ReceiptGrid.parse(rows)
+        XCTAssertEqual(parsed.items.count, 10)
+        XCTAssertEqual(parsed.items[3].name, "CHICKEN CHEESY KOFTA")
+        XCTAssertEqual(parsed.items[7].name, "SOFT DRINK (LARGE) COKE")
+        XCTAssertEqual(parsed.items[7].amount, "0.00")
+        XCTAssertEqual(parsed.items[9].name, "MINERAL WATER (LARGE)")
+        XCTAssertEqual(parsed.items.compactMap { try? toCents($0.amount) }.reduce(0, +), 20800)
+        let summary = ScannedReceipt.parse(parsed.summaries.joined(separator: "\n"))
+        XCTAssertEqual(summary.subtotal, "208.00")
+        XCTAssertEqual(summary.total, "242.55")
+    }
+    func testMissingItemPriceRemainsVisibleWhenNextItemIsPriced() {
+        let parsed = ReceiptGrid.parse([
+            [cell("Description", 0), cell("Amount", 1)],
+            [cell("Unclear soup", 0)],
+            [cell("Rice", 0), cell("12.00", 1)]
+        ])
+        XCTAssertEqual(parsed.items.map(\.name), ["Unclear soup", "Rice"])
+        XCTAssertEqual(parsed.items.map(\.amount), ["", "12.00"])
+    }
     func testAmountColumnWinsOverQuantityAndUnitPriceEvenWhenReordered() {
         let result = ReceiptGrid.parse([
             [cell("Amount (RM)", 0), cell("Description", 1), cell("Unit Price", 2), cell("Qty", 3)],
@@ -840,6 +882,13 @@ final class ReceiptGridTests: XCTestCase {
 }
 
 final class ReceiptRetryTests: XCTestCase {
+    func testTextNamesAreRecoveredOnlyWithExactRowAndAmountAgreement() {
+        let rows = [ScannedReceipt.Item(name: "", amount: "25.00"), .init(name: "Rice", amount: "33.00")]
+        let words = [ScannedReceipt.Item(name: "Soup", amount: "25.00"), .init(name: "Rice", amount: "33.00")]
+        XCTAssertEqual(ReceiptOCR.recoverNames(rows, from: words).map(\.name), ["Soup", "Rice"])
+        let wrong = [words[0], .init(name: "Rice", amount: "3.00")]
+        XCTAssertEqual(ReceiptOCR.recoverNames(rows, from: wrong).map(\.name), ["", "Rice"])
+    }
     func testCompleteReconciledPassWinsOverMoreUnreconciledItems() {
         var good = ScannedReceipt()
         good.subtotal = "40.00"; good.tax = "3.20"; good.service = "4.00"; good.total = "47.20"

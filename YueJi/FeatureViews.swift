@@ -1203,8 +1203,8 @@ struct ScannedReceipt {
             if l.contains("service") || l.contains("srv chg") || l.contains("svc chg") { return "service" }
             if l.range(of: #"\b(sst|gst|tax)\b"#, options: .regularExpression) != nil { return "tax" }
             if l.contains("discount") { return "discount" }
-            if l.contains("total") && !l.contains("qty") && !l.contains("quantity") { return "total" }
             if l.contains("bill amount") { return "subtotal" }
+            if l.contains("total") && !l.contains("qty") && !l.contains("quantity") { return "total" }
             return ""
         }
         for (lineIndex, line) in lines.enumerated() {
@@ -1349,11 +1349,13 @@ struct ReceiptGrid {
         var descriptionColumn: Int?
         var amountColumn: Int?
         var reachedSummary = false
+        var pendingName = ""
+        var previousZeroWithUnitPrice = false
         for row in rows {
             let ordered = row.sorted { $0.columns.lowerBound < $1.columns.lowerBound }
             if let first = ordered.first(where: { !$0.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }), summaryLabel(first.text) {
                 result.summaries.append(ordered.map(\.text).joined(separator: " "))
-                reachedSummary = true
+                reachedSummary = true; pendingName = ""; previousZeroWithUnitPrice = false
                 continue
             }
             var header = false
@@ -1369,23 +1371,64 @@ struct ReceiptGrid {
                     header = true
                 }
             }
-            if header { reachedSummary = false; continue }
+            if header { reachedSummary = false; pendingName = ""; previousZeroWithUnitPrice = false; continue }
             guard !reachedSummary, let d = descriptionColumn, let a = amountColumn, d != a else { continue }
             result.foundColumns = true
-            let description = ordered.first { $0.columns == (d...d) }?.text
+            let description = ordered.first { $0.columns.lowerBound <= d && $0.columns.upperBound >= d && $0.columns.upperBound < a }?.text
                 .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let amountText = ordered.first { $0.columns == (a...a) }?.text ?? ""
+            let amountText = ordered.first { $0.columns.lowerBound == a && $0.columns.upperBound == a }?.text ?? ""
             if description.isEmpty && amountText.isEmpty { continue }
             let value = amount(amountText) ?? ""
-            // Keep incomplete rows visible instead of joining unrelated purchases.
-            result.items.append(ScannedReceipt.Item(name: description, amount: value))
+            let hasUnitPrice = ordered.contains { $0.columns.upperBound != a && $0.columns.lowerBound != d && amount($0.text) != nil }
+            if value.isEmpty && amountText.isEmpty && !description.isEmpty {
+                // Wrapped descriptions often occupy their own table row. An already
+                // priced item owns the following description-only continuation.
+                if !result.items.isEmpty && pendingName.isEmpty && !result.items[result.items.count - 1].amount.isEmpty {
+                    result.items[result.items.count - 1].name += " " + description
+                } else {
+                    pendingName = [pendingName, description].filter { !$0.isEmpty }.joined(separator: " ")
+                }
+                continue
+            }
+            if value == "0.00" && previousZeroWithUnitPrice && !hasUnitPrice && !description.isEmpty && pendingName.isEmpty && !result.items.isEmpty {
+                result.items[result.items.count - 1].name += " " + description
+                previousZeroWithUnitPrice = false
+                continue
+            }
+            if !pendingName.isEmpty && !description.isEmpty {
+                result.items.append(ScannedReceipt.Item(name: pendingName, amount: ""))
+                pendingName = ""
+            }
+            let name = [pendingName, description].filter { !$0.isEmpty }.joined(separator: " ")
+            pendingName = ""
+            // Retain ambiguous incomplete rows for explicit review.
+            result.items.append(ScannedReceipt.Item(name: name, amount: value))
+            previousZeroWithUnitPrice = value == "0.00" && hasUnitPrice
         }
+        if !pendingName.isEmpty { result.items.append(ScannedReceipt.Item(name: pendingName, amount: "")) }
         return result
     }
 }
 
 struct ReceiptOCR {
+    // Use the plain-text pass only to restore a missing label when every row
+    // already lines up with the table's Amount column in the same order.
+    static func recoverNames(_ table: [ScannedReceipt.Item], from text: [ScannedReceipt.Item]) -> [ScannedReceipt.Item] {
+        guard table.count == text.count, !table.isEmpty else { return table }
+        for index in table.indices {
+            guard table[index].amount == text[index].amount,
+                  !text[index].name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return table }
+            if !table[index].name.isEmpty && ReceiptGrid.normalized(table[index].name) != ReceiptGrid.normalized(text[index].name) {
+                return table
+            }
+        }
+        return table.indices.map { index in
+            var item = table[index]
+            if item.name.isEmpty { item.name = text[index].name }
+            return item
+        }
+    }
     // Compare complete passes; never stitch purchases from different passes together.
     static func quality(_ receipt: ScannedReceipt) -> Int {
         guard !receipt.items.isEmpty else { return 0 }
@@ -1437,8 +1480,12 @@ struct ReceiptOCR {
             }
         }
         var receipt = ScannedReceipt.parse(try await read(data))
-        receipt.items = []
-        receipt.scanNotice = tr("未能可靠读取商品表格，请重拍清晰照片或手动补充商品。", "Could not read the item table reliably. Retake a clear photo or add items manually.", "Jadual item tidak dapat dibaca dengan pasti. Ambil foto jelas atau tambah item secara manual.")
+        if quality(receipt) == 4 {
+            receipt.scanNotice = tr("已按金额核对文字识别结果，请仍对照照片确认商品名称与日期。", "Text reading balances. Check names and date against the photo.", "Jumlah teks sepadan. Semak nama dan tarikh dengan foto.")
+        } else {
+            receipt.items = []
+            receipt.scanNotice = tr("未能可靠读取商品表格，请重拍清晰照片或手动补充商品。", "Could not read the item table reliably. Retake a clear photo or add items manually.", "Jadual item tidak dapat dibaca dengan pasti. Ambil foto jelas atau tambah item secara manual.")
+        }
         return receipt
     }
     @available(iOS 26.0, *)
@@ -1448,6 +1495,7 @@ struct ReceiptOCR {
         let text = document.text.transcript
         guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("No receipt found") }
         var receipt = ScannedReceipt.parse(text)
+        let textItems = receipt.items
         receipt.items = []
         var candidates: [ReceiptGrid.Result] = []
         var summaries: [String] = []
@@ -1462,7 +1510,7 @@ struct ReceiptOCR {
             if candidate.foundColumns { candidates.append(candidate) }
         }
         // A second detected table may be payment details, not more purchases.
-        if candidates.count == 1 { receipt.items = candidates[0].items }
+        if candidates.count == 1 { receipt.items = recoverNames(candidates[0].items, from: textItems) }
         let totals = ScannedReceipt.parse(summaries.joined(separator: "\n"))
         if !totals.subtotal.isEmpty { receipt.subtotal = totals.subtotal }
         if !totals.tax.isEmpty { receipt.tax = totals.tax }
@@ -1660,13 +1708,32 @@ struct ReceiptScanView: View {
         }
     }
     private func itemRow(_ item: Binding<ScannedReceipt.Item>) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .top, spacing: 10) {
                 TextField(tr("菜名 / 商品名", "Item name", "Nama item"), text: item.name, axis: .vertical)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityLabel(tr("商品名称", "Item name", "Nama item"))
+                Text("RM").foregroundStyle(.secondary)
+                TextField("0.00", text: item.amount).keyboardType(.decimalPad)
+                    .multilineTextAlignment(.trailing).frame(width: 72)
+                    .accessibilityLabel(tr("这项金额", "Line total", "Jumlah item"))
                 Button(role: .destructive) { items.removeAll { $0.id == item.wrappedValue.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
                     .accessibilityLabel(tr("删除商品", "Remove item", "Buang item"))
             }
-            amountRow(tr("这项金额", "Line total", "Jumlah item"), item.amount)
+            if item.wrappedValue.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.wrappedValue.amount.isEmpty {
+                Text(tr("请对照照片补上名称或金额", "Check the photo for the missing name or amount", "Semak foto untuk nama atau amaun yang tiada"))
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if let index = items.firstIndex(where: { $0.id == item.wrappedValue.id }), index > 0,
+               (item.wrappedValue.amount.isEmpty || ((try? toCents(item.wrappedValue.amount)) == 0 && (try? toCents(items[index - 1].amount)) == 0)) {
+                Button(tr("与上一项合并名称", "Join name with previous item", "Gabung nama dengan item sebelumnya")) {
+                    let continuation = items[index].name.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if !continuation.isEmpty {
+                        items[index - 1].name = [items[index - 1].name, continuation].filter { !$0.isEmpty }.joined(separator: " ")
+                        items.remove(at: index)
+                    }
+                }.font(.caption).buttonStyle(.borderless)
+            }
             if byItem {
                 Menu {
                     ForEach(people) { person in
@@ -1689,6 +1756,11 @@ struct ReceiptScanView: View {
     private var itemsSection: some View {
         Section(tr("3. 菜品明细", "3. Items", "3. Butiran item")) {
             if !scanNotice.isEmpty { Text(scanNotice).font(.caption).foregroundStyle(.orange) }
+            if let receiptImage {
+                DisclosureGroup(tr("对照收据照片", "Compare receipt photo", "Banding foto resit")) {
+                    Image(uiImage: receiptImage).resizable().scaledToFit()
+                }
+            }
             ForEach($items) { item in itemRow(item) }
             Button(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal")) { items.append(ScannedReceipt.Item(name: "", amount: "")) }
             if !items.isEmpty {
