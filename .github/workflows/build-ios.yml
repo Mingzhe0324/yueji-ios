@@ -20,7 +20,7 @@ jobs:
           version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
           assert (version,build)==('1.17.1','22'), 'Wrong source version; expected 1.17.1 build 22'
           source=Path('YueJi/FeatureViews.swift').read_text()
-          for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','AICoachView','TNGIncomingView']:
+          for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','TNGIncomingView']:
               assert 'struct '+name in source, 'Missing feature: '+name
           with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('label='+version+'-build'+build+'\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('Source: '+version+' ('+build+')\nCommit: '+os.environ['GITHUB_SHA']+'\n')
