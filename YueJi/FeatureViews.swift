@@ -103,7 +103,7 @@ struct RecurringView: View {
                     }
                 }
             }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: paused).yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.inline)
-                .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
+                .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(isPresented: $adding) { RecurringEditor(original: nil) }
                 .sheet(item: $editing) { RecurringEditor(original: $0) }
                 .confirmationDialog(tr("删除固定项目？已入账记录会保留。", "Delete schedule? Recorded entries will stay.", "Padam jadual? Rekod sedia ada dikekalkan."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
@@ -395,7 +395,7 @@ struct FriendDetailView: View {
                     }
                     Button(tr("记录收款", "Record money received", "Rekod wang diterima")) {
                         do { let n = try toCents(amount); try LocalStore.shared.change { try $0.batchRepay(friend: key, cents: n, date: date) }; model.reload(); model.showSaved(); amount = "" } catch { self.error = error.localizedDescription }
-                    }.disabled(friend.owed == 0)
+                    }.disabled(friend.owed == 0).guideTarget("friend.repay")
                     Text(tr("收到的款项会优先抵扣最早的欠款。", "Receipts settle the oldest outstanding entries first.", "Penerimaan melangsaikan hutang tertua dahulu.")).font(.caption).foregroundStyle(.secondary)
                 }
                 ForEach(model.ledger.expenses.filter { $0.shares.contains { friendKey($0.name) == key } }.sorted { $0.date < $1.date }) { e in
@@ -1060,7 +1060,7 @@ struct TNGInboxView: View {
                         if item.cents != nil { Text(tngSignedAmount(item)).foregroundStyle(item.kind == "incoming" ? Color.green : Color.primary) }
                         Text(dateLabel(item.date, time: true)).font(.caption)
                     }
-                }
+                }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
             }
             if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入 TNG 通知。", "Waiting for TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
@@ -1676,6 +1676,7 @@ struct ReceiptCamera: UIViewControllerRepresentable {
 }
 
 struct ReceiptScanView: View {
+    @Environment(\.accessibilityReduceMotion) private var guideReduceMotion
     var guideSection: Int? = nil
     @EnvironmentObject var model: LedgerModel
     @State private var photo: PhotosPickerItem?
@@ -1749,7 +1750,7 @@ struct ReceiptScanView: View {
         Section {
             Button { camera = true } label: { Label(tr("扫描收据", "Scan receipt", "Imbas resit"), systemImage: "doc.viewfinder") }
                 .disabled(!VNDocumentCameraViewController.isSupported || busy)
-            PhotosPicker(selection: $photo, matching: .images) { Label(tr("选择收据照片", "Choose receipt photo", "Pilih foto resit"), systemImage: "photo") }.disabled(busy)
+            PhotosPicker(selection: $photo, matching: .images) { Label(tr("选择收据照片", "Choose receipt photo", "Pilih foto resit"), systemImage: "photo") }.disabled(busy).guideTarget("receipt.photo")
             Text(tr("把整张收据放入画面，调整四角再保存；每次只扫描一张。", "Fit the full receipt in the frame, adjust its corners, then save. Scan one page at a time.", "Letakkan seluruh resit dalam bingkai, laraskan penjuru dan simpan. Imbas satu halaman sahaja.")).font(.caption).foregroundStyle(.secondary)
             if busy { ProgressView(tr("正在识别并核对金额…", "Reading and checking amounts…", "Membaca dan menyemak amaun…")) }
             if let receiptImage {
@@ -1762,9 +1763,9 @@ struct ReceiptScanView: View {
     private var reviewSection: some View {
         Section(tr("1. 核对收据", "1. Review receipt", "1. Semak resit")) {
             LabeledContent(tr("商家", "Merchant", "Peniaga")) {
-                TextField(tr("商家名称", "Merchant name", "Nama peniaga"), text: $merchant).multilineTextAlignment(.trailing)
+                TextField(tr("商家名称", "Merchant name", "Nama peniaga"), text: $merchant).multilineTextAlignment(.trailing).guideTarget("receipt.merchant")
             }
-            DatePicker(tr("消费日期", "Receipt date", "Tarikh resit"), selection: Binding(get: { date }, set: { date = $0; dateMissing = false }), displayedComponents: .date)
+            DatePicker(tr("消费日期", "Receipt date", "Tarikh resit"), selection: Binding(get: { date }, set: { date = $0; dateMissing = false }), displayedComponents: .date).guideTarget("receipt.date")
             if dateMissing { Text(tr("没有识别到日期，请按收据调整日期。", "Date not found. Set the date shown on the receipt.", "Tarikh tidak dikesan. Tetapkan tarikh pada resit.")).font(.caption).foregroundStyle(.orange) }
             amountRow(tr("商品小计", "Items subtotal", "Subjumlah item"), $subtotal)
             amountRow(tr("税费（SST / GST）", "Tax (SST / GST)", "Cukai (SST / GST)"), $tax)
@@ -1773,7 +1774,7 @@ struct ReceiptScanView: View {
                 amountRow(tr("折扣", "Discount", "Diskaun"), $discount)
                 amountRow(tr("舍入调整（可为负数）", "Rounding (+ / −)", "Pembundaran (+ / −)"), $rounding, signed: true)
             }
-            amountRow(tr("实付总额", "Paid total", "Jumlah akhir"), $printedTotal)
+            amountRow(tr("实付总额", "Paid total", "Jumlah akhir"), $printedTotal).guideTarget("receipt.total")
             Text(tr("金额均为 RM；请对照照片核对。", "All amounts are in RM. Check against your photo.", "Semua amaun dalam RM. Semak dengan foto.")).font(.caption).foregroundStyle(.secondary)
         }
     }
@@ -1791,7 +1792,7 @@ struct ReceiptScanView: View {
                         .accessibilityLabel(tr("移除朋友", "Remove friend", "Buang rakan"))
                 }
             }
-            Button(tr("添加朋友", "Add friend", "Tambah rakan")) { friends.append(ReceiptPerson(name: "")) }.disabled(friends.count >= 20)
+            Button(tr("添加朋友", "Add friend", "Tambah rakan")) { friends.append(ReceiptPerson(name: "")) }.disabled(friends.count >= 20).guideTarget("receipt.people")
             Picker(tr("怎样分账", "Split method", "Cara bahagi"), selection: $byItem) {
                 Text(tr("按各自点的菜", "By items", "Ikut item")).tag(true)
                 Text(tr("全部均分", "Split equally", "Sama rata")).tag(false)
@@ -1852,8 +1853,10 @@ struct ReceiptScanView: View {
                     Image(uiImage: receiptImage).resizable().scaledToFit()
                 }
             }
-            ForEach($items) { item in itemRow(item) }
-            Button(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal")) { items.append(ScannedReceipt.Item(name: "", amount: "")) }
+            ForEach($items) { item in
+                itemRow(item).guideTarget("receipt.item\(items.firstIndex(where: { $0.id == item.wrappedValue.id }) ?? 0)")
+            }
+            Button(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal")) { items.append(ScannedReceipt.Item(name: "", amount: "")) }.guideTarget("receipt.items")
             if !items.isEmpty {
                 let sum = items.reduce(0) { $0 + ((try? optionalMoney($1.amount)) ?? 0) }
                 LabeledContent(tr("商品合计", "Items total", "Jumlah item"), value: money(sum))
@@ -1934,8 +1937,10 @@ struct ReceiptScanView: View {
                              ScannedReceipt.Item(name: "Noodles", amount: "15.00", people: [amy.id])]
                     hasReceipt = true
                 }
-                do { try await Task.sleep(for: .milliseconds(200)) } catch { return }
-                proxy.scrollTo(section, anchor: .top)
+                do { try await Task.sleep(for: .milliseconds(section == 2 ? 400 : 200)) } catch { return }
+                withAnimation(guideReduceMotion ? nil : .easeInOut(duration: 0.8)) {
+                    proxy.scrollTo(section, anchor: .top)
+                }
             }
         }
 

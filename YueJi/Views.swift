@@ -107,6 +107,7 @@ struct MonthPicker: View {
     private func shift(_ n: Int) { UISelectionFeedbackGenerator().selectionChanged(); withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9)) { month = shiftedMonth(month, by: n) } }
 }
 struct DashboardView: View {
+    var guideFocus: String? = nil
     @Namespace private var navigationMotion
     @EnvironmentObject var model: LedgerModel
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
@@ -121,6 +122,7 @@ struct DashboardView: View {
     private var owed: Int { model.ledger.expenses.flatMap(\.shares).reduce(0) { $0 + max(0, $1.owed) } }
     var body: some View {
         NavigationStack {
+            ScrollViewReader { guideScroll in
             ScrollView {
                 VStack(spacing: 24) {
                     PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
@@ -133,7 +135,7 @@ struct DashboardView: View {
                             Text(tr("日常工具", "Everyday tools", "Alat harian")).font(.headline)
                             NavigationLink { ReceiptScanView() } label: {
                                 SimpleSettingsRow(title: tr("收据分账", "Receipt split", "Bahagi resit"), subtitle: tr("扫一张收据，按各自点的菜分", "Scan a receipt and split by dishes", "Imbas resit, bahagi ikut item"), symbol: "doc.viewfinder", color: .blue)
-                            }
+                            }.guideTarget("dashboard.receipt").id("dashboard.receipt")
                             Divider()
                             NavigationLink { AutomationSetupView() } label: {
                                 SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
@@ -146,6 +148,11 @@ struct DashboardView: View {
                             .frame(maxWidth: .infinity, minHeight: 44)
                     }.yuejiPrimaryButton().buttonBorderShape(.capsule)
                 }.padding(24).frame(maxWidth: 640).frame(maxWidth: .infinity)
+            }
+            .task(id: guideFocus) {
+                guard model.isPreview, let guideFocus else { return }
+                do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                withAnimation(.easeInOut(duration: 0.85)) { guideScroll.scrollTo(guideFocus, anchor: .center) }
             }
             .background(Color(uiColor: .systemGroupedBackground))
             .navigationTitle(tr("概览", "Overview", "Ringkasan")).navigationBarTitleDisplayMode(.inline)
@@ -166,6 +173,7 @@ struct DashboardView: View {
                         .contentShape(Rectangle())
                 }
                 .yuejiPrimaryButton().buttonBorderShape(.capsule)
+                .guideTarget("dashboard.add")
                 .padding(.horizontal, 24).padding(.vertical, 10)
                 .background(.bar)
             }
@@ -175,6 +183,7 @@ struct DashboardView: View {
                 Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); model.change { $0.budgets[monthKey(month)] = n } } catch { model.error = error.localizedDescription } }
                 Button(tr("移除预算", "Remove budget", "Buang bajet"), role: .destructive) { model.change { $0.budgets.removeValue(forKey: monthKey(month)) } }
                 Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+            }
             }
         }
     }
@@ -370,7 +379,7 @@ struct ExpensesView: View {
                             Text(String(entries.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
-                                .buttonStyle(.borderless).font(.subheadline)
+                                .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
                         }
                     }.padding(.vertical, 6)
                 }
@@ -393,6 +402,7 @@ struct ExpensesView: View {
                     Section {
                         ForEach(day.entries) { entry in
                             Button { editing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
+                                .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .swipeActions { Button(tr("删除", "Delete", "Padam"), role: .destructive) { deleting = entry } }
                         }
                     } header: { Text(dateLabel(day.date)) }
@@ -486,7 +496,7 @@ struct ExpenseEditor: View {
                     Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
                 }.disabled((original?.refunded ?? 0) > 0)
                 Section {
-                    Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting)
+                    Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
                     if splitting {
                         Toggle(tr("行程油费", "Trip fuel cost", "Kos minyak perjalanan"), isOn: $fuel).onChange(of: fuel) { _, value in if value { category = "交通" } }
                         Picker(tr("分摊方式", "Split method", "Cara pembahagian"), selection: $equal) { Text(tr("平均", "Equal", "Sama rata")).tag(true); Text(tr("自定", "Custom", "Tersuai")).tag(false) }.pickerStyle(.segmented)
@@ -618,6 +628,7 @@ struct FriendsView: View {
                     }
                     ForEach(visible) { friend in
                         NavigationLink { FriendDetailView(key: friend.id) } label: { FriendBalanceRow(friend: friend) }
+                            .guideTarget(friend.id == "amy" ? "friends.person" : "friends.other")
                     }
                 }
                 Section {
@@ -737,7 +748,7 @@ struct SettingsView: View {
                 Section {
                     NavigationLink { appearancePage } label: {
                         SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
-                    }
+                    }.guideTarget("settings.appearance")
                     NavigationLink { NotificationSettingsView() } label: {
                         SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("预算、每日记账", "Budget and daily reminders", "Bajet dan peringatan harian"), symbol: "bell.fill", color: .orange)
                     }
@@ -756,7 +767,7 @@ struct SettingsView: View {
                 Section {
                     NavigationLink { backupPage } label: {
                         SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: .indigo)
-                    }
+                    }.guideTarget("settings.backup")
                     NavigationLink { aboutPage } label: {
                         SimpleSettingsRow(title: tr("关于月记", "About YueJi", "Tentang YueJi"), subtitle: installedVersionLabel, symbol: "info.circle.fill", color: .gray)
                     }
@@ -842,16 +853,23 @@ struct ShortcutSetupGuide: View {
     var previewStep: Int? = nil
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @Environment(\.openURL) private var openURL
+    @StateObject private var demo = LedgerModel(previewLedger: GuideSample.ledger())
     @State private var step = 0
-    @State private var playing = true
+    @State private var gesturePhase = 0
+    @State private var gestureStep = 0
     private var modern: Bool { ProcessInfo.processInfo.operatingSystemVersion.majorVersion >= 27 }
     private var title: String { provider == .applePay ? tr("Apple Pay 设置演示", "Apple Pay walkthrough", "Panduan Apple Pay") : tr("TNG 设置演示", "TNG walkthrough", "Panduan TNG") }
     private var actionName: String { provider == .applePay ? tr("记录 Apple Pay 支出", "Record Apple Pay expense", "Rekod belanja Apple Pay") : tr("记录 TNG 通知", "Record TNG notification", "Rekod notifikasi TNG") }
     private var headings: [String] { [tr("添加月记动作", "Add YueJi's action", "Tambah tindakan YueJi"), tr("选择触发方式", "Choose the trigger", "Pilih pencetus"), tr("接好交易资料", "Connect the fields", "Sambungkan medan"), tr("允许自动运行", "Allow automatic runs", "Benarkan jalan automatik"), tr("回月记核对", "Check in YueJi", "Semak dalam YueJi")] }
-    private var selection: Binding<Int> { Binding(get: { step }, set: { step = $0; playing = false }) }
+    private var selection: Binding<Int> { Binding(get: { step }, set: { step = $0 }) }
     private var unavailable: Bool { provider == .tng && !modern }
-
+    private var chapter: GuideChapter? { GuideChapter.all.first { $0.id == (provider == .applePay ? "applePay" : "tng") } }
+    private func action(for page: Int) -> GuideGesture? {
+        guard let chapter else { return nil }
+        return GuideGesture.actions(chapter: chapter, stage: page + 1).dropFirst(gestureStep).first
+    }
     var body: some View {
         Group {
             if let previewStep {
@@ -859,42 +877,55 @@ struct ShortcutSetupGuide: View {
             } else if unavailable {
                 ContentUnavailableView(tr("需要通知触发器", "Notification trigger required", "Pencetus notifikasi diperlukan"), systemImage: "bell.badge", description: Text(tr("此演示使用 iOS 27 的通知自动化。当前系统没有这个入口时，可继续手动记账。", "This walkthrough uses iOS 27 notification automations. If your system does not have this trigger, use manual recording.", "Panduan ini menggunakan automasi notifikasi iOS 27. Jika pencetus tiada, guna rekod manual.")))
             } else {
-                VStack(spacing: 12) {
-                    HStack {
-                        Text("\(step + 1) / 5").monospacedDigit()
-                        Spacer()
-                        Button {
-                            if !playing && step == 4 { step = 0 }
-                            playing.toggle()
-                        } label: { Label(playing ? tr("暂停", "Pause", "Jeda") : tr("播放", "Play", "Main"), systemImage: playing ? "pause.fill" : "play.fill") }
-                    }.font(.subheadline).padding(.horizontal, 24)
+                GeometryReader { geometry in
                     TabView(selection: selection) {
                         ForEach(0..<5) { index in
-                            ScrollView { slide(index).padding(24) }.tag(index)
+                            ScrollView {
+                                VStack(spacing: 18) {
+                                    GuideScreenFrame(screen: provider == .applePay ? .applePay(index) : .tngSetup(index), action: index == step ? action(for: index) : nil, gesturePhase: index == step ? gesturePhase : 0)
+                                        .environmentObject(demo)
+                                        .frame(height: min(470, max(280, geometry.size.height * 0.65)))
+                                    Text(headings[index]).font(.title2.bold())
+                                    Text(note(index)).font(.subheadline).foregroundStyle(.secondary)
+                                        .lineLimit(3)
+                                    Button(tr("打开快捷指令", "Open Shortcuts", "Buka Pintasan")) {
+                                        if let url = URL(string: "shortcuts://") { openURL(url) }
+                                    }.buttonStyle(.bordered).buttonBorderShape(.capsule)
+                                }
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 26).padding(.vertical, 16)
+                                .frame(maxWidth: .infinity)
+                            }.tag(index)
                         }
-                    }.tabViewStyle(.page(indexDisplayMode: .always))
-                    HStack {
-                        Button { selection.wrappedValue = max(0, step - 1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
-                            .disabled(step == 0).accessibilityLabel(tr("上一步", "Previous step", "Langkah sebelum"))
-                        Spacer()
-                        Button(tr("打开快捷指令", "Open Shortcuts", "Buka Pintasan")) {
-                            playing = false
-                            if let url = URL(string: "shortcuts://") { openURL(url) }
-                        }.buttonStyle(.borderedProminent).buttonBorderShape(.capsule)
-                        Spacer()
-                        Button { selection.wrappedValue = min(4, step + 1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
-                            .disabled(step == 4).accessibilityLabel(tr("下一步", "Next step", "Langkah seterusnya"))
-                    }.padding(.horizontal, 20).padding(.bottom, 12)
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .always))
+                    .indexViewStyle(.page(backgroundDisplayMode: .always))
                 }
             }
         }
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(Color(uiColor: .systemBackground))
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
-        .task(id: "\(step)-\(playing)") {
-            guard previewStep == nil, !model.isPreview, !unavailable, playing, step < 4 else { return }
-            do { try await Task.sleep(for: .seconds(5)) } catch { return }
+        .task(id: "\(step)-\(scenePhase)") {
+            gesturePhase = 0
+            gestureStep = 0
+            guard previewStep == nil, !model.isPreview, !unavailable, scenePhase == .active, let chapter else { return }
+            let actions = GuideGesture.actions(chapter: chapter, stage: step + 1)
+            if actions.isEmpty {
+                do { try await Task.sleep(for: .seconds(2)) } catch { return }
+            } else {
+                for index in actions.indices {
+                    guard !Task.isCancelled else { return }
+                    gestureStep = index
+                    gesturePhase = 0
+                    do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.65)) { gesturePhase = 1 }
+                    do { try await Task.sleep(for: .milliseconds(720)) } catch { return }
+                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) { gesturePhase = 2 }
+                    do { try await Task.sleep(for: .milliseconds(480)) } catch { return }
+                }
+            }
             guard !Task.isCancelled else { return }
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) { step += 1; if step == 4 { playing = false } }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.42)) { step = (step + 1) % 5 }
         }
     }
 
@@ -955,7 +986,7 @@ struct ShortcutSetupGuide: View {
                     row("月记 / YueJi", tr("运行记录", "Activity log", "Log aktiviti"), focused: true, symbol: "list.bullet.rectangle")
                     row(tr("账本", "Ledger", "Lejar"), tr("核对金额和商户", "Check amount and merchant", "Semak amaun dan peniaga"), symbol: "checkmark.circle")
                 }
-            }.padding(16).ledgerGlass()
+            }.padding(16).ledgerGlass().guideTarget("shortcut.steps")
             Text(note(index)).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             if index == 4 && previewStep == nil {
                 NavigationLink(tr("查看运行记录", "View activity log", "Lihat log aktiviti")) { AutomationStatusView() }
@@ -1020,10 +1051,10 @@ struct AutomationSetupView: View {
             Section {
                 NavigationLink { ShortcutHelpView() } label: {
                     SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: .blue)
-                }
+                }.guideTarget("automation.apple")
                 NavigationLink { TNGInboxView() } label: {
                     SimpleSettingsRow(title: "TNG eWallet", subtitle: tr("通知接入与待确认", "Notification setup & review", "Persediaan notifikasi & semakan"), symbol: "bell.badge.fill", color: .teal)
-                }
+                }.guideTarget("automation.tng")
             } footer: { Text(tr("先在快捷指令完成设置，再用实际运行记录确认结果。", "Set up Shortcuts, then verify actual results in the log.", "Sediakan Pintasan, kemudian sahkan hasil sebenar dalam log.")) }
             Section {
                 NavigationLink(tr("查看运行记录", "View activity log", "Lihat log aktiviti")) { AutomationStatusView() }
@@ -1087,7 +1118,7 @@ extension View {
 }
 
 private enum GuideScreen: Hashable {
-    case overview, tools, newExpense, foreignExpense, ledger, filter, editExpense, refund, receipt(Int), splitEditor
+    case overview, receiptEntry, tools, newExpense, foreignExpense, ledger, filter, editExpense, refund, receipt(Int), splitEditor
     case friends, friendSummary, friendDetail, repayment, history, friendSpending, statement, trip
     case recurring, recurringEditor, upcoming, comparison, duplicates
     case automation, applePay(Int), tng, tngPayment, tngIncoming, tngSetup(Int), logs
@@ -1103,29 +1134,16 @@ private struct GuideChapter: Identifiable {
     let screens: [GuideScreen]
     static var all: [GuideChapter] {
         [
-            .init(id: "expense", title: tr("记一笔", "Add an expense", "Tambah belanja"), path: tr("概览 → 记一笔 → 保存", "Overview → Add expense → Save", "Ringkasan → Tambah belanja → Simpan"), detail: tr("填写商户、币种、金额、日期和分类；保存后到账本查看。", "Enter merchant, currency, amount, date and category; review the saved entry in Ledger.", "Isi peniaga, mata wang, amaun, tarikh dan kategori; semak rekod dalam Lejar."), screens: [.overview, .newExpense, .ledger]),
-            .init(id: "ledger", title: tr("搜索、筛选与编辑", "Find and edit entries", "Cari dan edit rekod"), path: tr("账本 → 搜索／筛选 → 点账目", "Ledger → Search / Filter → Entry", "Lejar → Cari / Tapis → Rekod"), detail: tr("切换月份、搜索商家或分类，按金额和分账状态筛选；点账目编辑，左滑可删除。", "Change month, search merchants or categories and filter amounts or split status. Tap to edit; swipe left to delete.", "Tukar bulan, cari peniaga atau kategori dan tapis amaun atau status. Ketik untuk edit; leret kiri untuk padam."), screens: [.ledger, .filter, .editExpense]),
-            .init(id: "receipt", title: tr("扫描并核对收据", "Scan and review", "Imbas dan semak"), path: tr("概览 → 收据分账", "Overview → Receipt split", "Ringkasan → Bahagi resit"), detail: tr("扫描收据或选择照片，再核对消费日期、小计、税费、服务费、折扣、舍入和实付总额。", "Scan or choose a photo. Review date, subtotal, tax, service, discount, rounding and paid total.", "Imbas atau pilih foto. Semak tarikh, subjumlah, cukai, caj, diskaun, pembundaran dan jumlah akhir."), screens: [.overview, .receipt(0), .receipt(1)]),
-            .init(id: "dishes", title: tr("按菜品分账", "Split by dishes", "Bahagi ikut item"), path: tr("收据分账 → 谁一起吃？ → 菜品明细", "Receipt split → Who is sharing? → Items", "Bahagi resit → Siapa berkongsi? → Item"), detail: tr("添加朋友，选择按菜或均分；点“谁吃这道菜？”选人，共享可选多人。名称和金额可改，也能补漏项或合并续行名称。", "Add friends; choose items or equal split. Choose people for each dish, including shared items. Edit names and amounts, add missing items or join wrapped names.", "Tambah rakan; pilih ikut item atau sama rata. Pilih pemakan setiap item. Edit nama dan amaun, tambah item atau gabung nama."), screens: [.receipt(2), .receipt(3)]),
-            .init(id: "receiptSave", title: tr("核对每人应付", "Review each share", "Semak setiap bahagian"), path: tr("收据分账 → 每人应付 → 保存分账", "Receipt split → Each person pays → Save split", "Bahagi resit → Bayaran setiap orang → Simpan"), detail: tr("查看餐费及税费调整。已有付款时选原账目；勾选已核对后保存，避免重复新增。", "Review food and charge allocations. Select an existing payment when applicable, confirm review and save.", "Semak makanan dan pelarasan caj. Pilih bayaran asal jika ada, sahkan semakan dan simpan."), screens: [.receipt(3), .receipt(4), .friends]),
-            .init(id: "manualSplit", title: tr("代垫与手动分账", "Advances and manual splits", "Pendahuluan dan pembahagian"), path: tr("分账 → 新增代垫／账本 → 编辑 → 朋友分账", "Friends → Add advance / Ledger → Edit → Split with friends", "Rakan → Tambah pendahuluan / Lejar → Edit → Bahagi"), detail: tr("开启朋友分账，选择平均或自定金额，填写朋友姓名；可选择自己是否参与均分。", "Enable splitting, choose equal or custom shares and enter names. For equal splits, choose whether to include yourself.", "Aktifkan pembahagian, pilih sama rata atau tersuai dan isi nama; pilih sama ada termasuk diri sendiri."), screens: [.friends, .splitEditor, .history]),
-            .init(id: "repayment", title: tr("记录还款与撤销", "Repayments and undo", "Bayaran balik dan batal"), path: tr("分账 → 朋友 → 记录收款／单笔还款", "Friends → Friend → Record money received / Repay this entry", "Rakan → Rakan → Rekod bayaran balik"), detail: tr("可按朋友批量还款，也可逐笔记录。填写本次收到金额和日期，余款保留；记录有误可撤销。退款后多收的款项可退回朋友。", "Record a friend's repayment in bulk or per entry. Enter amount and date; the remaining balance stays. Undo mistakes or return overpayments after refunds.", "Rekod bayaran rakan secara pukal atau setiap rekod. Isi amaun dan tarikh; baki kekal. Batalkan kesilapan atau pulangkan lebihan."), screens: [.friends, .friendDetail, .repayment, .history]),
-            .init(id: "friendReports", title: tr("朋友消费与账单", "Friend reports", "Laporan rakan"), path: tr("分账 → 朋友 → 消费概览／分享朋友账单", "Friends → Friend details → Spending / Statement", "Rakan → Butiran → Belanja / Penyata"), detail: tr("查看未结清、已结清、朋友份额与还款记录；按月或全部月份查看，分享朋友账单。", "Review outstanding and settled balances, shares and repayments. View one or all months and share a statement.", "Semak baki belum selesai, bahagian dan bayaran. Lihat satu atau semua bulan dan kongsi penyata."), screens: [.friendSummary, .friendDetail, .friendSpending, .statement]),
-            .init(id: "refunds", title: tr("退款与分配", "Refunds", "Bayaran balik belian"), path: tr("账本 → 点账目 → 退款记录", "Ledger → Entry → Refunds", "Lejar → Rekod → Bayaran balik"), detail: tr("填写退款金额和日期，按比例或自定分配给自己与朋友；核对分配后保存，错误退款可撤销。", "Enter refund amount and date; allocate proportionally or customize shares. Review before saving; incorrect refunds can be undone.", "Isi amaun dan tarikh; agih mengikut nisbah atau tersuai. Semak sebelum simpan; kesilapan boleh dibatalkan."), screens: [.ledger, .editExpense, .refund]),
-            .init(id: "trip", title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), path: tr("分账 → 行程分摊", "Friends → Split a trip", "Rakan → Bahagi perjalanan"), detail: tr("输入里程、油耗、油价、停车费和过路费；选择同行人数，可保存常用资料、分享估算，再确认保存到账本。", "Enter distance, fuel use, price, parking and tolls. Choose companions, save defaults, share an estimate and review before recording.", "Isi jarak, penggunaan minyak, harga, parkir dan tol. Pilih rakan, simpan tetapan, kongsi anggaran dan semak rekod."), screens: [.friends, .trip]),
-            .init(id: "recurring", title: tr("固定消费", "Recurring expenses", "Belanja berulang"), path: tr("固定 → ＋ → 保存", "Recurring → + → Save", "Berulang → + → Simpan"), detail: tr("填写金额、币种、周期和首次日期；可手动入账、开启自动补记、暂停、编辑或删除计划。删除计划保留已入账记录。", "Set amount, currency, cycle and start date. Record manually, enable catch-up, pause, edit or delete a schedule. Posted entries remain.", "Tetapkan amaun, mata wang, kitaran dan tarikh. Rekod manual, aktifkan automatik, jeda, edit atau padam jadual; rekod lama kekal."), screens: [.recurring, .recurringEditor, .recurring]),
-            .init(id: "upcoming", title: tr("固定消费预览", "Upcoming bills", "Bil akan datang"), path: tr("概览 → 更多工具 → 固定消费预览", "Overview → More tools → Upcoming bills", "Ringkasan → Alat lain → Bil akan datang"), detail: tr("按月查看即将到期和未入账的固定消费，再回固定页面处理计划。", "Review due and unrecorded recurring expenses by month, then manage schedules in Recurring.", "Semak belanja berulang mengikut bulan, kemudian urus jadual di Berulang."), screens: [.tools, .upcoming, .recurring]),
-            .init(id: "budget", title: tr("预算与消费对比", "Budget and comparisons", "Bajet dan perbandingan"), path: tr("概览 → 设置预算／更多工具 → 月度消费对比", "Overview → Set budget / More tools → Monthly comparison", "Ringkasan → Bajet / Alat lain → Perbandingan bulanan"), detail: tr("切换月份并设置该月预算，查看已用及剩余；对比两个月的个人净消费和分类变化。", "Choose a month and set its budget. Review spending and remaining budget; compare personal net spending and categories across months.", "Pilih bulan dan tetapkan bajet. Semak belanja dan baki; banding belanja bersih serta kategori antara bulan."), screens: [.overview, .tools, .comparison]),
-            .init(id: "duplicates", title: tr("检查重复账目", "Review duplicates", "Semak pendua"), path: tr("账本 → ⋯ → 检查重复账目", "Ledger → … → Review duplicates", "Lejar → … → Semak pendua"), detail: tr("对照疑似重复的付款，确认后再处理；不同的真实付款可以标记为非重复。", "Compare possible duplicate payments before acting; mark distinct real payments as not duplicates.", "Banding bayaran yang mungkin pendua; tandakan bayaran berasingan sebagai bukan pendua."), screens: [.ledger, .duplicates]),
-            .init(id: "automation", title: tr("自动记账入口", "Automatic recording", "Rekod automatik"), path: tr("概览／设置 → 自动记账", "Overview / Settings → Automatic recording", "Ringkasan / Tetapan → Rekod automatik"), detail: tr("选择 Apple Pay 或 TNG 的现有设置说明，并在运行记录核对结果；指南只展示月记里的入口。", "Open the existing Apple Pay or TNG setup instructions and check the activity log. This guide shows the in-app screens.", "Buka panduan Apple Pay atau TNG dan semak log aktiviti. Panduan ini menunjukkan skrin aplikasi."), screens: [.automation, .applePay(0), .applePay(1), .applePay(2), .applePay(3), .applePay(4), .tngSetup(0), .tngSetup(1), .tngSetup(2), .tngSetup(3), .tngSetup(4), .logs]),
-            .init(id: "tng", title: tr("TNG 待确认与收款", "TNG review and receipts", "Semakan dan penerimaan TNG"), path: tr("自动记账 → TNG eWallet → 点通知", "Automatic recording → TNG eWallet → Notice", "Rekod automatik → TNG eWallet → Notifikasi"), detail: tr("检查付款和疑似重复通知。收到转账显示＋，确认是朋友还款、其他收入、自己转入或忽略；确认后仍可撤销用途。", "Review payments and possible duplicates. Incoming money shows +; confirm repayment, income, own transfer or ignore. Confirmation can be undone.", "Semak bayaran dan pendua. Wang masuk bertanda +; sahkan bayaran rakan, pendapatan, pindahan sendiri atau abaikan. Pengesahan boleh dibatal."), screens: [.tng, .tngPayment, .tngIncoming]),
-            .init(id: "categories", title: tr("分类与商户规则", "Categories and merchant rules", "Kategori dan peraturan"), path: tr("设置 → 分类与规则", "Settings → Categories & rules", "Tetapan → Kategori & peraturan"), detail: tr("管理自定义分类、图标和颜色。编辑账目分类会记住该商户用于未来入账，可查看或删除商户规则。", "Manage custom categories, icons and colors. Changing an entry's category creates a future merchant rule; review or delete rules here.", "Urus kategori, ikon dan warna. Kategori rekod menjadi peraturan peniaga untuk rekod akan datang; semak atau padam peraturan."), screens: [.categoriesMenu, .categories, .categoryEditor, .rules]),
-            .init(id: "currency", title: tr("外币与汇率", "Currencies and rates", "Mata wang dan kadar"), path: tr("设置 → 币种与汇率", "Settings → Currencies & rates", "Tetapan → Mata wang & kadar"), detail: tr("获取参考汇率或填写实际汇率；记录外币时查看 MYR 换算，已保存的历史账目保留原汇率。", "Fetch a reference rate or enter an actual rate. Review MYR conversion when recording foreign amounts; existing entries keep their rate.", "Dapatkan kadar rujukan atau isi kadar sebenar. Semak penukaran MYR; rekod lama mengekalkan kadar asal."), screens: [.settings, .rates, .foreignExpense]),
-            .init(id: "reminders", title: tr("提醒与通知", "Reminders and notifications", "Peringatan dan notifikasi"), path: tr("设置 → 提醒与通知", "Settings → Reminders & notifications", "Tetapan → Peringatan & notifikasi"), detail: tr("设置每日记账时间、预算提醒比例、自动化结果通知及通知隐私；可打开 iPhone 通知设置。", "Choose daily reminder time, budget threshold, automation result notifications and notification privacy; open iPhone notification settings if needed.", "Tetapkan masa peringatan, ambang bajet, notifikasi automasi dan privasi; buka tetapan notifikasi iPhone jika perlu."), screens: [.settings, .notifications]),
-            .init(id: "appearance", title: tr("外观与语言", "Appearance and language", "Paparan dan bahasa"), path: tr("设置 → 外观与语言", "Settings → Appearance & language", "Tetapan → Paparan & bahasa"), detail: tr("切换简体中文、English 或 Bahasa Melayu；选择浅色、深色或跟随系统。", "Choose Chinese, English or Malay and light, dark or system appearance.", "Pilih bahasa Cina, Inggeris atau Melayu serta paparan cerah, gelap atau sistem."), screens: [.settings, .appearance]),
-            .init(id: "backup", title: tr("备份与恢复", "Back up and restore", "Sandaran dan pemulihan"), path: tr("设置 → 备份与导出", "Settings → Backups & export", "Tetapan → Sandaran & eksport"), detail: tr("导出完整 JSON 备份；恢复前先看预览，再确认替换。可查看本机历史备份，并在需要时恢复上次导入前的数据。", "Export a full JSON backup. Preview before confirming a restore. Review local snapshots and recover pre-import data when available.", "Eksport sandaran JSON penuh. Pratonton sebelum sahkan pemulihan. Semak sandaran tempatan dan data sebelum import jika ada."), screens: [.settings, .backups, .restore]),
-            .init(id: "export", title: tr("导出账单", "Export statements", "Eksport penyata"), path: tr("设置 → 备份与导出 → 导出 Excel／CSV", "Settings → Backups & export → Export Excel / CSV", "Tetapan → Sandaran & eksport → Eksport Excel / CSV"), detail: tr("选择月份或全部记录，导出消费及分账数据用于表格查看；完整恢复请使用 JSON 备份。", "Choose a month or all entries and export expense and split data for spreadsheets. Use JSON backups for full restores.", "Pilih satu bulan atau semua rekod untuk eksport belanja dan pembahagian. Guna JSON untuk pemulihan penuh."), screens: [.backups, .csv, .statement]),
-            .init(id: "help", title: tr("版本与重播指南", "Version and replay", "Versi dan ulang panduan"), path: tr("设置 → 关于月记／使用指南", "Settings → About YueJi / Getting started", "Tetapan → Tentang YueJi / Panduan"), detail: tr("查看当前版本；以后可随时从设置重播。左右滑动切换章节，或用目录、上一页、下一页和暂停按钮。", "Check your version and replay anytime from Settings. Swipe between chapters or use Contents, Previous, Next and Pause.", "Semak versi dan ulang dari Tetapan. Leret antara bab atau guna Kandungan, Sebelum, Seterusnya dan Jeda."), screens: [.about, .settings])
+            .init(id: "expense", title: tr("记一笔", "Add an expense", "Tambah belanja"), path: "", detail: tr("点“记一笔”，填写金额、商家和日期。", "Tap Add expense, then enter an amount, merchant and date.", "Ketik Tambah belanja, isi amaun, peniaga dan tarikh."), screens: [.overview, .newExpense]),
+            .init(id: "ledger", title: tr("看账本", "Find an entry", "Cari rekod"), path: "", detail: tr("到账本查找记录，再按需要筛选。", "Find entries in Ledger and narrow them down with filters.", "Cari rekod dalam Lejar dan tapis jika perlu."), screens: [.ledger, .filter]),
+            .init(id: "receipt", title: tr("扫描收据", "Scan a receipt", "Imbas resit"), path: "", detail: tr("选照片后核对金额和日期，再按菜品分给每个人。画面使用示例收据数据。", "Choose a photo, check the amounts and date, then assign each item. This demonstration uses sample data.", "Pilih foto, semak amaun dan tarikh, lalu bahagi item. Demonstrasi menggunakan data contoh."), screens: [.receiptEntry, .receipt(0), .receipt(1), .receipt(2), .receipt(3), .receipt(4)]),
+            .init(id: "split", title: tr("朋友分账", "Split with friends", "Bahagi bersama rakan"), path: "", detail: tr("从账本打开一笔消费，再按各自份额分账。", "Open an entry in Ledger and assign each friend's share.", "Buka rekod dalam Lejar dan tetapkan bahagian setiap rakan."), screens: [.ledger, .editExpense, .splitEditor]),
+            .init(id: "repayment", title: tr("朋友还款", "Record a repayment", "Rekod bayaran rakan"), path: "", detail: tr("打开朋友的欠款，按实际收到的金额记录还款。", "Open a friend's balance and record the amount received.", "Buka baki rakan dan rekod amaun yang diterima."), screens: [.friends, .friendDetail, .repayment]),
+            .init(id: "recurring", title: tr("固定消费", "Recurring bills", "Belanja berulang"), path: "", detail: tr("新增计划，设置金额、周期和开始日期。", "Add a schedule with its amount, frequency and start date.", "Tambah jadual bersama amaun, kekerapan dan tarikh mula."), screens: [.recurring, .recurringEditor]),
+            .init(id: "applePay", title: tr("Apple Pay 自动记账", "Apple Pay automation", "Automasi Apple Pay"), path: "", detail: tr("在快捷指令选交易触发器，接入月记动作，并核对运行结果。系统画面为设置示意。", "Choose a transaction trigger in Shortcuts, connect YueJi's action and check the result. The system setup is illustrated.", "Pilih pencetus transaksi dalam Pintasan, sambung tindakan YueJi dan semak hasil. Tetapan sistem ialah ilustrasi."), screens: [.automation, .applePay(0), .applePay(1), .applePay(2), .applePay(3), .applePay(4)]),
+            .init(id: "tng", title: tr("TNG 自动记账", "TNG automation", "Automasi TNG"), path: "", detail: tr("在快捷指令选通知触发器，接入月记动作；收到款项记为＋并由你确认。系统画面为设置示意。", "Choose a notification trigger and YueJi's action; incoming money appears as + for your review. The system setup is illustrated.", "Pilih pencetus notifikasi dan tindakan YueJi; wang masuk bertanda + untuk disemak. Tetapan sistem ialah ilustrasi."), screens: [.automation, .tngSetup(0), .tngSetup(1), .tngSetup(2), .tngSetup(3), .tngSetup(4), .tng, .tngIncoming]),
+            .init(id: "settings", title: tr("外观与语言", "Appearance and language", "Paparan dan bahasa"), path: "", detail: tr("在设置中选择语言和外观。", "Choose a language and appearance in Settings.", "Pilih bahasa dan paparan dalam Tetapan."), screens: [.settings, .appearance]),
+            .init(id: "backup", title: tr("备份账本", "Back up your ledger", "Sandarkan lejar"), path: "", detail: tr("从设置打开备份与导出，先保存一份完整备份。", "Open Backups & export in Settings to save a full backup.", "Buka Sandaran & eksport dalam Tetapan untuk menyimpan sandaran penuh."), screens: [.settings, .backups])
         ]
     }
 }
@@ -1149,109 +1167,213 @@ enum GuideSample {
 struct UsageGuideView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var scenePhase
     @StateObject private var preview = LedgerModel(previewLedger: GuideSample.ledger())
     @State private var page = 0
     @State private var stage = 0
-    @State private var playing = true
+    @State private var gesturePhase = 0
+    @State private var gestureStep = 0
     private var chapters: [GuideChapter] { GuideChapter.all }
     private var selection: Binding<Int> {
-        Binding(get: { page }, set: { next in page = next; stage = 0; playing = false })
-    }
-    private var playbackKey: String { "\(page)-\(stage)-\(playing)" }
-    private func move(_ next: Int) {
-        guard chapters.indices.contains(next) else { return }
-        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { selection.wrappedValue = next }
+        Binding(get: { page }, set: { next in page = next; stage = 0 })
     }
     var body: some View {
         NavigationStack {
-            VStack(spacing: 10) {
-                HStack {
-                    Menu {
-                        ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
-                            Button(chapter.title) { move(index) }
-                        }
-                    } label: { Label(tr("目录", "Contents", "Kandungan"), systemImage: "list.bullet") }
-                    Spacer()
-                    Text("\(page + 1) / \(chapters.count) · \(stage + 1) / \(chapters[page].screens.count)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-                }.padding(.horizontal, 24)
+            GeometryReader { geometry in
                 TabView(selection: selection) {
                     ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
                         ScrollView {
-                            VStack(alignment: .leading, spacing: 14) {
-                                Text(chapter.title).font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
-                                Text(chapter.path).font(.caption.weight(.medium)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                            VStack(spacing: 22) {
                                 if abs(index - page) <= 1 {
-                                    GuideScreenFrame(screen: chapter.screens[min(index == page ? stage : 0, chapter.screens.count - 1)])
+                                    GuideScreenFrame(screen: chapter.screens[min(index == page ? stage : 0, chapter.screens.count - 1)], action: index == page ? GuideGesture.actions(chapter: chapter, stage: stage).dropFirst(gestureStep).first : nil, gesturePhase: index == page ? gesturePhase : 0)
                                         .environmentObject(preview)
-                                        .frame(height: 560)
+                                        .frame(height: min(480, max(280, geometry.size.height * 0.65)))
                                 } else {
-                                    Color.clear.frame(height: 560)
+                                    Color.clear.frame(height: min(480, max(280, geometry.size.height * 0.65)))
                                 }
-                                Text(chapter.detail).font(.subheadline).fixedSize(horizontal: false, vertical: true)
-                                Text(tr("真实页面 · 示例数据 · 左右滑动切换章节", "Actual screens · Sample data · Swipe between chapters", "Skrin sebenar · Data contoh · Leret antara bab"))
-                                    .font(.caption).foregroundStyle(.secondary)
-                            }.padding(.horizontal, 24).padding(.vertical, 12).frame(maxWidth: 580).frame(maxWidth: .infinity)
+                                VStack(spacing: 10) {
+                                    Text(chapter.title).font(.title2.bold())
+                                    Text(chapter.detail).font(.subheadline).foregroundStyle(.secondary)
+                                }
+                                .multilineTextAlignment(.center)
+                                .fixedSize(horizontal: false, vertical: true)
+                                .accessibilityElement(children: .combine)
+                            }
+                            .padding(.horizontal, 28).padding(.top, 12).padding(.bottom, 52)
+                            .frame(maxWidth: 560).frame(maxWidth: .infinity)
                         }.tag(index)
                     }
-                }.tabViewStyle(.page(indexDisplayMode: .never))
-                HStack(spacing: 20) {
-                    Button {
-                        playing = false
-                        if stage > 0 { stage -= 1 }
-                        else if page > 0 { page -= 1; stage = chapters[page].screens.count - 1 }
-                    } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
-                        .disabled(page == 0 && stage == 0).accessibilityLabel(tr("上一步", "Previous step", "Langkah sebelum"))
-                    Spacer()
-                    Button {
-                        if !playing && page == chapters.count - 1 && stage == chapters[page].screens.count - 1 { page = 0; stage = 0 }
-                        playing.toggle()
-                    } label: { Label(playing ? tr("暂停演示", "Pause", "Jeda") : tr("自动演示", "Play", "Main"), systemImage: playing ? "pause.fill" : "play.fill") }
-                        .buttonStyle(.bordered).buttonBorderShape(.capsule)
-                    Spacer()
-                    if page == chapters.count - 1 && stage == chapters[page].screens.count - 1 {
-                        Button { dismiss() } label: { Image(systemName: "checkmark").frame(width: 44, height: 44) }
-                            .accessibilityLabel(tr("完成指南", "Finish guide", "Selesai panduan"))
-                    } else {
-                        Button {
-                            playing = false
-                            if stage + 1 < chapters[page].screens.count { stage += 1 }
-                            else { stage = 0; page += 1 }
-                        } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
-                            .accessibilityLabel(tr("下一步", "Next step", "Langkah seterusnya"))
-                    }
-                }.padding(.horizontal, 24).padding(.bottom, 8)
+                }
+                .tabViewStyle(.page(indexDisplayMode: .always))
+                .indexViewStyle(.page(backgroundDisplayMode: .always))
             }
-            .background(Color(uiColor: .systemGroupedBackground))
+            .background(Color(uiColor: .systemBackground))
             .navigationTitle(tr("认识月记", "Meet YueJi", "Kenali YueJi")).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup")) { dismiss() } } }
-            .task(id: playbackKey) {
-                guard playing else { return }
-                do { try await Task.sleep(for: .seconds(4)) } catch { return }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button { dismiss() } label: { Image(systemName: "chevron.left") }
+                        .accessibilityLabel(tr("关闭指南", "Close guide", "Tutup panduan"))
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Menu {
+                        ForEach(Array(chapters.enumerated()), id: \.element.id) { index, chapter in
+                            Button(chapter.title) { selection.wrappedValue = index }
+                        }
+                    } label: { Image(systemName: "list.bullet") }
+                        .accessibilityLabel(tr("目录", "Contents", "Kandungan"))
+                }
+            }
+            .task(id: "\(page)-\(stage)-\(scenePhase)") {
+                gesturePhase = 0
+                gestureStep = 0
+                guard scenePhase == .active else { return }
+                let actions = GuideGesture.actions(chapter: chapters[page], stage: stage)
+                if actions.isEmpty {
+                    do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                } else {
+                    for index in actions.indices {
+                        guard !Task.isCancelled else { return }
+                        gestureStep = index
+                        gesturePhase = 0
+                        do { try await Task.sleep(for: .milliseconds(260)) } catch { return }
+                        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.65)) { gesturePhase = 1 }
+                        do { try await Task.sleep(for: .milliseconds(720)) } catch { return }
+                        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) { gesturePhase = 2 }
+                        do { try await Task.sleep(for: .milliseconds(480)) } catch { return }
+                    }
+                }
                 guard !Task.isCancelled else { return }
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.3)) {
-                    if stage + 1 < chapters[page].screens.count { stage += 1 }
-                    else if page + 1 < chapters.count { stage = 0; page += 1 }
-                    else { playing = false }
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.42)) {
+                    stage = (stage + 1) % chapters[page].screens.count
                 }
             }
         }
     }
 }
 
+// Preview markers measure the very same controls rendered by the app. The hand
+// follows their layout, including localized text and Dynamic Type sizes.
+struct GuideTargetKey: PreferenceKey {
+    static var defaultValue: [String: CGRect] = [:]
+    static func reduce(value: inout [String: CGRect], nextValue: () -> [String: CGRect]) {
+        value.merge(nextValue(), uniquingKeysWith: { _, new in new })
+    }
+}
+extension View {
+    func guideTarget(_ key: String) -> some View {
+        background(GeometryReader { proxy in
+            Color.clear.preference(key: GuideTargetKey.self, value: [key: proxy.frame(in: .named("guidePreview"))])
+        })
+    }
+}
+
+private struct GuideGesture {
+    let start: CGPoint
+    let target: CGPoint
+    let targetID: String
+    let position: CGFloat
+    let swipe: Bool
+    static func actions(chapter: GuideChapter, stage: Int) -> [GuideGesture] {
+        guard chapter.screens.indices.contains(stage) else { return [] }
+        let points: [(String, CGFloat, CGFloat, CGFloat)]
+        var swipe = false
+        switch (chapter.id, stage) {
+        case ("expense", 0): points = [("dashboard.add", 195, 665, 0.5)]
+        case ("ledger", 0): points = [("ledger.filter", 300, 268, 0.5)]
+        case ("receipt", 0): points = [("dashboard.receipt", 145, 375, 0.5)]
+        case ("receipt", 1): points = [("receipt.photo", 145, 212, 0.5)]
+        case ("receipt", 2): points = [("receipt.merchant", 285, 148, 0.5), ("receipt.date", 285, 235, 0.5), ("receipt.total", 285, 360, 0.5)]
+        case ("receipt", 3): points = [("receipt.people", 195, 470, 0.5)]; swipe = true
+        case ("receipt", 4): points = [("receipt.item0", 140, 200, 0.5), ("receipt.item1", 140, 300, 0.5), ("receipt.items", 195, 470, 0.5)]
+        case ("split", 0): points = [("ledger.expense", 164, 370, 0.5)]
+        case ("split", 1): points = [("expense.split", 245, 440, 0.5)]
+        case ("repayment", 0): points = [("friends.person", 146, 380, 0.5)]
+        case ("repayment", 1): points = [("friend.repay", 158, 350, 0.5)]
+        case ("recurring", 0): points = [("recurring.add", 355, 55, 0.5)]
+        case ("applePay", 0): points = [("automation.apple", 150, 156, 0.5)]
+        case ("tng", 0): points = [("automation.tng", 150, 242, 0.5)]
+        case ("applePay", 1...5), ("tng", 1...5): points = [("shortcut.steps", 200, 140, 0.25), ("shortcut.steps", 200, 210, 0.50), ("shortcut.steps", 200, 280, 0.75)]
+        case ("tng", 6): points = [("tng.incoming", 140, 300, 0.5)]
+        case ("settings", 0): points = [("settings.appearance", 145, 185, 0.5)]
+        case ("backup", 0): points = [("settings.backup", 145, 570, 0.5)]
+        default: return []
+        }
+        return points.map { key, x, y, relative in
+            let point = CGPoint(x: x, y: y)
+            return GuideGesture(start: swipe ? CGPoint(x: x, y: y + 120) : CGPoint(x: x + 70, y: y + 95), target: point, targetID: key, position: relative, swipe: swipe)
+        }
+    }
+}
+
+private struct GuideTouchIndicator: View {
+    let phase: Int
+    let action: GuideGesture
+    let measured: CGRect?
+    private var destination: CGPoint {
+        guard let measured, measured.width > 0, measured.height > 0 else { return action.target }
+        return CGPoint(x: measured.midX, y: measured.minY + measured.height * action.position)
+    }
+    var body: some View {
+        ZStack {
+            if phase == 2 && !action.swipe {
+                Circle().stroke(.blue.opacity(0.55), lineWidth: 2)
+                    .frame(width: 62, height: 62)
+                    .transition(.scale.combined(with: .opacity))
+            }
+            Circle().fill(.white.opacity(0.86))
+                .frame(width: 46, height: 46)
+                .overlay(Circle().strokeBorder(.blue.opacity(0.55), lineWidth: 1.5))
+                .shadow(color: .black.opacity(0.17), radius: 9, y: 4)
+                .overlay(Image(systemName: "hand.point.up.left.fill")
+                    .font(.system(size: 20, weight: .medium))
+                    .foregroundStyle(.blue))
+                .scaleEffect(phase == 2 && !action.swipe ? 0.78 : 1)
+        }
+        .position(phase == 1 ? (action.swipe ? CGPoint(x: destination.x, y: destination.y + 120) : CGPoint(x: destination.x + 70, y: destination.y + 95)) : destination)
+        .accessibilityHidden(true)
+    }
+}
+
 private struct GuideScreenFrame: View {
     let screen: GuideScreen
+    let action: GuideGesture?
+    let gesturePhase: Int
+    @State private var measuredTargets: [String: CGRect] = [:]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         GeometryReader { geometry in
-            let scale = min(geometry.size.width / 390, geometry.size.height / 760)
-            GuideActualScreen(screen: screen)
-                .frame(width: 390, height: 760)
-                .background(Color(uiColor: .systemBackground))
-                .clipShape(RoundedRectangle(cornerRadius: 28))
-                .overlay(RoundedRectangle(cornerRadius: 28).strokeBorder(.primary.opacity(0.14), lineWidth: 2))
-                .scaleEffect(scale)
-                .frame(width: geometry.size.width, height: geometry.size.height)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
+            let scale = min(geometry.size.width / 410, geometry.size.height / 820)
+            VStack(spacing: 0) {
+                HStack {
+                    Text("9:41").font(.system(size: 14, weight: .semibold))
+                    Spacer()
+                    Capsule().fill(.primary).frame(width: 88, height: 24)
+                    Spacer()
+                    Image(systemName: "wifi")
+                    Image(systemName: "battery.100percent")
+                }.padding(.horizontal, 25).frame(height: 38)
+                ZStack {
+                    GuideActualScreen(screen: screen)
+                        .id(screen)
+                        .transition(reduceMotion ? .identity : .asymmetric(insertion: .move(edge: .trailing).combined(with: .opacity), removal: .move(edge: .leading).combined(with: .opacity)))
+                    if let action, gesturePhase > 0 {
+                        GuideTouchIndicator(phase: gesturePhase, action: action, measured: measuredTargets[action.targetID])
+                    }
+                }.frame(width: 390, height: 740).clipped()
+                    .coordinateSpace(name: "guidePreview")
+                    .onPreferenceChange(GuideTargetKey.self) { measuredTargets = $0 }
+                Capsule().fill(.primary).frame(width: 125, height: 5)
+                    .frame(height: 22)
+            }
+            .frame(width: 390, height: 800)
+            .background(Color(uiColor: .systemBackground))
+            .clipShape(RoundedRectangle(cornerRadius: 42))
+            .overlay(RoundedRectangle(cornerRadius: 42).strokeBorder(Color.primary.opacity(0.85), lineWidth: 5))
+            .padding(10)
+            .scaleEffect(scale)
+            .frame(width: geometry.size.width, height: geometry.size.height)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
         }
     }
 }
@@ -1279,6 +1401,7 @@ private struct GuideActualScreen: View {
         Group {
             switch screen {
             case .overview: GuideRootScreen(tab: 0)
+            case .receiptEntry: DashboardView(guideFocus: "dashboard.receipt")
             case .ledger: GuideRootScreen(tab: 1)
             case .recurring: GuideRootScreen(tab: 2)
             case .friends: GuideRootScreen(tab: 3)
@@ -1291,7 +1414,7 @@ private struct GuideActualScreen: View {
             case .splitEditor: ExpenseEditor(original: expense, startWithSplit: true)
             case .filter: LedgerFilterEditor(value: LedgerFilter()) { _ in }
             case .repayment: RepaymentView(target: RepayTarget(expense: expense, share: expense.shares[0]))
-            case .recurringEditor: RecurringEditor(original: model.ledger.recurring.first)
+            case .recurringEditor: RecurringEditor(original: nil)
             case .appearance: SettingsView(guideDestination: "appearance")
             case .categoriesMenu: SettingsView(guideDestination: "categories")
             case .backups: SettingsView(guideDestination: "backup")
