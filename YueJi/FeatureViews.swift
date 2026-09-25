@@ -1183,8 +1183,9 @@ struct ScannedReceipt {
             else if lower.contains("sst") || lower.contains("gst") || lower.contains("tax") { result.tax = value; inItems = false }
             else if lower.contains("discount") { result.discount = value; inItems = false }
             else if lower.contains("total") || lower.contains("bill amount") { if result.total.isEmpty { result.total = value }; inItems = false }
-            else if inItems && label.rangeOfCharacter(from: .letters) != nil && !lower.contains("@") && !lower.contains("date") && !lower.contains("check") && !lower.contains("table") {
-                result.items.append(Item(name: label, amount: value))
+            else if inItems && label.rangeOfCharacter(from: .letters) != nil && !lower.contains("date") && !lower.contains("check") && !lower.contains("table") {
+                let name = label.components(separatedBy: .decimalDigits).first?.trimmingCharacters(in: .whitespacesAndNewlines) ?? label
+                if !name.isEmpty { result.items.append(Item(name: name, amount: value)) }
             }
         }
         return result
