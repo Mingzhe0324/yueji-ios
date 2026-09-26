@@ -342,12 +342,21 @@ struct SavingsGoal: Codable, Identifiable, Equatable {
     var name: String
     var target: Int
     var entries: [SavingsEntry] = []
+    var deadline: Date? = nil
+    var monthlyContribution: Int? = nil
     var balance: Int { entries.reduce(0) { $0 + $1.cents } }
     var progress: Double { min(1, Double(balance) / Double(max(1, target))) }
     func validate() throws {
         guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               name.count <= 80, target > 0, target <= 10_000_000_000, entries.count <= 10000,
               Set(entries.map(\.id)).count == entries.count else { throw LedgerError.invalid("储蓄目标无效 / Invalid savings goal") }
+        if let deadline {
+            guard deadline.timeIntervalSince1970.isFinite, deadline.timeIntervalSince1970 >= 0,
+                  deadline.timeIntervalSince1970 <= 32_503_680_000 else { throw LedgerError.invalid("目标日期无效 / Invalid deadline") }
+        }
+        if let monthlyContribution {
+            guard monthlyContribution > 0, monthlyContribution <= 10_000_000_000 else { throw LedgerError.invalid("每月金额无效 / Invalid monthly amount") }
+        }
         var running = 0
         for entry in entries {
             guard !entry.id.isEmpty, entry.cents != 0, entry.cents >= -10_000_000_000, entry.cents <= 10_000_000_000,
@@ -361,5 +370,22 @@ struct SavingsGoal: Codable, Identifiable, Equatable {
         next.entries.append(SavingsEntry(cents: cents))
         try next.validate()
         self = next
+    }
+}
+
+// Integer cents; first contribution is one month after the preview date.
+enum SavingsPlanMath {
+    static func installments(until deadline: Date, from now: Date, calendar: Calendar = .current) -> Int {
+        let start = calendar.startOfDay(for: now)
+        let end = calendar.startOfDay(for: deadline)
+        guard end > start else { return 0 }
+        return max(1, calendar.dateComponents([.month], from: start, to: end).month ?? 0)
+    }
+    static func monthly(remaining: Int, installments: Int) -> Int {
+        guard remaining > 0, installments > 0 else { return 0 }
+        return remaining / installments + (remaining % installments == 0 ? 0 : 1)
+    }
+    static func months(remaining: Int, contribution: Int) -> Int {
+        monthly(remaining: remaining, installments: contribution)
     }
 }

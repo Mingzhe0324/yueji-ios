@@ -11,6 +11,37 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(preview.ledger.expenses, sample.expenses)
         XCTAssertEqual(preview.ledger.tngNotices, sample.tngNotices)
     }
+    func testSavingsPlanRoundingAndCompletion() {
+        XCTAssertEqual(SavingsPlanMath.monthly(remaining: 10000, installments: 3), 3334)
+        XCTAssertEqual(SavingsPlanMath.months(remaining: 10000, contribution: 3334), 3)
+        XCTAssertEqual(SavingsPlanMath.monthly(remaining: 0, installments: 6), 0)
+        XCTAssertEqual(SavingsPlanMath.months(remaining: 10000, contribution: 0), 0)
+    }
+    func testSavingsPlanCalendarEdges() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let now = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 1, day: 31)))
+        let next = try XCTUnwrap(calendar.date(byAdding: .month, value: 1, to: now))
+        XCTAssertEqual(SavingsPlanMath.installments(until: next, from: now, calendar: calendar), 1)
+        XCTAssertEqual(SavingsPlanMath.installments(until: now, from: now, calendar: calendar), 0)
+        let soon = try XCTUnwrap(calendar.date(byAdding: .day, value: 2, to: now))
+        XCTAssertEqual(SavingsPlanMath.installments(until: soon, from: now, calendar: calendar), 1)
+    }
+    func testSavingsOldBackupAndPlanRoundTrip() throws {
+        let old = Data(#"{"id":"old","name":"Laptop","target":300000,"entries":[]}"#.utf8)
+        var goal = try JSONDecoder().decode(SavingsGoal.self, from: old)
+        XCTAssertNil(goal.deadline); XCTAssertNil(goal.monthlyContribution)
+        goal.deadline = Date(timeIntervalSince1970: 1_900_000_000)
+        goal.monthlyContribution = 50000
+        try goal.validate()
+        let restored = try JSONDecoder().decode(SavingsGoal.self, from: JSONEncoder().encode(goal))
+        XCTAssertEqual(restored, goal)
+        XCTAssertTrue(restored.entries.isEmpty)
+        goal.monthlyContribution = -1
+        XCTAssertThrowsError(try goal.validate())
+        goal.monthlyContribution = 1; goal.deadline = Date(timeIntervalSince1970: .infinity)
+        XCTAssertThrowsError(try goal.validate())
+    }
     func testMoney() throws {
         XCTAssertEqual(try toCents("18.50"), 1850)
         XCTAssertThrowsError(try toCents("1.234"))

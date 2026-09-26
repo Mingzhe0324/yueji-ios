@@ -49,6 +49,7 @@ struct MainView: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("completedUsageGuide") private var completedGuide = false
+    @AppStorage("hasSeenMoonOpening") private var hasSeenOpening = false
     @State private var showingGuide = false
     @State private var selectedTab = 0
     var body: some View {
@@ -62,14 +63,15 @@ struct MainView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedTab)
             .overlay {
                 if !model.didFinishLaunch {
-                    OpeningAnimationView().transition(.opacity)
+                    OpeningAnimationView(compact: hasSeenOpening).transition(.opacity)
                 }
             }
             .task {
                 model.reload(postRecurring: false)
                 if !model.didFinishLaunch {
-                    if !reduceMotion { do { try await Task.sleep(for: .milliseconds(900)) } catch { return } }
-                    withAnimation(reduceMotion ? nil : .easeOut(duration: 0.25)) { model.didFinishLaunch = true }
+                    if !reduceMotion { do { try await Task.sleep(for: .milliseconds(hasSeenOpening ? 650 : 1550)) } catch { return } }
+                    hasSeenOpening = true
+                    withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
                 }
                 if !completedGuide { showingGuide = true }
                 await AutomaticRates.shared.refreshSaved(); model.reload()
@@ -1721,26 +1723,58 @@ private struct YueJiEntrance: ViewModifier {
     }
 }
 private struct OpeningAnimationView: View {
+    let compact: Bool
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var visible = false
+    @State private var gathered = false
+    @State private var revealed = false
+    @State private var titled = false
+    private let night = Color(red: 0.025, green: 0.045, blue: 0.11)
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground).ignoresSafeArea()
-            VStack(spacing: 20) {
+            night.ignoresSafeArea()
+            RadialGradient(colors: [Color.blue.opacity(revealed ? 0.28 : 0.04), night], center: .center, startRadius: 12, endRadius: 310).ignoresSafeArea()
+            VStack(spacing: 30) {
                 ZStack {
-                    Circle().stroke(Color.blue.opacity(0.10), lineWidth: 5)
-                    Circle().trim(from: 0, to: visible || reduceMotion ? 0.82 : 0)
-                        .stroke(Color.blue, style: StrokeStyle(lineWidth: 5, lineCap: .round))
-                        .rotationEffect(.degrees(-90))
-                    Image(systemName: "moon.fill").font(.system(size: 38, weight: .light)).foregroundStyle(.blue)
-                }.frame(width: 94, height: 94)
-                Text("月记").font(.system(size: 30, weight: .semibold)).tracking(4)
-                Text("YUEJI").font(.caption.weight(.medium)).tracking(5).foregroundStyle(.secondary)
-            }
-            .opacity(visible || reduceMotion ? 1 : 0)
-            .scaleEffect(visible || reduceMotion ? 1 : 0.94)
+                    Circle().fill(Color.cyan.opacity(0.15)).frame(width: 160, height: 160).blur(radius: 30)
+                        .scaleEffect(revealed ? 1.15 : 0.45).opacity(revealed ? 1 : 0)
+                    if !compact && !reduceMotion {
+                        ForEach(0..<24, id: \.self) { index in
+                            let angle = Double(index) * .pi * 2 / 24
+                            Circle().fill(Color(red: 0.7, green: 0.86, blue: 1))
+                                .frame(width: index % 3 == 0 ? 4 : 2, height: index % 3 == 0 ? 4 : 2)
+                                .offset(x: cos(angle) * (gathered ? 42 : 145), y: sin(angle) * (gathered ? 42 : 145))
+                                .opacity(revealed ? 0 : 0.85)
+                        }
+                    }
+                    Circle().trim(from: 0.08, to: revealed ? 0.92 : 0.08)
+                        .stroke(AngularGradient(colors: [.clear, .cyan.opacity(0.65), .white.opacity(0.8), .clear], center: .center), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                        .frame(width: 150, height: 150).rotationEffect(.degrees(-110))
+                    Image(systemName: "moon.fill")
+                        .font(.system(size: 76, weight: .ultraLight))
+                        .foregroundStyle(LinearGradient(colors: [.white, Color(red: 0.62, green: 0.8, blue: 1)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .shadow(color: .cyan.opacity(0.3), radius: 20)
+                        .scaleEffect(revealed ? 1 : 0.82).opacity(revealed || reduceMotion ? 1 : 0)
+                }.frame(width: 280, height: 230)
+                VStack(spacing: 12) {
+                    Text("月记").font(.system(size: 34, weight: .medium, design: .rounded)).tracking(8)
+                    Text("YUEJI").font(.system(size: 10, weight: .medium)).tracking(6).foregroundStyle(.white.opacity(0.55))
+                }.foregroundStyle(.white).opacity(titled || reduceMotion ? 1 : 0)
+                    .offset(y: titled || reduceMotion ? 0 : 8)
+            }.offset(y: -24)
         }
-        .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.65)) { visible = true } }
+        .task {
+            if reduceMotion { revealed = true; titled = true; return }
+            if compact {
+                withAnimation(.easeOut(duration: 0.4)) { revealed = true; titled = true }
+                return
+            }
+            withAnimation(.easeInOut(duration: 0.55)) { gathered = true }
+            do { try await Task.sleep(for: .milliseconds(380)) } catch { return }
+            withAnimation(.spring(response: 0.65, dampingFraction: 0.88)) { revealed = true }
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.5)
+            do { try await Task.sleep(for: .milliseconds(270)) } catch { return }
+            withAnimation(.easeOut(duration: 0.45)) { titled = true }
+        }
         .accessibilityElement(children: .ignore).accessibilityLabel("月记 YueJi")
     }
 }
