@@ -56,7 +56,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } - personalRefund }
 }
 struct Ledger: Codable {
-    var version = 3
+    var version = 4
     var expenses: [Expense] = []
     var budgets: [String: Int] = [:]
     var seenEvents: Set<String> = []
@@ -69,17 +69,18 @@ struct Ledger: Codable {
     var backupCreatedAt: Date? = nil
     var customCategories: [CustomCategory] = []
     var tripDefaults: TripDefaults? = nil
+    var savingsGoals: [SavingsGoal] = []
     var tngNotices: [TNGNotice] = []
-    init(version: Int = 3, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
+    init(version: Int = 4, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
-        guard (1...3).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
-        version = 3
+        guard (1...4).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
+        version = 4
         expenses = try c.decode([Expense].self, forKey: .expenses)
         budgets = try c.decode([String: Int].self, forKey: .budgets)
         seenEvents = try c.decode(Set<String>.self, forKey: .seenEvents)
@@ -92,9 +93,12 @@ struct Ledger: Codable {
         backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
         customCategories = try c.decodeIfPresent([CustomCategory].self, forKey: .customCategories) ?? []
         tripDefaults = try c.decodeIfPresent(TripDefaults.self, forKey: .tripDefaults)
+        savingsGoals = try c.decodeIfPresent([SavingsGoal].self, forKey: .savingsGoals) ?? []
         tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
     }
     func validated() throws -> Ledger {
+        guard savingsGoals.count <= 100, Set(savingsGoals.map(\.id)).count == savingsGoals.count else { throw LedgerError.invalid("储蓄目标无效 / Invalid savings goals") }
+        for goal in savingsGoals { try goal.validate() }
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for n in tngNotices {
             guard (n.recipient?.count ?? 0) <= 200, (n.resolvedFriend?.count ?? 0) <= 200,
@@ -116,7 +120,7 @@ struct Ledger: Codable {
               merchantCategories.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 200 && categoryNames.contains($0.value) }) else {
             throw LedgerError.invalid("付款或分账数据无效。")
         }
-        guard version == 3, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
+        guard version == 4, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
@@ -325,5 +329,37 @@ extension Ledger {
         }
         copy.tngNotices[i].repaymentIDs = nil; copy.tngNotices[i].resolvedFriend = nil; copy.tngNotices[i].status = "pending"
         self = try copy.validated()
+    }
+}
+
+struct SavingsEntry: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var cents: Int
+    var date = Date()
+}
+struct SavingsGoal: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var name: String
+    var target: Int
+    var entries: [SavingsEntry] = []
+    var balance: Int { entries.reduce(0) { $0 + $1.cents } }
+    var progress: Double { min(1, Double(balance) / Double(max(1, target))) }
+    func validate() throws {
+        guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              name.count <= 80, target > 0, target <= 10_000_000_000, entries.count <= 10000,
+              Set(entries.map(\.id)).count == entries.count else { throw LedgerError.invalid("储蓄目标无效 / Invalid savings goal") }
+        var running = 0
+        for entry in entries {
+            guard !entry.id.isEmpty, entry.cents != 0, entry.cents >= -10_000_000_000, entry.cents <= 10_000_000_000,
+                  entry.date.timeIntervalSince1970.isFinite, entry.date.timeIntervalSince1970 >= 0 else { throw LedgerError.invalid("储蓄记录无效 / Invalid savings entry") }
+            running += entry.cents
+            guard running >= 0, running <= 10_000_000_000 else { throw LedgerError.invalid("取出金额不能超过已存金额 / Withdrawal exceeds savings") }
+        }
+    }
+    mutating func record(cents: Int) throws {
+        var next = self
+        next.entries.append(SavingsEntry(cents: cents))
+        try next.validate()
+        self = next
     }
 }

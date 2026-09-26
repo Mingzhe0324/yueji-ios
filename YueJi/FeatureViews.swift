@@ -684,6 +684,7 @@ struct RestorePreviewView: View {
                     LabeledContent(tr("备份时间", "Backup created", "Masa sandaran"), value: preview.ledger.backupCreatedAt.map { dateLabel($0, time: true) } ?? tr("旧备份未记录", "Not recorded in this older backup", "Tidak direkod dalam sandaran lama"))
                     LabeledContent(tr("账目数量", "Entries", "Rekod"), value: String(preview.ledger.expenses.count))
                     LabeledContent(tr("固定消费", "Recurring bills", "Bil berulang"), value: String(preview.ledger.recurring.count))
+                    LabeledContent(tr("储蓄目标", "Savings goals", "Matlamat simpanan"), value: String(preview.ledger.savingsGoals.count))
                     LabeledContent(tr("分类规则", "Category rules", "Peraturan kategori"), value: String(preview.ledger.merchantCategories.count))
                     LabeledContent(tr("自定义分类", "Custom categories", "Kategori sendiri"), value: String(preview.ledger.customCategories.count))
                     if let first = preview.ledger.expenses.map(\.date).min(), let last = preview.ledger.expenses.map(\.date).max() {
@@ -1149,6 +1150,8 @@ struct ScannedReceipt {
         var name: String
         var amount: String
         var people: Set<UUID> = []
+        var quantity = ""
+        var unitPrice = ""
     }
     var merchant = ""
     var date: Date?
@@ -1347,6 +1350,7 @@ struct ReceiptGrid {
         var descriptionColumn: Int?
         var amountColumn: Int?
         var unitPriceColumn: Int?
+        var quantityColumn: Int?
         var reachedSummary = false
         var pendingName = ""
         var previousZeroWithUnitPrice = false
@@ -1369,6 +1373,7 @@ struct ReceiptGrid {
                     amountColumn = cell.columns.upperBound
                     header = true
                 }
+                if ["qty", "quantity", "数量", "kuantiti"].contains(label) { quantityColumn = cell.columns.lowerBound; header = true }
                 if ["price", "harga", "unit price", "unit cost", "harga seunit", "单价"].contains(label) {
                     unitPriceColumn = cell.columns.lowerBound
                     header = true
@@ -1415,7 +1420,11 @@ struct ReceiptGrid {
             let name = [pendingName, description].filter { !$0.isEmpty }.joined(separator: " ")
             pendingName = ""
             // Retain ambiguous incomplete rows for explicit review.
-            result.items.append(ScannedReceipt.Item(name: name, amount: value))
+            var item = ScannedReceipt.Item(name: name, amount: value)
+            if let q = quantityColumn, let raw = ordered.first(where: { $0.columns == (q...q) })?.text,
+               raw.range(of: #"^\d+(?:[.]\d+)?$"#, options: .regularExpression) != nil { item.quantity = raw }
+            if let u = unitPriceColumn, u != a, let raw = ordered.first(where: { $0.columns == (u...u) })?.text { item.unitPrice = amount(raw) ?? "" }
+            result.items.append(item)
             previousZeroWithUnitPrice = value == "0.00" && hasUnitPrice
         }
         if !pendingName.isEmpty { result.items.append(ScannedReceipt.Item(name: pendingName, amount: "")) }
@@ -1701,6 +1710,7 @@ struct ReceiptScanView: View {
     @State private var scanNotice = ""
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
+    @State private var comparingItem: ScannedReceipt.Item?
 
     private var people: [ReceiptPerson] {
         (includeMe ? [ReceiptPerson(id: myID, name: tr("我", "Me", "Saya"))] : []) + friends
@@ -1811,6 +1821,19 @@ struct ReceiptScanView: View {
                 Button(role: .destructive) { items.removeAll { $0.id == item.wrappedValue.id } } label: { Image(systemName: "minus.circle") }.buttonStyle(.borderless)
                     .accessibilityLabel(tr("删除商品", "Remove item", "Buang item"))
             }
+            DisclosureGroup(tr("数量与单价（可选）", "Quantity & unit price (optional)", "Kuantiti & harga seunit (pilihan)")) {
+                HStack {
+                    TextField(tr("数量", "Quantity", "Kuantiti"), text: item.quantity).keyboardType(.decimalPad)
+                    Text("× RM").foregroundStyle(.secondary)
+                    TextField(tr("单价", "Unit price", "Harga seunit"), text: item.unitPrice).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                }
+                Text(tr("分账按这项金额计算；有折扣时请以收据金额为准。", "Splits use the line total, including any item discount.", "Pembahagian menggunakan jumlah item termasuk diskaun.")).font(.caption).foregroundStyle(.secondary)
+            }
+            if receiptImage != nil {
+                Button { comparingItem = item.wrappedValue } label: {
+                    Label(tr("对照原收据", "Compare with receipt", "Banding dengan resit"), systemImage: "viewfinder")
+                }.font(.caption).buttonStyle(.borderless)
+            }
             if item.wrappedValue.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || item.wrappedValue.amount.isEmpty {
                 Text(tr("请对照照片补上名称或金额", "Check the photo for the missing name or amount", "Semak foto untuk nama atau amaun yang tiada"))
                     .font(.caption).foregroundStyle(.orange)
@@ -1870,11 +1893,27 @@ struct ReceiptScanView: View {
         Section(tr("4. 每人应付", "4. Each person pays", "4. Bayaran setiap orang")) {
             if let result = try? breakdown() {
                 ForEach(Array(people.enumerated()), id: \.element.id) { index, person in
-                    VStack(alignment: .leading, spacing: 4) {
-                        LabeledContent(person.name, value: money(result.totals[index])).fontWeight(.semibold)
-                        Text(tr("餐费 ", "Food ", "Makanan ") + money(result.food[index]) + " · " + tr("税费等调整 ", "Charges / adjustments ", "Caj / pelarasan ") + money(result.totals[index] - result.food[index])).font(.caption).foregroundStyle(.secondary)
-                    }
+                    VStack(alignment: .leading, spacing: 12) {
+                        HStack { Text(person.name).font(.headline); Spacer(); AnimatedMoney(cents: result.totals[index]).font(.title3.bold()) }
+                        if byItem {
+                            ForEach(items.filter { $0.people.contains(person.id) }) { item in
+                                HStack(alignment: .top) {
+                                    Text(item.name).fixedSize(horizontal: false, vertical: true)
+                                    Spacer()
+                                    Text(money(itemShare(item, person: person.id))).monospacedDigit()
+                                }.font(.subheadline)
+                            }
+                        } else { Text(tr("全部商品均分", "All items split equally", "Semua item dibahagi sama rata")).font(.subheadline) }
+                        Divider()
+                        LabeledContent(tr("餐费", "Food", "Makanan"), value: money(result.food[index]))
+                        LabeledContent(tr("税费、折扣及舍入", "Charges, discount & rounding", "Caj, diskaun & pembundaran"), value: money(result.totals[index] - result.food[index]))
+                            .foregroundStyle(.secondary)
+                    }.padding(14).background(Color.blue.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
                 }
+                ShareLink(item: splitSummary(result)) {
+                    Label(tr("分享分账明细", "Share split details", "Kongsi butiran pembahagian"), systemImage: "square.and.arrow.up")
+                }.disabled(!reviewed)
+
                 Text(tr("税费、服务费、折扣和舍入按餐费比例分摊，尾数自动补齐。", "Charges, discounts and rounding follow each person's food share; cents are balanced automatically.", "Caj, diskaun dan pembundaran mengikut bahagian makanan; baki sen diseimbangkan.")).font(.caption).foregroundStyle(.secondary)
             } else {
                 Text(validationMessage).font(.caption).foregroundStyle(.orange)
@@ -1890,12 +1929,33 @@ struct ReceiptScanView: View {
             Button(tr("保存分账", "Save split", "Simpan pembahagian")) { save() }.disabled(!reviewed || busy || (try? breakdown()) == nil)
         }
     }
+    private func itemShare(_ item: ScannedReceipt.Item, person: UUID) -> Int {
+        let owners = people.filter { item.people.contains($0.id) }
+        guard let index = owners.firstIndex(where: { $0.id == person }),
+              let cents = try? optionalMoney(item.amount), cents > 0,
+              let parts = try? ReceiptSplit.allocate(cents, weights: Array(repeating: 1, count: owners.count)) else { return 0 }
+        return parts[index]
+    }
+    private func splitSummary(_ result: (food: [Int], totals: [Int])) -> String {
+        var lines = [merchant, dateLabel(date), tr("实付总额：", "Paid total: ", "Jumlah akhir: ") + printedTotal + " MYR"]
+        for (index, person) in people.enumerated() {
+            lines.append("\n" + person.name + " · " + money(result.totals[index]))
+            if byItem {
+                for item in items where item.people.contains(person.id) {
+                    lines.append(item.name + " · " + money(itemShare(item, person: person.id)))
+                }
+            } else { lines.append(tr("全部商品均分", "All items split equally", "Semua item dibahagi sama rata")) }
+            lines.append(tr("餐费：", "Food: ", "Makanan: ") + money(result.food[index]))
+            lines.append(tr("税费、折扣及舍入：", "Charges, discount & rounding: ", "Caj, diskaun & pembundaran: ") + money(result.totals[index] - result.food[index]))
+        }
+        return lines.joined(separator: "\n")
+    }
     private var validationMessage: String {
         do { _ = try breakdown(); return "" } catch { return error.localizedDescription }
     }
     private var reviewKey: String {
         let fields = [merchant, subtotal, tax, service, discount, rounding, printedTotal, existingID, String(date.timeIntervalSince1970), String(includeMe), String(byItem)]
-        let rows = items.map { $0.id.uuidString + $0.name + $0.amount + $0.people.map(\.uuidString).sorted().joined(separator: ",") }
+        let rows = items.map { $0.id.uuidString + $0.name + $0.amount + $0.quantity + $0.unitPrice + $0.people.map(\.uuidString).sorted().joined(separator: ",") }
         return (fields + rows + friends.map { $0.id.uuidString + $0.name }).joined(separator: "|")
     }
     var body: some View {
@@ -1911,6 +1971,11 @@ struct ReceiptScanView: View {
                 resultSection.id(4)
             }
         }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
+            .animation(guideReduceMotion ? nil : .easeInOut(duration: 0.25), value: items.count)
+            .animation(guideReduceMotion ? nil : .easeInOut(duration: 0.25), value: friends.count)
+            .sheet(item: $comparingItem) { item in
+                if let receiptImage { ReceiptComparisonView(image: receiptImage, item: item) }
+            }
             .onChange(of: reviewKey) { _, _ in reviewed = false }
             .sheet(isPresented: $camera) {
                 ReceiptCamera { result in
@@ -1971,7 +2036,7 @@ struct ReceiptScanView: View {
             }
             details.append("Subtotal RM \(subtotal); tax RM \(tax.isEmpty ? "0.00" : tax); service RM \(service.isEmpty ? "0.00" : service); discount RM \(discount.isEmpty ? "0.00" : discount); rounding RM \(rounding.isEmpty ? "0.00" : rounding)")
             for (i, person) in people.enumerated() { details.append(person.name + ": " + money(result.totals[i])) }
-            let summary = details.joined(separator: "\n")
+            let summary = details.joined(separator: "\n") + "\n\n" + splitSummary(result)
             guard summary.count <= 20_000 else { throw reviewError("收据明细过长，请缩短商品或朋友名称。", "Receipt details are too long. Shorten item or friend names.", "Butiran resit terlalu panjang. Pendekkan nama item atau rakan.") }
             if !existingID.isEmpty {
                 guard let original = matching.first(where: { $0.id == existingID }) else { throw LedgerError.invalid("Re-select the original payment") }
@@ -2072,5 +2137,232 @@ struct TNGIncomingView: View {
             try LocalStore.shared.change { try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct) }
             model.reload(); model.showSaved()
         } catch { self.error = error.localizedDescription }
+    }
+}
+
+struct SavingsGoalsView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var adding = false
+    var body: some View {
+        List {
+            Section {
+                Text(tr("为想做的事，慢慢存起来。", "Save for something that matters to you.", "Simpan untuk sesuatu yang bermakna."))
+                    .font(.title2.bold()).padding(.vertical, 12)
+            }.listRowBackground(Color.clear)
+            if model.ledger.savingsGoals.isEmpty {
+                ContentUnavailableView(tr("第一个储蓄目标", "Your first savings goal", "Matlamat simpanan pertama"), systemImage: "target", description: Text(tr("例如新电脑、旅行或学习用品。", "For a computer, a trip or school supplies.", "Untuk komputer, perjalanan atau alat belajar.")))
+                Button(tr("创建目标", "Create goal", "Cipta matlamat")) { adding = true }
+            }
+            ForEach(model.ledger.savingsGoals) { goal in
+                NavigationLink { SavingsGoalDetail(id: goal.id) } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack {
+                            Text(goal.name).font(.headline)
+                            Spacer()
+                            if goal.balance >= goal.target { Image(systemName: "checkmark.seal.fill").foregroundStyle(.green) }
+                        }
+                        Text(money(goal.balance) + " / " + money(goal.target)).font(.subheadline).monospacedDigit()
+                        ProgressView(value: goal.progress).tint(goal.balance >= goal.target ? .green : .blue)
+                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: goal.progress)
+                    }.padding(.vertical, 8)
+                }
+            }
+            Section {
+                Text(tr("这里记录你已存下的钱；不会移动资金，也不计入消费或收入。", "Track money you have set aside. No funds are moved and spending or income totals are unchanged.", "Jejak wang yang diasingkan. Tiada wang dipindahkan atau perubahan jumlah belanja dan pendapatan."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .yuejiListSurface().navigationTitle(tr("储蓄目标", "Savings goals", "Matlamat simpanan"))
+        .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("创建目标", "Create goal", "Cipta matlamat")) }
+        .sheet(isPresented: $adding) { SavingsGoalEditor() }
+    }
+}
+
+private struct SavingsGoalEditor: View {
+    var original: SavingsGoal? = nil
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var amount = ""
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(tr("目标名称", "Goal name", "Nama matlamat"), text: $name)
+                TextField(tr("目标金额 · RM", "Target amount · RM", "Amaun sasaran · RM"), text: $amount).keyboardType(.decimalPad)
+            }
+            .navigationTitle(tr("储蓄目标", "Savings goal", "Matlamat simpanan"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() } }
+            }
+            .onAppear { name = original?.name ?? ""; amount = original.map { Currency.input($0.target, "MYR") } ?? "" }
+            .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        }
+    }
+    private func save() {
+        do {
+            let target = try toCents(amount)
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            try LocalStore.shared.change { ledger in
+                if let original {
+                    guard let index = ledger.savingsGoals.firstIndex(where: { $0.id == original.id }) else { throw LedgerError.invalid("目标已不存在 / Goal no longer exists") }
+                    ledger.savingsGoals[index].name = trimmed
+                    ledger.savingsGoals[index].target = target
+                } else { ledger.savingsGoals.append(SavingsGoal(name: trimmed, target: target)) }
+            }
+            model.reload(postRecurring: false); model.showSaved(); dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct SavingsGoalDetail: View {
+    let id: String
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var editing = false
+    @State private var deleting = false
+    @State private var recording = false
+    @State private var withdrawing = false
+    @State private var amount = ""
+    @State private var error: String?
+    @State private var celebrated = false
+    private var goal: SavingsGoal? { model.ledger.savingsGoals.first { $0.id == id } }
+    var body: some View {
+        List {
+            if let goal {
+                Section {
+                    VStack(spacing: 18) {
+                        ZStack {
+                            Circle().stroke(Color.blue.opacity(0.1), lineWidth: 12)
+                            Circle().trim(from: 0, to: CGFloat(goal.progress))
+                                .stroke(goal.balance >= goal.target ? Color.green : .blue, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                                .animation(reduceMotion ? nil : .spring(response: 0.75, dampingFraction: 0.9), value: goal.balance)
+                            VStack(spacing: 5) {
+                                Text("\(Int(goal.progress * 100))%") .font(.largeTitle.bold()).contentTransition(.numericText())
+                                Text(goal.balance >= goal.target ? tr("已达成", "Reached", "Tercapai") : tr("已存下", "Saved", "Disimpan")).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.frame(width: 170, height: 170).padding(.top, 12)
+                        AnimatedMoney(cents: goal.balance).font(.title.bold())
+                        Text(tr("目标 ", "Target ", "Sasaran ") + money(goal.target)).foregroundStyle(.secondary)
+                        Text(tr("还差 ", "Remaining ", "Baki ") + money(max(0, goal.target - goal.balance))).font(.subheadline)
+                        if celebrated {
+                            Label(tr("目标达成！", "Goal reached!", "Matlamat tercapai!"), systemImage: "checkmark.seal.fill")
+                                .foregroundStyle(.green).font(.headline)
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+                        }
+                        HStack {
+                            Button(tr("存入", "Add savings", "Tambah simpanan")) { withdrawing = false; amount = ""; recording = true }
+                                .buttonStyle(.borderedProminent)
+                            Button(tr("取出", "Withdraw", "Keluarkan")) { withdrawing = true; amount = ""; recording = true }
+                                .buttonStyle(.bordered).disabled(goal.balance == 0)
+                        }
+                    }.frame(maxWidth: .infinity).padding(.vertical, 10)
+                }
+                Section(tr("储蓄记录", "Savings history", "Sejarah simpanan")) {
+                    if goal.entries.isEmpty { Text(tr("记录第一笔存入吧。", "Record your first contribution.", "Rekod simpanan pertama anda.")) }
+                    ForEach(goal.entries.reversed()) { entry in
+                        HStack {
+                            Text(dateLabel(entry.date, time: true)).font(.subheadline)
+                            Spacer()
+                            Text((entry.cents > 0 ? "+ " : "− ") + money(abs(entry.cents)))
+                                .monospacedDigit().foregroundStyle(entry.cents > 0 ? Color.green : .secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .yuejiListSurface().navigationTitle(goal?.name ?? "")
+        .toolbar {
+            Menu {
+                Button(tr("编辑目标", "Edit goal", "Edit matlamat")) { editing = true }
+                Button(tr("删除目标", "Delete goal", "Padam matlamat"), role: .destructive) { deleting = true }
+            } label: { Image(systemName: "ellipsis.circle") }
+        }
+        .sheet(isPresented: $editing) { if let goal { SavingsGoalEditor(original: goal) } }
+        .alert(withdrawing ? tr("记录取出 · RM", "Record withdrawal · RM", "Rekod pengeluaran · RM") : tr("记录存入 · RM", "Record savings · RM", "Rekod simpanan · RM"), isPresented: $recording) {
+            TextField("0.00", text: $amount).keyboardType(.decimalPad)
+            Button(tr("确认", "Confirm", "Sahkan")) { record() }
+            Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+        }
+        .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        .confirmationDialog(tr("删除目标及全部储蓄记录？", "Delete this goal and its savings history?", "Padam matlamat dan sejarahnya?"), isPresented: $deleting, titleVisibility: .visible) {
+            Button(tr("删除目标", "Delete goal", "Padam matlamat"), role: .destructive) {
+                do { try LocalStore.shared.change { $0.savingsGoals.removeAll { $0.id == id } }; model.reload(postRecurring: false); dismiss() }
+                catch { self.error = error.localizedDescription }
+            }
+        }
+        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.85), value: celebrated)
+    }
+    private func record() {
+        do {
+            let cents = try toCents(amount)
+            guard cents > 0 else { throw LedgerError.invalid("金额必须大于零 / Enter an amount above zero") }
+            let reached = try LocalStore.shared.change { ledger -> Bool in
+                guard let index = ledger.savingsGoals.firstIndex(where: { $0.id == id }) else { throw LedgerError.invalid("目标已不存在 / Goal no longer exists") }
+                let before = ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
+                try ledger.savingsGoals[index].record(cents: withdrawing ? -cents : cents)
+                return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
+            }
+            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.5)) { model.reload(postRecurring: false); celebrated = reached }
+            model.showSaved()
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+
+private struct ReceiptComparisonView: View {
+    let image: UIImage
+    let item: ScannedReceipt.Item
+    @Environment(\.dismiss) private var dismiss
+    @State private var region: UIImage?
+    @State private var searching = true
+    @State private var zoom: CGFloat = 1
+    var body: some View {
+        NavigationStack {
+            ScrollView([.horizontal, .vertical]) {
+                VStack(alignment: .leading, spacing: 18) {
+                    Text(item.name.isEmpty ? tr("待核对商品", "Item to review", "Item untuk disemak") : item.name).font(.headline)
+                    Text(tr("这项金额：RM ", "Line total: RM ", "Jumlah item: RM ") + item.amount)
+                    if searching { ProgressView() }
+                    if let region {
+                        Text(tr("对应区域（请核对）", "Matching area — please check", "Kawasan sepadan — sila semak")).font(.caption)
+                        Image(uiImage: region).resizable().scaledToFit()
+                    } else if !searching {
+                        Text(tr("未能可靠定位，请对照下方完整收据。", "Could not locate a unique match. Check the full receipt below.", "Tiada padanan unik. Semak resit penuh di bawah.")).font(.caption).foregroundStyle(.secondary)
+                    }
+                    Slider(value: $zoom, in: 1...3) { Text(tr("放大照片", "Zoom photo", "Zum foto")) }
+                    Image(uiImage: image).resizable().scaledToFit().frame(width: 320 * zoom)
+                }.frame(width: 320 * zoom, alignment: .leading).padding(20)
+            }
+            .navigationTitle(tr("对照收据", "Compare receipt", "Banding resit")).navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup")) { dismiss() } } }
+            .task {
+                let renderer = UIGraphicsImageRenderer(size: image.size)
+                let normalized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
+                guard let cg = normalized.cgImage else { searching = false; return }
+                let name = item.name
+                let crop = await Task.detached(priority: .userInitiated) { () -> CGImage? in
+                    let request = VNRecognizeTextRequest()
+                    request.recognitionLevel = .accurate
+                    guard !name.isEmpty, (try? VNImageRequestHandler(cgImage: cg).perform([request])) != nil else { return nil }
+                    let key = ReceiptGrid.normalized(name)
+                    let matches = (request.results ?? []).filter {
+                        guard let text = $0.topCandidates(1).first?.string else { return false }
+                        let value = ReceiptGrid.normalized(text)
+                        return key.count >= 4 && (value.contains(key) || (value.count >= 6 && key.hasPrefix(value)))
+                    }
+                    guard matches.count == 1, let box = matches.first?.boundingBox else { return nil }
+                    let top = max(0, 1 - box.maxY - box.height)
+                    let bottom = min(1, 1 - box.minY + box.height * 2)
+                    return cg.cropping(to: CGRect(x: 0, y: top * Double(cg.height), width: Double(cg.width), height: (bottom - top) * Double(cg.height)).integral)
+                }.value
+                guard !Task.isCancelled else { return }
+                region = crop.map { UIImage(cgImage: $0) }; searching = false
+            }
+        }
     }
 }

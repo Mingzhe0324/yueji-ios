@@ -20,6 +20,7 @@ struct YueJiApp: App {
     }
     @Published var ledger = Ledger()
     @Published var error: String?
+    @Published var didFinishLaunch = false
     @Published var loaded = false
     @Published var savedNotice: UUID?
     func showSaved() {

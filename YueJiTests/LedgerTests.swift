@@ -114,7 +114,7 @@ final class FeatureTests: XCTestCase {
     func testV1MigrationAndV2RoundTrip() throws {
         let old = Data(#"{"version":1,"expenses":[],"budgets":{"2026-09":10000},"seenEvents":["old"]}"#.utf8)
         var ledger = try LocalStore.decode(old)
-        XCTAssertEqual(ledger.version, 3); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
+        XCTAssertEqual(ledger.version, 4); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
         ledger.recurring = [RecurringExpense(name: "Phone", minor: 3000, start: Date())]
         ledger.rates["SGD"] = RateQuote(value: Decimal(string: "3.2")!, date: date(2026, 1, 1), source: "Manual")
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
@@ -941,5 +941,67 @@ final class ReceiptRetryTests: XCTestCase {
             [.init(text: "Naan", columns: 0...0), .init(text: "3.00", columns: 1...1), .init(text: "33.00", columns: 2...2)]
         ])
         XCTAssertEqual(parsed.items.first?.amount, "33.00")
+    }
+}
+
+final class SavingsGoalTests: XCTestCase {
+    func testSavingsBackupRestoreAndFailedWithdrawalPreservesData() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        var goal = SavingsGoal(name: "Computer", target: 100000)
+        try goal.record(cents: 20000)
+        try goal.record(cents: -2500)
+        try store.change {
+            $0.savingsGoals = [goal]
+            $0.expenses = [Expense(merchant: "Lunch", cents: 1200)]
+        }
+        let saved = try LocalStore.encode(store.read())
+        XCTAssertThrowsError(try store.change { try $0.savingsGoals[0].record(cents: -17501) })
+        XCTAssertEqual(try LocalStore.encode(store.read()), saved)
+        try store.change { $0.savingsGoals.removeAll() }
+        try store.restore(saved)
+        let restored = try store.read()
+        XCTAssertEqual(restored.savingsGoals.first?.balance, 17500)
+        XCTAssertEqual(restored.savingsGoals.first?.entries.map(\.cents), [20000, -2500])
+        XCTAssertEqual(restored.expenses.first?.personal, 1200)
+    }
+    func testOldLedgerMigratesWithoutInventingGoals() throws {
+        let data = Data(#"{"version":3,"expenses":[],"budgets":{},"seenEvents":[]}"#.utf8)
+        let ledger = try LocalStore.decode(data)
+        XCTAssertEqual(ledger.version, 4)
+        XCTAssertTrue(ledger.savingsGoals.isEmpty)
+    }
+    func testSavingsBoundsAndCompletion() throws {
+        var goal = SavingsGoal(name: "Books", target: 10000)
+        XCTAssertThrowsError(try goal.record(cents: -1))
+        XCTAssertThrowsError(try goal.record(cents: 0))
+        XCTAssertThrowsError(try goal.record(cents: Int.max))
+        XCTAssertTrue(goal.entries.isEmpty)
+        try goal.record(cents: 12000)
+        XCTAssertEqual(goal.balance, 12000)
+        XCTAssertEqual(goal.progress, 1)
+        try goal.record(cents: -12000)
+        XCTAssertEqual(goal.progress, 0)
+        var ledger = Ledger()
+        ledger.savingsGoals = [goal, goal]
+        XCTAssertThrowsError(try ledger.validated())
+        goal.target = 0
+        XCTAssertThrowsError(try goal.validate())
+    }
+}
+
+final class ReceiptColumnDetailTests: XCTestCase {
+    func testQuantityAndUnitPriceNeverReplaceLineTotal() {
+        func cell(_ text: String, _ column: Int) -> ReceiptGrid.Cell { .init(text: text, columns: column...column) }
+        let result = ReceiptGrid.parse([
+            [cell("Description", 0), cell("Quantity", 1), cell("Unit Price", 2), cell("Amount", 3)],
+            [cell("PLAIN NAAN", 0), cell("11", 1), cell("3.00", 2), cell("33.00", 3)]
+        ])
+        XCTAssertEqual(result.items.count, 1)
+        XCTAssertEqual(result.items.first?.name, "PLAIN NAAN")
+        XCTAssertEqual(result.items.first?.quantity, "11")
+        XCTAssertEqual(result.items.first?.unitPrice, "3.00")
+        XCTAssertEqual(result.items.first?.amount, "33.00")
     }
 }
