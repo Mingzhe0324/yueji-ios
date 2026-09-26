@@ -18,9 +18,9 @@ jobs:
           from pathlib import Path
           info=plistlib.loads(Path('YueJi/Info.plist').read_bytes())
           version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
-          assert (version,build)==('1.30.0','36'), 'Wrong source version; expected 1.30.0 build 36'
+          assert (version,build)==('1.32.0','39'), 'Wrong source version; expected 1.32.0 build 39'
           source=Path('YueJi/FeatureViews.swift').read_text()
-          for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','TNGIncomingView']:
+          for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','TNGIncomingView','SavingsGoalsView']:
               assert 'struct '+name in source, 'Missing feature: '+name
           with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('label='+version+'-build'+build+'\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('Source: '+version+' ('+build+')\nCommit: '+os.environ['GITHUB_SHA']+'\n')
