@@ -9,3 +9,5 @@ Use case: logo-brand. Create a polished 1024x1024 opaque square iOS app icon for
 Audio: original synthesized bell tones. Rebuild with `python3 scripts/generate_sounds.py`. No external soundtrack or sound sample used.
 
 QA pending on iPhone: cold launch / warm return, silent switch, music playing, sound toggle, reduced motion, save response, goal reached and opening preview. Linux checks confirm source wiring and resource integrity; they do not verify native rendering or audio routing.
+
+1.38 motion: 4.8-second skippable opening; hello, dance, star and hug interactions, each with a distinct cue. Launch cue is peak-limited to 14000 PCM units. Check quick repeated taps, skip during each stage, large text, reduced motion, and toggling sound off during playback on device.

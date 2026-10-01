@@ -5,11 +5,11 @@ import AVFoundation
 
 final class LedgerTests: XCTestCase {
     @MainActor func testBundledFeedbackSoundsDecodeWithoutPlaying() throws {
-        for name in ["LaunchChime", "SavedChime", "GoalChime"] {
+        for name in ["LaunchChime", "SavedChime", "GoalChime", "HelloChime", "DanceChime", "StarChime", "HugChime"] {
             let asset = try XCTUnwrap(NSDataAsset(name: name))
             let player = try AVAudioPlayer(data: asset.data)
             XCTAssertGreaterThan(player.duration, 0.15)
-            XCTAssertLessThan(player.duration, 1.1)
+            XCTAssertLessThan(player.duration, name == "LaunchChime" ? 4.8 : 1.2)
             XCTAssertEqual(player.numberOfChannels, 1)
         }
     }
@@ -1220,5 +1220,27 @@ final class LocalSavingsDraftTests: XCTestCase {
         XCTAssertEqual(LocalSavingsDraft.parse("买电脑").amount, "")
         XCTAssertEqual(LocalSavingsDraft.parse("RM-50").amount, "")
         XCTAssertEqual(LocalSavingsDraft.parse("RM1.234").amount, "")
+    }
+}
+
+final class TNGLedgerPresentationTests: XCTestCase {
+    func testExistingTransfersAppearWithoutChangingSpending() throws {
+        var ledger = Ledger()
+        let now = Date()
+        _ = try ledger.receiveTNG(body: "RM 20.00 has been successfully transferred to FRIEND.", date: now, eventID: "sent")
+        _ = try ledger.receiveTNG(body: "FRIEND has transferred RM40.00 to you.", date: now, eventID: "received")
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).count, 2)
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now, search: "friend").count, 2)
+        XCTAssertTrue(ledger.ledgerTNGTransfers(in: now, search: "unrelated").isEmpty)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        let previous = try XCTUnwrap(Calendar.current.date(byAdding: .month, value: -1, to: now))
+        XCTAssertTrue(ledger.ledgerTNGTransfers(in: previous).isEmpty)
+        let outgoing = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "transfer" })
+        try ledger.confirmTNGExpense(id: outgoing.id, merchant: "FRIEND", cents: 2000, date: now, category: "其他")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).count, 1)
+        let incoming = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "incoming" })
+        try ledger.resolveTNGIncoming(id: incoming.id, purpose: "income", date: now)
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).first?.status, "income")
     }
 }

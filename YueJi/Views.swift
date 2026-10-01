@@ -49,7 +49,6 @@ struct MainView: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("completedUsageGuide") private var completedGuide = false
-    @AppStorage("hasSeenMoonOpeningV2") private var hasSeenOpening = false
     @AppStorage("openingAnimationEnabled") private var openingEnabled = true
     @AppStorage("playfulAnimations") private var playful = true
     @State private var showingGuide = false
@@ -65,18 +64,25 @@ struct MainView: View {
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedTab)
             .overlay {
                 if !model.didFinishLaunch && openingEnabled {
-                    OpeningAnimationView(compact: hasSeenOpening, sound: !model.isPreview).transition(.opacity)
+                    OpeningAnimationView(sound: !model.isPreview)
+                        .overlay(alignment: .topTrailing) {
+                            Button(tr("跳过", "Skip", "Langkau")) {
+                                FeedbackSounds.shared.stop()
+                                withAnimation(.easeOut(duration: 0.25)) { model.didFinishLaunch = true }
+                            }.buttonStyle(.bordered).tint(.white).padding(24)
+                        }.transition(.opacity)
                 }
             }
             .task {
                 model.reload(postRecurring: false)
                 if !model.didFinishLaunch {
-                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(hasSeenOpening ? 800 : 1650)) } catch { return } }
-                    hasSeenOpening = true
+                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(4800)) } catch { return } }
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
                 }
-                if !completedGuide { showingGuide = true }
                 await AutomaticRates.shared.refreshSaved(); model.reload()
+            }
+            .onChange(of: model.didFinishLaunch) { _, finished in
+                if finished && !completedGuide { showingGuide = true }
             }
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true }) {
                 UsageGuideView()
@@ -422,6 +428,7 @@ struct ExpensesView: View {
     @State private var editing: Expense?
     @State private var deleting: Expense?
     private var entries: [Expense] { (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? [] }
+    private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search) }
     private var days: [LedgerDayGroup] {
         Dictionary(grouping: entries, by: { Calendar.current.startOfDay(for: $0.date) })
             .map { LedgerDayGroup(date: $0.key, entries: $0.value) }.sorted { $0.date > $1.date }
@@ -447,7 +454,39 @@ struct ExpensesView: View {
                         }
                     }.padding(.vertical, 6)
                 }
-                if entries.isEmpty {
+                Section {
+                    NavigationLink { AutomationStatusView() } label: {
+                        Label(tr("TNG 没有记录？查看运行状态", "Missing TNG entry? Check status", "Rekod TNG tiada? Semak status"), systemImage: "bolt.badge.clock")
+                    }
+                    ForEach(transfers) { notice in
+                        NavigationLink {
+                            if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+                            else { TNGNoticeView(id: notice.id) }
+                        } label: {
+                            HStack(spacing: 12) {
+                                Image(systemName: notice.kind == "incoming" ? "arrow.down.left.circle.fill" : "arrow.up.right.circle.fill")
+                                    .font(.title2).foregroundStyle(notice.kind == "incoming" ? Color.green : Color.orange)
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(notice.party ?? "TNG").font(.headline)
+                                    Text((notice.kind == "incoming" ? tr("转入", "Incoming", "Masuk") : tr("转出", "Outgoing", "Keluar")) + " · " + tngStatus(notice))
+                                        .font(.caption).foregroundStyle(.secondary)
+                                    Text(dateLabel(notice.date, time: true)).font(.caption2).foregroundStyle(.secondary)
+                                }
+                                Spacer()
+                                Text(tngSignedAmount(notice)).font(.subheadline.weight(.semibold)).monospacedDigit()
+                                    .foregroundStyle(notice.kind == "incoming" ? Color.green : Color.primary)
+                            }.padding(.vertical, 6)
+                        }
+                    }
+                    if transfers.isEmpty {
+                        Text(tr("这个月没有符合搜索条件的 TNG 转账记录。", "No TNG transfers match this month and search.", "Tiada pindahan TNG sepadan dengan bulan dan carian ini.")).font(.caption).foregroundStyle(.secondary)
+                    }
+                } header: {
+                    Text(tr("TNG 转入 / 转出", "TNG incoming / outgoing", "TNG masuk / keluar"))
+                } footer: {
+                    Text(tr("显示所选月份的转账；消费筛选不影响此区。转入点开确认用途；转出可确认记为消费。疑似重复需核对，上方消费合计不包含未计为消费的转账。", "Transfers follow the selected month and search, not expense filters. Open incoming money to confirm its purpose, or outgoing money to record an expense. Review possible duplicates. Transfers are excluded from the spending total until recorded as expenses.", "Pindahan mengikut bulan dan carian, bukan penapis belanja. Buka wang masuk untuk sahkan tujuan atau wang keluar untuk rekod belanja. Semak pendua. Pindahan tidak termasuk jumlah belanja sehingga disahkan sebagai belanja."))
+                }
+                if entries.isEmpty && transfers.isEmpty {
                     ContentUnavailableView {
                         Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                     } description: {
@@ -485,8 +524,9 @@ struct ExpensesView: View {
                     } header: { Text(dateLabel(day.date)) }
                 }
             }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
+                .refreshable { model.reload(postRecurring: false) }
                 .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
-                .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: tr("商户、分类", "Merchant, category", "Peniaga, kategori"))
+                .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
@@ -1931,11 +1971,14 @@ private struct MoonBody: Shape {
     }
 }
 
+enum MoonGesture: String { case hello, dance, star, cuddle }
+
 struct MoonBuddy: View {
     var size: CGFloat = 100
     var celebrating = false
     var animated = true
     var reaction: UUID? = nil
+    var gesture: MoonGesture = .hello
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("playfulAnimations") private var playful = true
     @State private var lift: CGFloat = 0
@@ -1945,7 +1988,7 @@ struct MoonBuddy: View {
     @State private var sparkle = false
     private let navy = Color(red: 0.04, green: 0.08, blue: 0.22)
     private var motion: Bool { animated && playful && !reduceMotion }
-    private var animationKey: String { "\(motion)-\(reaction?.uuidString ?? "once")" }
+    private var animationKey: String { "\(motion)-\(gesture.rawValue)-\(reaction?.uuidString ?? "once")" }
     var body: some View {
         ZStack {
             Ellipse().fill(Color.blue.opacity(0.12)).frame(width: size * 0.62, height: size * 0.07)
@@ -1995,6 +2038,29 @@ struct MoonBuddy: View {
                     withAnimation(.easeInOut(duration: 0.10)) { blink = true }
                     try await Task.sleep(for: .milliseconds(120))
                     withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { blink = false; tilt = 0 }
+                    switch gesture {
+                    case .hello: break
+                    case .dance:
+                        for beat in 0..<6 {
+                            try await Task.sleep(for: .milliseconds(150))
+                            withAnimation(.spring(response: 0.22, dampingFraction: 0.55)) {
+                                tilt = beat.isMultiple(of: 2) ? -19 : 19
+                                lift = beat.isMultiple(of: 2) ? -size * 0.10 : 0
+                                stretch = beat.isMultiple(of: 2) ? 1.07 : 0.94
+                            }
+                        }
+                    case .star:
+                        withAnimation(.spring(response: 0.65, dampingFraction: 0.65)) {
+                            tilt = 360; lift = -size * 0.18; sparkle = true
+                        }
+                        try await Task.sleep(for: .milliseconds(650))
+                    case .cuddle:
+                        withAnimation(.easeInOut(duration: 0.3)) { blink = true; stretch = 0.88; tilt = -12 }
+                        try await Task.sleep(for: .milliseconds(650))
+                    }
+                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                        lift = 0; stretch = 1; tilt = 0; blink = false
+                    }
                 } catch { return }
             }
     }
@@ -2021,25 +2087,48 @@ struct SavedFeedback: View {
 }
 
 private struct OpeningAnimationView: View {
-    let compact: Bool
     var sound = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var phase
     @AppStorage("playfulAnimations") private var playful = true
     @State private var entered = false
     @State private var titled = false
+    @State private var orbit = false
+    @State private var burst = false
+    @State private var farewell = false
+    @State private var greeting = UUID()
     private let night = Color(red: 0.02, green: 0.045, blue: 0.15)
     private var motion: Bool { playful && !reduceMotion }
     var body: some View {
         ZStack {
             night.ignoresSafeArea()
             RadialGradient(colors: [Color.blue.opacity(0.30), night], center: .center, startRadius: 10, endRadius: 380).ignoresSafeArea()
+            GeometryReader { geometry in
+                ForEach(0..<24, id: \.self) { i in
+                    Circle().fill(i.isMultiple(of: 3) ? Color.yellow : Color.white)
+                        .frame(width: i.isMultiple(of: 3) ? 4 : 2, height: i.isMultiple(of: 3) ? 4 : 2)
+                        .position(x: geometry.size.width * CGFloat((i * 37 + 11) % 100) / 100,
+                                  y: geometry.size.height * CGFloat((i * 23 + 7) % 100) / 100)
+                        .opacity(entered ? 0.7 : 0.1)
+                }
+            }.allowsHitTesting(false)
             VStack(spacing: 28) {
                 ZStack {
+                    Circle().fill(Color.indigo.opacity(0.35)).frame(width: 240, height: 240)
+                        .blur(radius: 35).scaleEffect(burst ? 1.4 : 0.6)
+                    ForEach(0..<12, id: \.self) { i in
+                        Image(systemName: i.isMultiple(of: 3) ? "sparkle" : "circle.fill")
+                            .font(.system(size: i.isMultiple(of: 3) ? 18 : 5))
+                            .foregroundStyle(i.isMultiple(of: 2) ? Color.yellow : Color.cyan)
+                            .offset(y: burst ? -153 : -65)
+                            .rotationEffect(.degrees(Double(i) * 30 + (orbit ? 110 : -40)))
+                            .opacity(entered ? 0.9 : 0)
+                    }
                     Circle().stroke(.white.opacity(0.055), lineWidth: 1).frame(width: 270, height: 270)
                     Circle().stroke(.white.opacity(0.07), lineWidth: 1).frame(width: 320, height: 320)
-                    MoonBuddy(size: 235, celebrating: !compact, animated: motion)
-                        .scaleEffect(entered || !motion ? 1 : 0.65)
+                    MoonBuddy(size: 235, celebrating: true, animated: motion, reaction: greeting, gesture: .star)
+                        .scaleEffect(entered || !motion ? (farewell ? 1.06 : 1) : 0.25)
+                        .rotationEffect(.degrees(entered || !motion ? 0 : -35))
                         .opacity(entered || !motion ? 1 : 0)
                 }.frame(height: 320)
                 VStack(spacing: 12) {
@@ -2053,11 +2142,20 @@ private struct OpeningAnimationView: View {
         }
         .task(id: phase) {
             guard phase == .active else { return }
-            if sound { FeedbackSounds.shared.play(compact ? .saved : .launch) }
-            guard motion else { entered = true; titled = true; return }
-            withAnimation(.spring(response: compact ? 0.34 : 0.52, dampingFraction: 0.7)) { entered = true }
-            do { try await Task.sleep(for: .milliseconds(compact ? 100 : 330)) } catch { return }
-            withAnimation(.easeOut(duration: 0.3)) { titled = true }
+            guard motion else { entered = true; titled = true; burst = true; return }
+            if sound { FeedbackSounds.shared.play(.launch) }
+            do {
+                withAnimation(.spring(response: 0.85, dampingFraction: 0.58)) { entered = true }
+                withAnimation(.easeInOut(duration: 3.8)) { orbit = true }
+                try await Task.sleep(for: .milliseconds(850))
+                withAnimation(.spring(response: 0.8, dampingFraction: 0.7)) { burst = true }
+                try await Task.sleep(for: .milliseconds(750))
+                withAnimation(.easeOut(duration: 0.6)) { titled = true }
+                try await Task.sleep(for: .milliseconds(950))
+                greeting = UUID()
+                try await Task.sleep(for: .milliseconds(1100))
+                withAnimation(.easeInOut(duration: 0.6)) { farewell = true }
+            } catch { return }
         }
         .onDisappear { FeedbackSounds.shared.stop() }
         .accessibilityElement(children: .ignore).accessibilityLabel("月记 YueJi")
@@ -2097,17 +2195,17 @@ private struct BrandExperienceSettings: View {
                 Button(tr("试听开场音效", "Preview opening sound", "Dengar bunyi pembukaan")) { FeedbackSounds.shared.play(.launch) }
                     .disabled(!sounds)
             } footer: {
-                Text(tr("开场、保存和达标使用轻柔短音；遵循静音模式，不打断音乐。", "Soft cues for opening, saving and reaching a goal. Respects silent mode and mixes with music.", "Bunyi lembut untuk pembukaan, simpan dan capai matlamat. Mengikut mod senyap dan bercampur dengan muzik."))
+                Text(tr("开场旋律和打招呼、跳舞、送星、抱抱音效；遵循静音模式，可随时关闭。", "Opening melody and cues for hello, dance, stars and hugs. Respects silent mode; turn off anytime.", "Melodi pembukaan dan bunyi sapaan, tarian, bintang serta pelukan. Mengikut mod senyap; boleh dimatikan."))
             }
         }.navigationTitle(tr("动画与声音", "Motion & sound", "Animasi & bunyi"))
             .fullScreenCover(isPresented: $preview) {
-                OpeningAnimationView(compact: false)
+                OpeningAnimationView()
                     .overlay(alignment: .topTrailing) {
                         Button { preview = false } label: { Image(systemName: "xmark.circle.fill").font(.title).foregroundStyle(.white).padding(24) }
                             .accessibilityLabel(tr("关闭", "Close", "Tutup"))
                     }
                     .task {
-                        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                        do { try await Task.sleep(for: .seconds(reduceMotion || !playful ? 1 : 4.8)) } catch { return }
                         preview = false
                     }
             }
@@ -2119,32 +2217,59 @@ private struct MoonCompanionCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("playfulAnimations") private var playful = true
     @State private var reaction = UUID()
-    @State private var greeting = 0
+    @State private var gesture: MoonGesture = .hello
+    @State private var lastInteraction = Date.distantPast
     private var message: String {
-        switch greeting {
-        case 1: return tr("记下小小一笔，也是一份进步。", "One little entry is progress too.", "Satu rekod kecil juga kemajuan.")
-        case 2: return tr("按自己的节奏，慢慢靠近目标。", "Your goals, at your own pace.", "Matlamat anda, mengikut rentak sendiri.")
-        default: return tr("今天也一起，把生活记清楚。", "Let's make today a little clearer.", "Mari jelaskan belanja hari ini.")
+        switch gesture {
+        case .hello: return tr("嗨！今天也一起记下小进步。", "Hi! Let's celebrate today's little steps.", "Hai! Raikan kemajuan kecil hari ini.")
+        case .dance: return tr("跟上我的节拍，一起摇一摇！", "A little happy dance, just for you!", "Tarian ceria khas untuk anda!")
+        case .star: return tr("送你一颗星，慢慢靠近目标。", "A star for you. One step closer.", "Bintang untuk anda. Selangkah lebih dekat.")
+        case .cuddle: return tr("辛苦了，给你一个月亮抱抱。", "You did enough. Here's a moon hug.", "Anda sudah berusaha. Pelukan bulan untuk anda.")
         }
     }
     var body: some View {
-        HStack(spacing: 16) {
-            Button {
-                reaction = UUID()
-                withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) {
-                    greeting = (greeting + 1) % 3
+        GlassPanel {
+            VStack(spacing: 14) {
+                HStack(spacing: 18) {
+                    Button { respond(.hello) } label: {
+                        MoonBuddy(size: 104, celebrating: gesture == .star, reaction: reaction, gesture: gesture)
+                    }.buttonStyle(.plain)
+                        .accessibilityLabel(tr("和月亮打招呼", "Say hello to the moon", "Sapa bulan"))
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text(tr("你的月亮伙伴", "Your moon companion", "Teman bulan anda")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                        Text(message).font(.subheadline.weight(.medium)).contentTransition(.opacity)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if !model.isPreview { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.4) }
-            } label: { MoonBuddy(size: 76, celebrating: greeting == 2, reaction: reaction) }
-                .buttonStyle(.plain)
-                .accessibilityLabel(tr("和月亮伙伴打招呼", "Say hello to your moon companion", "Sapa teman bulan anda"))
-                .accessibilityHint(tr("轻点让伙伴回应", "Tap for a response", "Ketik untuk respons"))
-            VStack(alignment: .leading, spacing: 5) {
-                Text(message).font(.subheadline.weight(.medium)).contentTransition(.opacity)
-                Text(tr("轻点月亮，打个招呼", "Tap the moon to say hello", "Ketik bulan untuk menyapa"))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Spacer(minLength: 0)
-        }.padding(.horizontal, 12)
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 8) { actions }
+                    VStack(spacing: 8) { actions }
+                }
+            }.padding(.vertical, 4)
+        }
+        .onChange(of: model.savedNotice) { _, value in
+            if value != nil { gesture = .star; reaction = UUID() }
+        }
+    }
+    @ViewBuilder private var actions: some View {
+        interaction(tr("跳支舞", "Dance", "Menari"), icon: "music.note", gesture: .dance)
+        interaction(tr("送颗星", "A star", "Bintang"), icon: "sparkles", gesture: .star)
+        interaction(tr("抱一下", "A hug", "Pelukan"), icon: "heart.fill", gesture: .cuddle)
+    }
+    private func interaction(_ title: String, icon: String, gesture: MoonGesture) -> some View {
+        Button { respond(gesture) } label: {
+            Label(title, systemImage: icon).font(.caption.weight(.semibold))
+                .frame(maxWidth: .infinity, minHeight: 44)
+        }.buttonStyle(.bordered).buttonBorderShape(.capsule)
+    }
+    private func respond(_ value: MoonGesture) {
+        guard Date().timeIntervalSince(lastInteraction) > 0.35 else { return }
+        lastInteraction = Date()
+        withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) { gesture = value }
+        reaction = UUID()
+        if !model.isPreview {
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.4)
+            FeedbackSounds.shared.play(value == .dance ? .dance : value == .star ? .star : value == .cuddle ? .hug : .hello)
+        }
     }
 }

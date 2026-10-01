@@ -268,6 +268,16 @@ func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
     return nil
 }
 extension Ledger {
+    /// Presents existing notices without creating expenses or changing balances.
+    func ledgerTNGTransfers(in month: Date, search: String = "") -> [TNGNotice] {
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return tngNotices.filter { notice in
+            (notice.kind == "incoming" || notice.kind == "transfer") &&
+            notice.status != "ignored" && notice.expenseID == nil &&
+            Calendar.current.isDate(notice.date, equalTo: month, toGranularity: .month) &&
+            (query.isEmpty || ((notice.party ?? "") + " " + (notice.recipient ?? "") + " TNG " + tngSignedAmount(notice)).localizedCaseInsensitiveContains(query))
+        }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+    }
     /// Logs delivery independently from whether a supported transaction was recognized.
     /// Unsupported bodies are never retained or posted as expenses.
     mutating func processTNGNotification(body: String, title: String = "", date: Date?, eventID: String?) throws -> (accepted: Bool, message: String) {
@@ -281,7 +291,7 @@ extension Ledger {
         guard !text.isEmpty, text.count <= 8000, title.count <= 500 else {
             throw reviewError("通知正文为空或过长，请把 TNG 通知的 Body 传入。", "Notification body is empty or too long. Pass the TNG notification Body.", "Teks notifikasi kosong atau terlalu panjang. Hantar Body notifikasi TNG.")
         }
-        // Only verified successful outgoing transaction templates enter the inbox.
+        // Only supported successful payment, outgoing and incoming templates enter the inbox.
         // Unknown text (including promotions, top-ups and receipts) changes no ledger state.
         guard let verified = parseTNG(text, title: title) else {
             return tr("已忽略：不是已支持的付款、转账或收款通知。", "Ignored: not a supported payment, transfer or incoming-money notice.", "Diabaikan: bukan notifikasi bayaran, pindahan atau wang masuk yang disokong.")
@@ -307,10 +317,10 @@ extension Ledger {
         }
         tngNotices.append(notice)
         if let eventKey { seenEvents.insert(eventKey) }
-        if notice.kind == "incoming" { return tr("收到转账，待确认用途；尚未抵扣欠款或计入收入。", "Incoming money awaits review; no debt or income changed.", "Wang diterima menunggu semakan; hutang dan pendapatan belum berubah.") }
+        if notice.kind == "incoming" { return tr("收款已显示在账本，待确认用途；尚未抵扣欠款或计入收入。", "Incoming money is in your ledger for review; no debt or income changed.", "Wang diterima menunggu semakan; hutang dan pendapatan belum berubah.") }
         if duplicate { return tr("疑似重复，已保留待确认，未再次计入消费。", "Possible duplicate retained for review, not added to spending.", "Kemungkinan pendua disimpan untuk semakan, tidak ditambah kepada belanja.") }
         if notice.status == "recorded" { return tr("已记消费：", "Expense recorded: ", "Belanja direkod: ") + money(notice.cents ?? 0) + " · " + (notice.party ?? "") }
-        if notice.status == "transfer" { return tr("已保存转账，未计入消费。", "Transfer saved, excluded from spending.", "Pindahan disimpan, tidak dikira sebagai belanja.") }
+        if notice.status == "transfer" { return tr("转出已显示在账本，尚未计入消费。", "Outgoing transfer is in your ledger, excluded from spending.", "Pindahan disimpan, tidak dikira sebagai belanja.") }
         return tr("通知已保存到待确认，未计入消费。", "Notification saved for review, excluded from spending.", "Notifikasi disimpan untuk semakan, tidak dikira sebagai belanja.")
     }
     mutating func confirmTNGExpense(id: String, merchant: String, cents: Int, date: Date, category: String) throws {

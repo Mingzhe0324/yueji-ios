@@ -62,7 +62,7 @@ struct YueJiShortcuts: AppShortcutsProvider {
 
 struct RecordTNGIntent: AppIntent {
     static var title: LocalizedStringResource = "记录 TNG 通知"
-    static var description = IntentDescription("解析 TNG 通知正文。已识别付款记为消费，转账单独保存，收款待确认用途；广告及其他未支持格式直接忽略。")
+    static var description = IntentDescription("解析 TNG 通知正文。已识别付款记为消费，转出及收款显示在账本，收款待确认用途；广告及其他未支持格式直接忽略。")
     static var openAppWhenRun = false
     @Parameter(title: "通知正文") var body: String
     @Parameter(title: "通知标题（可选）") var notificationTitle: String?

@@ -78,7 +78,7 @@ struct YueJiApp: App {
 /// Ambient audio respects silent mode, mixes with music, and never requests a microphone.
 @MainActor final class FeedbackSounds {
     static let shared = FeedbackSounds()
-    enum Cue: String { case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime" }
+    enum Cue: String { case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime", hello = "HelloChime", dance = "DanceChime", star = "StarChime", hug = "HugChime" }
     private var player: AVAudioPlayer?
     private var releaseTask: Task<Void, Never>?
     func play(_ cue: Cue) {

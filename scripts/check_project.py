@@ -56,14 +56,14 @@ header = icon.read_bytes()[:33]
 assert header[:8] == b'\x89PNG\r\n\x1a\n'
 assert struct.unpack('>II', header[16:24]) == (1024, 1024)
 assert header[25] == 2, 'App icon must be opaque RGB'
-for name in ('LaunchChime', 'SavedChime', 'GoalChime'):
+for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'HelloChime', 'DanceChime', 'StarChime', 'HugChime'):
     asset = root / 'YueJi/Assets.xcassets' / (name + '.dataset')
     metadata = json.loads((asset / 'Contents.json').read_text())
     audio = asset / metadata['data'][0]['filename']
     with wave.open(str(audio)) as wav:
         assert wav.getnchannels() == 1 and wav.getsampwidth() == 2
-        assert 0.15 < wav.getnframes() / wav.getframerate() < 1.1
+        assert 0.15 < wav.getnframes() / wav.getframerate() < (4.8 if name == 'LaunchChime' else 1.2)
         samples = struct.unpack('<' + 'h' * wav.getnframes(), wav.readframes(wav.getnframes()))
         peak = max(abs(x) for x in samples)
         assert 1000 < peak < 16000, 'Missing sound or excessive peak'
-print('PASS: 1024px opaque icon and three short, decodable PCM sound assets.')
+print('PASS: 1024px opaque icon and seven decodable PCM sound assets.')
