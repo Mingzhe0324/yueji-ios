@@ -144,6 +144,25 @@ struct Ledger: Codable {
         }
         return self
     }
+    mutating func restoreDeletedExpenses(_ entries: [Expense]) throws {
+        guard Set(entries.map(\.id)).count == entries.count,
+              !entries.contains(where: { item in expenses.contains { $0.id == item.id } }) else {
+            throw LedgerError.invalid(tr("账目已存在，无法重复恢复。", "Entry already exists. Cannot restore a duplicate.", "Rekod sudah wujud. Tidak dapat memulihkan pendua."))
+        }
+        var restored = self
+        restored.expenses.append(contentsOf: entries)
+        self = try restored.validated()
+    }
+
+    /// Keep automation and recurring deduplication markers so deletion stays deleted.
+    mutating func deleteExpense(_ expected: Expense) throws {
+        guard let index = expenses.firstIndex(where: { $0.id == expected.id }),
+              expenses[index] == expected else {
+            throw LedgerError.invalid(tr("账目已改变或已删除，请重新打开后再试。", "Entry changed or was deleted. Reopen it and try again.", "Rekod berubah atau dipadam. Buka semula dan cuba lagi."))
+        }
+        expenses.remove(at: index)
+    }
+
     mutating func addPayment(amount: Double, merchant: String, currency: String, date: Date, eventID: String?) throws -> Bool {
         let code = currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard Currency.codes.contains(code), amount.isFinite, amount > 0, amount <= 100_000_000,

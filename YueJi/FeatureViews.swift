@@ -413,7 +413,7 @@ struct FriendDetailView: View {
                 }
             }
         }.navigationTitle(tr("欠款明细", "Balance details", "Butiran baki")).navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $editing) { ExpenseEditor(original: $0) }
+            .sheet(item: $editing) { ExpenseDetailView(id: $0.id) }
             .sheet(item: $target) { RepaymentView(target: $0) }
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
@@ -1119,7 +1119,7 @@ struct TNGNoticeView: View {
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
                 category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant)
             }
-            .sheet(item: $editing) { ExpenseEditor(original: $0) }
+            .sheet(item: $editing) { ExpenseDetailView(id: $0.id) }
             .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("确认入账", "Record", "Rekod")) {
                     do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category) }; model.reload() } catch { self.error = error.localizedDescription }
@@ -2408,6 +2408,11 @@ private struct SavingsGoalDetail: View {
             }
         }
         .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.85), value: celebrated)
+        .task(id: celebrated) {
+            guard celebrated else { return }
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            celebrated = false
+        }
     }
     private func record() {
         do {

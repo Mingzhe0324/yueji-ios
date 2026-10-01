@@ -2,6 +2,102 @@ import XCTest
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    func testUndoRestoresWholeEntriesAndPreservesNewWrites() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let now = Date()
+        let shared = Expense(merchant: "Dinner", cents: 6000, date: now.addingTimeInterval(-3600),
+                             shares: [Share(name: "Amy", cents: 3000)], receiptSummary: "Dinner receipt")
+        try store.change { ledger in
+            ledger.expenses = [shared, Expense(merchant: "Coffee", cents: 500)]
+            try ledger.repay(expenseID: shared.id, shareID: shared.shares[0].id, cents: 1000, date: now)
+            try ledger.addRefund(expenseID: shared.id, cents: 200, date: now)
+        }
+        let deleted = try store.read().expenses
+        for entry in deleted { try store.change { try $0.deleteExpense(entry) } }
+        let newEntry = Expense(merchant: "New purchase", cents: 700)
+        try store.change { $0.expenses.append(newEntry) }
+        try store.change { try $0.restoreDeletedExpenses(deleted) }
+        let reopened = try LocalStore(folder: folder).read()
+        XCTAssertEqual(Set(reopened.expenses.map(\.id)), Set(deleted.map(\.id) + [newEntry.id]))
+        for entry in deleted { XCTAssertEqual(reopened.expenses.first { $0.id == entry.id }, entry) }
+        XCTAssertEqual(reopened.friendBalances.first?.owed, deleted[0].shares[0].owed)
+    }
+
+    func testUndoConflictIsAtomic() throws {
+        let first = Expense(merchant: "First", cents: 1000)
+        let second = Expense(merchant: "Second", cents: 2000)
+        var ledger = Ledger(expenses: [second])
+        XCTAssertThrowsError(try ledger.restoreDeletedExpenses([first, second]))
+        XCTAssertEqual(ledger.expenses, [second])
+        XCTAssertThrowsError(try ledger.restoreDeletedExpenses([first, first]))
+        XCTAssertEqual(ledger.expenses, [second])
+        var invalid = first; invalid.category = "missing-category"
+        XCTAssertThrowsError(try ledger.restoreDeletedExpenses([invalid]))
+        XCTAssertEqual(ledger.expenses, [second])
+    }
+
+
+    func testDeletePersistsAndUpdatesBalancesWithoutTouchingOtherEntries() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let now = Date()
+        let shared = Expense(merchant: "Dinner", cents: 6000, date: now.addingTimeInterval(-3600),
+                             shares: [Share(name: "Amy", cents: 3000)])
+        let keep = Expense(merchant: "Keep", cents: 500)
+        try store.change { ledger in
+            ledger.expenses = [shared, keep]
+            try ledger.repay(expenseID: shared.id, shareID: shared.shares[0].id, cents: 1000, date: now)
+            try ledger.addRefund(expenseID: shared.id, cents: 200, date: now)
+        }
+        let before = try store.read()
+        let target = try XCTUnwrap(before.expenses.first)
+        XCTAssertFalse(before.friendBalances.isEmpty)
+        try store.change { try $0.deleteExpense(target) }
+        let reopened = try LocalStore(folder: folder).read()
+        XCTAssertEqual(reopened.expenses.map(\.id), [keep.id])
+        XCTAssertEqual(reopened.expenses.reduce(0) { $0 + $1.personal }, 500)
+        XCTAssertTrue(reopened.friendBalances.isEmpty)
+        let snapshots = try store.backups().map { try LocalStore.decode(Data(contentsOf: $0)) }
+        XCTAssertTrue(snapshots.contains { $0.expenses == before.expenses })
+    }
+
+    func testDeleteRejectsStaleRecordAndPreservesLatestData() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        try store.change { $0.expenses = [Expense(merchant: "Cafe", cents: 1000)] }
+        let stale = try XCTUnwrap(store.read().expenses.first)
+        try store.change { $0.expenses[0].merchant = "Corrected" }
+        XCTAssertThrowsError(try store.change { try $0.deleteExpense(stale) })
+        let current = try XCTUnwrap(store.read().expenses.first)
+        XCTAssertEqual(current.merchant, "Corrected")
+        try store.change { try $0.deleteExpense(current) }
+        XCTAssertThrowsError(try store.change { try $0.deleteExpense(current) })
+        XCTAssertTrue(try store.read().expenses.isEmpty)
+    }
+
+    func testDeleteKeepsAutomationDeduplicationAcrossReload() throws {
+        var ledger = Ledger()
+        let now = Date()
+        XCTAssertTrue(try ledger.addPayment(amount: 12.50, merchant: "Cafe", currency: "MYR", date: now, eventID: "delete-regression"))
+        let entry = try XCTUnwrap(ledger.expenses.first)
+        ledger.postedRecurring.insert("rule:0")
+        ledger.tngNotices = [TNGNotice(body: "Paid Cafe", title: "TNG", date: now,
+            usesReceivedDate: true, kind: "payment", status: "recorded", cents: 1250,
+            party: "Cafe", expenseID: entry.id)]
+        try ledger.deleteExpense(entry)
+        var restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertFalse(try restored.addPayment(amount: 12.50, merchant: "Cafe", currency: "MYR", date: now, eventID: "delete-regression"))
+        XCTAssertTrue(restored.expenses.isEmpty)
+        XCTAssertTrue(restored.postedRecurring.contains("rule:0"))
+        XCTAssertEqual(restored.tngNotices.first?.expenseID, entry.id)
+        XCTAssertThrowsError(try restored.confirmTNGExpense(id: restored.tngNotices[0].id,
+            merchant: "Cafe", cents: 1250, date: now, category: "其他"))
+    }
+
     @MainActor func testGuideUsesValidIsolatedSampleLedger() throws {
         let sample = try GuideSample.ledger().validated()
         let preview = LedgerModel(previewLedger: sample)
