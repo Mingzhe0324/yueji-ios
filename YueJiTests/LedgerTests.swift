@@ -1324,3 +1324,97 @@ final class TimelineOrderingTests: XCTestCase {
         XCTAssertGreaterThan(days[0].date, days[1].date)
     }
 }
+
+final class FeedbackPresentationTests: XCTestCase {
+    func testOnlyTopPresentationShowsSaveAndUndoFeedback() {
+        var owners = FeedbackPresentationOwners()
+        let detail = UUID(), nested = UUID()
+        XCTAssertTrue(owners.isVisible(nil))
+        owners.present(detail)
+        owners.present(detail)
+        XCTAssertEqual(owners.modals.count, 1)
+        XCTAssertFalse(owners.isVisible(nil))
+        XCTAssertTrue(owners.isVisible(detail))
+        owners.present(nested)
+        XCTAssertFalse(owners.isVisible(detail))
+        XCTAssertTrue(owners.isVisible(nested))
+        owners.dismiss(nested)
+        XCTAssertTrue(owners.isVisible(detail))
+        owners.dismiss(detail)
+        XCTAssertTrue(owners.isVisible(nil))
+        XCTAssertFalse(owners.isVisible(detail))
+    }
+    func testDismissalOfUnderlyingModalDoesNotStealOwnership() {
+        var owners = FeedbackPresentationOwners()
+        let first = UUID(), second = UUID()
+        owners.present(first); owners.present(second)
+        owners.dismiss(first)
+        XCTAssertFalse(owners.isVisible(nil))
+        XCTAssertTrue(owners.isVisible(second))
+    }
+}
+
+final class BankNotificationTests: XCTestCase {
+    private let samples: [(String, String, String, String, String, Bool)] = [
+        ("Maybank", "Maybank2u: Funds Received", "You've just received RM 0.01 in your account ending ***1234. REF: TESTIN001", "incoming", "", true),
+        ("Maybank", "Maybank2u: Transfer", "DuitNow of RM 0.01 to TEST PERSON. Mobile Number : ****5678. REF: TESTOUT001", "transfer", "TEST PERSON", true),
+        ("Hong Leong", "Transaction Notice", "HLB: You have received a transfer of RM0.01 into your bank account ending 1234 @01/10/2026 22:44:38", "incoming", "", false),
+        ("Hong Leong", "Transaction Notice", "Your transfer of RM0.01 to TEST PERSON is SUCCESSFUL.", "transfer", "TEST PERSON", true),
+        ("AmBank", "AmOnline", "AmBank/AmBank Islamic: TEST PERSON transferred MYR0.01 to your current/savings account ***1234 on 01/10/26 22:48", "incoming", "TEST PERSON", false),
+        ("AmBank", "AmOnline", "AmBank: RM0.01 DuitNow Transfer to ***5678/TEST PERSON on 01/10/2026 22:46. For queries call AmBank.", "transfer", "TEST PERSON", false),
+        ("Ryt Bank", "Your money is in!", "You've received RM0.01 from TEST PERSON on 1/10/2026, 10:55 PM (GMT+8).", "incoming", "TEST PERSON", false),
+        ("Ryt Bank", "Nice! Transfer settled!", "You've sent RM0.01 to TEST PERSON on 1/10/2026, 10:54 PM (GMT+8) using your Main Account.", "transfer", "TEST PERSON", false),
+        ("RHB", "Funds Received", "You've received MYR 0.01 to your account 1234 on 2026-10-01 22:52:31.", "incoming", "", false)
+    ]
+    func testNineObservedTemplatesWithAndWithoutTitles() throws {
+        for (bank, title, body, kind, party, fallback) in samples {
+            for heading in [title, ""] {
+                let parsed = try XCTUnwrap(parseFinancialNotification(body, title: heading), bank)
+                XCTAssertEqual(parsed.sourceBank, bank)
+                XCTAssertEqual(parsed.kind, kind)
+                XCTAssertEqual(parsed.cents, 1)
+                XCTAssertEqual(parsed.party, party)
+                XCTAssertEqual(parsed.transactionDate == nil, fallback)
+            }
+            XCTAssertNil(parseFinancialNotification(body, title: "Promotion"))
+            XCTAssertNil(parseFinancialNotification("Offer: " + body, title: title))
+            XCTAssertNil(parseFinancialNotification(body.replacingOccurrences(of: "0.01", with: "-0.01"), title: title))
+            XCTAssertNil(parseFinancialNotification(body.replacingOccurrences(of: "0.01", with: "0.001"), title: title))
+        }
+    }
+    func testDatesUseMalaysiaTimezoneAndRejectInvalidDates() throws {
+        let expected = ISO8601DateFormatter().date(from: "2026-10-01T14:55:00Z")
+        XCTAssertEqual(parseFinancialNotification(samples[6].2)?.transactionDate, expected)
+        XCTAssertNil(parseFinancialNotification(samples[6].2.replacingOccurrences(of: "1/10/2026", with: "31/02/2026")))
+        XCTAssertNil(parseFinancialNotification(samples[3].2.replacingOccurrences(of: "SUCCESSFUL", with: "FAILED")))
+        XCTAssertNil(parseFinancialNotification("You've sent MYR 0.01 to FRIEND.", title: "Funds Received"))
+    }
+    func testPersistenceAndSourceScopedDeduplication() throws {
+        var ledger = Ledger()
+        let now = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-01T15:00:00Z"))
+        for (_, title, body, _, _, _) in samples {
+            _ = try ledger.receiveTNG(body: body, title: title, date: now, eventID: nil, now: now)
+        }
+        XCTAssertEqual(ledger.tngNotices.count, 9)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertFalse(ledger.tngNotices.contains { $0.possibleDuplicate })
+        XCTAssertTrue(ledger.tngNotices[0].usesReceivedDate)
+        XCTAssertFalse(ledger.tngNotices[2].usesReceivedDate)
+        _ = try ledger.receiveTNG(body: samples[0].2, title: samples[0].1, date: now, eventID: nil, now: now)
+        XCTAssertEqual(ledger.tngNotices.count, 9)
+        let decoded = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger.validated()))
+        XCTAssertEqual(decoded.tngNotices, ledger.tngNotices)
+        let outgoing = ledger.tngNotices[1]
+        try ledger.confirmTNGExpense(id: outgoing.id, merchant: "TEST PERSON", cents: 1, date: now, category: "其他")
+        XCTAssertEqual(ledger.expenses.first?.source, "Maybank")
+        XCTAssertFalse(ledger.ledgerTNGTransfers(in: now).contains { $0.id == outgoing.id })
+    }
+    func testLegacyTNGDecodesAndStillRecords() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "You have paid RM1.00 for Shop.", date: nil, eventID: "legacy")
+        let encoded = try JSONEncoder().encode(ledger)
+        let decoded = try JSONDecoder().decode(Ledger.self, from: encoded)
+        XCTAssertEqual(decoded.tngNotices.first?.provider, "TNG")
+        XCTAssertEqual(decoded.expenses.first?.source, "TNG")
+    }
+}

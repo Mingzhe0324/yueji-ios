@@ -54,15 +54,15 @@ struct PostRecurringIntent: AppIntent {
 }
 struct YueJiShortcuts: AppShortcutsProvider {
     static var appShortcuts: [AppShortcut] {
-        AppShortcut(intent: RecordTNGIntent(), phrases: ["Record a TNG notification in \(.applicationName)"], shortTitle: "记录 TNG", systemImageName: "bell.badge")
+        AppShortcut(intent: RecordTNGIntent(), phrases: ["Record a TNG notification in \(.applicationName)"], shortTitle: "银行与 TNG", systemImageName: "bell.badge")
         AppShortcut(intent: PostRecurringIntent(), phrases: ["Post recurring expenses in \(.applicationName)"], shortTitle: "补记固定消费", systemImageName: "repeat")
         AppShortcut(intent: RecordApplePayIntent(), phrases: ["用\(.applicationName)记录付款", "Record a payment in \(.applicationName)"], shortTitle: "记录 Apple Pay", systemImageName: "creditcard.fill")
     }
 }
 
 struct RecordTNGIntent: AppIntent {
-    static var title: LocalizedStringResource = "记录 TNG 通知"
-    static var description = IntentDescription("解析 TNG 通知正文。已识别付款记为消费，转出及收款显示在账本，收款待确认用途；广告及其他未支持格式直接忽略。")
+    static var title: LocalizedStringResource = "记录银行与 TNG 通知"
+    static var description = IntentDescription("解析银行与 TNG 通知正文。已识别付款记为消费，转出及收款显示在账本，收款待确认用途；广告及其他未支持格式直接忽略。")
     static var openAppWhenRun = false
     @Parameter(title: "通知正文") var body: String
     @Parameter(title: "通知标题（可选）") var notificationTitle: String?
@@ -80,11 +80,11 @@ struct RecordTNGIntent: AppIntent {
             // Keep an ignored delivery log, without alerts for advertisements or points.
             if result.accepted {
                 await BudgetAlertService.shared.check()
-                await LedgerNotifications.result(title: "TNG", body: result.message)
+                await LedgerNotifications.result(title: "月记", body: result.message)
             }
             return .result()
         } catch {
-            try? LocalStore.shared.change { $0.logAutomation(source: "TNG", outcome: "failed", detail: error.localizedDescription) }
+            try? LocalStore.shared.change { $0.logAutomation(source: "银行 / TNG", outcome: "failed", detail: error.localizedDescription) }
             await LedgerNotifications.result(title: tr("TNG 记录失败", "TNG recording failed", "Rekod TNG gagal"), body: error.localizedDescription)
             throw error
         }

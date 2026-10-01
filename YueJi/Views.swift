@@ -66,12 +66,7 @@ struct MainView: View {
             .overlay {
                 if !model.didFinishLaunch && openingEnabled {
                     OpeningAnimationView(sound: !model.isPreview)
-                        .overlay(alignment: .topTrailing) {
-                            Button(tr("跳过", "Skip", "Langkau")) {
-                                FeedbackSounds.shared.stop()
-                                withAnimation(.easeOut(duration: 0.25)) { model.didFinishLaunch = true }
-                            }.buttonStyle(.bordered).tint(.white).padding(24)
-                        }.transition(.opacity)
+                        .transition(.opacity)
                 }
             }
             .task {
@@ -89,32 +84,14 @@ struct MainView: View {
                 UsageGuideView()
             }
             .onChange(of: selectedTab) { _, _ in FeedbackHaptics.selection() }
-            .overlay(alignment: .top) {
-                VStack(spacing: 8) {
-                if !model.undoEntries.isEmpty {
-                    HStack(spacing: 16) {
-                        Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
-                            .font(.subheadline.weight(.medium))
-                        Button(tr("撤销", "Undo", "Batal padam")) {
-                            withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88)) { model.undoDeletion() }
-                        }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44)
-                    }
-                    .padding(.horizontal, 16).ledgerGlass().padding(.horizontal, 24).padding(.top, 8)
-                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                }
-                if let token = model.savedNotice {
-                    SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
-                        .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .scale(scale: 0.92)).combined(with: .opacity))
-                }
-            }
-            }
+            .ledgerFeedback()
             .safeAreaInset(edge: .top) {
                 if model.didFinishLaunch && model.newTNGCount > 0 {
                     HStack {
                         Button {
                             model.dismissNewTNG(); showingNewTNG = true
                         } label: {
-                            Label(tr("新增 \(model.newTNGCount) 笔 TNG 记录", "\(model.newTNGCount) new TNG records", "\(model.newTNGCount) rekod TNG baharu"), systemImage: "tray.and.arrow.down")
+                            Label(tr("新增 \(model.newTNGCount) 笔银行 / TNG 记录", "\(model.newTNGCount) new bank / TNG records", "\(model.newTNGCount) rekod bank / TNG baharu"), systemImage: "tray.and.arrow.down")
                                 .font(.subheadline.weight(.medium))
                         }
                         Spacer()
@@ -126,7 +103,7 @@ struct MainView: View {
             .sheet(isPresented: $showingNewTNG) {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
                     Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
-                } } }
+                } } }.ledgerFeedback(modal: true)
             }
             .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82), value: model.savedNotice)
             .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: model.undoEntries.count)
@@ -241,7 +218,7 @@ struct DashboardView: View {
                 .background(.bar)
             }
             .sheet(item: $reviewing) { entry in
-                ExpenseDetailView(id: entry.id).yuejiZoom(id: entry.id, namespace: navigationMotion)
+                ExpenseDetailView(id: entry.id).yuejiZoom(id: entry.id, namespace: navigationMotion).ledgerFeedback(modal: true)
             }
             .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
             .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
@@ -316,7 +293,7 @@ struct DashboardView: View {
                 }.reduce(0) { $0 + ($1.cents ?? 0) }
                 if incoming > 0 {
                     NavigationLink { TNGInboxView() } label: {
-                        LabeledContent(tr("TNG 本月收到 · 单独记录", "TNG received this month · separate", "TNG diterima bulan ini · berasingan"), value: "+" + money(incoming))
+                        LabeledContent(tr("银行 / TNG 本月收到", "Bank / TNG received this month", "Bank / TNG diterima bulan ini"), value: "+" + money(incoming))
                             .foregroundStyle(.green)
                     }.buttonStyle(.plain)
                 }
@@ -419,6 +396,9 @@ struct ExpenseRow: View {
                 .font(.title3).foregroundStyle(ink).frame(width: 42, height: 42)
                 .background(ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 14)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
+                if ["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"].contains(entry.source) {
+                    Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                }
                 Text(entry.merchant).font(.headline)
                 CategoryBadge(name: entry.category).font(.caption)
                 Text(dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary)
@@ -426,7 +406,7 @@ struct ExpenseRow: View {
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.caption) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            Text("−" + money(entry.cents)).foregroundStyle(.primary).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            Text("−" + money(entry.cents)).foregroundStyle(.red).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
         }.padding(.vertical, 10)
     }
 }
@@ -434,6 +414,7 @@ struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filter = LedgerFilter()
+    @State private var providerFilter = "all"
     @State private var reviewing: Expense?
     @Namespace private var expenseTransition
     @State private var filtering = false
@@ -447,8 +428,8 @@ struct ExpensesView: View {
     @State private var adding = false
     @State private var editing: Expense?
     @State private var deleting: Expense?
-    private var entries: [Expense] { (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? [] }
-    private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search) }
+    private var entries: [Expense] { ((try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []).filter { providerFilter == "all" || $0.source == providerFilter } }
+    private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search).filter { providerFilter == "all" || $0.provider == providerFilter } }
     private var days: [LedgerDayGroup] {
         LedgerTimelineItem.grouped(expenses: entries, transfers: transfers)
     }
@@ -460,8 +441,12 @@ struct ExpensesView: View {
 
                 Section {
                     MonthPicker(month: monthBinding)
+                    Picker(tr("来源", "Source", "Sumber"), selection: $providerFilter) {
+                        Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
+                        ForEach(["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"], id: \.self) { Text($0).tag($0) }
+                    }
                     VStack(alignment: .leading, spacing: 8) {
-                        Text(filter.active || !search.isEmpty ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
+                        Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
                             .font(.caption).foregroundStyle(.secondary)
                         AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personal })
                             .font(.system(.title2, design: .default, weight: .semibold)).foregroundStyle(ink)
@@ -477,12 +462,12 @@ struct ExpensesView: View {
                     ContentUnavailableView {
                         Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                     } description: {
-                        Text(filter.active || !search.isEmpty
+                        Text(filter.active || !search.isEmpty || providerFilter != "all"
                              ? tr("试试其他关键词，或清除筛选。", "Try another search or clear your filters.", "Cuba carian lain atau kosongkan penapis.")
                              : tr("为这个月记一笔，日期会保留在所选月份。", "Add an expense for the selected month.", "Tambah belanja untuk bulan dipilih."))
                     } actions: {
-                        if filter.active || !search.isEmpty {
-                            Button(tr("清除筛选与搜索", "Clear filters and search", "Kosongkan penapis dan carian")) { filter = LedgerFilter(); search = "" }
+                        if filter.active || !search.isEmpty || providerFilter != "all" {
+                            Button(tr("清除筛选与搜索", "Clear filters and search", "Kosongkan penapis dan carian")) { filter = LedgerFilter(); search = ""; providerFilter = "all" }
                         } else {
                             Button(tr("记一笔", "Add expense", "Tambah belanja")) { adding = true }.yuejiPrimaryButton()
                         }
@@ -524,7 +509,7 @@ struct ExpensesView: View {
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
-                            NavigationLink(tr("TNG 通知 / 待确认", "TNG inbox / review", "Peti TNG / semakan")) { TNGInboxView() }
+                            NavigationLink(tr("银行 / TNG 通知", "Bank / TNG inbox", "Peti bank / TNG")) { TNGInboxView() }
                             NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
                         } label: { Image(systemName: "ellipsis.circle") }
                             .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
@@ -536,7 +521,7 @@ struct ExpensesView: View {
                 }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
                 .sheet(item: $reviewing) { entry in
-                    ExpenseDetailView(id: entry.id).yuejiZoom(id: entry.id, namespace: expenseTransition)
+                    ExpenseDetailView(id: entry.id).yuejiZoom(id: entry.id, namespace: expenseTransition).ledgerFeedback(modal: true)
                 }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
@@ -550,24 +535,29 @@ private struct TNGTimelineDetail: View {
         Group { if notice.kind == "incoming" { TNGIncomingView(id: notice.id) } else { TNGNoticeView(id: notice.id) } }
     }
 }
-private struct TNGTimelineRow: View {
+struct TNGTimelineRow: View {
     let notice: TNGNotice
     @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
-        let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
+        let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout {
-            Image(systemName: notice.kind == "incoming" ? "arrow.down.left.circle.fill" : "arrow.up.right.circle.fill")
-                .font(.title2).foregroundStyle(notice.kind == "incoming" ? Color.green : Color.orange)
-            VStack(alignment: .leading, spacing: 5) {
-                Text(notice.party ?? "TNG").font(.headline)
-                Text(notice.kind == "incoming" ? tr("TNG 转入", "TNG incoming", "TNG masuk") : tr("TNG 转出", "TNG outgoing", "TNG keluar")).font(.caption).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(notice.provider + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " +
+                     (notice.kind == "incoming" ? tr("转入", "Incoming", "Masuk") : tr("转出", "Outgoing", "Keluar")))
+                    .font(.headline).fixedSize(horizontal: false, vertical: true)
+                if let party = notice.party, !party.isEmpty {
+                    Text((notice.kind == "incoming" ? tr("来自：", "From: ", "Daripada: ") : tr("给：", "To: ", "Kepada: ")) + party)
+                        .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                }
+                Text(dateLabel(notice.date, time: true) + (notice.usesReceivedDate ? tr(" · 接收时间", " · received time", " · masa diterima") : ""))
+                    .font(.caption).foregroundStyle(.secondary)
                 Label(tngStatus(notice), systemImage: notice.status == "pending" ? "clock" : "checkmark.circle.fill")
                     .font(.caption2.weight(.medium)).foregroundStyle(notice.status == "pending" ? Color.orange : Color.secondary)
                     .padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule())
             }
             if !textSize.isAccessibilitySize { Spacer(minLength: 8) }
             Text(tngSignedAmount(notice)).font(.headline).monospacedDigit()
-                .foregroundStyle(notice.kind == "incoming" ? Color.green : Color.primary).layoutPriority(1)
+                .foregroundStyle(notice.kind == "incoming" ? Color.green : Color.red).layoutPriority(1)
         }.padding(.vertical, 8)
     }
 }
@@ -649,7 +639,6 @@ struct ExpenseDetailView: View {
                 }
             }
             .sheet(item: $editing) { ExpenseEditor(original: $0) }
-            .overlay(alignment: .top) { if let token = model.savedNotice { SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot) } }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
             .onChange(of: entry == nil) { _, missing in if missing { dismiss() } }
         }
@@ -990,7 +979,7 @@ struct SplitHistoryView: View {
                     } header: { Text(e.merchant) } footer: { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(e.personal)) }
                 }
             }.navigationTitle(tr("分账记录", "Split history", "Sejarah pembahagian")).navigationBarTitleDisplayMode(.inline)
-                .sheet(item: $editing) { ExpenseDetailView(id: $0.id) }
+                .sheet(item: $editing) { ExpenseDetailView(id: $0.id).ledgerFeedback(modal: true) }
                 .sheet(item: $target) { RepaymentView(target: $0) }
                 .confirmationDialog(tr("撤销还款？", "Undo repayment?", "Batalkan bayaran balik?"), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                     Button(tr("撤销", "Undo", "Batal"), role: .destructive) {
@@ -1053,9 +1042,6 @@ struct SettingsView: View {
                     NavigationLink { appearancePage } label: {
                         SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
                     }.guideTarget("settings.appearance")
-                    NavigationLink { BrandExperienceSettings() } label: {
-                        SimpleSettingsRow(title: tr("动画与声音", "Motion & sound", "Animasi & bunyi"), subtitle: tr("月亮伙伴、开场与提示音", "Moon companion, opening and sounds", "Teman bulan, pembukaan dan bunyi"), symbol: "sparkles", color: .orange)
-                    }
                     NavigationLink { NotificationSettingsView() } label: {
                         SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("预算、每日记账", "Budget and daily reminders", "Bajet dan peringatan harian"), symbol: "bell.fill", color: .orange)
                     }
@@ -1275,7 +1261,7 @@ struct AutomationSetupView: View {
                     SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: .blue)
                 }.guideTarget("automation.apple")
                 NavigationLink { TNGInboxView() } label: {
-                    SimpleSettingsRow(title: "TNG eWallet", subtitle: tr("通知接入与待确认", "Notification setup & review", "Persediaan notifikasi & semakan"), symbol: "bell.badge.fill", color: .teal)
+                    SimpleSettingsRow(title: tr("银行与 TNG", "Banks and TNG", "Bank dan TNG"), subtitle: tr("通知接入与待确认", "Notification setup & review", "Persediaan notifikasi & semakan"), symbol: "bell.badge.fill", color: .teal)
                 }.guideTarget("automation.tng")
             } footer: { Text(tr("先在快捷指令完成设置，再用实际运行记录确认结果。", "Set up Shortcuts, then verify actual results in the log.", "Sediakan Pintasan, kemudian sahkan hasil sebenar dalam log.")) }
             Section {
@@ -2210,61 +2196,40 @@ private struct OpeningAnimationView: View {
     }
 }
 
-private struct BrandExperienceSettings: View {
-    @AppStorage("playfulAnimations") private var playful = true
-    @AppStorage("openingAnimationEnabled") private var opening = true
-    @AppStorage("animationSounds") private var sounds = true
-    @AppStorage("soundFeedbackMode") private var soundMode = "full"
-    @AppStorage("feedbackHaptics") private var haptics = true
+
+/// Exactly one presentation layer renders feedback: the top modal, or the main page.
+private struct LedgerFeedbackHost: ViewModifier {
+    @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var preview = false
-    var body: some View {
-        Form {
-            Section {
-                VStack(spacing: 12) {
-                    MoonBuddy(size: 130)
-                    Text(tr("你的月亮伙伴", "Your moon companion", "Teman bulan anda")).font(.title3.bold())
-                    Text(tr("一点好心情，每一笔都算数。", "A little joy. Every entry counts.", "Sedikit keceriaan. Setiap rekod bermakna."))
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity).padding(.vertical, 12)
-            }
-            Section {
-                Toggle(tr("角色趣味动画", "Playful character motion", "Animasi watak ceria"), isOn: $playful)
-                Toggle(tr("开场动画", "Opening animation", "Animasi pembukaan"), isOn: $opening)
-                Button { preview = true } label: {
-                    Label(tr("预览开场", "Preview opening", "Pratonton pembukaan"), systemImage: "play.circle.fill")
+    @State private var owner = UUID()
+    var modal = false
+    private var visible: Bool { model.feedbackOwners.isVisible(modal ? owner : nil) }
+    func body(content: Content) -> some View {
+        content
+            .overlay(alignment: .top) {
+                if visible {
+                    VStack(spacing: 8) {
+                        if !model.undoEntries.isEmpty {
+                            HStack(spacing: 16) {
+                                Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
+                                    .font(.subheadline.weight(.medium))
+                                Button(tr("撤销", "Undo", "Batal padam")) {
+                                    withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88)) { model.undoDeletion() }
+                                }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44)
+                            }.padding(.horizontal, 16).ledgerGlass().padding(.horizontal, 24).padding(.top, 8)
+                        }
+                        if let token = model.savedNotice {
+                            SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
+                        }
+                    }
                 }
-            } footer: {
-                Text(reduceMotion
-                     ? tr("已遵循系统“减少动态效果”，角色会静态显示。", "Reduce Motion is on. The character stays still.", "Kurangkan Gerakan aktif. Watak kekal statik.")
-                     : tr("开场只在冷启动播放，回到前台不会重播。", "The opening plays on cold launch, not when returning to the app.", "Pembukaan dimainkan semasa pelancaran baharu sahaja."))
             }
-            Section {
-                Toggle(tr("动画音效", "Animation sounds", "Bunyi animasi"), isOn: $sounds)
-                    .onChange(of: sounds) { _, enabled in if !enabled { FeedbackSounds.shared.stop() } }
-                Picker(tr("音效范围", "Sound mode", "Mod bunyi"), selection: $soundMode) {
-                    Text(tr("全部关闭", "Off", "Tutup")).tag("off")
-                    Text(tr("仅成功与达标", "Success and goals", "Kejayaan dan matlamat")).tag("success")
-                    Text(tr("完整音效", "Full sounds", "Semua bunyi")).tag("full")
-                }.onChange(of: soundMode) { _, _ in FeedbackSounds.shared.stop() }
-                Toggle(tr("震动反馈", "Haptic feedback", "Maklum balas haptik"), isOn: $haptics)
-                Button(tr("试听开场音效", "Preview opening sound", "Dengar bunyi pembukaan")) { FeedbackSounds.shared.play(.launch) }
-                    .disabled(!sounds || soundMode != "full")
-            } footer: {
-                Text(tr("完整音效包含开场、保存、删除、撤销、存入和达标。遵循静音模式，普通浏览无音效。", "Full sounds include opening, save, delete, undo, deposit and goals. Silent mode is respected; browsing stays quiet.", "Bunyi pembukaan, simpan, padam, batal, deposit dan matlamat. Mengikut mod senyap; pelayaran senyap."))
-            }
-        }.navigationTitle(tr("动画与声音", "Motion & sound", "Animasi & bunyi"))
-            .fullScreenCover(isPresented: $preview) {
-                OpeningAnimationView()
-                    .overlay(alignment: .topTrailing) {
-                        Button { preview = false } label: { Image(systemName: "xmark.circle.fill").font(.title).foregroundStyle(.white).padding(24) }
-                            .accessibilityLabel(tr("关闭", "Close", "Tutup"))
-                    }
-                    .task {
-                        do { try await Task.sleep(for: .seconds(reduceMotion || !playful ? 1 : 1.6)) } catch { return }
-                        preview = false
-                    }
-            }
+            .onAppear { if modal { model.feedbackOwners.present(owner) } }
+            .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.savedNotice)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.undoEntries.count)
     }
 }
-
+extension View {
+    func ledgerFeedback(modal: Bool = false) -> some View { modifier(LedgerFeedbackHost(modal: modal)) }
+}

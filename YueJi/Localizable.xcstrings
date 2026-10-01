@@ -320,6 +320,38 @@
           }
         }
       }
+    },
+    "记录银行与 TNG 通知": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record bank and TNG notification"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod notifikasi bank dan TNG"
+          }
+        }
+      }
+    },
+    "银行与 TNG": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Banks and TNG"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bank dan TNG"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

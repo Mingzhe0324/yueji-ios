@@ -101,6 +101,8 @@ struct Ledger: Codable {
         for goal in savingsGoals { try goal.validate() }
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for n in tngNotices {
+            guard ["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"].contains(n.provider),
+                  (n.accountSuffix?.count ?? 0) <= 4, (n.bankReference?.count ?? 0) <= 200 else { throw LedgerError.invalid("Invalid notification source") }
             guard (n.recipient?.count ?? 0) <= 200, (n.resolvedFriend?.count ?? 0) <= 200,
                   (n.repaymentIDs?.count ?? 0) <= 50_000,
                   n.kind != "incoming" || (n.cents != nil && n.party != nil && n.expenseID == nil && ["pending", "ignored", "repayment", "income", "ownTransfer"].contains(n.status)),
@@ -212,12 +214,20 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var recipient: String? = nil
     var resolvedFriend: String? = nil
     var repaymentIDs: [String]? = nil
+    var sourceBank: String? = nil
+    var accountSuffix: String? = nil
+    var bankReference: String? = nil
+    var provider: String { sourceBank ?? "TNG" }
 }
 struct TNGParsed {
     let kind: String
     let cents: Int
     let party: String
     var recipient: String? = nil
+    var sourceBank: String = "TNG"
+    var transactionDate: Date? = nil
+    var accountSuffix: String? = nil
+    var reference: String? = nil
 }
 // A confirmed incoming notification changes the wallet in the positive
 // direction even if its purpose (repayment, income, own transfer) is pending.
@@ -275,15 +285,16 @@ extension Ledger {
             (notice.kind == "incoming" || notice.kind == "transfer") &&
             notice.status != "ignored" && notice.expenseID == nil &&
             Calendar.current.isDate(notice.date, equalTo: month, toGranularity: .month) &&
-            (query.isEmpty || ((notice.party ?? "") + " " + (notice.recipient ?? "") + " TNG " + tngSignedAmount(notice)).localizedCaseInsensitiveContains(query))
+            (query.isEmpty || ((notice.party ?? "") + " " + (notice.recipient ?? "") + " " + notice.provider + " " + tngSignedAmount(notice)).localizedCaseInsensitiveContains(query))
         }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
     }
     /// Logs delivery independently from whether a supported transaction was recognized.
     /// Unsupported bodies are never retained or posted as expenses.
     mutating func processTNGNotification(body: String, title: String = "", date: Date?, eventID: String?) throws -> (accepted: Bool, message: String) {
         let message = try receiveTNG(body: body, title: title, date: date, eventID: eventID)
-        let accepted = parseTNG(body, title: title) != nil
-        logAutomation(source: "TNG", outcome: accepted ? "checked" : "ignored", detail: message)
+        let parsed = parseFinancialNotification(body, title: title)
+        let accepted = parsed != nil
+        logAutomation(source: parsed?.sourceBank ?? "银行 / TNG", outcome: accepted ? "checked" : "ignored", detail: message)
         return (accepted, message)
     }
     mutating func receiveTNG(body: String, title: String = "", date: Date?, eventID: String?, now: Date = Date()) throws -> String {
@@ -293,22 +304,25 @@ extension Ledger {
         }
         // Only supported successful payment, outgoing and incoming templates enter the inbox.
         // Unknown text (including promotions, top-ups and receipts) changes no ledger state.
-        guard let verified = parseTNG(text, title: title) else {
+        guard let verified = parseFinancialNotification(text, title: title) else {
             return tr("已忽略：不是已支持的付款、转账或收款通知。", "Ignored: not a supported payment, transfer or incoming-money notice.", "Diabaikan: bukan notifikasi bayaran, pindahan atau wang masuk yang disokong.")
         }
-        let timestamp = date ?? now
+        let timestamp = verified.transactionDate ?? date ?? now
         guard timestamp.timeIntervalSince1970 >= 0, timestamp.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易金额或日期无效。") }
         let explicit = eventID?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard explicit.count <= 500 else { throw LedgerError.invalid("交易金额或日期无效。") }
-        let eventKey = explicit.isEmpty ? nil : "tng:" + SHA256.hash(data: Data(explicit.utf8)).map { String(format: "%02x", $0) }.joined()
+        let referenceKey = verified.reference.map { "bank:" + verified.sourceBank + ":" + verified.kind + ":" + (verified.accountSuffix ?? "") + ":" + $0 }
+        let identity = referenceKey ?? (explicit.isEmpty ? nil : (verified.sourceBank == "TNG" ? explicit : verified.sourceBank + ":" + verified.kind + ":" + explicit))
+        let eventKey = identity.map { "tng:" + SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
         if let eventKey, seenEvents.contains(eventKey) { return tr("相同交易标识已处理，未重复记录。", "This transaction ID was already processed.", "ID transaksi ini sudah diproses.") }
         guard tngNotices.count < 5000 else { throw reviewError("TNG 通知记录已达上限，请先导出备份并清理已处理通知。", "TNG inbox is full. Export a backup and clear processed notices.", "Peti TNG penuh. Eksport sandaran dan kosongkan notifikasi selesai.") }
         let parsed: TNGParsed? = verified
         let duplicate = tngNotices.contains { old in
+            old.provider == verified.sourceBank && old.accountSuffix == verified.accountSuffix &&
             abs(old.date.timeIntervalSince(timestamp)) <= 86400 &&
             (friendKey(old.body) == friendKey(text) || (parsed != nil && old.kind == parsed?.kind && old.cents == parsed?.cents && friendKey(old.party ?? "") == friendKey(parsed?.party ?? "")))
         }
-        var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: date == nil, kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate, recipient: parsed?.recipient)
+        var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: verified.transactionDate == nil && (verified.sourceBank != "TNG" || date == nil), kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate, recipient: parsed?.recipient, sourceBank: verified.sourceBank == "TNG" ? nil : verified.sourceBank, accountSuffix: verified.accountSuffix, bankReference: verified.reference)
         if let parsed, !duplicate {
             if parsed.kind == "payment" {
                 let entry = Expense(merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party), source: "TNG")
@@ -327,7 +341,7 @@ extension Ledger {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].expenseID == nil, tngNotices[i].kind != "incoming",
               cents > 0, cents <= 10_000_000_000, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               merchant.count <= 200, categoryNames.contains(category), date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("付款或分账数据无效。") }
-        let expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: "TNG")
+        let expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider)
         expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
     }
     mutating func excludeTNG(id: String) throws {
@@ -468,4 +482,69 @@ extension LedgerTimelineItem {
             .map { LedgerDayGroup(date: $0.key, entries: $0.value.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }) }
             .sorted { $0.date > $1.date }
     }
+}
+
+struct FeedbackPresentationOwners {
+    private(set) var modals: [UUID] = []
+    mutating func present(_ id: UUID) {
+        guard !modals.contains(id) else { return }
+        modals.append(id)
+    }
+    mutating func dismiss(_ id: UUID) { modals.removeAll { $0 == id } }
+    func isVisible(_ id: UUID?) -> Bool { modals.last == id }
+}
+
+/// Only the nine observed bank templates; unrelated notifications are never posted.
+func parseFinancialNotification(_ body: String, title: String = "") -> TNGParsed? {
+    if let bank = parseBankNotification(body, title: title) { return bank }
+    return parseTNG(body, title: title)
+}
+
+func parseBankNotification(_ body: String, title: String = "") -> TNGParsed? {
+    let text = body.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").replacingOccurrences(of: "’", with: "'")
+    let heading = title.trimmingCharacters(in: .whitespacesAndNewlines)
+    struct Rule {
+        let bank: String, title: String, kind: String, pattern: String
+        let amount: Int
+        var party = 0
+        var account = 0
+        var reference = 0
+        var date = 0
+        var format = ""
+    }
+    let rules: [Rule] = [
+        Rule(bank: "Maybank", title: "Maybank2u: Funds Received", kind: "incoming", pattern: #"\AYou've just received RM\s*([0-9]+(?:\.[0-9]{2})?) in your account ending \*{3}([0-9]{4})\. REF: ([A-Za-z0-9]+)\z"#, amount: 1, account: 2, reference: 3),
+        Rule(bank: "Maybank", title: "Maybank2u: Transfer", kind: "transfer", pattern: #"\ADuitNow of RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200}?)\. Mobile Number : \*{4}[0-9]{4}\. REF: ([A-Za-z0-9]+)\z"#, amount: 1, party: 2, reference: 3),
+        Rule(bank: "Hong Leong", title: "Transaction Notice", kind: "incoming", pattern: #"\AHLB: You have received a transfer of RM\s*([0-9]+(?:\.[0-9]{2})?) into your bank account ending ([0-9]{4}) @([0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2})\z"#, amount: 1, account: 2, date: 3, format: "dd/MM/yyyy HH:mm:ss"),
+        Rule(bank: "Hong Leong", title: "Transaction Notice", kind: "transfer", pattern: #"\AYour transfer of RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200}?) is SUCCESSFUL\.\z"#, amount: 1, party: 2),
+        Rule(bank: "AmBank", title: "AmOnline", kind: "incoming", pattern: #"\AAmBank/AmBank Islamic: (.{1,200}?) transferred MYR\s*([0-9]+(?:\.[0-9]{2})?) to your current/savings account \*{3}([0-9]{4}) on ([0-9]{2}/[0-9]{2}/[0-9]{2} [0-9]{2}:[0-9]{2})\z"#, amount: 2, party: 1, account: 3, date: 4, format: "dd/MM/yy HH:mm"),
+        Rule(bank: "AmBank", title: "AmOnline", kind: "transfer", pattern: #"\AAmBank: RM\s*([0-9]+(?:\.[0-9]{2})?) DuitNow Transfer to \*{3}[0-9]{4}/(.{1,200}?) on ([0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2})\. For queries call AmBank\.\z"#, amount: 1, party: 2, date: 3, format: "dd/MM/yyyy HH:mm"),
+        Rule(bank: "Ryt Bank", title: "Your money is in!", kind: "incoming", pattern: #"\AYou've received RM\s*([0-9]+(?:\.[0-9]{2})?) from (.{1,200}?) on ([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}, [0-9]{1,2}:[0-9]{2} [AP]M) \(GMT\+8\)\.\z"#, amount: 1, party: 2, date: 3, format: "d/M/yyyy, h:mm a"),
+        Rule(bank: "Ryt Bank", title: "Nice! Transfer settled!", kind: "transfer", pattern: #"\AYou've sent RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200}?) on ([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}, [0-9]{1,2}:[0-9]{2} [AP]M) \(GMT\+8\) using your Main Account\.\z"#, amount: 1, party: 2, date: 3, format: "d/M/yyyy, h:mm a"),
+        Rule(bank: "RHB", title: "Funds Received", kind: "incoming", pattern: #"\AYou've received MYR\s*([0-9]+(?:\.[0-9]{2})?) to your account ([0-9]{4}) on ([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2})\.\z"#, amount: 1, account: 2, date: 3, format: "yyyy-MM-dd HH:mm:ss")
+    ]
+    for rule in rules {
+        guard heading.isEmpty || heading == rule.title,
+              let regex = try? NSRegularExpression(pattern: rule.pattern),
+              let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) else { continue }
+        func field(_ index: Int) -> String? {
+            guard index > 0, let range = Range(match.range(at: index), in: text) else { return nil }
+            return String(text[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+        guard let amount = field(rule.amount), let cents = try? toCents(amount), cents > 0, cents <= 10_000_000_000 else { continue }
+        var date: Date?
+        if rule.date > 0 {
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.calendar = Calendar(identifier: .gregorian)
+            formatter.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")
+            formatter.dateFormat = rule.format
+            formatter.isLenient = false
+            formatter.twoDigitStartDate = Date(timeIntervalSince1970: 946684800)
+            guard let raw = field(rule.date), let parsed = formatter.date(from: raw), formatter.string(from: parsed) == raw else { continue }
+            date = parsed
+        }
+        return TNGParsed(kind: rule.kind, cents: cents, party: field(rule.party) ?? "", sourceBank: rule.bank, transactionDate: date, accountSuffix: field(rule.account), reference: field(rule.reference))
+    }
+    return nil
 }

@@ -23,6 +23,7 @@ struct YueJiApp: App {
     @Published var error: String?
     @Published var didFinishLaunch = false
     @Published var loaded = false
+    @Published var feedbackOwners = FeedbackPresentationOwners()
     @Published var savedNotice: UUID?
     @Published var feedbackMessage = ""
     @Published var feedbackMascot = false

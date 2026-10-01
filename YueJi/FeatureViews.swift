@@ -413,7 +413,7 @@ struct FriendDetailView: View {
                 }
             }
         }.navigationTitle(tr("欠款明细", "Balance details", "Butiran baki")).navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $editing) { ExpenseDetailView(id: $0.id) }
+            .sheet(item: $editing) { ExpenseDetailView(id: $0.id).ledgerFeedback(modal: true) }
             .sheet(item: $target) { RepaymentView(target: $0) }
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
@@ -569,21 +569,21 @@ struct AutomationStatusView: View {
         case "saved": return tr("成功入账", "Saved", "Disimpan")
         case "duplicate": return tr("已拦截重复", "Duplicate blocked", "Pendua disekat")
         case "ignored": return tr("已收到 · 未识别或非交易", "Received · unsupported or not a transaction", "Diterima · tidak disokong atau bukan transaksi")
-        case "checked": return source == "TNG" ? tr("通知已处理", "Notification processed", "Notifikasi diproses") : tr("已检查到期项目", "Schedules checked", "Jadual disemak")
+        case "checked": return source != "Recurring" ? tr("通知已处理", "Notification processed", "Notifikasi diproses") : tr("已检查到期项目", "Schedules checked", "Jadual disemak")
         default: return tr("失败", "Failed", "Gagal")
         }
     }
     var body: some View {
         List {
             Section {
-                ForEach(["TNG", "Apple Pay"], id: \.self) { source in
+                ForEach(["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB", "银行 / TNG", "Apple Pay"], id: \.self) { source in
                     if let last = model.ledger.automationEvents.first(where: { $0.source == source }) {
                         LabeledContent(source + tr(" 最近调用", " last call", " panggilan terakhir"), value: dateLabel(last.date, time: true))
                     } else {
                         Text(source + tr(" 暂无调用记录", " has no call logs yet", " belum ada log panggilan"))
                     }
                 }
-                Text(tr("TNG：未识别也会留下记录；若本次没有新日志，请先检查快捷指令是否触发或报错。", "TNG: unsupported notices are logged too. If no new log appears, check whether Shortcuts triggered or reported an error.", "TNG: notifikasi tidak disokong juga dilog. Jika tiada log baharu, semak pencetus atau ralat Pintasan.")).font(.footnote)
+                Text(tr("银行与 TNG：未识别也会留下日志；若本次没有新日志，请先检查快捷指令是否触发或报错。", "Bank and TNG: unsupported notices are logged too. If no new log appears, check whether Shortcuts triggered or reported an error.", "TNG: notifikasi tidak disokong juga dilog. Jika tiada log baharu, semak pencetus atau ralat Pintasan.")).font(.footnote)
                 Button(tr("刷新", "Refresh", "Muat semula")) { model.reload() }
                 Text(tr("显示实际调用记录，不代表快捷指令已启用或签名仍有效。App 无法检测没有触发的交易，也无法判断是否漏账。最多保留 100 条；日志写入失败时无法留痕。", "Shows actual action calls, not whether Shortcuts is enabled or signing is valid. The app cannot detect transactions that never triggered or establish completeness. Keeps 100 events; storage failure may prevent logging.", "Memaparkan panggilan tindakan sebenar, bukan status pengaktifan Pintasan atau tandatangan. Aplikasi tidak dapat mengesan transaksi yang tidak tercetus atau memastikan kelengkapan. Menyimpan 100 peristiwa; kegagalan storan boleh menghalang log.")).font(.footnote)
             }
@@ -967,7 +967,7 @@ struct LedgerFilterEditor: View {
                 }
                 Picker(tr("来源", "Source", "Sumber"), selection: $value.source) {
                     Text(tr("全部", "All", "Semua")).tag("")
-                    ForEach(["手动", "Apple Pay", "TNG", "固定消费"], id: \.self) { Text(sourceLabel($0)).tag($0) }
+                    ForEach(["手动", "Apple Pay", "TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB", "固定消费"], id: \.self) { Text(sourceLabel($0)).tag($0) }
                 }
                 TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
@@ -1052,7 +1052,7 @@ struct TNGInboxView: View {
     @State private var clearing = false
     var body: some View {
         List {
-            NavigationLink(tr("TNG 接入步骤", "TNG setup", "Persediaan TNG")) { TNGSetupView() }
+            NavigationLink(tr("银行与 TNG 接入", "Bank and TNG setup", "Persediaan bank dan TNG")) { TNGSetupView() }
             Section(tr("收款概览 · 全部月份", "Incoming summary · all months", "Ringkasan wang masuk · semua bulan")) {
                 LabeledContent(tr("待确认收款", "Incoming to review", "Wang masuk untuk semakan"), value: String(model.ledger.tngNotices.filter { $0.kind == "incoming" && $0.status == "pending" }.count))
                 LabeledContent(tr("已确认其他收入", "Confirmed other income", "Pendapatan lain disahkan"), value: money(model.ledger.tngNotices.filter { $0.kind == "incoming" && $0.status == "income" }.reduce(0) { $0 + ($1.cents ?? 0) }))
@@ -1061,17 +1061,12 @@ struct TNGInboxView: View {
             Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
             ForEach(model.ledger.tngNotices.filter { !pendingOnly || $0.status == "pending" }.sorted { $0.date > $1.date }) { item in
                 NavigationLink { if item.kind == "incoming" { TNGIncomingView(id: item.id) } else { TNGNoticeView(id: item.id) } } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(item.party ?? tr("TNG 通知", "TNG notification", "Notifikasi TNG")).font(.headline)
-                        Text(tngStatus(item)).foregroundStyle(item.status == "pending" ? Color.orange : Color.secondary)
-                        if item.cents != nil { Text(tngSignedAmount(item)).foregroundStyle(item.kind == "incoming" ? Color.green : Color.primary) }
-                        Text(dateLabel(item.date, time: true)).font(.caption)
-                    }
+                    TNGTimelineRow(notice: item)
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
             }
-            if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入 TNG 通知。", "Waiting for TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
+            if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入银行或 TNG 通知。", "Waiting for bank or TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
-        }.navigationTitle(tr("TNG 通知记录", "TNG inbox", "Peti TNG")).navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle(tr("银行与 TNG 通知", "Bank and TNG inbox", "Peti bank dan TNG")).navigationBarTitleDisplayMode(.inline)
             .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账和待确认保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers and pending notices remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
                 Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.status == "recorded" || $0.status == "ignored" } } }
             }
@@ -1094,7 +1089,8 @@ struct TNGNoticeView: View {
         Form {
             if let notice {
                 Section {
-                    TNGStatusFeedback(notice: notice)
+                    TNGTimelineRow(notice: notice)
+                    if let reference = notice.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
                     if !notice.title.isEmpty { Text(notice.title) }
                     Text(notice.body).textSelection(.enabled)
                     Text(dateLabel(notice.date, time: true)).font(.caption)
@@ -1119,16 +1115,13 @@ struct TNGNoticeView: View {
                     Button(tr("不计消费 / 排除此通知", "Exclude from spending", "Kecualikan daripada belanja"), role: .destructive) { excluding = true }
                 }
             }
-        }.navigationTitle("TNG")
-            .overlay(alignment: .top) {
-                if let token = model.savedNotice { SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot) }
-            }
+        }.navigationTitle(notice?.provider ?? "TNG")
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
                 category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant)
             }
-            .sheet(item: $editing) { ExpenseDetailView(id: $0.id) }
+            .sheet(item: $editing) { ExpenseDetailView(id: $0.id).ledgerFeedback(modal: true) }
             .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("确认入账", "Record", "Rekod")) {
                     do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category) }; model.reload(); model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) } catch { self.error = error.localizedDescription }
@@ -1141,7 +1134,22 @@ struct TNGNoticeView: View {
     }
 }
 struct TNGSetupView: View {
-    var body: some View { ShortcutSetupGuide(provider: .tng) }
+    var body: some View {
+        List {
+            Section(tr("一个快捷指令，多家银行", "One shortcut, multiple banks", "Satu pintasan, pelbagai bank")) {
+                Text(tr("在通知触发器的 App 旁点 ＋，加入 TNG、MAE、HLB、AmOnline、Ryt 和 RHB。", "Tap + beside App in the notification trigger and add TNG, MAE, HLB, AmOnline, Ryt and RHB.", "Ketik + di sebelah App dalam pencetus notifikasi dan tambah TNG, MAE, HLB, AmOnline, Ryt dan RHB."))
+                Text(tr("动作选择「记录银行与 TNG 通知」。旧 TNG 动作保留兼容。", "Use Record bank and TNG notification. Existing TNG actions remain compatible.", "Guna Record bank and TNG notification. Tindakan TNG lama kekal serasi."))
+                Text("Notification body → Body\nNotification title → Title\nNotification date → Date（若提供 / if available）")
+                Text(tr("交易标识没有对应值就留空；不要填固定文字。选择立即运行，并按系统要求授权。", "Leave transaction ID empty if unavailable; do not enter a fixed value. Select Run Immediately and grant requested system permissions.", "Biarkan ID transaksi kosong jika tiada; jangan isi nilai tetap. Pilih Run Immediately dan beri kebenaran sistem."))
+            }
+            Section(tr("目前支持的通知样本", "Supported notification samples", "Sampel notifikasi disokong")) {
+                Text("Maybank / Hong Leong / AmBank / Ryt: 转入与转出 · incoming/outgoing")
+                Text("RHB: 转入 · incoming only")
+                Text(tr("仅适配提供的英文格式。通知不完整或格式改变时会留下未识别日志；这不是银行 API，不同步余额或历史交易。", "Only the supplied English formats are supported. Incomplete or changed notices are logged as unsupported. This is not a bank API and does not sync balances or history.", "Hanya format Inggeris yang diberi disokong. Format tidak lengkap atau berubah dilog. Ini bukan API bank dan tidak menyegerakkan baki atau sejarah."))
+            }
+            NavigationLink(tr("TNG 详细指南", "Detailed TNG guide", "Panduan TNG terperinci")) { ShortcutSetupGuide(provider: .tng) }
+        }.navigationTitle(tr("银行通知设置", "Bank notification setup", "Tetapan notifikasi bank"))
+    }
 }
 
 import Vision
@@ -2081,8 +2089,11 @@ struct TNGIncomingView: View {
             if let n = notice {
                 Section {
                     Text("+" + money(n.cents ?? 0)).font(.title.bold()).foregroundStyle(.green)
-                    LabeledContent(tr("转账人", "Sender", "Pengirim"), value: n.party ?? "—")
-                    LabeledContent(tr("收款人", "Recipient", "Penerima"), value: n.recipient ?? "—")
+                    Text(n.provider).font(.headline)
+                    if let party = n.party, !party.isEmpty { Text(tr("来自：", "From: ", "Daripada: ") + party).fixedSize(horizontal: false, vertical: true) }
+                    if let recipient = n.recipient, !recipient.isEmpty { Text(tr("收款人：", "Recipient: ", "Penerima: ") + recipient).fixedSize(horizontal: false, vertical: true) }
+                    if let account = n.accountSuffix { LabeledContent(tr("账户尾号", "Account ending", "Akhiran akaun"), value: account) }
+                    if let reference = n.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
                     TNGStatusFeedback(notice: n)
                     DisclosureGroup(tr("通知原文", "Original notification", "Notifikasi asal")) { Text(n.body).textSelection(.enabled) }
                 }
@@ -2097,9 +2108,6 @@ struct TNGIncomingView: View {
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
         }.navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
-            .overlay(alignment: .top) {
-                if let token = model.savedNotice { SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot) }
-            }
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
             .confirmationDialog(tr("确认此收款用途？", "Confirm this purpose?", "Sahkan tujuan ini?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认保存", "Confirm and save", "Sahkan dan simpan")) { save() }
@@ -2136,7 +2144,7 @@ struct TNGIncomingView: View {
                 Text(tr("按整笔收款抵扣欠款，支持未还清；如果此前已手动记过这笔还款，请选忽略。", "Applies the full receipt to debt; partial debt repayment is supported. Ignore if this receipt was already recorded manually.", "Gunakan seluruh penerimaan untuk hutang; bayaran separa hutang disokong. Abaikan jika sudah direkod manual.")).font(.caption)
             }
             DatePicker(tr("实际收到日期", "Date received", "Tarikh diterima"), selection: $date, in: ...Date())
-            Text(tr("通知未提供交易日期，默认使用接收时间。收入单独保存在 TNG 收款记录，自己账户转入不计收入；两者不改变消费预算。", "Notification has no transaction date, so received time is used. Income stays in TNG receipt records; own transfers are not income. Neither changes spending budgets.", "Notifikasi tiada tarikh transaksi, jadi masa diterima digunakan. Pendapatan disimpan dalam rekod TNG; pindahan sendiri bukan pendapatan. Kedua-duanya tidak mengubah bajet belanja.")).font(.caption)
+            Text(tr("优先使用通知中的交易日期，缺少时使用接收时间。收入保存在收款记录，自己账户转入不计收入；两者不改变消费预算。", "Uses the transaction date in the notification, or received time when absent. Income stays in receipt records; own transfers are not income. Neither changes spending budgets.", "Tarikh transaksi digunakan jika ada, jika tiada masa diterima digunakan. Pendapatan disimpan dalam rekod penerimaan; pindahan sendiri bukan pendapatan. Kedua-duanya tidak mengubah bajet belanja.")).font(.caption)
             if notice?.possibleDuplicate == true {
                 Toggle(tr("已核对：这是另一笔真实收款", "Checked: this is a separate receipt", "Disemak: ini penerimaan berasingan"), isOn: $distinct)
             }
