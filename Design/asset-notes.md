@@ -11,3 +11,7 @@ Audio: original synthesized bell tones. Rebuild with `python3 scripts/generate_s
 QA pending on iPhone: cold launch / warm return, silent switch, music playing, sound toggle, reduced motion, save response, goal reached and opening preview. Linux checks confirm source wiring and resource integrity; they do not verify native rendering or audio routing.
 
 1.38 motion: 4.8-second skippable opening; hello, dance, star and hug interactions, each with a distinct cue. Launch cue is peak-limited to 14000 PCM units. Check quick repeated taps, skip during each stage, large text, reduced motion, and toggling sound off during playback on device.
+
+1.38.2: opening and melody shortened to 1.6 seconds; overview companion panel removed. Save/delete/goal feedback stays. Verify DuitNow successful-transfer notification and optional title with the added regression tests.
+
+1.39.0: unified chronological ledger with transfer-purpose badges and zoom destinations. Adaptive category buttons, large amount input and save progress/retry. Six active cues (opening/save/delete/undo/deposit/goal), selectable scope and independent haptics. Automatic result notifications are silent. Pending TNG arrivals persist across launches until dismissed. First-install notice tracking establishes a baseline. Native QA still required: timeline sorting/filtering, rapid save, failed storage, delete/undo, large text, Reduce Motion, mute switch, each sound mode, new arrival while backgrounded, and savings threshold celebration.

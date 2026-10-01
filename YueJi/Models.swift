@@ -226,7 +226,7 @@ func tngSignedAmount(_ notice: TNGNotice) -> String {
 }
 func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
     let titleKey = friendKey(title).replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
-    guard ["", "payment", "transfer successful", "ka-ching! incoming money", "you've received money"].contains(titleKey) else { return nil }
+    guard ["", "payment", "transfer successful", "duitnow transfer is successful", "ka-ching! incoming money", "you've received money"].contains(titleKey) else { return nil }
     let text = body.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     if titleKey.isEmpty || titleKey == "ka-ching! incoming money" {
         let pattern = #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) received from (.{1,200}?) for (.{1,200})\.\z"#
@@ -252,11 +252,11 @@ func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
         }
     }
     let patterns = [
-        ("payment", #"\AYou have paid RM\s*([0-9]+(?:\.[0-9]{2})?) for (.{1,200})\.\z"#),
-        ("transfer", #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) has been successfully transferred to (.{1,200})\.\z"#)
+        ("payment", "payment", #"\AYou have paid RM\s*([0-9]+(?:\.[0-9]{2})?) for (.{1,200})\.\z"#),
+        ("transfer", "transfer successful", #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) has been successfully transferred to (.{1,200})\.\z"#),
+        ("transfer", "duitnow transfer is successful", #"\AYou have successfully transferred RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200})\.\z"#)
     ]
-    for (kind, pattern) in patterns {
-        let expectedTitle = kind == "payment" ? "payment" : "transfer successful"
+    for (kind, expectedTitle, pattern) in patterns {
         guard titleKey.isEmpty || titleKey == expectedTitle else { continue }
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
@@ -436,5 +436,36 @@ enum SavingsPlanMath {
     }
     static func months(remaining: Int, contribution: Int) -> Int {
         monthly(remaining: remaining, installments: contribution)
+    }
+}
+
+/// Tracks arrivals across launches; an initial install establishes a baseline.
+struct TNGReviewTracker {
+    var observed: Set<String>?
+    var pending: Set<String> = []
+    mutating func observe(_ current: Set<String>) {
+        pending.formIntersection(current)
+        if let observed { pending.formUnion(current.subtracting(observed)) }
+        observed = current
+    }
+}
+
+enum LedgerTimelineItem: Identifiable {
+    case expense(Expense), transfer(TNGNotice)
+    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id } }
+    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date } }
+}
+struct LedgerDayGroup: Identifiable {
+    let date: Date
+    let entries: [LedgerTimelineItem]
+    var id: Date { date }
+}
+
+extension LedgerTimelineItem {
+    static func grouped(expenses: [Expense], transfers: [TNGNotice]) -> [LedgerDayGroup] {
+        let items = expenses.map(Self.expense) + transfers.map(Self.transfer)
+        return Dictionary(grouping: items, by: { Calendar.current.startOfDay(for: $0.date) })
+            .map { LedgerDayGroup(date: $0.key, entries: $0.value.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }) }
+            .sorted { $0.date > $1.date }
     }
 }

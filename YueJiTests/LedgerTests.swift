@@ -5,11 +5,11 @@ import AVFoundation
 
 final class LedgerTests: XCTestCase {
     @MainActor func testBundledFeedbackSoundsDecodeWithoutPlaying() throws {
-        for name in ["LaunchChime", "SavedChime", "GoalChime", "HelloChime", "DanceChime", "StarChime", "HugChime"] {
+        for name in ["LaunchChime", "SavedChime", "GoalChime", "DeleteCue", "RestoreCue", "DepositCue"] {
             let asset = try XCTUnwrap(NSDataAsset(name: name))
             let player = try AVAudioPlayer(data: asset.data)
             XCTAssertGreaterThan(player.duration, 0.15)
-            XCTAssertLessThan(player.duration, name == "LaunchChime" ? 4.8 : 1.2)
+            XCTAssertLessThan(player.duration, name == "LaunchChime" ? 1.7 : 1.2)
             XCTAssertEqual(player.numberOfChannels, 1)
         }
     }
@@ -1242,5 +1242,85 @@ final class TNGLedgerPresentationTests: XCTestCase {
         let incoming = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "incoming" })
         try ledger.resolveTNGIncoming(id: incoming.id, purpose: "income", date: now)
         XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).first?.status, "income")
+    }
+}
+
+final class DuitNowNotificationTests: XCTestCase {
+    private let body = "You have successfully transferred RM 0.01 to TEST NAME/SECOND NAME."
+    private let title = "DuitNow Transfer is successful!"
+    func testScreenshotFormatAndOptionalTitle() throws {
+        for heading in [title, ""] {
+            let result = try XCTUnwrap(parseTNG(body, title: heading))
+            XCTAssertEqual(result.kind, "transfer")
+            XCTAssertEqual(result.cents, 1)
+            XCTAssertEqual(result.party, "TEST NAME/SECOND NAME")
+        }
+        XCTAssertNotNil(parseTNG(body.replacingOccurrences(of: " to ", with: " to\n"), title: title))
+        for heading in ["Promotion", "Payment", "You've received money!"] {
+            XCTAssertNil(parseTNG(body, title: heading))
+        }
+        for text in [body.replacingOccurrences(of: "0.01", with: "-0.01"),
+                     body.replacingOccurrences(of: "0.01", with: "0.001"),
+                     body.replacingOccurrences(of: "successfully", with: "unsuccessfully"),
+                     "Offer: " + body] {
+            XCTAssertNil(parseTNG(text, title: title))
+        }
+    }
+    func testDeliveryAppearsInLedgerAndDeduplicates() throws {
+        var ledger = Ledger()
+        let date = Date()
+        let result = try ledger.processTNGNotification(body: body, title: title, date: date, eventID: "duitnow-test")
+        XCTAssertTrue(result.accepted)
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: date).count, 1)
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: date).first?.status, "transfer")
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        _ = try ledger.processTNGNotification(body: body, title: title, date: date, eventID: "duitnow-test")
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+    }
+}
+
+final class FeedbackPolicyTests: XCTestCase {
+    func testNoticeReviewSurvivesRepeatedReadsAndRemovesDeletedItems() {
+        var tracker = TNGReviewTracker(observed: nil)
+        tracker.observe(["old"])
+        XCTAssertTrue(tracker.pending.isEmpty)
+        tracker.observe(["old", "new"])
+        XCTAssertEqual(tracker.pending, ["new"])
+        tracker.observe(["old", "new"])
+        XCTAssertEqual(tracker.pending, ["new"])
+        tracker = TNGReviewTracker(observed: tracker.observed, pending: tracker.pending)
+        tracker.observe(["old", "new", "later"])
+        XCTAssertEqual(tracker.pending, ["new", "later"])
+        tracker.observe(["old", "later"])
+        XCTAssertEqual(tracker.pending, ["later"])
+        tracker.pending = []
+        tracker.observe(["old", "later"])
+        XCTAssertTrue(tracker.pending.isEmpty)
+    }
+    @MainActor func testSoundModesRespectMasterMuteAndLimitSuccessMode() {
+        let cues: [FeedbackSounds.Cue] = [.launch, .saved, .goal, .deleted, .restored, .deposit]
+        for cue in cues {
+            XCTAssertFalse(FeedbackSounds.permits(cue, mode: "full", enabled: false))
+            XCTAssertFalse(FeedbackSounds.permits(cue, mode: "off", enabled: true))
+            XCTAssertTrue(FeedbackSounds.permits(cue, mode: "full", enabled: true))
+            XCTAssertEqual(FeedbackSounds.permits(cue, mode: "success", enabled: true), cue == .saved || cue == .goal)
+        }
+    }
+}
+
+final class TimelineOrderingTests: XCTestCase {
+    func testExpensesAndTransfersShareChronologicalDays() throws {
+        let day = Calendar.current.startOfDay(for: Date())
+        let expense = Expense(merchant: "Lunch", cents: 1200, date: day.addingTimeInterval(3600))
+        let incoming = TNGNotice(body: "test", title: "", date: day.addingTimeInterval(7200), usesReceivedDate: false, kind: "incoming", status: "pending", cents: 500, party: "Friend")
+        let groups = LedgerTimelineItem.grouped(expenses: [expense], transfers: [incoming])
+        XCTAssertEqual(groups.count, 1)
+        XCTAssertEqual(groups[0].entries.map(\.id), ["tng:" + incoming.id, "expense:" + expense.id])
+        var old = incoming
+        old.id = "older"
+        old.date = try XCTUnwrap(Calendar.current.date(byAdding: .day, value: -1, to: day))
+        let days = LedgerTimelineItem.grouped(expenses: [expense], transfers: [old, incoming])
+        XCTAssertEqual(days.count, 2)
+        XCTAssertGreaterThan(days[0].date, days[1].date)
     }
 }

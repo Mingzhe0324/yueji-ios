@@ -1094,7 +1094,7 @@ struct TNGNoticeView: View {
         Form {
             if let notice {
                 Section {
-                    Text(tngStatus(notice)).font(.headline)
+                    TNGStatusFeedback(notice: notice)
                     if !notice.title.isEmpty { Text(notice.title) }
                     Text(notice.body).textSelection(.enabled)
                     Text(dateLabel(notice.date, time: true)).font(.caption)
@@ -1120,6 +1120,9 @@ struct TNGNoticeView: View {
                 }
             }
         }.navigationTitle("TNG")
+            .overlay(alignment: .top) {
+                if let token = model.savedNotice { SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot) }
+            }
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
@@ -1128,7 +1131,7 @@ struct TNGNoticeView: View {
             .sheet(item: $editing) { ExpenseDetailView(id: $0.id) }
             .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("确认入账", "Record", "Rekod")) {
-                    do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category) }; model.reload() } catch { self.error = error.localizedDescription }
+                    do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category) }; model.reload(); model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) } catch { self.error = error.localizedDescription }
                 }
             }
             .confirmationDialog(tr("排除此通知？如已自动入账，将移除关联消费；已有分账或退款时会阻止操作。", "Exclude this notice? Its linked expense will be removed unless splits or refunds exist.", "Kecualikan notifikasi? Belanja berkaitan dibuang kecuali bahagian atau pulangan wujud."), isPresented: $excluding, titleVisibility: .visible) {
@@ -2080,7 +2083,7 @@ struct TNGIncomingView: View {
                     Text("+" + money(n.cents ?? 0)).font(.title.bold()).foregroundStyle(.green)
                     LabeledContent(tr("转账人", "Sender", "Pengirim"), value: n.party ?? "—")
                     LabeledContent(tr("收款人", "Recipient", "Penerima"), value: n.recipient ?? "—")
-                    Text(tngStatus(n))
+                    TNGStatusFeedback(notice: n)
                     DisclosureGroup(tr("通知原文", "Original notification", "Notifikasi asal")) { Text(n.body).textSelection(.enabled) }
                 }
                 if n.status == "pending" { reviewSection }
@@ -2094,6 +2097,9 @@ struct TNGIncomingView: View {
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
         }.navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
+            .overlay(alignment: .top) {
+                if let token = model.savedNotice { SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot) }
+            }
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
             .confirmationDialog(tr("确认此收款用途？", "Confirm this purpose?", "Sahkan tujuan ini?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认保存", "Confirm and save", "Sahkan dan simpan")) { save() }
@@ -2141,7 +2147,7 @@ struct TNGIncomingView: View {
     private func save() {
         do {
             try LocalStore.shared.change { try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct) }
-            model.reload(); model.showSaved()
+            model.reload(); model.showSaved(message: tr("用途已确认", "Purpose confirmed", "Tujuan disahkan"))
         } catch { self.error = error.localizedDescription }
     }
 }
@@ -2164,7 +2170,7 @@ struct SavingsGoalsView: View {
                 NavigationLink { SavingsGoalDetail(id: goal.id) } label: {
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Text(goal.name).font(.headline)
+                            Label(goal.name, systemImage: "target").font(.headline)
                             Spacer()
                             if goal.balance >= goal.target { Image(systemName: "checkmark.seal.fill").foregroundStyle(.green) }
                         }
@@ -2460,7 +2466,7 @@ private struct SavingsGoalDetail: View {
             Button(tr("确认", "Confirm", "Sahkan")) { record() }
             Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
         }
-        .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重新输入", "Edit amount", "Edit amaun")) { recording = true }; Button(tr("关闭", "Close", "Tutup"), role: .cancel) {} } message: { Text(error ?? "") }
         .confirmationDialog(tr("删除目标及全部储蓄记录？", "Delete this goal and its savings history?", "Padam matlamat dan sejarahnya?"), isPresented: $deleting, titleVisibility: .visible) {
             Button(tr("删除目标", "Delete goal", "Padam matlamat"), role: .destructive) {
                 do { try LocalStore.shared.change { $0.savingsGoals.removeAll { $0.id == id } }; model.reload(postRecurring: false); dismiss() }
@@ -2485,8 +2491,10 @@ private struct SavingsGoalDetail: View {
                 return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
             }
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.5)) { model.reload(postRecurring: false); celebrated = reached }
-            model.showSaved(sound: reached ? .goal : .saved)
-        } catch { self.error = error.localizedDescription }
+            model.showSaved(message: reached ? tr("目标完成！", "Goal complete!", "Matlamat tercapai!") :
+                (withdrawing ? tr("已取出 ", "Withdrawn ", "Dikeluarkan ") : tr("已存入 ", "Deposited ", "Disimpan ")) + money(cents),
+                sound: reached ? .goal : (withdrawing ? .saved : .deposit))
+        } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
 }
 
@@ -2541,5 +2549,16 @@ private struct ReceiptComparisonView: View {
                 region = crop.map { UIImage(cgImage: $0) }; searching = false
             }
         }
+    }
+}
+
+struct TNGStatusFeedback: View {
+    let notice: TNGNotice
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Label(tngStatus(notice), systemImage: notice.status == "pending" ? "clock" : "checkmark.circle.fill")
+            .font(.headline).foregroundStyle(notice.status == "pending" ? Color.orange : Color.green)
+            .contentTransition(.opacity)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: notice.status)
     }
 }

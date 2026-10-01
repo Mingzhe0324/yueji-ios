@@ -53,6 +53,7 @@ struct MainView: View {
     @AppStorage("playfulAnimations") private var playful = true
     @State private var showingGuide = false
     @State private var selectedTab = 0
+    @State private var showingNewTNG = false
     var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
@@ -76,7 +77,7 @@ struct MainView: View {
             .task {
                 model.reload(postRecurring: false)
                 if !model.didFinishLaunch {
-                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(4800)) } catch { return } }
+                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(1600)) } catch { return } }
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
                 }
                 await AutomaticRates.shared.refreshSaved(); model.reload()
@@ -87,8 +88,9 @@ struct MainView: View {
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true }) {
                 UsageGuideView()
             }
-            .onChange(of: selectedTab) { _, _ in UISelectionFeedbackGenerator().selectionChanged() }
+            .onChange(of: selectedTab) { _, _ in FeedbackHaptics.selection() }
             .overlay(alignment: .top) {
+                VStack(spacing: 8) {
                 if !model.undoEntries.isEmpty {
                     HStack(spacing: 16) {
                         Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
@@ -99,10 +101,32 @@ struct MainView: View {
                     }
                     .padding(.horizontal, 16).ledgerGlass().padding(.horizontal, 24).padding(.top, 8)
                     .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                } else if let token = model.savedNotice {
-                    SavedFeedback(token: token)
+                }
+                if let token = model.savedNotice {
+                    SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
                         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .scale(scale: 0.92)).combined(with: .opacity))
                 }
+            }
+            }
+            .safeAreaInset(edge: .top) {
+                if model.didFinishLaunch && model.newTNGCount > 0 {
+                    HStack {
+                        Button {
+                            model.dismissNewTNG(); showingNewTNG = true
+                        } label: {
+                            Label(tr("新增 \(model.newTNGCount) 笔 TNG 记录", "\(model.newTNGCount) new TNG records", "\(model.newTNGCount) rekod TNG baharu"), systemImage: "tray.and.arrow.down")
+                                .font(.subheadline.weight(.medium))
+                        }
+                        Spacer()
+                        Button { model.dismissNewTNG() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
+                            .accessibilityLabel(tr("关闭提示", "Dismiss notice", "Tutup notis"))
+                    }.padding(.horizontal, 18).background(.bar)
+                }
+            }
+            .sheet(isPresented: $showingNewTNG) {
+                NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
+                    Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
+                } } }
             }
             .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82), value: model.savedNotice)
             .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: model.undoEntries.count)
@@ -138,9 +162,10 @@ struct MonthPicker: View {
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
         }
     }
-    private func shift(_ n: Int) { UISelectionFeedbackGenerator().selectionChanged(); withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9)) { month = shiftedMonth(month, by: n) } }
+    private func shift(_ n: Int) { FeedbackHaptics.selection(); withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9)) { month = shiftedMonth(month, by: n) } }
 }
 struct DashboardView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var guideFocus: String? = nil
     @Namespace private var navigationMotion
     @EnvironmentObject var model: LedgerModel
@@ -162,7 +187,6 @@ struct DashboardView: View {
                 VStack(spacing: 24) {
                     PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
                     MonthPicker(month: monthBinding)
-                    MoonCompanionCard()
                     spendingCard
                     recentCard
                     NavigationLink { SavingsGoalsView() } label: {
@@ -172,6 +196,7 @@ struct DashboardView: View {
                                 if let goal = model.ledger.savingsGoals.first(where: { $0.balance < $0.target }) ?? model.ledger.savingsGoals.first {
                                     HStack { Text(goal.name); Spacer(); Text(money(goal.balance)).monospacedDigit() }
                                     ProgressView(value: goal.progress).tint(.blue)
+                                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: goal.progress)
                                 } else {
                                     Text(tr("为想做的事，存下第一笔。", "Set aside your first contribution.", "Asingkan simpanan pertama anda.")).font(.subheadline).foregroundStyle(.secondary)
                                 }
@@ -268,7 +293,7 @@ struct DashboardView: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Budget remaining", "Baki bajet"))
                         Spacer()
-                        Text(money(abs(budget - personal))).monospacedDigit().fontWeight(.semibold)
+                        AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
                     }.font(.subheadline)
                     SpendingMeter(value: personal, total: budget, color: personal > budget ? .orange : ink)
                 }
@@ -405,11 +430,6 @@ struct ExpenseRow: View {
         }.padding(.vertical, 10)
     }
 }
-private struct LedgerDayGroup: Identifiable {
-    let date: Date
-    let entries: [Expense]
-    var id: Date { date }
-}
 struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -430,8 +450,7 @@ struct ExpensesView: View {
     private var entries: [Expense] { (try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? [] }
     private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search) }
     private var days: [LedgerDayGroup] {
-        Dictionary(grouping: entries, by: { Calendar.current.startOfDay(for: $0.date) })
-            .map { LedgerDayGroup(date: $0.key, entries: $0.value) }.sorted { $0.date > $1.date }
+        LedgerTimelineItem.grouped(expenses: entries, transfers: transfers)
     }
     var body: some View {
         NavigationStack {
@@ -447,44 +466,12 @@ struct ExpensesView: View {
                         AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personal })
                             .font(.system(.title2, design: .default, weight: .semibold)).foregroundStyle(ink)
                         HStack {
-                            Text(String(entries.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
+                            Text(String(entries.count + transfers.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                                 .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
                         }
                     }.padding(.vertical, 6)
-                }
-                Section {
-                    NavigationLink { AutomationStatusView() } label: {
-                        Label(tr("TNG 没有记录？查看运行状态", "Missing TNG entry? Check status", "Rekod TNG tiada? Semak status"), systemImage: "bolt.badge.clock")
-                    }
-                    ForEach(transfers) { notice in
-                        NavigationLink {
-                            if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
-                            else { TNGNoticeView(id: notice.id) }
-                        } label: {
-                            HStack(spacing: 12) {
-                                Image(systemName: notice.kind == "incoming" ? "arrow.down.left.circle.fill" : "arrow.up.right.circle.fill")
-                                    .font(.title2).foregroundStyle(notice.kind == "incoming" ? Color.green : Color.orange)
-                                VStack(alignment: .leading, spacing: 4) {
-                                    Text(notice.party ?? "TNG").font(.headline)
-                                    Text((notice.kind == "incoming" ? tr("转入", "Incoming", "Masuk") : tr("转出", "Outgoing", "Keluar")) + " · " + tngStatus(notice))
-                                        .font(.caption).foregroundStyle(.secondary)
-                                    Text(dateLabel(notice.date, time: true)).font(.caption2).foregroundStyle(.secondary)
-                                }
-                                Spacer()
-                                Text(tngSignedAmount(notice)).font(.subheadline.weight(.semibold)).monospacedDigit()
-                                    .foregroundStyle(notice.kind == "incoming" ? Color.green : Color.primary)
-                            }.padding(.vertical, 6)
-                        }
-                    }
-                    if transfers.isEmpty {
-                        Text(tr("这个月没有符合搜索条件的 TNG 转账记录。", "No TNG transfers match this month and search.", "Tiada pindahan TNG sepadan dengan bulan dan carian ini.")).font(.caption).foregroundStyle(.secondary)
-                    }
-                } header: {
-                    Text(tr("TNG 转入 / 转出", "TNG incoming / outgoing", "TNG masuk / keluar"))
-                } footer: {
-                    Text(tr("显示所选月份的转账；消费筛选不影响此区。转入点开确认用途；转出可确认记为消费。疑似重复需核对，上方消费合计不包含未计为消费的转账。", "Transfers follow the selected month and search, not expense filters. Open incoming money to confirm its purpose, or outgoing money to record an expense. Review possible duplicates. Transfers are excluded from the spending total until recorded as expenses.", "Pindahan mengikut bulan dan carian, bukan penapis belanja. Buka wang masuk untuk sahkan tujuan atau wang keluar untuk rekod belanja. Semak pendua. Pindahan tidak termasuk jumlah belanja sehingga disahkan sebagai belanja."))
                 }
                 if entries.isEmpty && transfers.isEmpty {
                     ContentUnavailableView {
@@ -503,7 +490,13 @@ struct ExpensesView: View {
                 }
                 ForEach(days) { day in
                     Section {
-                        ForEach(day.entries) { entry in
+                        ForEach(day.entries) { item in
+                            switch item {
+                            case .transfer(let notice):
+                                NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
+                                    TNGTimelineRow(notice: notice)
+                                }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
+                            case .expense(let entry):
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
                                 .scaleEffect(model.removingExpenseIDs.contains(entry.id) ? 0.88 : 1, anchor: .trailing)
                                 .offset(x: model.removingExpenseIDs.contains(entry.id) ? 44 : 0)
@@ -520,6 +513,7 @@ struct ExpensesView: View {
                                     Button(tr("编辑", "Edit", "Edit"), systemImage: "pencil") { editing = entry }
                                     Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive) { deleting = entry }
                                 }
+                            }
                         }
                     } header: { Text(dateLabel(day.date)) }
                 }
@@ -546,8 +540,35 @@ struct ExpensesView: View {
                 }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
-                .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: entries.map(\.id))
+                .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: days.flatMap { $0.entries.map(\.id) })
         }
+    }
+}
+private struct TNGTimelineDetail: View {
+    let notice: TNGNotice
+    var body: some View {
+        Group { if notice.kind == "incoming" { TNGIncomingView(id: notice.id) } else { TNGNoticeView(id: notice.id) } }
+    }
+}
+private struct TNGTimelineRow: View {
+    let notice: TNGNotice
+    @Environment(\.dynamicTypeSize) private var textSize
+    var body: some View {
+        let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12))
+        layout {
+            Image(systemName: notice.kind == "incoming" ? "arrow.down.left.circle.fill" : "arrow.up.right.circle.fill")
+                .font(.title2).foregroundStyle(notice.kind == "incoming" ? Color.green : Color.orange)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(notice.party ?? "TNG").font(.headline)
+                Text(notice.kind == "incoming" ? tr("TNG 转入", "TNG incoming", "TNG masuk") : tr("TNG 转出", "TNG outgoing", "TNG keluar")).font(.caption).foregroundStyle(.secondary)
+                Label(tngStatus(notice), systemImage: notice.status == "pending" ? "clock" : "checkmark.circle.fill")
+                    .font(.caption2.weight(.medium)).foregroundStyle(notice.status == "pending" ? Color.orange : Color.secondary)
+                    .padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule())
+            }
+            if !textSize.isAccessibilitySize { Spacer(minLength: 8) }
+            Text(tngSignedAmount(notice)).font(.headline).monospacedDigit()
+                .foregroundStyle(notice.kind == "incoming" ? Color.green : Color.primary).layoutPriority(1)
+        }.padding(.vertical, 8)
     }
 }
 struct ExpenseDetailView: View {
@@ -628,7 +649,7 @@ struct ExpenseDetailView: View {
                 }
             }
             .sheet(item: $editing) { ExpenseEditor(original: $0) }
-            .overlay(alignment: .top) { if let token = model.savedNotice { SavedFeedback(token: token) } }
+            .overlay(alignment: .top) { if let token = model.savedNotice { SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot) } }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
             .onChange(of: entry == nil) { _, missing in if missing { dismiss() } }
         }
@@ -702,6 +723,7 @@ struct ExpenseEditor: View {
     @State private var people = [FriendDraft()]
     @State private var error: String?
     @State private var initialized = false
+    @State private var saving = false
     @State private var rateLoading = false
     @State private var rateNote = ""
     private func foreign() throws -> ForeignAmount? {
@@ -727,7 +749,7 @@ struct ExpenseEditor: View {
                         if let q = model.ledger.rates[code] { rate = q.text; rateDate = q.date; rateSource = q.source }
                         else { rate = ""; rateSource = "Manual"; rateDate = Date() }
                     })) { ForEach(Currency.codes, id: \.self) { Text($0).tag($0) } }
-                    TextField(tr("原币金额", "Original amount", "Amaun asal"), text: $amount).keyboardType(.decimalPad)
+                    TextField(tr("原币金额", "Original amount", "Amaun asal"), text: $amount).keyboardType(.decimalPad).font(.largeTitle.weight(.semibold)).monospacedDigit().padding(.vertical, 8)
                     if currency != "MYR" {
                         if rateLoading { ProgressView() }
                         if !rateNote.isEmpty { Text(rateNote).font(.caption).foregroundStyle(.secondary) }
@@ -737,7 +759,20 @@ struct ExpenseEditor: View {
                         if let n = try? total() { LabeledContent(tr("换算为", "Converted to", "Ditukar kepada"), value: money(n)) }
                     }
                     DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
-                    Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 10) {
+                        ForEach(model.ledger.categoryNames, id: \.self) { item in
+                            Button {
+                                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.65)) { category = item }
+                                if !model.isPreview { FeedbackHaptics.selection() }
+                            } label: {
+                                HStack { CategoryBadge(name: item); if category == item { Image(systemName: "checkmark") } }
+                                    .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
+                                    .padding(.horizontal, 8)
+                                    .background(category == item ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
+                                    .scaleEffect(category == item && !reduceMotion ? 1.03 : 1)
+                            }.buttonStyle(.plain).accessibilityAddTraits(category == item ? .isSelected : [])
+                        }
+                    }.accessibilityLabel(tr("分类", "Category", "Kategori"))
                 }.disabled((original?.refunded ?? 0) > 0)
                 Section {
                     Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
@@ -768,12 +803,15 @@ struct ExpenseEditor: View {
                         }
                     }
                 }
-            }
+            }.disabled(saving).interactiveDismissDisabled(saving)
                 .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: splitting)
                 .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: people.count)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
                 .navigationTitle(tr("记账 / 分账", "Expense / split", "Belanja / pembahagian")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { commit() }.disabled(rateLoading) } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
+                    if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
+                    else { Text(tr("保存", "Save", "Simpan")) }
+                }.disabled(rateLoading || saving) } }
                 .onAppear { load() }
                 .task(id: currency) {
                     guard !model.isPreview else { return }
@@ -789,7 +827,7 @@ struct ExpenseEditor: View {
                         if !Task.isCancelled { rateNote = tr("更新失败，已保留现有汇率，请核对日期。", "Refresh failed. Review the existing rate and date.", "Kemas kini gagal. Semak kadar dan tarikh sedia ada.") }
                     }
                 }
-                .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+                .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
         }
     }
     private func load() {
@@ -801,6 +839,15 @@ struct ExpenseEditor: View {
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
             if let fx = e.foreign { rate = fx.quote.text; rateDate = fx.quote.date; rateSource = fx.quote.source }
+        }
+    }
+    private func beginSave() {
+        guard !saving else { return }
+        saving = true
+        Task { @MainActor in
+            await Task.yield()
+            commit()
+            saving = false
         }
     }
     private func commit() {
@@ -845,8 +892,8 @@ struct ExpenseEditor: View {
                     ledger.expenses.append(entry)
                 }
             }
-            model.reload(); model.showSaved(); dismiss(); onSaved?()
-        } catch { self.error = error.localizedDescription }
+            model.reload(); model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()
+        } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
 }
 struct RepayTarget: Identifiable { var id: String { share.id }; let expense: Expense; let share: Share }
@@ -2074,15 +2121,17 @@ struct MoonBuddy: View {
 
 struct SavedFeedback: View {
     let token: UUID
+    let message: String
+    var mascot = false
     var body: some View {
         HStack(spacing: 10) {
-            MoonBuddy(size: 42, reaction: token)
-            Label(tr("已保存", "Saved", "Disimpan"), systemImage: "checkmark.circle.fill")
+            if mascot { MoonBuddy(size: 42, celebrating: true, reaction: token) }
+            Label(message, systemImage: "checkmark.circle.fill")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(ink)
         }.padding(.horizontal, 16).padding(.vertical, 6).ledgerGlass()
             .padding(.top, 8).allowsHitTesting(false)
             .accessibilityElement(children: .ignore)
-            .accessibilityLabel(tr("账目已保存", "Entry saved", "Rekod disimpan"))
+            .accessibilityLabel(message)
     }
 }
 
@@ -2145,15 +2194,14 @@ private struct OpeningAnimationView: View {
             guard motion else { entered = true; titled = true; burst = true; return }
             if sound { FeedbackSounds.shared.play(.launch) }
             do {
-                withAnimation(.spring(response: 0.85, dampingFraction: 0.58)) { entered = true }
-                withAnimation(.easeInOut(duration: 3.8)) { orbit = true }
-                try await Task.sleep(for: .milliseconds(850))
-                withAnimation(.spring(response: 0.8, dampingFraction: 0.7)) { burst = true }
-                try await Task.sleep(for: .milliseconds(750))
+                withAnimation(.spring(response: 0.5, dampingFraction: 0.68)) { entered = true }
+                withAnimation(.easeInOut(duration: 1.2)) { orbit = true }
+                try await Task.sleep(for: .milliseconds(250))
+                withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) { burst = true }
+                try await Task.sleep(for: .milliseconds(200))
                 withAnimation(.easeOut(duration: 0.6)) { titled = true }
-                try await Task.sleep(for: .milliseconds(950))
-                greeting = UUID()
-                try await Task.sleep(for: .milliseconds(1100))
+                try await Task.sleep(for: .milliseconds(300))
+                try await Task.sleep(for: .milliseconds(300))
                 withAnimation(.easeInOut(duration: 0.6)) { farewell = true }
             } catch { return }
         }
@@ -2166,6 +2214,8 @@ private struct BrandExperienceSettings: View {
     @AppStorage("playfulAnimations") private var playful = true
     @AppStorage("openingAnimationEnabled") private var opening = true
     @AppStorage("animationSounds") private var sounds = true
+    @AppStorage("soundFeedbackMode") private var soundMode = "full"
+    @AppStorage("feedbackHaptics") private var haptics = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var preview = false
     var body: some View {
@@ -2192,10 +2242,16 @@ private struct BrandExperienceSettings: View {
             Section {
                 Toggle(tr("动画音效", "Animation sounds", "Bunyi animasi"), isOn: $sounds)
                     .onChange(of: sounds) { _, enabled in if !enabled { FeedbackSounds.shared.stop() } }
+                Picker(tr("音效范围", "Sound mode", "Mod bunyi"), selection: $soundMode) {
+                    Text(tr("全部关闭", "Off", "Tutup")).tag("off")
+                    Text(tr("仅成功与达标", "Success and goals", "Kejayaan dan matlamat")).tag("success")
+                    Text(tr("完整音效", "Full sounds", "Semua bunyi")).tag("full")
+                }.onChange(of: soundMode) { _, _ in FeedbackSounds.shared.stop() }
+                Toggle(tr("震动反馈", "Haptic feedback", "Maklum balas haptik"), isOn: $haptics)
                 Button(tr("试听开场音效", "Preview opening sound", "Dengar bunyi pembukaan")) { FeedbackSounds.shared.play(.launch) }
-                    .disabled(!sounds)
+                    .disabled(!sounds || soundMode != "full")
             } footer: {
-                Text(tr("开场旋律和打招呼、跳舞、送星、抱抱音效；遵循静音模式，可随时关闭。", "Opening melody and cues for hello, dance, stars and hugs. Respects silent mode; turn off anytime.", "Melodi pembukaan dan bunyi sapaan, tarian, bintang serta pelukan. Mengikut mod senyap; boleh dimatikan."))
+                Text(tr("完整音效包含开场、保存、删除、撤销、存入和达标。遵循静音模式，普通浏览无音效。", "Full sounds include opening, save, delete, undo, deposit and goals. Silent mode is respected; browsing stays quiet.", "Bunyi pembukaan, simpan, padam, batal, deposit dan matlamat. Mengikut mod senyap; pelayaran senyap."))
             }
         }.navigationTitle(tr("动画与声音", "Motion & sound", "Animasi & bunyi"))
             .fullScreenCover(isPresented: $preview) {
@@ -2205,71 +2261,10 @@ private struct BrandExperienceSettings: View {
                             .accessibilityLabel(tr("关闭", "Close", "Tutup"))
                     }
                     .task {
-                        do { try await Task.sleep(for: .seconds(reduceMotion || !playful ? 1 : 4.8)) } catch { return }
+                        do { try await Task.sleep(for: .seconds(reduceMotion || !playful ? 1 : 1.6)) } catch { return }
                         preview = false
                     }
             }
     }
 }
 
-private struct MoonCompanionCard: View {
-    @EnvironmentObject private var model: LedgerModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("playfulAnimations") private var playful = true
-    @State private var reaction = UUID()
-    @State private var gesture: MoonGesture = .hello
-    @State private var lastInteraction = Date.distantPast
-    private var message: String {
-        switch gesture {
-        case .hello: return tr("嗨！今天也一起记下小进步。", "Hi! Let's celebrate today's little steps.", "Hai! Raikan kemajuan kecil hari ini.")
-        case .dance: return tr("跟上我的节拍，一起摇一摇！", "A little happy dance, just for you!", "Tarian ceria khas untuk anda!")
-        case .star: return tr("送你一颗星，慢慢靠近目标。", "A star for you. One step closer.", "Bintang untuk anda. Selangkah lebih dekat.")
-        case .cuddle: return tr("辛苦了，给你一个月亮抱抱。", "You did enough. Here's a moon hug.", "Anda sudah berusaha. Pelukan bulan untuk anda.")
-        }
-    }
-    var body: some View {
-        GlassPanel {
-            VStack(spacing: 14) {
-                HStack(spacing: 18) {
-                    Button { respond(.hello) } label: {
-                        MoonBuddy(size: 104, celebrating: gesture == .star, reaction: reaction, gesture: gesture)
-                    }.buttonStyle(.plain)
-                        .accessibilityLabel(tr("和月亮打招呼", "Say hello to the moon", "Sapa bulan"))
-                    VStack(alignment: .leading, spacing: 7) {
-                        Text(tr("你的月亮伙伴", "Your moon companion", "Teman bulan anda")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
-                        Text(message).font(.subheadline.weight(.medium)).contentTransition(.opacity)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }.frame(maxWidth: .infinity, alignment: .leading)
-                }
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 8) { actions }
-                    VStack(spacing: 8) { actions }
-                }
-            }.padding(.vertical, 4)
-        }
-        .onChange(of: model.savedNotice) { _, value in
-            if value != nil { gesture = .star; reaction = UUID() }
-        }
-    }
-    @ViewBuilder private var actions: some View {
-        interaction(tr("跳支舞", "Dance", "Menari"), icon: "music.note", gesture: .dance)
-        interaction(tr("送颗星", "A star", "Bintang"), icon: "sparkles", gesture: .star)
-        interaction(tr("抱一下", "A hug", "Pelukan"), icon: "heart.fill", gesture: .cuddle)
-    }
-    private func interaction(_ title: String, icon: String, gesture: MoonGesture) -> some View {
-        Button { respond(gesture) } label: {
-            Label(title, systemImage: icon).font(.caption.weight(.semibold))
-                .frame(maxWidth: .infinity, minHeight: 44)
-        }.buttonStyle(.bordered).buttonBorderShape(.capsule)
-    }
-    private func respond(_ value: MoonGesture) {
-        guard Date().timeIntervalSince(lastInteraction) > 0.35 else { return }
-        lastInteraction = Date()
-        withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) { gesture = value }
-        reaction = UUID()
-        if !model.isPreview {
-            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.4)
-            FeedbackSounds.shared.play(value == .dance ? .dance : value == .star ? .star : value == .cuddle ? .hug : .hello)
-        }
-    }
-}

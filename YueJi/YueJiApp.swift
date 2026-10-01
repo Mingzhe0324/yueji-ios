@@ -24,6 +24,9 @@ struct YueJiApp: App {
     @Published var didFinishLaunch = false
     @Published var loaded = false
     @Published var savedNotice: UUID?
+    @Published var feedbackMessage = ""
+    @Published var feedbackMascot = false
+    @Published var newTNGCount = 0
     @Published private(set) var undoEntries: [Expense] = []
     @Published private(set) var removingExpenseIDs: Set<String> = []
     private var undoExpiry: Task<Void, Never>?
@@ -50,7 +53,8 @@ struct YueJiApp: App {
                 }
             }
         } else { reload(postRecurring: false) }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        FeedbackHaptics.success()
+        FeedbackSounds.shared.play(.deleted)
     }
     func undoDeletion() {
         guard !isPreview, !undoEntries.isEmpty else { return }
@@ -60,15 +64,40 @@ struct YueJiApp: App {
             undoExpiry?.cancel(); undoEntries = []
             removingExpenseIDs.removeAll()
             reload(postRecurring: false)
-            showSaved()
+            showSaved(message: tr("已恢复", "Restored", "Dipulihkan"), sound: .restored)
         } catch { self.error = error.localizedDescription }
     }
-    func showSaved(sound: FeedbackSounds.Cue = .saved) {
+    func showSaved(message: String? = nil, sound: FeedbackSounds.Cue = .saved, firstEntry: Bool = false) {
+        feedbackMessage = message ?? tr("已保存", "Saved", "Disimpan")
+        feedbackMascot = sound == .goal || (firstEntry && !UserDefaults.standard.bool(forKey: "celebratedFirstEntry"))
+        if firstEntry && !isPreview { UserDefaults.standard.set(true, forKey: "celebratedFirstEntry") }
         savedNotice = UUID()
-        if !isPreview { FeedbackSounds.shared.play(sound) }
-        UINotificationFeedbackGenerator().notificationOccurred(.success)
+        if !isPreview {
+            FeedbackSounds.shared.play(sound); FeedbackHaptics.success()
+            if UIAccessibility.isVoiceOverRunning { UIAccessibility.post(notification: .announcement, argument: feedbackMessage) }
+        }
     }
-    func reload(postRecurring: Bool = true) { guard !isPreview else { return }; do { ledger = try LocalStore.shared.read(); loaded = true; if postRecurring { try LocalStore.shared.change { try $0.postDue() } }; ledger = try LocalStore.shared.read(); Task { await BudgetAlertService.shared.check() } } catch { self.error = error.localizedDescription } }
+    func reload(postRecurring: Bool = true) {
+        guard !isPreview else { return }
+        do {
+            if postRecurring { try LocalStore.shared.change { try $0.postDue() } }
+            let fresh = try LocalStore.shared.read()
+            let ids = Set(fresh.tngNotices.map(\.id))
+            var tracker = TNGReviewTracker(
+                observed: UserDefaults.standard.stringArray(forKey: "viewedTNGNoticeIDs").map { Set($0) },
+                pending: Set(UserDefaults.standard.stringArray(forKey: "pendingTNGNoticeIDs") ?? []))
+            tracker.observe(ids)
+            newTNGCount = tracker.pending.count
+            UserDefaults.standard.set(Array(ids), forKey: "viewedTNGNoticeIDs")
+            UserDefaults.standard.set(Array(tracker.pending), forKey: "pendingTNGNoticeIDs")
+            ledger = fresh; loaded = true
+            Task { await BudgetAlertService.shared.check() }
+        } catch { self.error = error.localizedDescription }
+    }
+    func dismissNewTNG() {
+        newTNGCount = 0
+        if !isPreview { UserDefaults.standard.set([String](), forKey: "pendingTNGNoticeIDs") }
+    }
     func change(_ action: (inout Ledger) throws -> Void) {
         guard !isPreview else { return }
         do { try LocalStore.shared.change(action); reload() } catch { self.error = error.localizedDescription }
@@ -78,12 +107,16 @@ struct YueJiApp: App {
 /// Ambient audio respects silent mode, mixes with music, and never requests a microphone.
 @MainActor final class FeedbackSounds {
     static let shared = FeedbackSounds()
-    enum Cue: String { case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime", hello = "HelloChime", dance = "DanceChime", star = "StarChime", hug = "HugChime" }
+    enum Cue: String { case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime", deleted = "DeleteCue", restored = "RestoreCue", deposit = "DepositCue" }
+    static func permits(_ cue: Cue, mode: String, enabled: Bool) -> Bool {
+        enabled && mode != "off" && (mode != "success" || cue == .saved || cue == .goal)
+    }
     private var player: AVAudioPlayer?
     private var releaseTask: Task<Void, Never>?
     func play(_ cue: Cue) {
         let enabled = UserDefaults.standard.object(forKey: "animationSounds") as? Bool ?? true
-        guard enabled, UIApplication.shared.applicationState == .active,
+        let mode = UserDefaults.standard.string(forKey: "soundFeedbackMode") ?? "full"
+        guard Self.permits(cue, mode: mode, enabled: enabled), UIApplication.shared.applicationState == .active,
               let asset = NSDataAsset(name: cue.rawValue) else { return }
         stop()
         do {
@@ -107,4 +140,11 @@ struct YueJiApp: App {
         player?.stop(); player = nil
         try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
     }
+}
+
+@MainActor enum FeedbackHaptics {
+    static var enabled: Bool { UserDefaults.standard.object(forKey: "feedbackHaptics") as? Bool ?? true }
+    static func success() { if enabled { UINotificationFeedbackGenerator().notificationOccurred(.success) } }
+    static func error() { if enabled { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
+    static func selection() { if enabled { UISelectionFeedbackGenerator().selectionChanged() } }
 }
