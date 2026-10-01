@@ -568,6 +568,7 @@ struct AutomationStatusView: View {
         switch key {
         case "saved": return tr("成功入账", "Saved", "Disimpan")
         case "duplicate": return tr("已拦截重复", "Duplicate blocked", "Pendua disekat")
+        case "ignored": return tr("已收到 · 未识别或非交易", "Received · unsupported or not a transaction", "Diterima · tidak disokong atau bukan transaksi")
         case "checked": return source == "TNG" ? tr("通知已处理", "Notification processed", "Notifikasi diproses") : tr("已检查到期项目", "Schedules checked", "Jadual disemak")
         default: return tr("失败", "Failed", "Gagal")
         }
@@ -575,9 +576,14 @@ struct AutomationStatusView: View {
     var body: some View {
         List {
             Section {
-                if let last = model.ledger.automationEvents.first(where: { $0.source == "Apple Pay" && $0.outcome == "saved" }) {
-                    LabeledContent(tr("最近成功接收", "Last successful receipt", "Penerimaan berjaya terakhir"), value: dateLabel(last.date, time: true))
-                } else { Text(tr("尚无成功接收日志", "No successful receipt logged yet", "Belum ada log penerimaan berjaya")) }
+                ForEach(["TNG", "Apple Pay"], id: \.self) { source in
+                    if let last = model.ledger.automationEvents.first(where: { $0.source == source }) {
+                        LabeledContent(source + tr(" 最近调用", " last call", " panggilan terakhir"), value: dateLabel(last.date, time: true))
+                    } else {
+                        Text(source + tr(" 暂无调用记录", " has no call logs yet", " belum ada log panggilan"))
+                    }
+                }
+                Text(tr("TNG：未识别也会留下记录；若本次没有新日志，请先检查快捷指令是否触发或报错。", "TNG: unsupported notices are logged too. If no new log appears, check whether Shortcuts triggered or reported an error.", "TNG: notifikasi tidak disokong juga dilog. Jika tiada log baharu, semak pencetus atau ralat Pintasan.")).font(.footnote)
                 Button(tr("刷新", "Refresh", "Muat semula")) { model.reload() }
                 Text(tr("显示实际调用记录，不代表快捷指令已启用或签名仍有效。App 无法检测没有触发的交易，也无法判断是否漏账。最多保留 100 条；日志写入失败时无法留痕。", "Shows actual action calls, not whether Shortcuts is enabled or signing is valid. The app cannot detect transactions that never triggered or establish completeness. Keeps 100 events; storage failure may prevent logging.", "Memaparkan panggilan tindakan sebenar, bukan status pengaktifan Pintasan atau tandatangan. Aplikasi tidak dapat mengesan transaksi yang tidak tercetus atau memastikan kelengkapan. Menyimpan 100 peristiwa; kegagalan storan boleh menghalang log.")).font(.footnote)
             }
@@ -2194,10 +2200,35 @@ private struct SavingsIntentDraft {
 }
 #endif
 
+private enum SavingsAIStatus {
+    static var available: Bool {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) { return SystemLanguageModel.default.availability == .available }
+        #endif
+        return false
+    }
+    static var message: String {
+        #if canImport(FoundationModels)
+        if #available(iOS 26.0, *) {
+            switch SystemLanguageModel.default.availability {
+            case .available: return tr("设备端 AI 已就绪", "On-device AI ready", "AI peranti sedia")
+            case .unavailable(.deviceNotEligible): return tr("此设备不支持 Apple Intelligence，可使用本地规则整理。", "This device does not support Apple Intelligence. Local rules are available.", "Peranti tidak menyokong Apple Intelligence. Peraturan tempatan tersedia.")
+            case .unavailable(.appleIntelligenceNotEnabled): return tr("Apple Intelligence 未启用，请检查系统设置；也可使用本地规则。", "Apple Intelligence is off. Check system settings, or use local rules.", "Apple Intelligence dimatikan. Semak tetapan atau guna peraturan tempatan.")
+            case .unavailable(.modelNotReady): return tr("设备端模型尚未准备好，可先使用本地规则。", "The on-device model is not ready. Use local rules meanwhile.", "Model peranti belum sedia. Guna peraturan tempatan dahulu.")
+            default: return tr("设备端 AI 暂不可用，可使用本地规则。", "On-device AI unavailable. Local rules are available.", "AI peranti tidak tersedia. Peraturan tempatan tersedia.")
+            }
+        }
+        #endif
+        return tr("此系统或构建不支持设备端 AI，可使用本地规则。", "This system or build lacks on-device AI. Local rules are available.", "Sistem atau binaan ini tidak menyokong AI peranti. Peraturan tempatan tersedia.")
+    }
+}
+
 private struct SavingsGoalEditor: View {
     var original: SavingsGoal? = nil
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.scenePhase) private var aiPhase
+    @State private var aiRefresh = 0
     @State private var name = ""
     @State private var amount = ""
     @State private var monthly = ""
@@ -2222,11 +2253,19 @@ private struct SavingsGoalEditor: View {
         NavigationStack {
             Form {
                 Section(tr("一句话建立目标", "Describe your goal", "Terangkan matlamat")) {
+                    Text(SavingsAIStatus.message).id(aiRefresh).font(.caption).foregroundStyle(.secondary)
                     TextField(tr("六个月存 RM3000 买电脑", "Save RM3000 in six months for a computer", "Simpan RM3000 dalam enam bulan untuk komputer"), text: $prompt, axis: .vertical)
                         .lineLimit(2...4).disabled(requesting)
                     Button { requestTask = Task { await interpret() } } label: {
-                        HStack { Image(systemName: "sparkles"); Text(tr("AI 整理成草稿", "Create AI draft", "Cipta draf AI")); if requesting { ProgressView() } }
+                        HStack { Image(systemName: "sparkles"); Text(SavingsAIStatus.available ? tr("AI 整理成草稿", "Create AI draft", "Cipta draf AI") : tr("本地规则整理", "Create local draft", "Cipta draf tempatan")); if requesting { ProgressView() } }
                     }.disabled(requesting || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || prompt.count > 500)
+                    Button(tr("使用本地规则（无需 AI）", "Use local rules (no AI)", "Guna peraturan tempatan (tanpa AI)")) { applyLocalDraft() }
+                        .disabled(requesting || prompt.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || prompt.count > 500)
+                    if requesting { Button(tr("取消生成", "Cancel generation", "Batal penjanaan")) { requestTask?.cancel() } }
+                    if prompt.count > 500 {
+                        Text(tr("请缩短至 500 字以内，再生成草稿。", "Shorten your description to 500 characters to create a draft.", "Pendekkan penerangan kepada 500 aksara untuk mencipta draf."))
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                     Text(notice.isEmpty ? tr("仅处理这句话。请核对下方草稿后保存。", "Only this description is processed. Review the draft before saving.", "Hanya penerangan ini diproses. Semak draf sebelum menyimpan.") : notice).font(.caption).foregroundStyle(.secondary)
                 }
                 Section(tr("核对目标", "Review goal", "Semak matlamat")) {
@@ -2267,6 +2306,7 @@ private struct SavingsGoalEditor: View {
                 hasDeadline = original?.deadline != nil
                 if let date = original?.deadline { deadline = date }
             }
+            .onChange(of: aiPhase) { _, phase in if phase == .active { aiRefresh += 1 } }
             .onDisappear { requestTask?.cancel() }
             .alert(tr("请检查", "Please check", "Sila semak"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
@@ -2284,16 +2324,35 @@ private struct SavingsGoalEditor: View {
                     let cents = try toCents(value)
                     guard cents > 0, cents <= 10_000_000_000 else { throw LedgerError.invalid("请手动核对金额 / Check amount manually") }
                 }
-                name = draft.name; amount = draft.amount; monthly = draft.monthly
-                hasDeadline = draft.months > 0
+                if !draft.name.isEmpty { name = draft.name }
+                if !draft.amount.isEmpty { amount = draft.amount }
+                if !draft.monthly.isEmpty { monthly = draft.monthly }
+                if draft.months > 0 { hasDeadline = true }
                 if draft.months > 0, let date = Calendar.current.date(byAdding: .month, value: draft.months, to: Date()) { deadline = date }
                 notice = tr("AI 草稿已填入，请核对金额和日期；缺少的资料请补充。", "AI draft filled. Check amounts and dates, and complete missing fields.", "Draf AI diisi. Semak amaun dan tarikh serta lengkapkan maklumat.")
-            } catch is CancellationError { }
-            catch { notice = tr("暂时无法整理，请在下方手动填写或重试。", "Unable to create draft. Fill in below or try again.", "Tidak dapat mencipta draf. Isi di bawah atau cuba lagi.") }
+            } catch is CancellationError {
+                notice = tr("已取消生成，可以修改描述后重试。", "Generation cancelled. Edit your description and try again.", "Penjanaan dibatalkan. Ubah penerangan dan cuba lagi.")
+            }
+            catch {
+                guard !Task.isCancelled else { return }
+                applyLocalDraft()
+                notice = tr("AI 请求未完成，已改用本地规则。请核对草稿；这不是 AI 结果。", "AI request failed; local rules were used. Review the draft; this is not AI output.", "Permintaan AI gagal; peraturan tempatan digunakan. Semak draf; ini bukan hasil AI.")
+            }
             return
         }
         #endif
-        notice = tr("设备端 AI 暂不可用，请手动填写；储蓄计划仍可正常计算。", "On-device AI is unavailable. Enter the details manually; planning still works.", "AI peranti tidak tersedia. Isi secara manual; pelan masih boleh dikira.")
+        guard !Task.isCancelled else { return }
+        applyLocalDraft()
+    }
+    private func applyLocalDraft() {
+        let draft = LocalSavingsDraft.parse(prompt)
+        if name.isEmpty { name = draft.name }
+        if !draft.amount.isEmpty { amount = draft.amount }
+        if !draft.monthly.isEmpty { monthly = draft.monthly }
+        if draft.months > 0, let date = Calendar.current.date(byAdding: .month, value: draft.months, to: Date()) {
+            hasDeadline = true; deadline = date
+        }
+        notice = tr("本地规则草稿（非 AI）：仅提取明确的 RM/MYR 金额及月数；未识别的栏位保留原值，请逐项核对。", "Local-rule draft (not AI): extracts explicit RM/MYR amounts and durations. Unrecognized fields keep their values; review every field.", "Draf peraturan tempatan (bukan AI): amaun RM/MYR dan tempoh jelas sahaja. Medan lain kekal; semak semuanya.")
     }
     private func save() {
         do {

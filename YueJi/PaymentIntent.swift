@@ -74,15 +74,14 @@ struct RecordTNGIntent: AppIntent {
             guard !text.isEmpty, text.count <= 8000, (notificationTitle?.count ?? 0) <= 500 else {
                 throw LedgerError.invalid(tr("请传入有效的通知正文 Body。", "Pass a valid notification Body.", "Hantar Body notifikasi yang sah."))
             }
-            // Exit before storage, logging, budget checks and result notifications.
-            guard parseTNG(text, title: notificationTitle ?? "") != nil else { return .result() }
-            let message = try LocalStore.shared.change { ledger in
-                let result = try ledger.receiveTNG(body: body, title: notificationTitle ?? "", date: notificationDate, eventID: transactionID)
-                ledger.logAutomation(source: "TNG", outcome: "checked", detail: result)
-                return result
+            let result = try LocalStore.shared.change { ledger in
+                try ledger.processTNGNotification(body: body, title: notificationTitle ?? "", date: notificationDate, eventID: transactionID)
             }
-            await BudgetAlertService.shared.check()
-            await LedgerNotifications.result(title: "TNG", body: message)
+            // Keep an ignored delivery log, without alerts for advertisements or points.
+            if result.accepted {
+                await BudgetAlertService.shared.check()
+                await LedgerNotifications.result(title: "TNG", body: result.message)
+            }
             return .result()
         } catch {
             try? LocalStore.shared.change { $0.logAutomation(source: "TNG", outcome: "failed", detail: error.localizedDescription) }

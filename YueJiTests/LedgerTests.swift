@@ -1144,3 +1144,81 @@ final class ReceiptColumnDetailTests: XCTestCase {
         XCTAssertEqual(result.items.first?.amount, "33.00")
     }
 }
+final class TNGNotificationDeliveryTests: XCTestCase {
+    func testObservedPaymentTemplateStillRecordsFortyRinggit() throws {
+        var ledger = Ledger()
+        let result = try ledger.processTNGNotification(body: "You have paid RM40.00 for Maxis Broadband Sdn Bhd.", title: "Payment", date: nil, eventID: "maxis-test")
+        XCTAssertTrue(result.accepted)
+        XCTAssertEqual(ledger.expenses.first?.cents, 4000)
+        XCTAssertEqual(ledger.expenses.first?.merchant, "Maxis Broadband Sdn Bhd")
+        XCTAssertEqual(ledger.automationEvents.first?.outcome, "checked")
+        _ = try ledger.processTNGNotification(body: "You have paid RM40.00 for Maxis Broadband Sdn Bhd.", title: "Payment", date: nil, eventID: "maxis-test")
+        XCTAssertEqual(ledger.expenses.count, 1)
+    }
+    func testReceivedMoneyTemplatePreservesJointSenderAndRequiresReview() throws {
+        let body = "ALICE/BOB has transferred RM 40.00 to you. Tap here to check the transaction details."
+        for title in ["", "You've received money!", "You’ve received money!"] {
+            let parsed = try XCTUnwrap(parseTNG(body, title: title))
+            XCTAssertEqual(parsed.kind, "incoming")
+            XCTAssertEqual(parsed.cents, 4000)
+            XCTAssertEqual(parsed.party, "ALICE/BOB")
+            XCTAssertNil(parsed.recipient)
+        }
+        XCTAssertNil(parseTNG(body, title: "Payment"))
+        XCTAssertNil(parseTNG(body, title: "Promotion"))
+        XCTAssertNil(parseTNG(body.replacingOccurrences(of: "40.00", with: "-40.00")))
+        XCTAssertNil(parseTNG(body.replacingOccurrences(of: "40.00", with: "40.001")))
+        var ledger = Ledger()
+        _ = try ledger.processTNGNotification(body: body, title: "You've received money!", date: nil, eventID: nil)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertEqual(ledger.tngNotices.first?.status, "pending")
+        XCTAssertEqual(ledger.tngNotices.first?.kind, "incoming")
+        _ = try ledger.processTNGNotification(body: body, title: "You've received money!", date: nil, eventID: nil)
+        XCTAssertEqual(ledger.tngNotices.last?.possibleDuplicate, true)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        _ = try ledger.validated()
+    }
+    func testIgnoredDeliveryLogsWithoutStoringBodyOrConsumingTransactionID() throws {
+        var ledger = Ledger()
+        for body in ["You have successfully registered your DuitNow ID *******0000.", "You've received 40 points from your transaction! Use them now to redeem great rewards."] {
+            let result = try ledger.processTNGNotification(body: body, date: nil, eventID: "not-consumed")
+            XCTAssertFalse(result.accepted)
+            XCTAssertEqual(ledger.automationEvents.first?.outcome, "ignored")
+            XCTAssertFalse(ledger.automationEvents.first?.detail.contains(body) ?? true)
+        }
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        XCTAssertTrue(ledger.seenEvents.isEmpty)
+        _ = try ledger.processTNGNotification(body: "You have paid RM40.00 for Maxis Broadband Sdn Bhd.", date: nil, eventID: "not-consumed")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertThrowsError(try ledger.processTNGNotification(body: " ", date: nil, eventID: nil))
+    }
+}
+
+final class LocalSavingsDraftTests: XCTestCase {
+    func testChineseTargetAndMonthlyAreSeparate() {
+        let d = LocalSavingsDraft.parse("六个月存 RM3000 买电脑，每月存 RM500")
+        XCTAssertEqual(d.amount, "3000")
+        XCTAssertEqual(d.monthly, "500")
+        XCTAssertEqual(d.months, 6)
+    }
+    func testEnglishAndMalay() {
+        let english = LocalSavingsDraft.parse("Save RM3,000 in six months for a computer; RM500 per month")
+        XCTAssertEqual(english.amount, "3000")
+        XCTAssertEqual(english.monthly, "500")
+        XCTAssertEqual(english.months, 6)
+        let malay = LocalSavingsDraft.parse("Simpan RM3000 dalam enam bulan untuk komputer")
+        XCTAssertEqual(malay.amount, "3000")
+        XCTAssertEqual(malay.months, 6)
+    }
+    func testAmbiguityDoesNotInventMoneyOrDates() {
+        XCTAssertEqual(LocalSavingsDraft.parse("RM3000 or RM5000").amount, "")
+        XCTAssertEqual(LocalSavingsDraft.parse("USD3000 in 6 months").amount, "")
+        XCTAssertEqual(LocalSavingsDraft.parse("每月存 RM500").amount, "")
+        XCTAssertEqual(LocalSavingsDraft.parse("每月存 RM500").monthly, "500")
+        XCTAssertEqual(LocalSavingsDraft.parse("2027年6月存 RM3000").months, 0)
+        XCTAssertEqual(LocalSavingsDraft.parse("买电脑").amount, "")
+        XCTAssertEqual(LocalSavingsDraft.parse("RM-50").amount, "")
+        XCTAssertEqual(LocalSavingsDraft.parse("RM1.234").amount, "")
+    }
+}

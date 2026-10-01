@@ -225,8 +225,8 @@ func tngSignedAmount(_ notice: TNGNotice) -> String {
     (notice.kind == "incoming" ? "+" : "−") + money(notice.cents ?? 0)
 }
 func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
-    let titleKey = friendKey(title).trimmingCharacters(in: .punctuationCharacters)
-    guard ["", "payment", "transfer successful", "ka-ching! incoming money"].contains(titleKey) else { return nil }
+    let titleKey = friendKey(title).replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
+    guard ["", "payment", "transfer successful", "ka-ching! incoming money", "you've received money"].contains(titleKey) else { return nil }
     let text = body.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     if titleKey.isEmpty || titleKey == "ka-ching! incoming money" {
         let pattern = #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) received from (.{1,200}?) for (.{1,200})\.\z"#
@@ -237,6 +237,18 @@ func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
             let sender = String(text[f]).trimmingCharacters(in: .whitespacesAndNewlines)
             let recipient = String(text[t]).trimmingCharacters(in: .whitespacesAndNewlines)
             if !sender.isEmpty && !recipient.isEmpty { return TNGParsed(kind: "incoming", cents: cents, party: sender, recipient: recipient) }
+        }
+    }
+    // Verified received-money template. A slash remains part of the sender name.
+    if titleKey.isEmpty || titleKey == "you've received money" {
+        let pattern = #"\A(.{1,200}?) has transferred RM\s*([0-9]+(?:\.[0-9]{2})?) to you\.(?: Tap here to check the transaction details\.)?\z"#
+        if let regex = try? NSRegularExpression(pattern: pattern),
+           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let senderRange = Range(match.range(at: 1), in: text),
+           let amountRange = Range(match.range(at: 2), in: text),
+           let cents = try? toCents(String(text[amountRange])) {
+            let sender = String(text[senderRange]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !sender.isEmpty { return TNGParsed(kind: "incoming", cents: cents, party: sender) }
         }
     }
     let patterns = [
@@ -256,6 +268,14 @@ func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
     return nil
 }
 extension Ledger {
+    /// Logs delivery independently from whether a supported transaction was recognized.
+    /// Unsupported bodies are never retained or posted as expenses.
+    mutating func processTNGNotification(body: String, title: String = "", date: Date?, eventID: String?) throws -> (accepted: Bool, message: String) {
+        let message = try receiveTNG(body: body, title: title, date: date, eventID: eventID)
+        let accepted = parseTNG(body, title: title) != nil
+        logAutomation(source: "TNG", outcome: accepted ? "checked" : "ignored", detail: message)
+        return (accepted, message)
+    }
     mutating func receiveTNG(body: String, title: String = "", date: Date?, eventID: String?, now: Date = Date()) throws -> String {
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 8000, title.count <= 500 else {

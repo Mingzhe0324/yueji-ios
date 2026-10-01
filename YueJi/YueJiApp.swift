@@ -25,6 +25,7 @@ struct YueJiApp: App {
     @Published var loaded = false
     @Published var savedNotice: UUID?
     @Published private(set) var undoEntries: [Expense] = []
+    @Published private(set) var removingExpenseIDs: Set<String> = []
     private var undoExpiry: Task<Void, Never>?
     func deleteExpense(_ entry: Expense) throws {
         guard !isPreview else { return }
@@ -37,7 +38,18 @@ struct YueJiApp: App {
             catch { return }
             self?.undoEntries = []
         }
-        reload(postRecurring: false)
+        let playful = UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true
+        if playful && !UIAccessibility.isReduceMotionEnabled {
+            withAnimation(.easeIn(duration: 0.18)) { _ = removingExpenseIDs.insert(entry.id) }
+            Task { [weak self] in
+                do { try await Task.sleep(for: .milliseconds(190)) } catch { return }
+                guard let self else { return }
+                withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
+                    self.reload(postRecurring: false)
+                    self.removingExpenseIDs.remove(entry.id)
+                }
+            }
+        } else { reload(postRecurring: false) }
         UINotificationFeedbackGenerator().notificationOccurred(.success)
     }
     func undoDeletion() {
@@ -46,6 +58,7 @@ struct YueJiApp: App {
             let entries = undoEntries
             try LocalStore.shared.change { try $0.restoreDeletedExpenses(entries) }
             undoExpiry?.cancel(); undoEntries = []
+            removingExpenseIDs.removeAll()
             reload(postRecurring: false)
             showSaved()
         } catch { self.error = error.localizedDescription }

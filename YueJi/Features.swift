@@ -666,3 +666,47 @@ struct ReceiptCalculation {
         return total
     }
 }
+
+/// Offline extraction of explicit MYR amounts and relative durations; not generative AI.
+struct LocalSavingsDraft {
+    var name: String
+    var amount: String = ""
+    var monthly: String = ""
+    var months: Int = 0
+    static func parse(_ input: String) -> LocalSavingsDraft {
+        let text = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        var draft = LocalSavingsDraft(name: String(text.prefix(80)))
+        let ns = text as NSString
+        let foreign = text.range(of: #"(?i)\b(USD|SGD|CNY|EUR|GBP)\b|美元|新币|人民币|欧元|£|\$"#, options: .regularExpression) != nil
+        if !foreign, let regex = try? NSRegularExpression(pattern: #"(?i)(?:RM|MYR)\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]{1,2})?|[0-9]{1,8}(?:\.[0-9]{1,2})?)(?![\d.]|,[0-9])"#) {
+            var targets: [String] = []; var monthlyValues: [String] = []
+            for match in regex.matches(in: text, range: NSRange(location: 0, length: ns.length)) {
+                let value = ns.substring(with: match.range(at: 1)).replacingOccurrences(of: ",", with: "")
+                guard (try? toCents(value)) != nil else { continue }
+                let start = max(0, match.range.location - 24)
+                let prefix = ns.substring(with: NSRange(location: start, length: match.range.location - start))
+                let end = NSMaxRange(match.range)
+                let suffix = ns.substring(with: NSRange(location: end, length: min(18, ns.length-end)))
+                let monthlyBefore = prefix.range(of: #"(?i)(?:每月|monthly|sebulan)[^\d,，;；。]{0,12}$"#, options: .regularExpression) != nil
+                let monthlyAfter = suffix.range(of: #"(?i)^\s*(?:per month|a month|monthly|sebulan|/month|/月)"#, options: .regularExpression) != nil
+                if monthlyBefore || monthlyAfter { monthlyValues.append(value) } else { targets.append(value) }
+            }
+            if targets.count == 1 { draft.amount = targets[0] }
+            if monthlyValues.count == 1 { draft.monthly = monthlyValues[0] }
+        }
+        let words = ["一":1,"二":2,"两":2,"三":3,"四":4,"五":5,"六":6,"七":7,"八":8,"九":9,"十":10,"十二":12,"one":1,"two":2,"three":3,"six":6,"twelve":12,"satu":1,"dua":2,"tiga":3,"enam":6]
+        if let regex = try? NSRegularExpression(pattern: #"(?i)(?<![\d/.-])(\d{1,3}|十二|[一二两三四五六七八九十]|one|two|three|six|twelve|satu|dua|tiga|enam)\s*(个月|月|months?\b|bulan\b|年|years?\b|tahun\b)"#) {
+            let matches = regex.matches(in: text, range: NSRange(location: 0, length: ns.length))
+            if matches.count == 1, let match = matches.first {
+                let number = ns.substring(with: match.range(at: 1)).lowercased()
+                let unit = ns.substring(with: match.range(at: 2)).lowercased()
+                let years = unit == "年" || unit.hasPrefix("year") || unit == "tahun"
+                let n = (Int(number) ?? words[number] ?? 0) * (years ? 12 : 1)
+                if (1...1200).contains(n) { draft.months = n }
+            }
+        }
+        // Absolute calendar dates must be chosen explicitly in the date picker.
+        if text.range(of: #"\d{4}[-/年]"#, options: .regularExpression) != nil { draft.months = 0 }
+        return draft
+    }
+}

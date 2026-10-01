@@ -156,6 +156,7 @@ struct DashboardView: View {
                 VStack(spacing: 24) {
                     PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
                     MonthPicker(month: monthBinding)
+                    MoonCompanionCard()
                     spendingCard
                     recentCard
                     NavigationLink { SavingsGoalsView() } label: {
@@ -236,6 +237,10 @@ struct DashboardView: View {
                 }
                 ForEach(recent) { entry in
                     Button { reviewing = entry } label: { ExpenseRow(entry: entry) }
+                        .scaleEffect(model.removingExpenseIDs.contains(entry.id) ? 0.88 : 1, anchor: .trailing)
+                        .offset(x: model.removingExpenseIDs.contains(entry.id) ? 44 : 0)
+                        .opacity(model.removingExpenseIDs.contains(entry.id) ? 0 : 1)
+                        .disabled(model.removingExpenseIDs.contains(entry.id))
                         .buttonStyle(.plain).yuejiZoomSource(id: entry.id, namespace: navigationMotion)
                     if entry.id != recent.last?.id { Divider() }
                 }
@@ -461,6 +466,10 @@ struct ExpensesView: View {
                     Section {
                         ForEach(day.entries) { entry in
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
+                                .scaleEffect(model.removingExpenseIDs.contains(entry.id) ? 0.88 : 1, anchor: .trailing)
+                                .offset(x: model.removingExpenseIDs.contains(entry.id) ? 44 : 0)
+                                .opacity(model.removingExpenseIDs.contains(entry.id) ? 0 : 1)
+                                .disabled(model.removingExpenseIDs.contains(entry.id))
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -2102,5 +2111,40 @@ private struct BrandExperienceSettings: View {
                         preview = false
                     }
             }
+    }
+}
+
+private struct MoonCompanionCard: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var reaction = UUID()
+    @State private var greeting = 0
+    private var message: String {
+        switch greeting {
+        case 1: return tr("记下小小一笔，也是一份进步。", "One little entry is progress too.", "Satu rekod kecil juga kemajuan.")
+        case 2: return tr("按自己的节奏，慢慢靠近目标。", "Your goals, at your own pace.", "Matlamat anda, mengikut rentak sendiri.")
+        default: return tr("今天也一起，把生活记清楚。", "Let's make today a little clearer.", "Mari jelaskan belanja hari ini.")
+        }
+    }
+    var body: some View {
+        HStack(spacing: 16) {
+            Button {
+                reaction = UUID()
+                withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) {
+                    greeting = (greeting + 1) % 3
+                }
+                if !model.isPreview { UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.4) }
+            } label: { MoonBuddy(size: 76, celebrating: greeting == 2, reaction: reaction) }
+                .buttonStyle(.plain)
+                .accessibilityLabel(tr("和月亮伙伴打招呼", "Say hello to your moon companion", "Sapa teman bulan anda"))
+                .accessibilityHint(tr("轻点让伙伴回应", "Tap for a response", "Ketik untuk respons"))
+            VStack(alignment: .leading, spacing: 5) {
+                Text(message).font(.subheadline.weight(.medium)).contentTransition(.opacity)
+                Text(tr("轻点月亮，打个招呼", "Tap the moon to say hello", "Ketik bulan untuk menyapa"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }.padding(.horizontal, 12)
     }
 }
