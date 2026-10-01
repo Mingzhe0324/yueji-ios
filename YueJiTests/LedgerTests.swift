@@ -1418,3 +1418,57 @@ final class BankNotificationTests: XCTestCase {
         XCTAssertEqual(decoded.expenses.first?.source, "TNG")
     }
 }
+
+final class AutomaticRecordDeletionTests: XCTestCase {
+    func testDeleteIncomingPreservesOtherBankAndUndoKeepsNewWrites() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "You've just received RM 0.01 in your account ending ***1234. REF: DELETE001", title: "Maybank2u: Funds Received", date: nil, eventID: nil)
+        _ = try ledger.receiveTNG(body: "Your transfer of RM0.01 to TEST PERSON is SUCCESSFUL.", title: "Transaction Notice", date: nil, eventID: nil)
+        let original = ledger.tngNotices
+        let markers = ledger.seenEvents
+        let deleted = try ledger.deleteAutomaticRecord(original[0])
+        XCTAssertEqual(ledger.tngNotices, [original[1]])
+        XCTAssertEqual(ledger.seenEvents, markers)
+        let newEntry = Expense(merchant: "New", cents: 100)
+        ledger.expenses.append(newEntry)
+        try ledger.restoreDeletedRecords([deleted])
+        XCTAssertEqual(Set(ledger.tngNotices.map(\.id)), Set(original.map(\.id)))
+        XCTAssertEqual(ledger.expenses, [newEntry])
+        XCTAssertThrowsError(try ledger.restoreDeletedRecords([deleted]))
+    }
+    func testDeletingExpenseAlsoRemovesItsNoticeAndRestoresBoth() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "You have paid RM1.00 for Shop.", date: nil, eventID: "delete-payment")
+        let entry = try XCTUnwrap(ledger.expenses.first)
+        let notice = try XCTUnwrap(ledger.tngNotices.first)
+        let deletion = try ledger.deleteLedgerExpense(entry)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        try ledger.restoreDeletedRecords([deletion])
+        XCTAssertEqual(ledger.expenses, [entry])
+        XCTAssertEqual(ledger.tngNotices, [notice])
+        let second = try ledger.deleteAutomaticRecord(notice)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        try ledger.restoreDeletedRecords([second])
+        XCTAssertEqual(ledger.expenses, [entry])
+    }
+    func testDeletingReceiptReversesOnlyItsRepaymentAndUndoChecksConflicts() throws {
+        var ledger = Ledger(expenses: [Expense(merchant: "Dinner", cents: 1000, shares: [Share(name: "Amy", cents: 500, repayments: [Repayment(cents: 50)])])])
+        _ = try ledger.receiveTNG(body: "You've just received RM 1.00 in your account ending ***1234. REF: REPAY001", title: "Maybank2u: Funds Received", date: nil, eventID: nil)
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "Amy", date: Date())
+        let before = ledger.expenses
+        let notice = try XCTUnwrap(ledger.tngNotices.first)
+        let deletion = try ledger.deleteAutomaticRecord(notice)
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 50)
+        var conflict = ledger
+        conflict.expenses[0].merchant = "Changed"
+        XCTAssertThrowsError(try conflict.restoreDeletedRecords([deletion]))
+        XCTAssertTrue(conflict.tngNotices.isEmpty)
+        XCTAssertEqual(conflict.expenses[0].merchant, "Changed")
+        let expenseDeletion = try ledger.deleteLedgerExpense(ledger.expenses[0])
+        try ledger.restoreDeletedRecords([deletion, expenseDeletion])
+        XCTAssertEqual(ledger.expenses, before)
+        XCTAssertEqual(ledger.tngNotices, [notice])
+    }
+}

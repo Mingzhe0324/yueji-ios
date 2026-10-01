@@ -1063,6 +1063,7 @@ struct TNGInboxView: View {
                 NavigationLink { if item.kind == "incoming" { TNGIncomingView(id: item.id) } else { TNGNoticeView(id: item.id) } } label: {
                     TNGTimelineRow(notice: item)
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
+                    .modifier(AutomaticRecordDeletion(notice: item))
             }
             if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入银行或 TNG 通知。", "Waiting for bank or TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
@@ -1116,6 +1117,7 @@ struct TNGNoticeView: View {
                 }
             }
         }.navigationTitle(notice?.provider ?? "TNG")
+            .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
@@ -2108,6 +2110,7 @@ struct TNGIncomingView: View {
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
         }.navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
+            .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
             .confirmationDialog(tr("确认此收款用途？", "Confirm this purpose?", "Sahkan tujuan ini?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认保存", "Confirm and save", "Sahkan dan simpan")) { save() }

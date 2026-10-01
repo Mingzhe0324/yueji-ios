@@ -548,3 +548,54 @@ func parseBankNotification(_ body: String, title: String = "") -> TNGParsed? {
     }
     return nil
 }
+
+
+/// A narrow undo delta: never replace the full ledger or automation history.
+struct DeletedLedgerRecord {
+    var notices: [TNGNotice]
+    var before: [Expense]
+    var after: [Expense]
+}
+extension Ledger {
+    mutating func deleteAutomaticRecord(_ expected: TNGNotice) throws -> DeletedLedgerRecord {
+        guard tngNotices.contains(expected) else { throw LedgerError.invalid("Record changed; reopen and try again.") }
+        return try deleteLedgerRecord(noticeIDs: [expected.id], expenseID: expected.expenseID)
+    }
+    mutating func deleteLedgerExpense(_ expected: Expense) throws -> DeletedLedgerRecord {
+        guard expenses.contains(expected) else { throw LedgerError.invalid("Record changed; reopen and try again.") }
+        return try deleteLedgerRecord(noticeIDs: Set(tngNotices.filter { $0.expenseID == expected.id }.map(\.id)), expenseID: expected.id)
+    }
+    private mutating func deleteLedgerRecord(noticeIDs: Set<String>, expenseID: String?) throws -> DeletedLedgerRecord {
+        var copy = self
+        let notices = tngNotices.filter { noticeIDs.contains($0.id) || (expenseID != nil && $0.expenseID == expenseID) }
+        let repayments = Set(notices.flatMap { $0.repaymentIDs ?? [] })
+        let affected = expenses.filter { $0.id == expenseID || $0.shares.contains { $0.repayments.contains { repayments.contains($0.id) } } }
+        copy.expenses.removeAll { $0.id == expenseID }
+        for e in copy.expenses.indices {
+            for s in copy.expenses[e].shares.indices {
+                copy.expenses[e].shares[s].repayments.removeAll { repayments.contains($0.id) }
+            }
+        }
+        let ids = Set(notices.map(\.id))
+        copy.tngNotices.removeAll { ids.contains($0.id) }
+        let affectedIDs = Set(affected.map(\.id))
+        let delta = DeletedLedgerRecord(notices: notices, before: affected, after: copy.expenses.filter { affectedIDs.contains($0.id) })
+        self = try copy.validated()
+        return delta
+    }
+    mutating func restoreDeletedRecords(_ records: [DeletedLedgerRecord]) throws {
+        var copy = self
+        for record in records.reversed() {
+            let ids = Set(record.before.map(\.id))
+            let current = copy.expenses.filter { ids.contains($0.id) }
+            guard current.count == record.after.count, current.allSatisfy({ record.after.contains($0) }),
+                  !copy.tngNotices.contains(where: { n in record.notices.contains { $0.id == n.id } }) else {
+                throw LedgerError.invalid(tr("关联账目已改变，无法安全撤销删除。", "Related entries changed; deletion cannot be safely undone.", "Rekod berkaitan berubah; pemadaman tidak dapat dibatalkan dengan selamat."))
+            }
+            copy.expenses.removeAll { ids.contains($0.id) }
+            copy.expenses.append(contentsOf: record.before)
+            copy.tngNotices.append(contentsOf: record.notices)
+        }
+        self = try copy.validated()
+    }
+}

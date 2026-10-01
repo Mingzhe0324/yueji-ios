@@ -481,6 +481,7 @@ struct ExpensesView: View {
                                 NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     TNGTimelineRow(notice: notice)
                                 }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
+                                .modifier(AutomaticRecordDeletion(notice: notice))
                             case .expense(let entry):
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
                                 .scaleEffect(model.removingExpenseIDs.contains(entry.id) ? 0.88 : 1, anchor: .trailing)
@@ -2232,4 +2233,43 @@ private struct LedgerFeedbackHost: ViewModifier {
 }
 extension View {
     func ledgerFeedback(modal: Bool = false) -> some View { modifier(LedgerFeedbackHost(modal: modal)) }
+}
+
+
+struct AutomaticRecordDeletion: ViewModifier {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let notice: TNGNotice?
+    var detail = false
+    @State private var confirming = false
+    @State private var failure: String?
+    private var removing: Bool { notice.map { model.removingExpenseIDs.contains($0.id) } ?? false }
+    private var deleteButton: some View {
+        Button(role: .destructive) { confirming = true } label: {
+            Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
+        }.disabled(notice == nil || removing)
+    }
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(!detail && removing ? 0.88 : 1, anchor: .trailing)
+            .opacity(!detail && removing ? 0 : 1)
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) { if !detail { deleteButton } }
+            .contextMenu { if !detail { deleteButton } }
+            .toolbar { if detail { ToolbarItem(placement: .topBarTrailing) { deleteButton } } }
+            .confirmationDialog(tr("删除这笔自动记录？", "Delete this automatic record?", "Padam rekod automatik ini?"), isPresented: $confirming, titleVisibility: .visible) {
+                Button(tr("删除", "Delete", "Padam"), role: .destructive) {
+                    guard let notice else { return }
+                    do {
+                        try model.deleteAutomaticRecord(notice)
+                        if detail { dismiss() }
+                    } catch { failure = error.localizedDescription }
+                }
+                Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+            } message: {
+                Text(tr("关联消费及其分账、退款会一并删除；此收款生成的还款也会撤销。其他银行的记录不受影响。删除后可撤销。", "Linked expenses, splits and refunds are deleted; repayments created by this receipt are reversed. Other bank records stay. You can undo this deletion.", "Belanja, bahagian dan pulangan berkaitan dipadam; bayaran rakan daripada penerimaan ini dibatalkan. Rekod bank lain kekal. Pemadaman boleh dibatalkan."))
+            }
+            .alert(tr("无法删除", "Unable to delete", "Tidak dapat memadam"), isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+                Button("OK", role: .cancel) { failure = nil }
+            } message: { Text(failure ?? "") }
+    }
 }

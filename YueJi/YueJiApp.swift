@@ -28,13 +28,25 @@ struct YueJiApp: App {
     @Published var feedbackMessage = ""
     @Published var feedbackMascot = false
     @Published var newTNGCount = 0
-    @Published private(set) var undoEntries: [Expense] = []
+    @Published private(set) var undoEntries: [DeletedLedgerRecord] = []
     @Published private(set) var removingExpenseIDs: Set<String> = []
     private var undoExpiry: Task<Void, Never>?
     func deleteExpense(_ entry: Expense) throws {
         guard !isPreview else { return }
-        try LocalStore.shared.change { try $0.deleteExpense(entry) }
-        undoEntries.append(entry)
+        var deletion: DeletedLedgerRecord?
+        try LocalStore.shared.change { deletion = try $0.deleteLedgerExpense(entry) }
+        guard let deletion else { return }
+        finishDeletion(deletion, id: entry.id)
+    }
+    func deleteAutomaticRecord(_ notice: TNGNotice) throws {
+        guard !isPreview else { return }
+        var deletion: DeletedLedgerRecord?
+        try LocalStore.shared.change { deletion = try $0.deleteAutomaticRecord(notice) }
+        guard let deletion else { return }
+        finishDeletion(deletion, id: notice.id)
+    }
+    private func finishDeletion(_ deletion: DeletedLedgerRecord, id: String) {
+        undoEntries.append(deletion)
         savedNotice = nil
         undoExpiry?.cancel()
         undoExpiry = Task { [weak self] in
@@ -44,13 +56,13 @@ struct YueJiApp: App {
         }
         let playful = UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true
         if playful && !UIAccessibility.isReduceMotionEnabled {
-            withAnimation(.easeIn(duration: 0.18)) { _ = removingExpenseIDs.insert(entry.id) }
+            withAnimation(.easeIn(duration: 0.18)) { _ = removingExpenseIDs.insert(id) }
             Task { [weak self] in
                 do { try await Task.sleep(for: .milliseconds(190)) } catch { return }
                 guard let self else { return }
                 withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
                     self.reload(postRecurring: false)
-                    self.removingExpenseIDs.remove(entry.id)
+                    self.removingExpenseIDs.remove(id)
                 }
             }
         } else { reload(postRecurring: false) }
@@ -61,7 +73,7 @@ struct YueJiApp: App {
         guard !isPreview, !undoEntries.isEmpty else { return }
         do {
             let entries = undoEntries
-            try LocalStore.shared.change { try $0.restoreDeletedExpenses(entries) }
+            try LocalStore.shared.change { try $0.restoreDeletedRecords(entries) }
             undoExpiry?.cancel(); undoEntries = []
             removingExpenseIDs.removeAll()
             reload(postRecurring: false)
