@@ -1,7 +1,19 @@
 import XCTest
+import UIKit
+import AVFoundation
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    @MainActor func testBundledFeedbackSoundsDecodeWithoutPlaying() throws {
+        for name in ["LaunchChime", "SavedChime", "GoalChime"] {
+            let asset = try XCTUnwrap(NSDataAsset(name: name))
+            let player = try AVAudioPlayer(data: asset.data)
+            XCTAssertGreaterThan(player.duration, 0.15)
+            XCTAssertLessThan(player.duration, 1.1)
+            XCTAssertEqual(player.numberOfChannels, 1)
+        }
+    }
+
     func testUndoRestoresWholeEntriesAndPreservesNewWrites() throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

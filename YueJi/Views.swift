@@ -49,7 +49,9 @@ struct MainView: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("completedUsageGuide") private var completedGuide = false
-    @AppStorage("hasSeenMoonOpening") private var hasSeenOpening = false
+    @AppStorage("hasSeenMoonOpeningV2") private var hasSeenOpening = false
+    @AppStorage("openingAnimationEnabled") private var openingEnabled = true
+    @AppStorage("playfulAnimations") private var playful = true
     @State private var showingGuide = false
     @State private var selectedTab = 0
     var body: some View {
@@ -62,14 +64,14 @@ struct MainView: View {
         }.tint(ink)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedTab)
             .overlay {
-                if !model.didFinishLaunch {
-                    OpeningAnimationView(compact: hasSeenOpening).transition(.opacity)
+                if !model.didFinishLaunch && openingEnabled {
+                    OpeningAnimationView(compact: hasSeenOpening, sound: !model.isPreview).transition(.opacity)
                 }
             }
             .task {
                 model.reload(postRecurring: false)
                 if !model.didFinishLaunch {
-                    if !reduceMotion { do { try await Task.sleep(for: .milliseconds(hasSeenOpening ? 650 : 1550)) } catch { return } }
+                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(hasSeenOpening ? 800 : 1650)) } catch { return } }
                     hasSeenOpening = true
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
                 }
@@ -91,12 +93,8 @@ struct MainView: View {
                     }
                     .padding(.horizontal, 16).ledgerGlass().padding(.horizontal, 24).padding(.top, 8)
                     .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
-                } else if model.savedNotice != nil {
-                    Label(tr("已保存", "Saved", "Disimpan"), systemImage: "checkmark.circle.fill")
-                        .font(.subheadline.weight(.semibold)).foregroundStyle(ink)
-                        .padding(.horizontal, 20).padding(.vertical, 12).ledgerGlass()
-                        .padding(.top, 8).allowsHitTesting(false)
-                        .accessibilityLabel(tr("账目已保存", "Entry saved", "Rekod disimpan"))
+                } else if let token = model.savedNotice {
+                    SavedFeedback(token: token)
                         .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .scale(scale: 0.92)).combined(with: .opacity))
                 }
             }
@@ -107,7 +105,7 @@ struct MainView: View {
                 do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
-            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } }
+            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }
@@ -581,6 +579,7 @@ struct ExpenseDetailView: View {
                 }
             }
             .sheet(item: $editing) { ExpenseEditor(original: $0) }
+            .overlay(alignment: .top) { if let token = model.savedNotice { SavedFeedback(token: token) } }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
             .onChange(of: entry == nil) { _, missing in if missing { dismiss() } }
         }
@@ -958,6 +957,9 @@ struct SettingsView: View {
                     NavigationLink { appearancePage } label: {
                         SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
                     }.guideTarget("settings.appearance")
+                    NavigationLink { BrandExperienceSettings() } label: {
+                        SimpleSettingsRow(title: tr("动画与声音", "Motion & sound", "Animasi & bunyi"), subtitle: tr("月亮伙伴、开场与提示音", "Moon companion, opening and sounds", "Teman bulan, pembukaan dan bunyi"), symbol: "sparkles", color: .orange)
+                    }
                     NavigationLink { NotificationSettingsView() } label: {
                         SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("预算、每日记账", "Budget and daily reminders", "Bajet dan peringatan harian"), symbol: "bell.fill", color: .orange)
                     }
@@ -1905,59 +1907,200 @@ private struct YueJiEntrance: ViewModifier {
             .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.32)) { entered = true } }
     }
 }
+/// Code-native mascot layers keep eyes and body independent and crisp at any size.
+private struct MoonBody: Shape {
+    func path(in r: CGRect) -> Path {
+        var p = Path()
+        p.move(to: CGPoint(x: 0.56, y: 0.08))
+        p.addCurve(to: CGPoint(x: 0.12, y: 0.70), control1: CGPoint(x: 0.13, y: 0.08), control2: CGPoint(x: -0.04, y: 0.40))
+        p.addCurve(to: CGPoint(x: 0.80, y: 0.86), control1: CGPoint(x: 0.23, y: 1.03), control2: CGPoint(x: 0.60, y: 1.03))
+        p.addCurve(to: CGPoint(x: 0.94, y: 0.52), control1: CGPoint(x: 0.92, y: 0.77), control2: CGPoint(x: 0.99, y: 0.49))
+        p.addCurve(to: CGPoint(x: 0.48, y: 0.53), control1: CGPoint(x: 0.82, y: 0.65), control2: CGPoint(x: 0.62, y: 0.65))
+        p.addCurve(to: CGPoint(x: 0.56, y: 0.08), control1: CGPoint(x: 0.33, y: 0.40), control2: CGPoint(x: 0.37, y: 0.21))
+        p.closeSubpath()
+        return p.applying(CGAffineTransform(scaleX: r.width, y: r.height)).applying(CGAffineTransform(translationX: r.minX, y: r.minY))
+    }
+}
+
+struct MoonBuddy: View {
+    var size: CGFloat = 100
+    var celebrating = false
+    var animated = true
+    var reaction: UUID? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var lift: CGFloat = 0
+    @State private var stretch: CGFloat = 1
+    @State private var tilt = 0.0
+    @State private var blink = false
+    @State private var sparkle = false
+    private let navy = Color(red: 0.04, green: 0.08, blue: 0.22)
+    private var motion: Bool { animated && playful && !reduceMotion }
+    private var animationKey: String { "\(motion)-\(reaction?.uuidString ?? "once")" }
+    var body: some View {
+        ZStack {
+            Ellipse().fill(Color.blue.opacity(0.12)).frame(width: size * 0.62, height: size * 0.07)
+                .blur(radius: size * 0.035).offset(y: size * 0.46).scaleEffect(lift < 0 ? 0.82 : 1)
+            ZStack {
+                MoonBody().fill(LinearGradient(colors: [Color(red: 1, green: 1, blue: 0.91), Color(red: 1, green: 0.89, blue: 0.53), Color(red: 1, green: 0.74, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .shadow(color: Color.orange.opacity(0.2), radius: size * 0.04, y: size * 0.025)
+                Ellipse().fill(Color.orange.opacity(0.35)).frame(width: size * 0.09, height: size * 0.065).offset(x: -size * 0.24, y: size * 0.22)
+                Ellipse().fill(Color.orange.opacity(0.35)).frame(width: size * 0.09, height: size * 0.065).offset(x: size * 0.15, y: size * 0.29)
+                eye.offset(x: -size * 0.15, y: size * 0.17)
+                eye.offset(x: size * 0.065, y: size * 0.23)
+                Path { p in
+                    p.move(to: CGPoint(x: size * 0.40, y: size * 0.76))
+                    p.addQuadCurve(to: CGPoint(x: size * 0.50, y: size * 0.79), control: CGPoint(x: size * 0.435, y: size * 0.85))
+                }.stroke(navy, style: StrokeStyle(lineWidth: size * 0.028, lineCap: .round))
+                Image(systemName: "sparkle").font(.system(size: size * 0.23, weight: .medium))
+                    .foregroundStyle(Color(red: 1, green: 0.83, blue: 0.30))
+                    .shadow(color: .yellow.opacity(0.3), radius: size * 0.04)
+                    .scaleEffect(sparkle ? 1.18 : 0.85).rotationEffect(.degrees(sparkle ? 12 : -8))
+                    .offset(x: size * 0.22, y: -size * 0.17)
+                if celebrating {
+                    ForEach(0..<6, id: \.self) { i in
+                        let angle = Double(i) * .pi / 3
+                        Image(systemName: "sparkle").font(.system(size: size * 0.075))
+                            .foregroundStyle(i.isMultiple(of: 2) ? Color.orange : Color.blue)
+                            .offset(x: cos(angle) * size * (sparkle ? 0.58 : 0.35), y: sin(angle) * size * (sparkle ? 0.55 : 0.32))
+                            .opacity(sparkle ? 1 : 0)
+                    }
+                }
+            }.frame(width: size, height: size)
+                .scaleEffect(x: 2 - stretch, y: stretch, anchor: .bottom)
+                .rotationEffect(.degrees(tilt)).offset(y: lift)
+        }.frame(width: size, height: size)
+            .accessibilityHidden(true)
+            .task(id: animationKey) {
+                lift = 0; stretch = 1; tilt = 0; blink = false; sparkle = !motion
+                guard motion else { return }
+                do {
+                    withAnimation(.easeInOut(duration: 0.12)) { stretch = 0.90 }
+                    try await Task.sleep(for: .milliseconds(120))
+                    withAnimation(.spring(response: 0.34, dampingFraction: 0.6)) {
+                        lift = -size * (celebrating ? 0.15 : 0.065); stretch = 1.04; tilt = -8; sparkle = true
+                    }
+                    try await Task.sleep(for: .milliseconds(240))
+                    withAnimation(.spring(response: 0.36, dampingFraction: 0.57)) { lift = 0; stretch = 1; tilt = 4 }
+                    try await Task.sleep(for: .milliseconds(200))
+                    withAnimation(.easeInOut(duration: 0.10)) { blink = true }
+                    try await Task.sleep(for: .milliseconds(120))
+                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { blink = false; tilt = 0 }
+                } catch { return }
+            }
+    }
+    private var eye: some View {
+        Ellipse().fill(navy).frame(width: size * 0.06, height: size * 0.09)
+            .overlay(alignment: .topTrailing) {
+                Circle().fill(.white).frame(width: size * 0.017, height: size * 0.017).padding(size * 0.01)
+            }.scaleEffect(y: blink ? 0.12 : 1)
+    }
+}
+
+struct SavedFeedback: View {
+    let token: UUID
+    var body: some View {
+        HStack(spacing: 10) {
+            MoonBuddy(size: 42, reaction: token)
+            Label(tr("已保存", "Saved", "Disimpan"), systemImage: "checkmark.circle.fill")
+                .font(.subheadline.weight(.semibold)).foregroundStyle(ink)
+        }.padding(.horizontal, 16).padding(.vertical, 6).ledgerGlass()
+            .padding(.top, 8).allowsHitTesting(false)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(tr("账目已保存", "Entry saved", "Rekod disimpan"))
+    }
+}
+
 private struct OpeningAnimationView: View {
     let compact: Bool
+    var sound = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var gathered = false
-    @State private var revealed = false
+    @Environment(\.scenePhase) private var phase
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var entered = false
     @State private var titled = false
-    private let night = Color(red: 0.025, green: 0.045, blue: 0.11)
+    private let night = Color(red: 0.02, green: 0.045, blue: 0.15)
+    private var motion: Bool { playful && !reduceMotion }
     var body: some View {
         ZStack {
             night.ignoresSafeArea()
-            RadialGradient(colors: [Color.blue.opacity(revealed ? 0.28 : 0.04), night], center: .center, startRadius: 12, endRadius: 310).ignoresSafeArea()
-            VStack(spacing: 30) {
+            RadialGradient(colors: [Color.blue.opacity(0.30), night], center: .center, startRadius: 10, endRadius: 380).ignoresSafeArea()
+            VStack(spacing: 28) {
                 ZStack {
-                    Circle().fill(Color.cyan.opacity(0.15)).frame(width: 160, height: 160).blur(radius: 30)
-                        .scaleEffect(revealed ? 1.15 : 0.45).opacity(revealed ? 1 : 0)
-                    if !compact && !reduceMotion {
-                        ForEach(0..<24, id: \.self) { index in
-                            let angle = Double(index) * .pi * 2 / 24
-                            Circle().fill(Color(red: 0.7, green: 0.86, blue: 1))
-                                .frame(width: index % 3 == 0 ? 4 : 2, height: index % 3 == 0 ? 4 : 2)
-                                .offset(x: cos(angle) * (gathered ? 42 : 145), y: sin(angle) * (gathered ? 42 : 145))
-                                .opacity(revealed ? 0 : 0.85)
-                        }
-                    }
-                    Circle().trim(from: 0.08, to: revealed ? 0.92 : 0.08)
-                        .stroke(AngularGradient(colors: [.clear, .cyan.opacity(0.65), .white.opacity(0.8), .clear], center: .center), style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
-                        .frame(width: 150, height: 150).rotationEffect(.degrees(-110))
-                    Image(systemName: "moon.fill")
-                        .font(.system(size: 76, weight: .ultraLight))
-                        .foregroundStyle(LinearGradient(colors: [.white, Color(red: 0.62, green: 0.8, blue: 1)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .shadow(color: .cyan.opacity(0.3), radius: 20)
-                        .scaleEffect(revealed ? 1 : 0.82).opacity(revealed || reduceMotion ? 1 : 0)
-                }.frame(width: 280, height: 230)
+                    Circle().stroke(.white.opacity(0.055), lineWidth: 1).frame(width: 270, height: 270)
+                    Circle().stroke(.white.opacity(0.07), lineWidth: 1).frame(width: 320, height: 320)
+                    MoonBuddy(size: 235, celebrating: !compact, animated: motion)
+                        .scaleEffect(entered || !motion ? 1 : 0.65)
+                        .opacity(entered || !motion ? 1 : 0)
+                }.frame(height: 320)
                 VStack(spacing: 12) {
-                    Text("月记").font(.system(size: 34, weight: .medium, design: .rounded)).tracking(8)
-                    Text("YUEJI").font(.system(size: 10, weight: .medium)).tracking(6).foregroundStyle(.white.opacity(0.55))
-                }.foregroundStyle(.white).opacity(titled || reduceMotion ? 1 : 0)
-                    .offset(y: titled || reduceMotion ? 0 : 8)
-            }.offset(y: -24)
+                    Text("月记").font(.system(size: 36, weight: .bold, design: .rounded)).tracking(6)
+                    Text("YUEJI").font(.system(size: 11, weight: .semibold, design: .rounded)).tracking(5).foregroundStyle(.white.opacity(0.55))
+                    Text(tr("每一笔，离目标近一点。", "A little closer, with every entry.", "Setiap rekod, semakin dekat."))
+                        .font(.subheadline).foregroundStyle(.white.opacity(0.78)).padding(.top, 6)
+                }.foregroundStyle(.white).opacity(titled || !motion ? 1 : 0)
+                    .offset(y: titled || !motion ? 0 : 10)
+            }.padding(.horizontal, 24).offset(y: -20)
         }
-        .task {
-            if reduceMotion { revealed = true; titled = true; return }
-            if compact {
-                withAnimation(.easeOut(duration: 0.4)) { revealed = true; titled = true }
-                return
-            }
-            withAnimation(.easeInOut(duration: 0.55)) { gathered = true }
-            do { try await Task.sleep(for: .milliseconds(380)) } catch { return }
-            withAnimation(.spring(response: 0.65, dampingFraction: 0.88)) { revealed = true }
-            UIImpactFeedbackGenerator(style: .soft).impactOccurred(intensity: 0.5)
-            do { try await Task.sleep(for: .milliseconds(270)) } catch { return }
-            withAnimation(.easeOut(duration: 0.45)) { titled = true }
+        .task(id: phase) {
+            guard phase == .active else { return }
+            if sound { FeedbackSounds.shared.play(compact ? .saved : .launch) }
+            guard motion else { entered = true; titled = true; return }
+            withAnimation(.spring(response: compact ? 0.34 : 0.52, dampingFraction: 0.7)) { entered = true }
+            do { try await Task.sleep(for: .milliseconds(compact ? 100 : 330)) } catch { return }
+            withAnimation(.easeOut(duration: 0.3)) { titled = true }
         }
+        .onDisappear { FeedbackSounds.shared.stop() }
         .accessibilityElement(children: .ignore).accessibilityLabel("月记 YueJi")
+    }
+}
+
+private struct BrandExperienceSettings: View {
+    @AppStorage("playfulAnimations") private var playful = true
+    @AppStorage("openingAnimationEnabled") private var opening = true
+    @AppStorage("animationSounds") private var sounds = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var preview = false
+    var body: some View {
+        Form {
+            Section {
+                VStack(spacing: 12) {
+                    MoonBuddy(size: 130)
+                    Text(tr("你的月亮伙伴", "Your moon companion", "Teman bulan anda")).font(.title3.bold())
+                    Text(tr("一点好心情，每一笔都算数。", "A little joy. Every entry counts.", "Sedikit keceriaan. Setiap rekod bermakna."))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity).padding(.vertical, 12)
+            }
+            Section {
+                Toggle(tr("角色趣味动画", "Playful character motion", "Animasi watak ceria"), isOn: $playful)
+                Toggle(tr("开场动画", "Opening animation", "Animasi pembukaan"), isOn: $opening)
+                Button { preview = true } label: {
+                    Label(tr("预览开场", "Preview opening", "Pratonton pembukaan"), systemImage: "play.circle.fill")
+                }
+            } footer: {
+                Text(reduceMotion
+                     ? tr("已遵循系统“减少动态效果”，角色会静态显示。", "Reduce Motion is on. The character stays still.", "Kurangkan Gerakan aktif. Watak kekal statik.")
+                     : tr("开场只在冷启动播放，回到前台不会重播。", "The opening plays on cold launch, not when returning to the app.", "Pembukaan dimainkan semasa pelancaran baharu sahaja."))
+            }
+            Section {
+                Toggle(tr("动画音效", "Animation sounds", "Bunyi animasi"), isOn: $sounds)
+                    .onChange(of: sounds) { _, enabled in if !enabled { FeedbackSounds.shared.stop() } }
+                Button(tr("试听开场音效", "Preview opening sound", "Dengar bunyi pembukaan")) { FeedbackSounds.shared.play(.launch) }
+                    .disabled(!sounds)
+            } footer: {
+                Text(tr("开场、保存和达标使用轻柔短音；遵循静音模式，不打断音乐。", "Soft cues for opening, saving and reaching a goal. Respects silent mode and mixes with music.", "Bunyi lembut untuk pembukaan, simpan dan capai matlamat. Mengikut mod senyap dan bercampur dengan muzik."))
+            }
+        }.navigationTitle(tr("动画与声音", "Motion & sound", "Animasi & bunyi"))
+            .fullScreenCover(isPresented: $preview) {
+                OpeningAnimationView(compact: false)
+                    .overlay(alignment: .topTrailing) {
+                        Button { preview = false } label: { Image(systemName: "xmark.circle.fill").font(.title).foregroundStyle(.white).padding(24) }
+                            .accessibilityLabel(tr("关闭", "Close", "Tutup"))
+                    }
+                    .task {
+                        do { try await Task.sleep(for: .seconds(2)) } catch { return }
+                        preview = false
+                    }
+            }
     }
 }

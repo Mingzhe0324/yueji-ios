@@ -2349,6 +2349,7 @@ private struct SavingsGoalDetail: View {
                         Text(tr("目标 ", "Target ", "Sasaran ") + money(goal.target)).foregroundStyle(.secondary)
                         Text(tr("还差 ", "Remaining ", "Baki ") + money(max(0, goal.target - goal.balance))).font(.subheadline)
                         if celebrated {
+                            MoonBuddy(size: 100, celebrating: true)
                             Label(tr("目标达成！", "Goal reached!", "Matlamat tercapai!"), systemImage: "checkmark.seal.fill")
                                 .foregroundStyle(.green).font(.headline)
                                 .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
@@ -2425,7 +2426,7 @@ private struct SavingsGoalDetail: View {
                 return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
             }
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.5)) { model.reload(postRecurring: false); celebrated = reached }
-            model.showSaved()
+            model.showSaved(sound: reached ? .goal : .saved)
         } catch { self.error = error.localizedDescription }
     }
 }
