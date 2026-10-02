@@ -33,7 +33,6 @@ final class LocalStore {
     @discardableResult func change<T>(_ action: (inout Ledger) throws -> T) throws -> T {
         try prepare()
         var output: Result<T, Error> = .failure(LedgerError.invalid("账本正忙，请重试。"))
-        var changed = false
         var error: NSError?
         NSFileCoordinator().coordinate(writingItemAt: file, options: .forMerging, error: &error) { _ in
             output = Result {
@@ -46,7 +45,6 @@ final class LocalStore {
                     let name = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString).json"
                     try Self.exportData(try Self.decode(previous)).write(to: self.backupFolder.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                     try next.write(to: self.file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-                    changed = true
                     let backups = try self.backups()
                     for old in backups.dropFirst(30) { try? FileManager.default.removeItem(at: old) }
                 }
@@ -54,18 +52,9 @@ final class LocalStore {
             }
         }
         if let error { throw error }
-        let result = try output.get()
-        if changed { NotificationCenter.default.post(name: .yuejiLedgerChanged, object: nil) }
-        return result
+        return try output.get()
     }
     func backups() throws -> [URL] { try prepare(); return try FileManager.default.contentsOfDirectory(at: backupFolder, includingPropertiesForKeys: nil).filter { $0.pathExtension == "json" }.sorted { $0.lastPathComponent > $1.lastPathComponent } }
-    func replaceCloud(_ data: Data) throws {
-        let imported = try Self.decode(data)
-        try change { ledger in
-            try Self.exportData(ledger).write(to: recoveryFile, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
-            ledger = imported
-        }
-    }
     func restore(_ data: Data) throws {
         let imported = try Self.decode(data)
         try change { ledger in

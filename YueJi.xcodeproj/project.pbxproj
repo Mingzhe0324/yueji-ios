@@ -9,8 +9,6 @@
         "CB1000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB1000000000000000000001"; };
         "CB0000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiIcon@2x.png"; "sourceTree" = "<group>"; };
         "CB0000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB0000000000000000000001"; };
-        "CA1000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "CloudAccount.swift"; "sourceTree" = "<group>"; };
-        "CA1000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CA1000000000000000000001"; };
 		"4272165E609CEB45988F02A0" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "text.json.xcstrings"; "path" = "Localizable.xcstrings"; "sourceTree" = "<group>"; };
 		"ABAD2E33A649C96D618F1E8D" = { "isa" = "PBXBuildFile"; "fileRef" = "4272165E609CEB45988F02A0"; };
 		"ED29F67A6CF18DB93C10A996" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "FeatureViews.swift"; "sourceTree" = "<group>"; };
@@ -110,8 +108,7 @@
 		"E17E80AD8E2103CF3FC3FD96" = {
 			"isa" = "PBXGroup";
 			"children" = (
-				"CA1000000000000000000001",
-                "CB0000000000000000000001",
+				"CB0000000000000000000001",
                 "CB1000000000000000000001",
                 "4272165E609CEB45988F02A0",
 				"ED29F67A6CF18DB93C10A996",
@@ -158,8 +155,7 @@
 			"isa" = "PBXSourcesBuildPhase";
 			"buildActionMask" = 2147483647;
 			"files" = (
-				"CA1000000000000000000002",
-                "18C3C4F160B163CE58D17794",
+				"18C3C4F160B163CE58D17794",
 				"E3782C11DFBCC2462503FF4D",
 				"91E32EA26F46EE0FB1BCD291",
 				"6517DFEE3B579FA613C5B1A2",

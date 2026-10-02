@@ -19,9 +19,9 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>1.41.1</string>
+	<string>1.40.4</string>
 	<key>CFBundleVersion</key>
-	<string>56</string>
+	<string>57</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
 	<key>UIApplicationSceneManifest</key>
@@ -37,10 +37,6 @@
 	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>拍摄收据并在本机识别金额，用于确认记账和朋友分账。</string>
-	<key>YueJiSupabaseURL</key>
-	<string></string>
-	<key>YueJiSupabasePublicKey</key>
-	<string></string>
 	<key>CFBundleIconFile</key>
 	<string>YueJiIcon@2x.png</string>
 	<key>CFBundleIconFiles</key>

@@ -11,7 +11,7 @@ struct YueJiApp: App {
     @AppStorage("appAppearance") private var appearance = "system"
     private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
     init() { UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; YueJiShortcuts.updateAppShortcutParameters() }
-    var body: some Scene { WindowGroup { AccountEntryView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
+    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
     let isPreview: Bool
@@ -44,9 +44,8 @@ struct YueJiApp: App {
         guard let deletion else { return }
         finishDeletion(deletion)
     }
-    private func finishDeletion(_ deletion: DeletedLedgerRecord) { finishDeletions([deletion]) }
-    private func finishDeletions(_ deletions: [DeletedLedgerRecord]) {
-        undoEntries.append(contentsOf: deletions)
+    private func finishDeletion(_ deletion: DeletedLedgerRecord) {
+        undoEntries.append(deletion)
         savedNotice = nil
         undoExpiry?.cancel()
         undoExpiry = Task { [weak self] in

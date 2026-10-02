@@ -71,7 +71,6 @@ struct MainView: View {
             }
             .task {
                 model.reload(postRecurring: false)
-                Task { await CloudAccount.shared.reconnect() }
                 if !model.didFinishLaunch {
                     if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(1600)) } catch { return } }
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
@@ -84,8 +83,6 @@ struct MainView: View {
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true }) {
                 UsageGuideView()
             }
-            .onChange(of: phase) { _, value in if value == .active { Task { await CloudAccount.shared.reconnect() } } }
-            .onReceive(NotificationCenter.default.publisher(for: .yuejiCloudRestored)) { _ in model.reload(postRecurring: false) }
             .onChange(of: selectedTab) { _, _ in FeedbackHaptics.selection() }
             .ledgerFeedback()
             .safeAreaInset(edge: .top) {
@@ -1063,7 +1060,6 @@ struct SettingsView: View {
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
-                    NavigationLink("账号与云备份") { CloudAccountView() }
                     NavigationLink { backupPage } label: {
                         SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: .indigo)
                     }.guideTarget("settings.backup")
@@ -1078,9 +1074,7 @@ struct SettingsView: View {
                     }
                 } header: { Text(tr("数据与帮助", "Data & help", "Data & bantuan")) }
             }.yuejiListSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.inline)
-                .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { result in
-                    switch result { case .success: UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastExportBackup"); case .failure(let e): model.error = e.localizedDescription }
-                }
+                .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                     do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }
                 }

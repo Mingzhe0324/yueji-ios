@@ -1,10 +1,6 @@
-# 月记 YueJi · 1.41.1（build 56）
+# 月记 YueJi · 1.40.4（build 57）
 
-本版移除快速归类、批量整理、通知截图补录、备份提醒及月度变化摘要。首次进入显示独立登录/注册页面；Keychain 中保留有效会话时直接进入账本，退出或确认会话失效后重新登录。离线时保留现有登录会话。
-
-**账号与云备份需要先配置 Supabase。**注册、登录、邮箱验证码和整份备份恢复已接入源码；没有配置 URL/公钥时页面会明确提示未启用。设置方法见 [CloudSetup.md](CloudSetup.md)，数据库脚本见 [backend/supabase.sql](backend/supabase.sql)。配置成功并上传后，同账号可恢复卸载前已上传的记录；离线、尚未同步的记录不能保证恢复。
-
-本次只完成 Linux 结构检查；GitHub Actions 会运行 Xcode 原生编译、XCTest 并生成 IPA。此 ZIP 是完整源码，不是已安装的 App。
+本版以 1.40.3 build 54 为基础，仅更新 App 图标资源与 IPA 图标元数据，补齐 iPhone/iPad 图标尺寸及 AltStore 读取用 PNG。通知使用系统 App 图标。原有 Swift 功能源码保持不变；不包含之后新增的云账号或登录入口。更新后系统或 AltStore 可能仍保留图标缓存，请先重新打开界面，勿为图标缓存删除未备份账本。
 
 记录消费、轻松分账，为目标存钱。支持中文、English、Bahasa Melayu。
 
