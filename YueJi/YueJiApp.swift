@@ -11,7 +11,7 @@ struct YueJiApp: App {
     @AppStorage("appAppearance") private var appearance = "system"
     private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
     init() { UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; YueJiShortcuts.updateAppShortcutParameters() }
-    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
+    var body: some Scene { WindowGroup { AccountEntryView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
     let isPreview: Bool
@@ -43,18 +43,6 @@ struct YueJiApp: App {
         try LocalStore.shared.change { deletion = try $0.deleteAutomaticRecord(notice) }
         guard let deletion else { return }
         finishDeletion(deletion)
-    }
-    func deleteBatch(expenses: [Expense], notices: [TNGNotice]) throws {
-        guard !isPreview else { return }
-        let records = try LocalStore.shared.change { ledger -> [DeletedLedgerRecord] in
-            var records: [DeletedLedgerRecord] = []
-            for notice in notices { records.append(try ledger.deleteAutomaticRecord(notice)) }
-            for expense in expenses {
-                if ledger.expenses.contains(where: { $0.id == expense.id }) { records.append(try ledger.deleteLedgerExpense(expense)) }
-            }
-            return records
-        }
-        guard !records.isEmpty else { return }; finishDeletions(records)
     }
     private func finishDeletion(_ deletion: DeletedLedgerRecord) { finishDeletions([deletion]) }
     private func finishDeletions(_ deletions: [DeletedLedgerRecord]) {

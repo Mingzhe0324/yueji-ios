@@ -7,6 +7,12 @@ private struct CloudSession: Codable {
     var refresh_token: String
     var user: CloudUser
 }
+private struct CloudHTTPError: LocalizedError {
+    let status: Int
+    let message: String
+    let code: String
+    var errorDescription: String? { message }
+}
 private struct CloudUser: Codable { var id: String; var email: String? }
 private struct CloudBackup: Decodable { var payload: Ledger; var revision: Int; var updated_at: String }
 private enum CloudKeys {
@@ -30,6 +36,8 @@ private enum CloudKeys {
 /// Revision conflicts stop uploads; a different account never inherits local data automatically.
 @MainActor final class CloudAccount: ObservableObject {
     static let shared = CloudAccount()
+    @Published private(set) var signedIn = false
+    @Published private(set) var checkingSession = true
     @Published private(set) var email: String?
     @Published private(set) var busy = false
     @Published private(set) var message = ""
@@ -47,7 +55,7 @@ private enum CloudKeys {
     private var publicKey: String { Bundle.main.object(forInfoDictionaryKey: "YueJiSupabasePublicKey") as? String ?? "" }
     var configured: Bool { URL(string: base)?.scheme == "https" && !publicKey.isEmpty && !publicKey.contains("$(") }
     private init() {
-        if let data = CloudKeys.read(), let value = try? JSONDecoder().decode(CloudSession.self, from: data) { session = value; email = value.user.email }
+        if let data = CloudKeys.read(), let value = try? JSONDecoder().decode(CloudSession.self, from: data) { session = value; email = value.user.email; signedIn = true }
         let savedDate = UserDefaults.standard.double(forKey: "lastCloudBackup")
         if savedDate > 0 { lastBackup = Date(timeIntervalSince1970: savedDate) }
         observer = NotificationCenter.default.addObserver(forName: .yuejiLedgerChanged, object: nil, queue: .main) { _ in
@@ -63,19 +71,32 @@ private enum CloudKeys {
         guard let response = response as? HTTPURLResponse, (200..<300).contains(response.statusCode) else {
             let json = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             let detail = json?["msg"] as? String ?? json?["message"] as? String ?? json?["error_description"] as? String ?? "请求失败，请检查网络或登录状态。"
-            throw LedgerError.invalid(detail)
+            throw CloudHTTPError(status: (response as? HTTPURLResponse)?.statusCode ?? 0, message: detail, code: json?["error_code"] as? String ?? json?["code"] as? String ?? "")
         }
         return data
     }
     private func json(_ values: [String: Any]) throws -> Data { try JSONSerialization.data(withJSONObject: values) }
     private func install(_ data: Data) throws {
         let value = try JSONDecoder().decode(CloudSession.self, from: data)
-        try CloudKeys.save(try JSONEncoder().encode(value)); session = value; email = value.user.email
+        try CloudKeys.save(try JSONEncoder().encode(value)); session = value; email = value.user.email; signedIn = true
     }
     private func refresh() async throws {
         guard let session else { throw LedgerError.invalid("请先登录。") }
-        let data = try await request("/auth/v1/token?grant_type=refresh_token", body: json(["refresh_token": session.refresh_token]))
-        try install(data)
+        do {
+            let data = try await request("/auth/v1/token?grant_type=refresh_token", body: json(["refresh_token": session.refresh_token]))
+            try install(data)
+        } catch {
+            if let failure = error as? CloudHTTPError,
+               ["refresh_token_not_found", "refresh_token_already_used", "session_not_found", "user_not_found", "user_banned"].contains(failure.code) {
+                invalidateSession(); message = "登录已失效，请重新登录。"
+            }
+            throw error
+        }
+    }
+    func checkEntrySession() async {
+        guard checkingSession else { return }
+        checkingSession = false
+        if session != nil { await reconnect() }
     }
     func authenticate(email: String, password: String, create: Bool) async {
         guard !busy else { return }; busy = true; defer { busy = false }
@@ -183,8 +204,12 @@ private enum CloudKeys {
         }
     }
     func signOut() {
-        guard !busy else { return }; pending?.cancel(); generation = UUID(); ready = false
-        session = nil; email = nil; remote = nil; revision = 0; fingerprint = nil; remoteAvailable = false; lastBackup = nil
+        guard !busy else { return }; invalidateSession()
+        message = "已退出。账目仍保留在本机，请勿卸载未备份的记录。"
+    }
+    private func invalidateSession() {
+        pending?.cancel(); generation = UUID(); ready = false
+        session = nil; email = nil; signedIn = false; remote = nil; revision = 0; fingerprint = nil; remoteAvailable = false; lastBackup = nil
         CloudKeys.clear(); message = "已退出。账目仍保留在本机，请勿卸载未备份的记录。"
     }
 }
@@ -242,5 +267,76 @@ struct CloudAccountView: View {
             .confirmationDialog("用云端账目替换本机账目？", isPresented: $confirmRestore, titleVisibility: .visible) {
                 Button("确认恢复") { Task { await cloud.restoreRemote(); model.reload(postRecurring: false) } }
             } message: { Text("本机原数据会先保存为恢复副本。这是整份恢复，不会重复叠加记录。") }
+    }
+}
+
+
+/// A real persisted Supabase session controls entry; a local "has opened" flag never bypasses login.
+struct AccountEntryView: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    var body: some View {
+        Group {
+            if cloud.checkingSession {
+                ZStack {
+                    Color(red: 0.03, green: 0.07, blue: 0.22).ignoresSafeArea()
+                    VStack(spacing: 20) { Image("LoginMoon").resizable().scaledToFit().frame(width: 150, height: 150); ProgressView("正在打开月记…").tint(.white).foregroundStyle(.white) }
+                }
+            } else if cloud.signedIn { MainView() }
+            else { LoginSignupView() }
+        }.task { await cloud.checkEntrySession() }
+    }
+}
+struct LoginSignupView: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    @State private var creating = false
+    @State private var email = ""
+    @State private var password = ""
+    @State private var code = ""
+    @State private var verifying = false
+    @State private var recovering = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.03, green: 0.07, blue: 0.22), Color(red: 0.07, green: 0.17, blue: 0.42)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            ScrollView {
+                VStack(spacing: 22) {
+                    Image("LoginMoon").resizable().scaledToFit().frame(width: 132, height: 132).accessibilityHidden(true)
+                    VStack(spacing: 8) {
+                        Text("月记 YueJi").font(.largeTitle.bold()).foregroundStyle(.white)
+                        Text("把每一笔生活，安心记下来").foregroundStyle(.white.opacity(0.75))
+                    }
+                    VStack(alignment: .leading, spacing: 18) {
+                        Text(recovering ? "重置密码" : verifying ? "验证邮箱" : creating ? "创建你的账号" : "欢迎回来").font(.title2.bold())
+                        if !verifying && !recovering {
+                            Picker("账号", selection: $creating) { Text("登录").tag(false); Text("注册").tag(true) }.pickerStyle(.segmented)
+                        }
+                        TextField("邮箱地址", text: $email).keyboardType(.emailAddress).textContentType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled().padding(14).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        if verifying || recovering {
+                            TextField("邮件验证码", text: $code).textContentType(.oneTimeCode).textInputAutocapitalization(.never).padding(14).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        if !verifying || recovering {
+                            SecureField(recovering ? "新密码（至少 8 位）" : "密码（至少 8 位）", text: $password).textContentType(creating || recovering ? .newPassword : .password).padding(14).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 12))
+                        }
+                        Button {
+                            Task {
+                                if verifying || recovering { await cloud.verify(email: email.trimmingCharacters(in: .whitespacesAndNewlines), code: code.trimmingCharacters(in: .whitespacesAndNewlines), newPassword: password, recovery: recovering) }
+                                else { await cloud.authenticate(email: email, password: password, create: creating); if creating && !cloud.signedIn && cloud.message.contains("验证邮件已发送") { verifying = true } }
+                                password = ""
+                            }
+                        } label: {
+                            HStack { Spacer(); if cloud.busy { ProgressView().tint(.white) }; Text(recovering ? "确认重置" : verifying ? "验证并进入月记" : creating ? "创建账号" : "登录月记").fontWeight(.semibold); Spacer() }.padding(15)
+                        }.buttonStyle(.plain).foregroundStyle(.white).background(Color(red: 0.12, green: 0.24, blue: 0.56), in: RoundedRectangle(cornerRadius: 14)).disabled(cloud.busy || !cloud.configured || !email.contains("@"))
+                        if verifying || recovering {
+                            Button("返回登录") { verifying = false; recovering = false; creating = false; code = ""; password = "" }
+                        } else if !creating {
+                            Button("忘记密码？") { Task { await cloud.requestReset(email); recovering = true; password = "" } }.disabled(!email.contains("@") || cloud.busy)
+                        }
+                        if !cloud.configured { Text("云端连接尚未配置，请配置 Supabase URL 与公开密钥后重新构建。").font(.footnote).foregroundStyle(.orange) }
+                        if !cloud.message.isEmpty { Text(cloud.message).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled) }
+                    }.padding(24).background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26)).disabled(cloud.busy)
+                    Text("登录状态会安全保留，下次打开即可进入。\n云备份需在登录后上传成功，才可用于重装恢复。").font(.footnote).multilineTextAlignment(.center).foregroundStyle(.white.opacity(0.65))
+                }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)
+            }.scrollDismissesKeyboard(.interactively)
+        }.animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: creating)
     }
 }
