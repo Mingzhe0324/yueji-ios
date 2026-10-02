@@ -1494,3 +1494,55 @@ final class ConsecutiveDeletionTests: XCTestCase {
         XCTAssertEqual(Set(ledger.tngNotices.map(\.id)), Set(originals.map(\.id) + [newID]))
     }
 }
+
+final class CloudRestoreAndTransferTests: XCTestCase {
+    func testOwnTransferOutgoingStaysVisibleWithoutChangingSpending() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "Your transfer of RM0.01 to MY ACCOUNT is SUCCESSFUL.", title: "Transaction Notice", date: nil, eventID: nil)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        ledger.tngNotices[0].status = "ownTransfer"
+        _ = try ledger.validated()
+        XCTAssertEqual(ledger.ledgerTNGTransfers(in: Date()).count, 1)
+        XCTAssertEqual(ledger.spending(in: Date()), 0)
+        ledger.tngNotices[0].status = "income"
+        XCTAssertThrowsError(try ledger.validated()) // outgoing cannot become income
+    }
+    func testCloudRestoreReplacesReplayMarkersAndKeepsRecoveryCopy() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        try store.change { ledger in
+            ledger.expenses.append(Expense(merchant: "Local", cents: 100))
+            ledger.seenEvents.insert("local-event")
+        }
+        var cloud = Ledger(); cloud.expenses.append(Expense(merchant: "Cloud", cents: 200)); cloud.seenEvents.insert("cloud-event")
+        try store.replaceCloud(LocalStore.encode(cloud))
+        XCTAssertEqual(try store.read().expenses.map(\.merchant), ["Cloud"])
+        XCTAssertEqual(try store.read().seenEvents, Set(["cloud-event"]))
+        let previous = try LocalStore.decode(Data(contentsOf: store.recoveryFile))
+        XCTAssertEqual(previous.expenses.map(\.merchant), ["Local"])
+        XCTAssertEqual(previous.seenEvents, Set(["local-event"]))
+    }
+    func testFailedBatchMutationLeavesCommittedFileUntouched() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        try store.change { $0.expenses.append(Expense(merchant: "Keep", cents: 100)) }
+        let expected = try store.read().expenses
+        XCTAssertThrowsError(try store.change { ledger in
+            _ = try ledger.deleteLedgerExpense(expected[0])
+            throw LedgerError.invalid("Stale second selection")
+        })
+        XCTAssertEqual(try store.read().expenses, expected)
+    }
+}
+
+final class CloudFingerprintTests: XCTestCase {
+    @MainActor func testSetOrderingDoesNotTriggerSpuriousBackupButTransactionChangeDoes() {
+        let a = Data(#"{"seenEvents":["b","a"],"postedRecurring":["2","1"],"expenses":[{"cents":100}]}"#.utf8)
+        let b = Data(#"{"expenses":[{"cents":100}],"postedRecurring":["1","2"],"seenEvents":["a","b"]}"#.utf8)
+        let c = Data(#"{"expenses":[{"cents":200}],"postedRecurring":["1","2"],"seenEvents":["a","b"]}"#.utf8)
+        XCTAssertEqual(CloudAccount.digest(a), CloudAccount.digest(b))
+        XCTAssertNotEqual(CloudAccount.digest(b), CloudAccount.digest(c))
+    }
+}

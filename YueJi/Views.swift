@@ -71,6 +71,7 @@ struct MainView: View {
             }
             .task {
                 model.reload(postRecurring: false)
+                Task { await CloudAccount.shared.reconnect() }
                 if !model.didFinishLaunch {
                     if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(1600)) } catch { return } }
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
@@ -83,6 +84,8 @@ struct MainView: View {
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true }) {
                 UsageGuideView()
             }
+            .onChange(of: phase) { _, value in if value == .active { Task { await CloudAccount.shared.reconnect() } } }
+            .onReceive(NotificationCenter.default.publisher(for: .yuejiCloudRestored)) { _ in model.reload(postRecurring: false) }
             .onChange(of: selectedTab) { _, _ in FeedbackHaptics.selection() }
             .ledgerFeedback()
             .safeAreaInset(edge: .top) {
@@ -165,6 +168,8 @@ struct DashboardView: View {
                     PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
                     MonthPicker(month: monthBinding)
                     spendingCard
+                    MonthlySummaryView(month: month)
+                    BackupReminderView()
                     recentCard
                     NavigationLink { SavingsGoalsView() } label: {
                         GlassPanel {
@@ -418,6 +423,7 @@ struct ExpensesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
+    @State private var quickPurpose: TNGNotice?
     @State private var deletingNotice: TNGNotice?
     @State private var reviewing: Expense?
     @Namespace private var expenseTransition
@@ -485,7 +491,7 @@ struct ExpensesView: View {
                                 NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     TNGTimelineRow(notice: notice)
                                 }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
-                                .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
+                                .modifier(AutomaticRecordDeleteActions(classify: { quickPurpose = notice }, request: { deletingNotice = notice }))
                             case .expense(let entry):
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
@@ -505,11 +511,14 @@ struct ExpensesView: View {
                 }
             }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
                 .refreshable { model.reload(postRecurring: false) }
+                .sheet(item: $quickPurpose) { QuickPurposeView(notice: $0) }
                 .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
                 .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
+                            NavigationLink("批量整理") { BatchLedgerView(month: month) }
+                            NavigationLink("补录银行 / TNG 通知") { NotificationImportView() }
                             NavigationLink(tr("银行 / TNG 通知", "Bank / TNG inbox", "Peti bank / TNG")) { TNGInboxView() }
                             NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
                         } label: { Image(systemName: "ellipsis.circle") }
@@ -1060,6 +1069,7 @@ struct SettingsView: View {
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
+                    NavigationLink("账号与云备份") { CloudAccountView() }
                     NavigationLink { backupPage } label: {
                         SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: .indigo)
                     }.guideTarget("settings.backup")
@@ -1074,7 +1084,9 @@ struct SettingsView: View {
                     }
                 } header: { Text(tr("数据与帮助", "Data & help", "Data & bantuan")) }
             }.yuejiListSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.inline)
-                .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
+                .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { result in
+                    switch result { case .success: UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: "lastExportBackup"); case .failure(let e): model.error = e.localizedDescription }
+                }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                     do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }
                 }
@@ -1109,6 +1121,7 @@ struct SettingsView: View {
     }
     private var backupPage: some View {
         Form {
+                Section { BackupHealthView(); NavigationLink("账号与云备份") { CloudAccountView() } }
                 Section(tr("数据与备份", "Data & backups", "Data & sandaran")) {
                     Text(tr("每次修改前保留旧版，最多 30 份本地备份。卸载会删除本地数据，请定期导出到文件或 iCloud Drive。", "Keeps up to 30 local snapshots before changes. Uninstalling deletes local data. Export to Files or iCloud Drive regularly.", "Menyimpan sehingga 30 sandaran tempatan sebelum perubahan. Nyahpasang memadam data tempatan. Eksport ke Files atau iCloud Drive secara berkala.")).font(.footnote)
                     NavigationLink(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")) { CSVExportView() }
@@ -2273,15 +2286,18 @@ struct AutomaticRecordDeletion: ViewModifier {
 
 /// Swipe only requests confirmation; the stable list owns the dialog.
 struct AutomaticRecordDeleteActions: ViewModifier {
+    var classify: (() -> Void)? = nil
     let request: () -> Void
     func body(content: Content) -> some View {
         content
+            .swipeActions(edge: .leading, allowsFullSwipe: false) { if let classify { Button("归类", action: classify).tint(.teal) } }
             .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                 Button(action: request) {
                     Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                 }.tint(.red)
             }
             .contextMenu {
+                if let classify { Button("快速归类", systemImage: "tag", action: classify) }
                 Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive, action: request)
             }
     }

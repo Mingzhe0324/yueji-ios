@@ -44,8 +44,21 @@ struct YueJiApp: App {
         guard let deletion else { return }
         finishDeletion(deletion)
     }
-    private func finishDeletion(_ deletion: DeletedLedgerRecord) {
-        undoEntries.append(deletion)
+    func deleteBatch(expenses: [Expense], notices: [TNGNotice]) throws {
+        guard !isPreview else { return }
+        let records = try LocalStore.shared.change { ledger -> [DeletedLedgerRecord] in
+            var records: [DeletedLedgerRecord] = []
+            for notice in notices { records.append(try ledger.deleteAutomaticRecord(notice)) }
+            for expense in expenses {
+                if ledger.expenses.contains(where: { $0.id == expense.id }) { records.append(try ledger.deleteLedgerExpense(expense)) }
+            }
+            return records
+        }
+        guard !records.isEmpty else { return }; finishDeletions(records)
+    }
+    private func finishDeletion(_ deletion: DeletedLedgerRecord) { finishDeletions([deletion]) }
+    private func finishDeletions(_ deletions: [DeletedLedgerRecord]) {
+        undoEntries.append(contentsOf: deletions)
         savedNotice = nil
         undoExpiry?.cancel()
         undoExpiry = Task { [weak self] in

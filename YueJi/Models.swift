@@ -106,7 +106,8 @@ struct Ledger: Codable {
             guard (n.recipient?.count ?? 0) <= 200, (n.resolvedFriend?.count ?? 0) <= 200,
                   (n.repaymentIDs?.count ?? 0) <= 50_000,
                   n.kind != "incoming" || (n.cents != nil && n.party != nil && n.expenseID == nil && ["pending", "ignored", "repayment", "income", "ownTransfer"].contains(n.status)),
-                  !["repayment", "income", "ownTransfer"].contains(n.status) || n.kind == "incoming" else { throw LedgerError.invalid("Invalid incoming record") }
+                  (!["repayment", "income"].contains(n.status) || n.kind == "incoming"),
+                  n.status != "ownTransfer" || ((n.kind == "incoming" || n.kind == "transfer") && n.expenseID == nil) else { throw LedgerError.invalid("Invalid incoming record") }
 
             guard !n.id.isEmpty, !n.body.isEmpty, n.body.count <= 8000, n.title.count <= 500,
                   n.date.timeIntervalSince1970 >= 0, n.date.timeIntervalSince1970 < 4_102_444_800,

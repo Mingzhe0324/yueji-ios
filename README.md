@@ -1,4 +1,10 @@
-# 月记 YueJi · 1.40.3（build 54）
+# 月记 YueJi · 1.41.0（build 55）
+
+本版加入快速转账归类（向右滑）、批量整理、原通知粘贴/截图补录、备份状态与月度变化摘要。通知和 IPA 图标使用当前蓝底月亮图标，补齐 iPhone/iPad 尺寸和 AltStore 读取用 PNG。
+
+**账号与云备份需要先配置 Supabase。**注册、登录、邮箱验证码和整份备份恢复已接入源码；没有配置 URL/公钥时页面会明确提示未启用。设置方法见 [CloudSetup.md](CloudSetup.md)，数据库脚本见 [backend/supabase.sql](backend/supabase.sql)。配置成功并上传后，同账号可恢复卸载前已上传的记录；离线、尚未同步的记录不能保证恢复。
+
+本次只完成 Linux 结构检查；GitHub Actions 会运行 Xcode 原生编译、XCTest 并生成 IPA。此 ZIP 是完整源码，不是已安装的 App。
 
 记录消费、轻松分账，为目标存钱。支持中文、English、Bahasa Melayu。
 
