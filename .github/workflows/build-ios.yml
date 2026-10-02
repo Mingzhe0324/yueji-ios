@@ -13,18 +13,34 @@ jobs:
         id: release
         run: |
           python3 scripts/check_project.py
+          python3 scripts/check_release.py
           python3 - <<'PYCODE'
           import plistlib, os
           from pathlib import Path
           info=plistlib.loads(Path('YueJi/Info.plist').read_bytes())
           version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
-          assert (version,build)==('1.40.3','54'), 'Wrong source version; expected 1.40.3 build 54'
+          assert (version,build)==('1.41.0','55'), 'Wrong source version; expected 1.41.0 build 55'
           source=Path('YueJi/FeatureViews.swift').read_text()
           for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','TNGIncomingView','SavingsGoalsView']:
               assert 'struct '+name in source, 'Missing feature: '+name
           with open(os.environ['GITHUB_OUTPUT'],'a') as f: f.write('label='+version+'-build'+build+'\n')
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('Source: '+version+' ('+build+')\nCommit: '+os.environ['GITHUB_SHA']+'\n')
           PYCODE
+      - name: Configure public cloud connection
+        env:
+          YUEJI_SUPABASE_URL: ${{ vars.YUEJI_SUPABASE_URL }}
+          YUEJI_SUPABASE_PUBLIC_KEY: ${{ vars.YUEJI_SUPABASE_PUBLIC_KEY }}
+        run: |
+          python3 - <<'PY'
+          import os, plistlib
+          from pathlib import Path
+          p=Path('YueJi/Info.plist'); info=plistlib.loads(p.read_bytes())
+          url=os.environ.get('YUEJI_SUPABASE_URL',''); key=os.environ.get('YUEJI_SUPABASE_PUBLIC_KEY','')
+          if url or key:
+              assert url.startswith('https://') and key and not key.startswith('sb_secret_'), 'Use project HTTPS URL and publishable key only'
+              info['YueJiSupabaseURL']=url; info['YueJiSupabasePublicKey']=key
+              p.write_bytes(plistlib.dumps(info,sort_keys=False))
+          PY
       - name: Show Xcode version
         run: xcodebuild -version
       - name: Choose installed iPhone simulator
@@ -54,6 +70,8 @@ jobs:
           for key in ['CFBundleShortVersionString','CFBundleVersion']:
               assert app[key]==source[key], 'Built app version does not match source'
           PYCODE
+          test -f build-device/Build/Products/Release-iphoneos/YueJi.app/YueJiIcon@2x.png
+          test -f build-device/Build/Products/Release-iphoneos/YueJi.app/YueJiIcon@3x.png
           mkdir -p package/Payload
           cp -R build-device/Build/Products/Release-iphoneos/YueJi.app package/Payload/
           cd package
