@@ -29,23 +29,22 @@ struct YueJiApp: App {
     @Published var feedbackMascot = false
     @Published var newTNGCount = 0
     @Published private(set) var undoEntries: [DeletedLedgerRecord] = []
-    @Published private(set) var removingExpenseIDs: Set<String> = []
     private var undoExpiry: Task<Void, Never>?
     func deleteExpense(_ entry: Expense) throws {
         guard !isPreview else { return }
         var deletion: DeletedLedgerRecord?
         try LocalStore.shared.change { deletion = try $0.deleteLedgerExpense(entry) }
         guard let deletion else { return }
-        finishDeletion(deletion, id: entry.id)
+        finishDeletion(deletion)
     }
     func deleteAutomaticRecord(_ notice: TNGNotice) throws {
         guard !isPreview else { return }
         var deletion: DeletedLedgerRecord?
         try LocalStore.shared.change { deletion = try $0.deleteAutomaticRecord(notice) }
         guard let deletion else { return }
-        finishDeletion(deletion, id: notice.id)
+        finishDeletion(deletion)
     }
-    private func finishDeletion(_ deletion: DeletedLedgerRecord, id: String) {
+    private func finishDeletion(_ deletion: DeletedLedgerRecord) {
         undoEntries.append(deletion)
         savedNotice = nil
         undoExpiry?.cancel()
@@ -54,18 +53,11 @@ struct YueJiApp: App {
             catch { return }
             self?.undoEntries = []
         }
-        let playful = UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true
-        if playful && !UIAccessibility.isReduceMotionEnabled {
-            withAnimation(.easeIn(duration: 0.18)) { _ = removingExpenseIDs.insert(id) }
-            Task { [weak self] in
-                do { try await Task.sleep(for: .milliseconds(190)) } catch { return }
-                guard let self else { return }
-                withAnimation(.spring(response: 0.38, dampingFraction: 0.86)) {
-                    self.reload(postRecurring: false)
-                    self.removingExpenseIDs.remove(id)
-                }
-            }
-        } else { reload(postRecurring: false) }
+        // Publish one committed ledger immediately. Never queue overlapping row removals.
+        let animated = (UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true) && !UIAccessibility.isReduceMotionEnabled
+        withAnimation(animated ? .easeInOut(duration: 0.22) : nil) {
+            reload(postRecurring: false)
+        }
         FeedbackHaptics.success()
         FeedbackSounds.shared.play(.deleted)
     }
@@ -75,7 +67,6 @@ struct YueJiApp: App {
             let entries = undoEntries
             try LocalStore.shared.change { try $0.restoreDeletedRecords(entries) }
             undoExpiry?.cancel(); undoEntries = []
-            removingExpenseIDs.removeAll()
             reload(postRecurring: false)
             showSaved(message: tr("已恢复", "Restored", "Dipulihkan"), sound: .restored)
         } catch { self.error = error.localizedDescription }

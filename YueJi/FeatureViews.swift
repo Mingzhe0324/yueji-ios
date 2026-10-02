@@ -1049,6 +1049,7 @@ func tngStatus(_ notice: TNGNotice) -> String {
 struct TNGInboxView: View {
     @EnvironmentObject var model: LedgerModel
     @State private var pendingOnly = false
+    @State private var deletingNotice: TNGNotice?
     @State private var clearing = false
     var body: some View {
         List {
@@ -1063,11 +1064,12 @@ struct TNGInboxView: View {
                 NavigationLink { if item.kind == "incoming" { TNGIncomingView(id: item.id) } else { TNGNoticeView(id: item.id) } } label: {
                     TNGTimelineRow(notice: item)
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
-                    .modifier(AutomaticRecordDeletion(notice: item))
+                    .modifier(AutomaticRecordDeleteActions { deletingNotice = item })
             }
             if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入银行或 TNG 通知。", "Waiting for bank or TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
         }.navigationTitle(tr("银行与 TNG 通知", "Bank and TNG inbox", "Peti bank dan TNG")).navigationBarTitleDisplayMode(.inline)
+            .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
             .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账和待确认保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers and pending notices remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
                 Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.status == "recorded" || $0.status == "ignored" } } }
             }

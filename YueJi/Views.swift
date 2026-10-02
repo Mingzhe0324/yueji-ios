@@ -415,6 +415,7 @@ struct ExpensesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
+    @State private var deletingNotice: TNGNotice?
     @State private var reviewing: Expense?
     @Namespace private var expenseTransition
     @State private var filtering = false
@@ -481,19 +482,15 @@ struct ExpensesView: View {
                                 NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     TNGTimelineRow(notice: notice)
                                 }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
-                                .modifier(AutomaticRecordDeletion(notice: notice))
+                                .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
-                                .scaleEffect(model.removingExpenseIDs.contains(entry.id) ? 0.88 : 1, anchor: .trailing)
-                                .offset(x: model.removingExpenseIDs.contains(entry.id) ? 44 : 0)
-                                .opacity(model.removingExpenseIDs.contains(entry.id) ? 0 : 1)
-                                .disabled(model.removingExpenseIDs.contains(entry.id))
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
-                                    Button(role: .destructive) { deleting = entry } label: {
+                                    Button { deleting = entry } label: {
                                         Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
-                                    }
+                                    }.tint(.red)
                                 }
                                 .contextMenu {
                                     Button(tr("编辑", "Edit", "Edit"), systemImage: "pencil") { editing = entry }
@@ -526,6 +523,7 @@ struct ExpensesView: View {
                 }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
+                .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
                 .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: days.flatMap { $0.entries.map(\.id) })
         }
     }
@@ -632,7 +630,7 @@ struct ExpenseDetailView: View {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
                                 .frame(maxWidth: .infinity, minHeight: 48)
                         }.yuejiPrimaryButton().buttonBorderShape(.capsule)
-                        Button(role: .destructive) { deleting = entry } label: {
+                        Button { deleting = entry } label: {
                             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                                 .frame(minWidth: 72, minHeight: 48)
                         }.buttonStyle(.bordered).buttonBorderShape(.capsule)
@@ -2243,18 +2241,13 @@ struct AutomaticRecordDeletion: ViewModifier {
     var detail = false
     @State private var confirming = false
     @State private var failure: String?
-    private var removing: Bool { notice.map { model.removingExpenseIDs.contains($0.id) } ?? false }
     private var deleteButton: some View {
         Button(role: .destructive) { confirming = true } label: {
             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
-        }.disabled(notice == nil || removing)
+        }.disabled(notice == nil)
     }
     func body(content: Content) -> some View {
         content
-            .scaleEffect(!detail && removing ? 0.88 : 1, anchor: .trailing)
-            .opacity(!detail && removing ? 0 : 1)
-            .swipeActions(edge: .trailing, allowsFullSwipe: false) { if !detail { deleteButton } }
-            .contextMenu { if !detail { deleteButton } }
             .toolbar { if detail { ToolbarItem(placement: .topBarTrailing) { deleteButton } } }
             .confirmationDialog(tr("删除这笔自动记录？", "Delete this automatic record?", "Padam rekod automatik ini?"), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("删除", "Delete", "Padam"), role: .destructive) {
@@ -2271,5 +2264,48 @@ struct AutomaticRecordDeletion: ViewModifier {
             .alert(tr("无法删除", "Unable to delete", "Tidak dapat memadam"), isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
                 Button("OK", role: .cancel) { failure = nil }
             } message: { Text(failure ?? "") }
+    }
+}
+
+
+/// Swipe only requests confirmation; the stable list owns the dialog.
+struct AutomaticRecordDeleteActions: ViewModifier {
+    let request: () -> Void
+    func body(content: Content) -> some View {
+        content
+            .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                Button(action: request) {
+                    Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
+                }.tint(.red)
+            }
+            .contextMenu {
+                Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive, action: request)
+            }
+    }
+}
+struct AutomaticRecordDeletionConfirmation: ViewModifier {
+    @EnvironmentObject private var model: LedgerModel
+    @Binding var notice: TNGNotice?
+    @State private var failure: String?
+    func body(content: Content) -> some View {
+        content.confirmationDialog(
+            tr("删除这笔自动记录？", "Delete this automatic record?", "Padam rekod automatik ini?"),
+            isPresented: Binding(get: { notice != nil }, set: { if !$0 { notice = nil } }),
+            titleVisibility: .visible, presenting: notice
+        ) { selected in
+            Button(tr("删除", "Delete", "Padam"), role: .destructive) {
+                do { try model.deleteAutomaticRecord(selected) }
+                catch { failure = error.localizedDescription }
+            }
+            Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+        } message: { selected in
+            Text(selected.provider + " · " + money(selected.cents ?? 0) + "\n" + tr(
+                "关联消费及分账、退款会一并删除；此收款生成的还款也会撤销。其他银行记录保留，删除后可撤销。",
+                "Linked expenses, splits and refunds are deleted; repayments from this receipt are reversed. Other bank records stay. Deletion can be undone.",
+                "Belanja, bahagian dan pulangan berkaitan dipadam; bayaran daripada penerimaan ini dibatalkan. Rekod bank lain kekal. Pemadaman boleh dibatalkan."))
+        }
+        .alert(tr("无法删除", "Unable to delete", "Tidak dapat memadam"), isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
+            Button("OK", role: .cancel) { failure = nil }
+        } message: { Text(failure ?? "") }
     }
 }

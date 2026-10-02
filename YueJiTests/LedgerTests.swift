@@ -1472,3 +1472,25 @@ final class AutomaticRecordDeletionTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices, [notice])
     }
 }
+
+
+final class ConsecutiveDeletionTests: XCTestCase {
+    func testConsecutiveAutomaticDeletesAndBatchUndoPreserveNewTransactions() throws {
+        var ledger = Ledger()
+        for index in 0..<10 {
+            _ = try ledger.receiveTNG(body: "You've just received RM 0.01 in your account ending ***1234. REF: MULTI\(index)", title: "Maybank2u: Funds Received", date: nil, eventID: nil)
+        }
+        let originals = ledger.tngNotices
+        var undo: [DeletedLedgerRecord] = []
+        for original in originals {
+            undo.append(try ledger.deleteAutomaticRecord(original))
+            XCTAssertFalse(ledger.tngNotices.contains { $0.id == original.id })
+        }
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        _ = try ledger.receiveTNG(body: "Your transfer of RM0.01 to NEW PERSON is SUCCESSFUL.", title: "Transaction Notice", date: nil, eventID: nil)
+        let newID = try XCTUnwrap(ledger.tngNotices.first?.id)
+        try ledger.restoreDeletedRecords(undo)
+        XCTAssertEqual(ledger.tngNotices.count, 11)
+        XCTAssertEqual(Set(ledger.tngNotices.map(\.id)), Set(originals.map(\.id) + [newID]))
+    }
+}
