@@ -18,7 +18,7 @@ jobs:
           from pathlib import Path
           info=plistlib.loads(Path('YueJi/Info.plist').read_bytes())
           version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
-          assert (version,build)==('1.40.1','52'), 'Wrong source version; expected 1.40.1 build 52'
+          assert (version,build)==('1.40.2','53'), 'Wrong source version; expected 1.40.2 build 53'
           source=Path('YueJi/FeatureViews.swift').read_text()
           for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','TNGIncomingView','SavingsGoalsView']:
               assert 'struct '+name in source, 'Missing feature: '+name
