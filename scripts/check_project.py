@@ -67,3 +67,8 @@ for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'DeleteCue', 'RestoreCue'
         peak = max(abs(x) for x in samples)
         assert 1000 < peak < 16000, 'Missing sound or excessive peak'
 print('PASS: 1024px opaque icon and six decodable PCM sound assets.')
+
+# Regression from build 53: overview still referenced removed deletion state.
+for source in (root / 'YueJi').glob('*.swift'):
+    assert 'removingExpenseIDs' not in source.read_text(), f'Stale deletion state in {source.name}'
+print('PASS: no references to removed delayed-deletion state.')

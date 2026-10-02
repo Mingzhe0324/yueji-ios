@@ -230,6 +230,13 @@ struct DashboardView: View {
             }
         }
     }
+    private var recentEntries: [Expense] {
+        let sorted: [Expense] = entries.sorted { (first: Expense, second: Expense) -> Bool in
+            if first.date == second.date { return first.id < second.id }
+            return first.date > second.date
+        }
+        return Array(sorted.prefix(3))
+    }
     private var recentCard: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 8) {
@@ -238,17 +245,13 @@ struct DashboardView: View {
                     Spacer()
                     Text(tr("所选月份", "Selected month", "Bulan dipilih")).font(.caption).foregroundStyle(.secondary)
                 }
-                let recent = Array(entries.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }.prefix(3))
+                let recent: [Expense] = recentEntries
                 if recent.isEmpty {
                     Text(tr("这个月还没有账目，记下第一笔吧。", "No entries this month. Add your first expense.", "Tiada rekod bulan ini. Tambah belanja pertama anda."))
                         .font(.subheadline).foregroundStyle(.secondary).padding(.vertical, 12)
                 }
                 ForEach(recent) { entry in
                     Button { reviewing = entry } label: { ExpenseRow(entry: entry) }
-                        .scaleEffect(model.removingExpenseIDs.contains(entry.id) ? 0.88 : 1, anchor: .trailing)
-                        .offset(x: model.removingExpenseIDs.contains(entry.id) ? 44 : 0)
-                        .opacity(model.removingExpenseIDs.contains(entry.id) ? 0 : 1)
-                        .disabled(model.removingExpenseIDs.contains(entry.id))
                         .buttonStyle(.plain).yuejiZoomSource(id: entry.id, namespace: navigationMotion)
                     if entry.id != recent.last?.id { Divider() }
                 }
