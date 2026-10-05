@@ -1748,8 +1748,16 @@ final class BookkeepingBuild62Tests: XCTestCase {
         var filter = LedgerFilter(); filter.category = "购物"; filter.accountID = wallet.id
         XCTAssertEqual(try ledger.filteredEntries(in: e.date, search: "槟城", filter: filter).count, 1)
         XCTAssertEqual(try ledger.filteredEntries(in: e.date, search: "family lunch", filter: filter).count, 1)
+        // The existing ISO-8601 backup format stores whole seconds, while Date()
+        // includes fractional seconds. Compare every field against that contract.
+        e.date = Date(timeIntervalSince1970: 1_759_680_000.75)
+        ledger.expenses = [e]
         let copy = try LocalStore.decode(LocalStore.encode(ledger))
-        XCTAssertEqual(copy.expenses[0], e)
+        var expected = e
+        expected.date = Date(timeIntervalSince1970: 1_759_680_000)
+        XCTAssertEqual(copy.expenses[0], expected)
+        XCTAssertEqual(copy.expenses[0].date.timeIntervalSince1970, 1_759_680_000)
+        XCTAssertEqual(try LocalStore.encode(copy), try LocalStore.encode(ledger))
         let exported = String(decoding: ledger.csv(month: nil, splits: false), as: UTF8.self)
         XCTAssertTrue(exported.contains("category_allocations_MYR")); XCTAssertTrue(exported.contains("槟城旅行"))
     }

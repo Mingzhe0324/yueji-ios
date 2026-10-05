@@ -1,6 +1,12 @@
-# 月记 YueJi · 1.45.0（build 62）
+# 月记 YueJi · 1.45.1（build 63）
 
 记录消费、轻松分账，为目标存钱。支持中文、English、Bahasa Melayu。
+
+## build 63 修正
+
+run50 已完成原生编译，135 项 XCTest 中 134 项通过。唯一失败为 `testTagsNotesAccountAndSplitSearch`：现有 ISO-8601 备份保存整秒，而测试对恢复结果与带小数秒的原始 Date 做完全相等比较。
+
+本版使用固定带小数秒的测试日期，将预期恢复时间明确为整秒，仍完整比较所有账目字段，并检查重新编码后备份一致。账目功能及备份格式不变。项目结构检查通过；修正后的原生测试需重新运行 GitHub Actions。
 
 ## build 62 新增记账功能
 
