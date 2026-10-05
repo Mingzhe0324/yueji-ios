@@ -1519,3 +1519,35 @@ final class NotificationBuild58Tests: XCTestCase {
         XCTAssertTrue(shouldReviewFinancialNotification("Refund RM40.00 credited", title: "Refund"))
     }
 }
+
+final class NotificationDuplicateScopeTests: XCTestCase {
+    func testCrossSourceDuplicateRemainsPending() throws {
+        var ledger = Ledger()
+        let now = Date()
+        ledger.expenses.append(Expense(merchant: "JENG PAN MEE", cents: 4000, date: now, category: "餐饮", source: "Apple Pay"))
+        _ = try ledger.receiveTNG(body: "You have paid RM40.00 to JENG PAN MEE.", title: "DuitNow Payment", date: now.addingTimeInterval(30), eventID: nil)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.tngNotices.first?.status, "pending")
+        XCTAssertEqual(ledger.tngNotices.first?.possibleDuplicate, true)
+        _ = try ledger.validated()
+    }
+    func testDifferentMerchantOrLaterPaymentIsRecorded() throws {
+        for (merchant, delay) in [("OTHER SHOP", 30.0), ("JENG PAN MEE", 180.0)] {
+            var ledger = Ledger()
+            let now = Date()
+            ledger.expenses.append(Expense(merchant: merchant, cents: 4000, date: now, category: "餐饮", source: "Apple Pay"))
+            _ = try ledger.receiveTNG(body: "You have paid RM40.00 to JENG PAN MEE.", title: "DuitNow Payment", date: now.addingTimeInterval(delay), eventID: nil)
+            XCTAssertEqual(ledger.expenses.count, 2)
+            XCTAssertEqual(ledger.tngNotices.first?.possibleDuplicate, false)
+            _ = try ledger.validated()
+        }
+    }
+    func testUnknownNoticeDoesNotRequireParsedTransaction() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "Purchase successful MYR 12.00 at NEW SHOP", title: "HLB Transaction", date: nil, eventID: nil)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.tngNotices[0].kind, "unknown")
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        _ = try ledger.validated()
+    }
+}

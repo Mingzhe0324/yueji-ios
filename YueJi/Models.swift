@@ -323,8 +323,7 @@ extension Ledger {
         guard !text.isEmpty, text.count <= 8000, title.count <= 500 else {
             throw reviewError("通知正文为空或过长，请把 TNG 通知的 Body 传入。", "Notification body is empty or too long. Pass the TNG notification Body.", "Teks notifikasi kosong atau terlalu panjang. Hantar Body notifikasi TNG.")
         }
-        // Only supported successful payment, outgoing and incoming templates enter the inbox.
-        // Unknown text (including promotions, top-ups and receipts) changes no ledger state.
+        // Supported templates can post transactions; unknown financial text stays pending.
         guard let verified = parseFinancialNotification(text, title: title) else {
             guard shouldReviewFinancialNotification(text, title: title) else {
                 return tr("已忽略：推广、验证码、失败或非交易通知。", "Ignored: promotion, OTP, failure or non-transaction notice.", "Diabaikan: promosi, OTP, kegagalan atau bukan transaksi.")
@@ -335,12 +334,7 @@ extension Ledger {
             if tngNotices.contains(where: { $0.kind == "unknown" && $0.body == text && $0.title == title && abs($0.date.timeIntervalSince(timestamp)) < 300 }) {
                 return "相同未识别通知已保留，未重复添加。"
             }
-            let crossSourceDuplicate = expenses.contains { old in
-            old.source != verified.sourceBank && old.cents == verified.cents &&
-            !verified.party.isEmpty && friendKey(old.merchant) == friendKey(verified.party) &&
-            abs(old.date.timeIntervalSince(timestamp)) <= 120
-        }
-        var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: true, kind: "unknown", status: "pending", cents: nil, party: nil)
+            var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: true, kind: "unknown", status: "pending", cents: nil, party: nil)
             notice.reviewReason = "格式尚未识别；可能是付款、收款、充值或退款。请核对原文，未计入消费。"
             notice.sourceBank = financialProvider(title + " " + text) ?? "银行 / TNG"
             tngNotices.append(notice)
@@ -356,6 +350,12 @@ extension Ledger {
         if let eventKey, seenEvents.contains(eventKey) { return tr("相同交易标识已处理，未重复记录。", "This transaction ID was already processed.", "ID transaksi ini sudah diproses.") }
         guard tngNotices.count < 5000 else { throw reviewError("TNG 通知记录已达上限，请先导出备份并清理已处理通知。", "TNG inbox is full. Export a backup and clear processed notices.", "Peti TNG penuh. Eksport sandaran dan kosongkan notifikasi selesai.") }
         let parsed: TNGParsed? = verified
+        let partyKey = friendKey(verified.party)
+        let crossSourceDuplicate = expenses.contains { old in
+            guard old.source != verified.sourceBank, old.cents == verified.cents else { return false }
+            guard !partyKey.isEmpty, friendKey(old.merchant) == partyKey else { return false }
+            return abs(old.date.timeIntervalSince(timestamp)) <= 120
+        }
         let duplicate = tngNotices.contains { old in
             old.provider == verified.sourceBank && old.accountSuffix == verified.accountSuffix &&
             abs(old.date.timeIntervalSince(timestamp)) <= (verified.transactionDate != nil || date != nil ? 120 : 300) &&
