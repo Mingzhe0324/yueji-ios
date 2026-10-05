@@ -10,8 +10,8 @@ struct YueJiApp: App {
     @AppStorage("appLanguage") private var language = "system"
     @AppStorage("appAppearance") private var appearance = "system"
     private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
-    init() { UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; YueJiShortcuts.updateAppShortcutParameters() }
-    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
+    init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
+    var body: some Scene { WindowGroup { MainView().task { await LedgerNotifications.prepareAutomaticResultsAuthorization() }.font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
     let isPreview: Bool

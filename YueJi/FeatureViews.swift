@@ -566,6 +566,8 @@ struct AutomationStatusView: View {
     @EnvironmentObject var model: LedgerModel
     private func outcome(_ key: String, source: String) -> String {
         switch key {
+        case "pending": return tr("待确认", "Needs review", "Perlu semakan")
+        case "resolved": return tr("已确认用途", "Purpose confirmed", "Tujuan disahkan")
         case "saved": return tr("成功入账", "Saved", "Disimpan")
         case "duplicate": return tr("已拦截重复", "Duplicate blocked", "Pendua disekat")
         case "ignored": return tr("已收到 · 未识别或非交易", "Received · unsupported or not a transaction", "Diterima · tidak disokong atau bukan transaksi")
@@ -575,6 +577,14 @@ struct AutomationStatusView: View {
     }
     var body: some View {
         List {
+            Section("处理概览") {
+                LabeledContent("已自动入账（当前账本）", value: String(model.ledger.expenses.filter { $0.source != "手动" && $0.source != "固定消费" }.count))
+                LabeledContent("待确认通知", value: String(model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.count))
+                LabeledContent("疑似重复待确认", value: String(model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count))
+                LabeledContent("失败（最近 100 次调用）", value: String(model.ledger.automationEvents.filter { $0.outcome == "failed" }.count))
+                NavigationLink("查看待确认通知") { TNGInboxView(pendingOnly: true) }
+                if let last = model.ledger.automationEvents.first { Text("最近收到 / 调用：" + dateLabel(last.date, time: true)).font(.caption) }
+            }
             Section {
                 ForEach(["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB", "银行 / TNG", "Apple Pay"], id: \.self) { source in
                     if let last = model.ledger.automationEvents.first(where: { $0.source == source }) {
@@ -651,7 +661,7 @@ struct MerchantRulesView: View {
     @EnvironmentObject var model: LedgerModel
     var body: some View {
         List {
-            Text(tr("修改已有账目的分类后，会记住该商户。以后 Apple Pay 入账优先使用此规则，历史记录不会批量改变。商户名称忽略大小写与多余空格。", "Changing an entry's category remembers its merchant for future Apple Pay entries. History is unchanged. Names ignore case and extra spaces.", "Mengubah kategori rekod mengingati peniaga untuk Apple Pay seterusnya. Sejarah tidak berubah. Nama mengabaikan huruf besar dan ruang tambahan.")).font(.footnote)
+            Text(tr("开启“以后此商户使用这个分类”后，Apple Pay、TNG 和银行消费优先使用此规则，历史记录不会批量改变。商户名称忽略大小写与多余空格。", "Enable the merchant category option to apply it to future Apple Pay, TNG and bank expenses. History is unchanged. Names ignore case and extra spaces.", "Aktifkan pilihan kategori peniaga untuk Apple Pay, TNG dan bank seterusnya. Sejarah tidak berubah. Nama mengabaikan huruf besar dan ruang tambahan.")).font(.footnote)
             ForEach(model.ledger.merchantCategories.keys.sorted(), id: \.self) { merchant in
                 HStack {
                     Text(merchant); Spacer()
@@ -1036,6 +1046,9 @@ struct CSVExportView: View {
 }
 
 func tngStatus(_ notice: TNGNotice) -> String {
+    if notice.resolution == "refund" { return "已关联退款" }
+    if notice.resolution == "ownTransfer" { return "账户转账 / 充值 · 不计收支" }
+    if notice.resolution == "duplicate" { return "已合并重复通知" }
     switch notice.status {
     case "recorded": return tr("已记消费", "Expense recorded", "Belanja direkod")
     case "repayment": return tr("已确认为朋友还款", "Confirmed repayment", "Bayaran balik disahkan")
@@ -1048,7 +1061,7 @@ func tngStatus(_ notice: TNGNotice) -> String {
 }
 struct TNGInboxView: View {
     @EnvironmentObject var model: LedgerModel
-    @State private var pendingOnly = false
+    @State var pendingOnly = false
     @State private var deletingNotice: TNGNotice?
     @State private var clearing = false
     var body: some View {
@@ -1060,7 +1073,7 @@ struct TNGInboxView: View {
                 Text(tr("其他收入保存在这里，不抵扣消费或预算；朋友还款不算收入。", "Other income is stored here, without reducing expenses or budget usage. Repayments are not income.", "Pendapatan lain disimpan di sini tanpa mengurangkan belanja atau bajet. Bayaran balik bukan pendapatan.")).font(.caption)
             }
             Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
-            ForEach(model.ledger.tngNotices.filter { !pendingOnly || $0.status == "pending" }.sorted { $0.date > $1.date }) { item in
+            ForEach(model.ledger.tngNotices.filter { !pendingOnly || $0.status == "pending" || $0.status == "transfer" }.sorted { $0.date > $1.date }) { item in
                 NavigationLink { if item.kind == "incoming" { TNGIncomingView(id: item.id) } else { TNGNoticeView(id: item.id) } } label: {
                     TNGTimelineRow(notice: item)
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
@@ -1070,8 +1083,8 @@ struct TNGInboxView: View {
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
         }.navigationTitle(tr("银行与 TNG 通知", "Bank and TNG inbox", "Peti bank dan TNG")).navigationBarTitleDisplayMode(.inline)
             .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
-            .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账和待确认保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers and pending notices remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
-                Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.status == "recorded" || $0.status == "ignored" } } }
+            .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账、待确认及已关联退款／充值保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers, pending notices and linked refunds/top-ups remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
+                Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.resolution == nil && ($0.status == "recorded" || $0.status == "ignored") } } }
             }
     }
 }
@@ -1082,6 +1095,7 @@ struct TNGNoticeView: View {
     @State private var amount = ""
     @State private var date = Date()
     @State private var category = "其他"
+    @State private var rememberCategory = true
     @State private var analyzing = false
     @State private var initialized = false
     @State private var excluding = false
@@ -1131,6 +1145,10 @@ struct TNGNoticeView: View {
                     if notice.usesReceivedDate { Text(tr("时间为接收时间，正文没有交易日期。补录旧通知时请修改账目日期。", "Uses received time; body has no transaction date. Edit the entry date when importing an old notice.", "Menggunakan masa diterima; teks tiada tarikh transaksi. Ubah tarikh rekod bagi notifikasi lama.")).font(.caption) }
                     if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
                 }
+                if ["pending", "transfer"].contains(notice.status), notice.expenseID == nil {
+                    NavigationLink("确认用途 / 收入 / 充值 / 退款") { FinancialNoticeReviewView(id: id) }
+                }
+                if notice.resolution != nil { NoticeResolutionSection(notice: notice) }
                 if let expenseID = notice.expenseID {
                     if let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
                         ExpenseRow(entry: entry)
@@ -1142,6 +1160,7 @@ struct TNGNoticeView: View {
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date)
                         Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Toggle("以后此商户使用这个分类", isOn: $rememberCategory)
                         Button(tr("计入消费", "Record expense", "Rekod belanja")) { confirming = true }
                     }
                 }
@@ -1154,12 +1173,12 @@ struct TNGNoticeView: View {
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
-                category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant)
+                category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant, description: n.title + " " + n.body)
             }
             .sheet(item: $editing) { ExpenseDetailView(id: $0.id).ledgerFeedback(modal: true) }
             .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("确认入账", "Record", "Rekod")) {
-                    do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category) }; model.reload(); model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) } catch { self.error = error.localizedDescription }
+                    do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory) }; model.reload(); model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) } catch { self.error = error.localizedDescription }
                 }
             }
             .confirmationDialog(tr("排除此通知？如已自动入账，将移除关联消费；已有分账或退款时会阻止操作。", "Exclude this notice? Its linked expense will be removed unless splits or refunds exist.", "Kecualikan notifikasi? Belanja berkaitan dibuang kecuali bahagian atau pulangan wujud."), isPresented: $excluding, titleVisibility: .visible) {
@@ -2122,6 +2141,8 @@ struct TNGIncomingView: View {
     var body: some View {
         Form {
             if let n = notice {
+                if n.status == "pending" { NavigationLink("账户转账 / 充值 / 退款关联") { FinancialNoticeReviewView(id: id) } }
+                if n.resolution != nil { NoticeResolutionSection(notice: n) }
                 Section {
                     Text("+" + money(n.cents ?? 0)).font(.title.bold()).foregroundStyle(.green)
                     Text(n.provider).font(.headline)
@@ -2604,5 +2625,130 @@ struct TNGStatusFeedback: View {
             .font(.headline).foregroundStyle(notice.status == "pending" ? Color.orange : Color.green)
             .contentTransition(.opacity)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: notice.status)
+    }
+}
+
+
+struct NoticeResolutionSection: View {
+    @EnvironmentObject var model: LedgerModel
+    let notice: TNGNotice
+    @State private var confirm = false
+    var body: some View {
+        Section("已确认关联") {
+            Text(tngStatus(notice))
+            if let relatedID = notice.relatedRecordID {
+                if let entry = model.ledger.expenses.first(where: { $0.id == relatedID }) {
+                    Text(entry.merchant + " · " + money(entry.cents))
+                    NavigationLink("查看关联消费") { ExpenseDetailView(id: relatedID) }
+                } else if let other = model.ledger.tngNotices.first(where: { $0.id == relatedID }) {
+                    Text(other.provider + " · " + money(other.cents ?? 0))
+                } else { Text("关联记录已删除或清理。") }
+            }
+            Button("撤销关联并重新确认") { confirm = true }
+        }.confirmationDialog("撤销关联？关联退款会一并撤销；充值配对会重新待确认。", isPresented: $confirm, titleVisibility: .visible) {
+            Button("确认撤销", role: .destructive) { model.change { try $0.reopenResolvedNotice(id: notice.id) } }
+        }
+    }
+}
+
+struct FinancialNoticeReviewView: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let id: String
+    @State private var purpose = ""
+    @State private var party = ""
+    @State private var amount = ""
+    @State private var date = Date()
+    @State private var category = "其他"
+    @State private var remember = true
+    @State private var relatedID = ""
+    @State private var distinct = false
+    @State private var initialized = false
+    @State private var confirm = false
+    @State private var error: String?
+    private var notice: TNGNotice? { model.ledger.tngNotices.first { $0.id == id } }
+    private var candidates: [Expense] {
+        let cents = (try? toCents(amount)) ?? 0
+        return model.ledger.expenses.filter { entry in
+            if purpose == "refund" { return entry.cents - entry.refunded >= cents && entry.date <= date }
+            return entry.cents == cents
+        }.sorted { $0.date > $1.date }
+    }
+    private var transferCandidates: [TNGNotice] {
+        let cents = (try? toCents(amount)) ?? 0
+        return model.ledger.tngNotices.filter { $0.id != id && $0.cents == cents && $0.expenseID == nil && ["pending", "transfer"].contains($0.status) }.sorted { $0.date > $1.date }
+    }
+    var body: some View {
+        Form {
+            if let notice {
+                Section { Text(notice.title); Text(notice.body).font(.caption).textSelection(.enabled) }
+                Section("确认用途") {
+                    Picker("这是什么交易？", selection: $purpose) {
+                        Text("请选择用途").tag("")
+                        if notice.kind != "incoming" { Text("消费支出").tag("expense") }
+                        Text("收入").tag("income")
+                        Text("自己的账户转账 / 充值").tag("ownTransfer")
+                        Text("退款到账").tag("refund")
+                        if notice.possibleDuplicate { Text("同一笔交易，不重复入账").tag("duplicate") }
+                        Text("忽略").tag("ignore")
+                    }
+                    TextField("商户 / 对方 / 用途", text: $party)
+                    TextField("MYR", text: $amount).keyboardType(.decimalPad)
+                    DatePicker("交易日期", selection: $date, in: ...Date())
+                    if purpose == "expense" {
+                        Picker("分类", selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Toggle("以后此商户使用这个分类", isOn: $remember)
+                    }
+                    if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer"].contains(purpose) {
+                        Toggle("已核对，这是另一笔真实交易", isOn: $distinct)
+                    }
+                }
+                if purpose == "refund" || purpose == "duplicate" {
+                    Section(purpose == "refund" ? "选择原消费" : "选择已有账目") {
+                        Picker("关联账目", selection: $relatedID) {
+                            Text("请选择").tag("")
+                            ForEach(candidates) { entry in Text(entry.merchant + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
+                        }
+                        Text("金额相同不代表同一笔，请核对商户和日期。退款会减少原消费，不作为收入。").font(.caption)
+                    }
+                }
+                if purpose == "ownTransfer" {
+                    Section("配对另一侧通知（可选）") {
+                        Picker("转入 / 转出通知", selection: $relatedID) {
+                            Text("没有另一侧通知").tag("")
+                            ForEach(transferCandidates) { other in Text(other.provider + " · " + (other.party ?? "") + " · " + dateLabel(other.date, time: true)).tag(other.id) }
+                        }
+                        Text("确认后，两侧通知均不计入消费或收入。").font(.caption)
+                    }
+                }
+                Button("确认处理") { confirm = true }
+                    .disabled(purpose.isEmpty || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
+            } else { Text("通知已删除或清理。") }
+        }.navigationTitle("确认通知")
+            .onAppear {
+                guard !initialized, let n = notice else { return }; initialized = true
+                party = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = min(n.date, Date())
+                category = model.ledger.merchantCategories[friendKey(party)] ?? guessCategory(party, description: n.body)
+                let text = (n.title + " " + n.body).lowercased()
+                if text.contains("refund") || text.contains("reversed") { purpose = "refund" }
+                else if text.contains("reload") || text.contains("top-up") || text.contains("top up") { purpose = "ownTransfer" }
+                else if n.kind == "incoming" { purpose = "income" }
+                else if n.kind == "payment" { purpose = "expense" }
+                if n.possibleDuplicate { purpose = "duplicate" }
+            }
+            .onChange(of: purpose) { _, _ in relatedID = "" }
+            .confirmationDialog("确认按所选用途处理？", isPresented: $confirm, titleVisibility: .visible) {
+                Button("确认") {
+                    do {
+                        try LocalStore.shared.change { ledger in
+                            if purpose == "ignore" { try ledger.excludeTNG(id: id) }
+                            else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
+                            else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID) }
+                        }
+                        model.reload(); dismiss()
+                    } catch { self.error = error.localizedDescription }
+                }
+            }
+            .alert("无法处理", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
 }

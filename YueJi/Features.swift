@@ -383,6 +383,26 @@ import UserNotifications
 final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     static let shared = LedgerNotifications()
     static let dailyID = "yueji.daily-reminder"
+    static func registerActions() {
+        let view = UNNotificationAction(identifier: "view", title: tr("查看账目", "View record", "Lihat rekod"), options: [.foreground])
+        let category = UNNotificationAction(identifier: "category", title: tr("修改分类", "Change category", "Ubah kategori"), options: [.foreground])
+        let review = UNNotificationAction(identifier: "review", title: tr("确认用途", "Review purpose", "Semak tujuan"), options: [.foreground])
+        UNUserNotificationCenter.current().setNotificationCategories([
+            UNNotificationCategory(identifier: "yueji.expense", actions: [view, category], intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: "yueji.review", actions: [review], intentIdentifiers: [], options: [])
+        ])
+    }
+    func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        let info = response.notification.request.content.userInfo
+        guard response.actionIdentifier != UNNotificationDismissActionIdentifier,
+              let recordID = info["recordID"] as? String, let kind = info["recordKind"] as? String,
+              ["expense", "notice"].contains(kind), !recordID.isEmpty else { completionHandler(); return }
+        let target = ["recordID": recordID, "kind": kind, "action": response.actionIdentifier]
+        UserDefaults.standard.set(target, forKey: "pendingNotificationDestination")
+        DispatchQueue.main.async { NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil) }
+        completionHandler()
+    }
+
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
         completionHandler([.banner, .sound, .list])
     }
@@ -407,12 +427,31 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
 
     }
-    static func result(title: String, body: String) async {
+    static func prepareAutomaticResultsAuthorization() async {
+        // Enable by default only when no preference exists; respect a saved opt-out.
+        UserDefaults.standard.register(defaults: ["automationNotifications": true])
+        guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        if settings.authorizationStatus == .notDetermined {
+            _ = try? await center.requestAuthorization(options: [.alert, .sound])
+        }
+    }
+    static func result(title: String, body: String, expenseID: String? = nil, noticeID: String? = nil) async {
+        UserDefaults.standard.register(defaults: ["automationNotifications": true])
         guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
         let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = nil
+        registerActions()
+        if let expenseID {
+            content.categoryIdentifier = "yueji.expense"
+            content.userInfo = ["recordID": expenseID, "recordKind": "expense"]
+        } else if let noticeID {
+            content.categoryIdentifier = "yueji.review"
+            content.userInfo = ["recordID": noticeID, "recordKind": "notice"]
+        }
         // Notification failure must never roll back or retry a successfully recorded payment.
         try? await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
     }

@@ -10,23 +10,30 @@ struct RecordApplePayIntent: AppIntent {
     static var openAppWhenRun: Bool = false
     @Parameter(title: "金额") var amount: Double
     @Parameter(title: "商户") var merchant: String
+    @Parameter(title: "交易描述（可选）") var transactionDescription: String?
     @Parameter(title: "币种", default: "MYR") var currency: String
     @Parameter(title: "交易时间") var transactionDate: Date
     @Parameter(title: "交易标识（可选）") var transactionID: String?
     func perform() async throws -> some IntentResult & ProvidesDialog {
         do {
             if currency.uppercased() != "MYR" { _ = try? await AutomaticRates.shared.refresh(currency.uppercased()) }
-            let result = try LocalStore.shared.change { ledger -> (Bool, String) in
-                let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID)
+            let result = try LocalStore.shared.change { ledger -> (Bool, String, String?, String?) in
+                let previousNotices = ledger.tngNotices.count
+                let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID, description: transactionDescription ?? "")
                 ledger.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : "duplicate")
                 let entry = saved ? ledger.expenses.last : nil
-                let detail = entry.map { money($0.cents) + " · " + $0.merchant + " · " + categoryLabel($0.category) } ?? ""
-                return (saved, detail)
+                let pending = ledger.tngNotices.count > previousNotices ? ledger.tngNotices.last : nil
+                let detail = entry.map { automaticExpenseDetail($0) } ?? (pending == nil ? "" : "疑似跨来源重复，请确认是否另一笔付款。")
+                return (saved, detail, entry?.id, pending?.id)
             }
             await BudgetAlertService.shared.check()
             if result.0 {
-                await LedgerNotifications.result(title: tr("已记账", "Recorded", "Direkod"), body: result.1)
+                await LedgerNotifications.result(title: tr("已记账", "Recorded", "Direkod"), body: result.1, expenseID: result.2)
                 return .result(dialog: "已保存到月记。")
+            }
+            if let noticeID = result.3 {
+                await LedgerNotifications.result(title: "Apple Pay 待确认", body: result.1, noticeID: noticeID)
+                return .result(dialog: "疑似重复，已保留待确认。")
             }
             await LedgerNotifications.result(title: tr("未重复记账", "Duplicate skipped", "Pendua dilangkau"), body: tr("这笔付款已存在。", "This payment is already recorded.", "Bayaran ini sudah direkod."))
             return .result(dialog: "这笔付款已记录，没有重复入账。")
@@ -81,9 +88,9 @@ struct RecordTNGIntent: AppIntent {
                 try ledger.processTNGNotification(body: body, title: notificationTitle ?? "", date: notificationDate, eventID: transactionID)
             }
             // Keep an ignored delivery log, without alerts for advertisements or points.
-            if result.accepted {
+            if result.accepted || shouldReviewFinancialNotification(body, title: notificationTitle ?? "") {
                 await BudgetAlertService.shared.check()
-                await LedgerNotifications.result(title: "月记", body: result.message)
+                await LedgerNotifications.result(title: tr("自动记账结果", "Automatic recording result", "Hasil rekod automatik"), body: result.message, expenseID: result.expenseID, noticeID: result.noticeID)
             }
             return .result()
         } catch {

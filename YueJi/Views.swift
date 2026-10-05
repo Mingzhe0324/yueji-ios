@@ -54,6 +54,14 @@ struct MainView: View {
     @State private var showingGuide = false
     @State private var selectedTab = 0
     @State private var showingNewTNG = false
+    @State private var notificationDestination: NotificationDestination?
+    private func openPendingNotification() {
+        guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil,
+              let value = UserDefaults.standard.dictionary(forKey: "pendingNotificationDestination"),
+              let recordID = value["recordID"] as? String, let kind = value["kind"] as? String else { return }
+        notificationDestination = NotificationDestination(recordID: recordID, kind: kind, action: value["action"] as? String ?? "view")
+        UserDefaults.standard.removeObject(forKey: "pendingNotificationDestination")
+    }
     var body: some View {
         TabView(selection: $selectedTab) {
             DashboardView().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
@@ -75,12 +83,13 @@ struct MainView: View {
                     if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(1600)) } catch { return } }
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
                 }
-                await AutomaticRates.shared.refreshSaved(); model.reload()
+                openPendingNotification()
+                await AutomaticRates.shared.refreshSaved(); model.reload(); openPendingNotification()
             }
             .onChange(of: model.didFinishLaunch) { _, finished in
-                if finished && !completedGuide { showingGuide = true }
+                if finished && !completedGuide && UserDefaults.standard.object(forKey: "pendingNotificationDestination") == nil { showingGuide = true }
             }
-            .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true }) {
+            .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification() }) {
                 UsageGuideView()
             }
             .onChange(of: selectedTab) { _, _ in FeedbackHaptics.selection() }
@@ -100,7 +109,11 @@ struct MainView: View {
                     }.padding(.horizontal, 18).background(.bar)
                 }
             }
-            .sheet(isPresented: $showingNewTNG) {
+            .onReceive(NotificationCenter.default.publisher(for: .init("YueJiNotificationDestination"))) { _ in model.reload(postRecurring: false); openPendingNotification() }
+            .sheet(item: $notificationDestination, onDismiss: { openPendingNotification() }) { target in
+                NotificationDestinationView(target: target).environmentObject(model)
+            }
+            .sheet(isPresented: $showingNewTNG, onDismiss: { openPendingNotification() }) {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
                     Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
                 } } }.ledgerFeedback(modal: true)
@@ -112,7 +125,7 @@ struct MainView: View {
                 do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
-            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
+            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); openPendingNotification(); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }
@@ -707,6 +720,7 @@ struct ExpenseEditor: View {
     @State private var rateSource = "Manual"
     @State private var date = Date()
     @State private var category = "其他"
+    @State private var rememberCategory = true
     @State private var splitting = false
     @State private var fuel = false
     @State private var equal = true
@@ -764,6 +778,7 @@ struct ExpenseEditor: View {
                             }.buttonStyle(.plain).accessibilityAddTraits(category == item ? .isSelected : [])
                         }
                     }.accessibilityLabel(tr("分类", "Category", "Kategori"))
+                    Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
                 }.disabled((original?.refunded ?? 0) > 0)
                 Section {
                     Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
@@ -876,11 +891,12 @@ struct ExpenseEditor: View {
                 if let original {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid(tr("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")) }
                     ledger.expenses[i] = entry
-                    if original.category != entry.category {
+                    if rememberCategory && original.category != entry.category {
                         ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
                     }
                 } else if !ledger.expenses.contains(where: { $0.id == entry.id }) {
                     ledger.expenses.append(entry)
+                    if rememberCategory { ledger.merchantCategories[friendKey(entry.merchant)] = entry.category }
                 }
             }
             model.reload(); model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()
@@ -2310,5 +2326,36 @@ struct AutomaticRecordDeletionConfirmation: ViewModifier {
         .alert(tr("无法删除", "Unable to delete", "Tidak dapat memadam"), isPresented: Binding(get: { failure != nil }, set: { if !$0 { failure = nil } })) {
             Button("OK", role: .cancel) { failure = nil }
         } message: { Text(failure ?? "") }
+    }
+}
+
+
+struct NotificationDestination: Identifiable {
+    let id = UUID()
+    let recordID: String
+    let kind: String
+    let action: String
+}
+struct NotificationDestinationView: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let target: NotificationDestination
+    var body: some View {
+        Group {
+            if target.kind == "expense", let entry = model.ledger.expenses.first(where: { $0.id == target.recordID }) {
+                if target.action == "category" { ExpenseEditor(original: entry) }
+                else { ExpenseDetailView(id: entry.id) }
+            } else {
+                NavigationStack {
+                    Group {
+                        if let notice = model.ledger.tngNotices.first(where: { $0.id == target.recordID }) {
+                            if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+                            else if ["pending", "transfer"].contains(notice.status) { FinancialNoticeReviewView(id: notice.id) }
+                            else { TNGNoticeView(id: notice.id) }
+                        } else { Text("这笔记录已删除或清理。") }
+                    }.toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+                }
+            }
+        }.ledgerFeedback(modal: true)
     }
 }

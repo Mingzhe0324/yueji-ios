@@ -1148,7 +1148,7 @@ final class TNGNotificationDeliveryTests: XCTestCase {
         XCTAssertTrue(result.accepted)
         XCTAssertEqual(ledger.expenses.first?.cents, 4000)
         XCTAssertEqual(ledger.expenses.first?.merchant, "Maxis Broadband Sdn Bhd")
-        XCTAssertEqual(ledger.automationEvents.first?.outcome, "checked")
+        XCTAssertEqual(ledger.automationEvents.first?.outcome, "saved")
         _ = try ledger.processTNGNotification(body: "You have paid RM40.00 for Maxis Broadband Sdn Bhd.", title: "Payment", date: nil, eventID: "maxis-test")
         XCTAssertEqual(ledger.expenses.count, 1)
     }
@@ -1549,5 +1549,140 @@ final class NotificationDuplicateScopeTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices[0].kind, "unknown")
         XCTAssertTrue(ledger.expenses.isEmpty)
         _ = try ledger.validated()
+    }
+}
+
+final class AutomaticCategoryNotificationTests: XCTestCase {
+    func testDescriptionClassification() {
+        XCTAssertEqual(guessCategory("JENG PAN MEE"), "餐饮")
+        XCTAssertEqual(guessCategory("RFID Toll"), "交通")
+        XCTAssertEqual(guessCategory("Maxis Broadband Sdn Bhd"), "账单")
+        XCTAssertEqual(guessCategory("ABC SDN BHD", description: "Payment for electricity bill"), "账单")
+        XCTAssertEqual(guessCategory("ABC", description: "GrabFood order"), "餐饮")
+        XCTAssertEqual(guessCategory("SHELLFISH"), "其他")
+        XCTAssertEqual(guessCategory("Unknown merchant"), "其他")
+    }
+    func testApplePayDescriptionAndUserRule() throws {
+        var ledger = Ledger()
+        let now = Date()
+        _ = try ledger.addPayment(amount: 12, merchant: "ABC", currency: "MYR", date: now, eventID: "description-1", description: "broadband bill")
+        XCTAssertEqual(ledger.expenses.last?.category, "账单")
+        XCTAssertEqual(ledger.expenses.last?.receiptSummary, "broadband bill")
+        ledger.merchantCategories[friendKey("ABC")] = "购物"
+        _ = try ledger.addPayment(amount: 13, merchant: "ABC", currency: "MYR", date: now, eventID: "description-2", description: "broadband bill")
+        XCTAssertEqual(ledger.expenses.last?.category, "购物")
+        _ = try ledger.validated()
+    }
+    func testTNGResultContainsPersistedCategoryAndAmount() throws {
+        var ledger = Ledger()
+        let result = try ledger.processTNGNotification(body: "You have paid RM40.00 to JENG PAN MEE.", title: "DuitNow Payment", date: Date(), eventID: "category-1")
+        XCTAssertTrue(result.accepted)
+        XCTAssertEqual(ledger.expenses.last?.category, "餐饮")
+        XCTAssertTrue(result.message.contains("RM 40.00"))
+        XCTAssertTrue(result.message.contains("JENG PAN MEE"))
+        XCTAssertTrue(result.message.contains(categoryLabel("餐饮")))
+        XCTAssertTrue(result.message.contains("TNG"))
+    }
+    func testBankTransferDoesNotBecomeExpenseFromBillDescription() throws {
+        var ledger = Ledger()
+        let result = try ledger.processTNGNotification(body: "Your transfer of RM40.00 to MAXIS BROADBAND is SUCCESSFUL.", title: "Transaction Notice", date: Date(), eventID: "bill-transfer")
+        XCTAssertTrue(result.accepted)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertEqual(ledger.tngNotices.last?.kind, "transfer")
+        XCTAssertTrue(result.message.contains("Hong Leong"))
+        XCTAssertTrue(result.message.contains(categoryLabel("账单")))
+    }
+}
+
+final class AutomationWorkflowTests: XCTestCase {
+    private func unknown(_ text: String, in ledger: inout Ledger, date: Date) throws -> String {
+        _ = try ledger.receiveTNG(body: text, title: "Transaction", date: date, eventID: nil)
+        return try XCTUnwrap(ledger.tngNotices.last?.id)
+    }
+    func testReferenceDistinguishesConsecutiveRealPayments() throws {
+        var ledger = Ledger(); let now = Date()
+        let text = "You have paid RM40.00 to JENG PAN MEE."
+        _ = try ledger.receiveTNG(body: text, title: "DuitNow Payment", date: now, eventID: "order-111")
+        _ = try ledger.receiveTNG(body: text, title: "DuitNow Payment", date: now.addingTimeInterval(10), eventID: "order-222")
+        XCTAssertEqual(ledger.expenses.count, 2)
+        _ = try ledger.receiveTNG(body: text, title: "DuitNow Payment", date: now.addingTimeInterval(20), eventID: "order-222")
+        XCTAssertEqual(ledger.expenses.count, 2)
+    }
+    func testReverseArrivalAndMerchantNormalization() throws {
+        var ledger = Ledger(); let now = Date()
+        _ = try ledger.receiveTNG(body: "You have paid RM40.00 for Cafe Sdn. Bhd..", title: "Payment", date: now, eventID: nil)
+        XCTAssertFalse(try ledger.addPayment(amount: 40, merchant: "CAFE", currency: "MYR", date: now, eventID: "apple-reverse"))
+        XCTAssertEqual(ledger.expenses.count, 1)
+        let pending = try XCTUnwrap(ledger.tngNotices.last)
+        XCTAssertEqual(pending.provider, "Apple Pay")
+        XCTAssertTrue(pending.possibleDuplicate)
+        try ledger.dismissDuplicateNotice(id: pending.id, expenseID: ledger.expenses[0].id)
+        XCTAssertEqual(ledger.tngNotices.last?.resolution, "duplicate")
+        _ = try ledger.validated()
+    }
+    func testRefundAssociatesOnceAndUndoRestoresTotals() throws {
+        var ledger = Ledger(); let now = Date().addingTimeInterval(-60)
+        ledger.expenses = [Expense(merchant: "Shop", cents: 5000, date: now.addingTimeInterval(-86400))]
+        let id = try unknown("Refund RM10.00 credited", in: &ledger, date: now)
+        XCTAssertEqual(ledger.tngNotices.last?.cents, 1000)
+        try ledger.resolveNotice(id: id, purpose: "refund", party: "Shop", cents: 1000, date: now, relatedID: ledger.expenses[0].id)
+        XCTAssertEqual(ledger.expenses[0].refunded, 1000)
+        XCTAssertThrowsError(try ledger.resolveNotice(id: id, purpose: "refund", party: "Shop", cents: 1000, date: now, relatedID: ledger.expenses[0].id))
+        try ledger.reopenResolvedNotice(id: id)
+        XCTAssertEqual(ledger.expenses[0].refunded, 0)
+        XCTAssertEqual(ledger.tngNotices.last?.status, "pending")
+    }
+    func testExcessRefundLeavesLedgerUnchanged() throws {
+        var ledger = Ledger(); let now = Date().addingTimeInterval(-60)
+        ledger.expenses = [Expense(merchant: "Shop", cents: 1000, date: now.addingTimeInterval(-100))]
+        let id = try unknown("Refund RM20.00 credited", in: &ledger, date: now)
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.resolveNotice(id: id, purpose: "refund", party: "Shop", cents: 2000, date: now, relatedID: ledger.expenses[0].id))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+    }
+    func testRechargePairExcludedAndUndoReopensBoth() throws {
+        var ledger = Ledger(); let now = Date().addingTimeInterval(-60)
+        let bank = try unknown("Bank transfer RM50.00 to wallet", in: &ledger, date: now)
+        let wallet = try unknown("Reload successful RM50.00", in: &ledger, date: now)
+        try ledger.resolveNotice(id: wallet, purpose: "ownTransfer", party: "My TNG wallet", cents: 5000, date: now, relatedID: bank)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.resolution == "ownTransfer" && $0.status == "ignored" })
+        try ledger.reopenResolvedNotice(id: wallet)
+        XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.resolution == nil && $0.status == "pending" })
+    }
+    func testConfirmedExpenseRemembersMerchantAndCannotReplay() throws {
+        var ledger = Ledger(); let now = Date().addingTimeInterval(-60)
+        let id = try unknown("Purchase RM20.00 at ABC", in: &ledger, date: now)
+        try ledger.resolveNotice(id: id, purpose: "expense", party: "ABC", cents: 2000, date: now, category: "餐饮", remember: true)
+        XCTAssertEqual(ledger.merchantCategories[friendKey("ABC")], "餐饮")
+        XCTAssertThrowsError(try ledger.resolveNotice(id: id, purpose: "expense", party: "ABC", cents: 2000, date: now, category: "餐饮"))
+        XCTAssertEqual(ledger.expenses.count, 1)
+    }
+    func testUnknownIncomeAndBackupRoundTrip() throws {
+        var ledger = Ledger(); let now = Date().addingTimeInterval(-60)
+        let id = try unknown("Salary credited RM2000.00", in: &ledger, date: now)
+        try ledger.resolveNotice(id: id, purpose: "income", party: "Employer", cents: 200000, date: now)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.tngNotices[0].status, "income")
+        XCTAssertTrue(restored.expenses.isEmpty)
+    }
+    func testAmountExtractionAvoidsBalancesAndMalformedNumbers() {
+        XCTAssertEqual(singleNotificationAmount("Refund RM1,234.50 credited"), 123450)
+        XCTAssertNil(singleNotificationAmount("RM12.00 paid, balance RM200.00"))
+        XCTAssertNil(singleNotificationAmount("RM12.345"))
+        XCTAssertNil(singleNotificationAmount("RM-12.00"))
+        XCTAssertEqual(notificationReference("REF: TXN-12345"), "TXN-12345")
+    }
+    func testLogOutcomeAndNotificationTargets() throws {
+        var ledger = Ledger()
+        let paid = try ledger.processTNGNotification(body: "You have paid RM40.00 to JENG PAN MEE.", title: "DuitNow Payment", date: Date(), eventID: "target-1")
+        XCTAssertNotNil(paid.expenseID); XCTAssertNotNil(paid.noticeID)
+        XCTAssertEqual(ledger.automationEvents.first?.outcome, "saved")
+        let repeated = try ledger.processTNGNotification(body: "You have paid RM40.00 to JENG PAN MEE.", title: "DuitNow Payment", date: Date(), eventID: "target-1")
+        XCTAssertNil(repeated.expenseID); XCTAssertNil(repeated.noticeID)
+        XCTAssertEqual(ledger.automationEvents.first?.outcome, "duplicate")
+        let unknown = try ledger.processTNGNotification(body: "Purchase RM9.00 at NEW", title: "Transaction", date: nil, eventID: nil)
+        XCTAssertNil(unknown.expenseID); XCTAssertNotNil(unknown.noticeID)
+        XCTAssertEqual(ledger.automationEvents.first?.outcome, "pending")
     }
 }
