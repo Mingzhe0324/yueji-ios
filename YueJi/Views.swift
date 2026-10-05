@@ -178,6 +178,7 @@ struct DashboardView: View {
                     PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
                     MonthPicker(month: monthBinding)
                     spendingCard
+                    PendingBookkeepingCard()
                     recentCard
                     NavigationLink { SavingsGoalsView() } label: {
                         GlassPanel {
@@ -339,7 +340,7 @@ struct DashboardView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
                 ForEach(model.ledger.categoryNames, id: \.self) { category in
-                    let value = entries.filter { $0.category == category }.reduce(0) { $0 + $1.personal }
+                    let value = entries.reduce(0) { $0 + $1.personalAmount(category: category) }
                     if value > 0 {
                         VStack(spacing: 9) {
                             HStack { CategoryBadge(name: category); Spacer(); AnimatedMoney(cents: value).fontWeight(.medium) }.font(.subheadline)
@@ -416,7 +417,7 @@ struct ExpenseRow: View {
                     Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 Text(entry.merchant).font(.headline)
-                CategoryBadge(name: entry.category).font(.caption)
+                Text(entry.categorySummary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
                 Text(dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary)
                 if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + "+" + money(entry.refunded)).font(.caption).foregroundStyle(.green) }
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.caption) }
@@ -590,7 +591,7 @@ struct ExpenseDetailView: View {
                 if let entry {
                     Section {
                         VStack(spacing: 12) {
-                            CategoryBadge(name: entry.category).font(.subheadline)
+                            Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
                             Text(money(entry.cents)).font(.system(.largeTitle, design: .rounded, weight: .bold))
                                 .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
                             Text(entry.merchant).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
@@ -609,6 +610,7 @@ struct ExpenseDetailView: View {
                         }
                         NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: id) }
                     }
+                    ExpenseBookkeepingDetails(entry: entry)
                     if !entry.shares.isEmpty {
                         Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
                             ForEach(entry.shares) { share in
@@ -721,6 +723,11 @@ struct ExpenseEditor: View {
     @State private var date = Date()
     @State private var category = "其他"
     @State private var rememberCategory = true
+    @State private var splitCategories = false
+    @State private var allocations: [CategoryAllocationDraft] = []
+    @State private var accountID = ""
+    @State private var note = ""
+    @State private var tagsText = ""
     @State private var splitting = false
     @State private var fuel = false
     @State private var equal = true
@@ -780,6 +787,7 @@ struct ExpenseEditor: View {
                     }.accessibilityLabel(tr("分类", "Category", "Kategori"))
                     Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
                 }.disabled((original?.refunded ?? 0) > 0)
+                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, accountID: $accountID, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0)
                 Section {
                     Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
                     if splitting {
@@ -841,6 +849,9 @@ struct ExpenseEditor: View {
         if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
+            splitCategories = !(e.categoryAllocations ?? []).isEmpty
+            allocations = (e.categoryAllocations ?? []).map { CategoryAllocationDraft(id: $0.id, category: $0.category, amount: Currency.input($0.cents, "MYR")) }
+            accountID = e.paymentAccountID ?? ""; note = e.note ?? ""; tagsText = (e.tags ?? []).joined(separator: ", ")
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -866,6 +877,13 @@ struct ExpenseEditor: View {
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
+            entry.paymentAccountID = accountID.isEmpty ? nil : accountID
+            entry.note = note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note
+            entry.tags = normalizedExpenseTags(tagsText)
+            if splitCategories {
+                entry.categoryAllocations = try allocations.map { CategoryAllocation(id: $0.id, category: $0.category, cents: try toCents($0.amount)) }
+                if let first = entry.categoryAllocations?.first { entry.category = first.category }
+            } else { entry.categoryAllocations = nil }
             if let original, original.refunded > 0 {
                 guard entry.cents == original.cents, entry.date == original.date, entry.foreign == original.foreign else { throw reviewError("已有退款，请先撤销退款再修改金额或日期。", "Undo refunds before changing amount or date.", "Batalkan bayaran balik sebelum mengubah amaun atau tarikh.") }
             }
@@ -891,12 +909,12 @@ struct ExpenseEditor: View {
                 if let original {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid(tr("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")) }
                     ledger.expenses[i] = entry
-                    if rememberCategory && original.category != entry.category {
+                    if rememberCategory && !splitCategories && original.category != entry.category {
                         ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
                     }
                 } else if !ledger.expenses.contains(where: { $0.id == entry.id }) {
                     ledger.expenses.append(entry)
-                    if rememberCategory { ledger.merchantCategories[friendKey(entry.merchant)] = entry.category }
+                    if rememberCategory && !splitCategories { ledger.merchantCategories[friendKey(entry.merchant)] = entry.category }
                 }
             }
             model.reload(); model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()
@@ -1068,6 +1086,9 @@ struct SettingsView: View {
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
                     }
+                    NavigationLink("付款账户 / 卡片") { PaymentAccountsView() }
+                    NavigationLink("月结对账（CSV）") { StatementReconciliationView() }
+                    NavigationLink("标签与项目") { ExpenseTagsView() }
                     NavigationLink { categoriesPage } label: {
                         SimpleSettingsRow(title: tr("分类与规则", "Categories & rules", "Kategori & peraturan"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)
                     }

@@ -10,6 +10,7 @@ struct RecordApplePayIntent: AppIntent {
     static var openAppWhenRun: Bool = false
     @Parameter(title: "金额") var amount: Double
     @Parameter(title: "商户") var merchant: String
+    @Parameter(title: "付款账户名称（可选）") var paymentAccountName: String?
     @Parameter(title: "交易描述（可选）") var transactionDescription: String?
     @Parameter(title: "币种", default: "MYR") var currency: String
     @Parameter(title: "交易时间") var transactionDate: Date
@@ -19,7 +20,7 @@ struct RecordApplePayIntent: AppIntent {
             if currency.uppercased() != "MYR" { _ = try? await AutomaticRates.shared.refresh(currency.uppercased()) }
             let result = try LocalStore.shared.change { ledger -> (Bool, String, String?, String?) in
                 let previousNotices = ledger.tngNotices.count
-                let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID, description: transactionDescription ?? "")
+                let saved = try ledger.addPayment(amount: amount, merchant: merchant, currency: currency, date: transactionDate, eventID: transactionID, description: transactionDescription ?? "", paymentAccount: paymentAccountName)
                 ledger.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : "duplicate")
                 let entry = saved ? ledger.expenses.last : nil
                 let pending = ledger.tngNotices.count > previousNotices ? ledger.tngNotices.last : nil

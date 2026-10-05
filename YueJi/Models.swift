@@ -43,7 +43,7 @@ func guessCategory(_ name: String, description: String = "") -> String {
 
 func automaticExpenseDetail(_ entry: Expense) -> String {
     let amount = entry.foreign.map { Currency.display($0.minor, $0.currency) + " (" + money(entry.cents) + ")" } ?? money(entry.cents)
-    return entry.source + " · " + amount + "\n" + entry.merchant + " · " + categoryLabel(entry.category) + "\n" + dateLabel(entry.date, time: true)
+    return entry.source + " · " + amount + "\n" + entry.merchant + " · " + entry.categorySummary + "\n" + dateLabel(entry.date, time: true)
 }
 
 struct Repayment: Codable, Identifiable, Equatable {
@@ -78,6 +78,10 @@ struct Expense: Codable, Identifiable, Equatable {
     var refunds: [RefundRecord]? = nil
     var receiptSummary: String? = nil
     var transactionReference: String? = nil
+    var categoryAllocations: [CategoryAllocation]? = nil
+    var paymentAccountID: String? = nil
+    var note: String? = nil
+    var tags: [String]? = nil
     var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
     var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
     var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } - personalRefund }
@@ -98,11 +102,15 @@ struct Ledger: Codable {
     var tripDefaults: TripDefaults? = nil
     var savingsGoals: [SavingsGoal] = []
     var tngNotices: [TNGNotice] = []
+    var paymentAccounts: [PaymentAccount] = []
+    var sourceAccountDefaults: [String: String] = [:]
+    var expenseHistory: [ExpenseRevision] = []
+    var statementLines: [StatementLine] = []
     init(version: Int = 4, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, paymentAccounts, sourceAccountDefaults, expenseHistory, statementLines }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -122,8 +130,13 @@ struct Ledger: Codable {
         tripDefaults = try c.decodeIfPresent(TripDefaults.self, forKey: .tripDefaults)
         savingsGoals = try c.decodeIfPresent([SavingsGoal].self, forKey: .savingsGoals) ?? []
         tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
+        paymentAccounts = try c.decodeIfPresent([PaymentAccount].self, forKey: .paymentAccounts) ?? []
+        sourceAccountDefaults = try c.decodeIfPresent([String: String].self, forKey: .sourceAccountDefaults) ?? [:]
+        expenseHistory = try c.decodeIfPresent([ExpenseRevision].self, forKey: .expenseHistory) ?? []
+        statementLines = try c.decodeIfPresent([StatementLine].self, forKey: .statementLines) ?? []
     }
     func validated() throws -> Ledger {
+        try validateBookkeeping()
         guard savingsGoals.count <= 100, Set(savingsGoals.map(\.id)).count == savingsGoals.count else { throw LedgerError.invalid("储蓄目标无效 / Invalid savings goals") }
         for goal in savingsGoals { try goal.validate() }
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
@@ -192,7 +205,8 @@ struct Ledger: Codable {
         expenses.remove(at: index)
     }
 
-    mutating func addPayment(amount: Double, merchant: String, currency: String, date: Date, eventID: String?, description: String = "") throws -> Bool {
+    mutating func addPayment(amount: Double, merchant: String, currency: String, date: Date, eventID: String?, description: String = "", paymentAccount: String? = nil) throws -> Bool {
+        let resolvedAccount = try resolvePaymentAccount(source: "Apple Pay", explicitName: paymentAccount)
         guard description.count <= 2000 else { throw LedgerError.invalid("交易描述过长。") }
         let code = currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard Currency.codes.contains(code), amount.isFinite, amount > 0, amount <= 100_000_000,
@@ -225,7 +239,7 @@ struct Ledger: Codable {
             seenEvents.insert(key)
             return false
         }
-        expenses.append(Expense(merchant: name, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
+        expenses.append(Expense(merchant: name, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit, paymentAccountID: resolvedAccount))
         seenEvents.insert(key)
         return true
     }
@@ -258,6 +272,7 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var recipient: String? = nil
     var resolvedFriend: String? = nil
     var repaymentIDs: [String]? = nil
+    var paymentAccountID: String? = nil
     var resolution: String? = nil
     var relatedRecordID: String? = nil
     var relatedRefundID: String? = nil
@@ -440,7 +455,7 @@ extension Ledger {
         var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: verified.transactionDate == nil && (verified.sourceBank != "TNG" || date == nil), kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate || crossSourceDuplicate, recipient: parsed?.recipient, sourceBank: verified.sourceBank == "TNG" ? nil : verified.sourceBank, accountSuffix: verified.accountSuffix, bankReference: suppliedReference)
         if let parsed, !duplicate, !crossSourceDuplicate {
             if parsed.kind == "payment" {
-                let entry = Expense(merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party, description: title + " " + text), source: parsed.sourceBank, transactionReference: suppliedReference)
+                let entry = Expense(merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party, description: title + " " + text), source: parsed.sourceBank, transactionReference: suppliedReference, paymentAccountID: try resolvePaymentAccount(source: parsed.sourceBank, suffix: parsed.accountSuffix))
                 expenses.append(entry); notice.expenseID = entry.id; notice.status = "recorded"
             } else if parsed.kind == "transfer" { notice.status = "transfer" }
         }
@@ -459,7 +474,7 @@ extension Ledger {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].expenseID == nil, tngNotices[i].kind != "incoming", ["pending", "transfer"].contains(tngNotices[i].status),
               cents > 0, cents <= 10_000_000_000, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               merchant.count <= 200, categoryNames.contains(category), date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("付款或分账数据无效。") }
-        let expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference)
+        let expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference, paymentAccountID: try (tngNotices[i].paymentAccountID ?? resolvePaymentAccount(source: tngNotices[i].provider, suffix: tngNotices[i].accountSuffix)))
         expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
         if remember { merchantCategories[friendKey(expense.merchant)] = category }
     }
@@ -831,5 +846,372 @@ extension Ledger {
         copy.tngNotices[i].status = "pending"; copy.tngNotices[i].resolution = nil
         copy.tngNotices[i].relatedRecordID = nil; copy.tngNotices[i].relatedRefundID = nil
         self = try copy.validated()
+    }
+}
+
+
+struct CategoryAllocation: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var category: String
+    var cents: Int
+}
+struct PaymentAccount: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var name: String
+    var kind: String = "bank" // bank, wallet, credit, cash
+    var provider: String = ""
+    var lastFour: String = ""
+    var archived = false
+}
+struct ExpenseRevision: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var expenseID: String
+    var date = Date()
+    var before: Expense?
+    var after: Expense?
+    var summary: String {
+        if before == nil { return "新增账目" }
+        if after == nil { return "删除账目" }
+        guard let a = before, let b = after else { return "账目更新" }
+        var fields: [String] = []
+        if a.cents != b.cents { fields.append("金额") }
+        if a.merchant != b.merchant { fields.append("商户") }
+        if a.date != b.date { fields.append("日期") }
+        if a.category != b.category || a.categoryAllocations != b.categoryAllocations { fields.append("分类") }
+        if a.paymentAccountID != b.paymentAccountID { fields.append("付款账户") }
+        if a.note != b.note || a.tags != b.tags { fields.append("备注 / 标签") }
+        if a.shares != b.shares || a.refunds != b.refunds { fields.append("分账 / 还款 / 退款") }
+        return fields.isEmpty ? "账目更新" : fields.joined(separator: "、")
+    }
+}
+extension Expense {
+    var allocatedCategories: [CategoryAllocation] {
+        if let parts = categoryAllocations, !parts.isEmpty { return parts }
+        return [CategoryAllocation(id: "single", category: category, cents: cents)]
+    }
+    var categorySummary: String { allocatedCategories.map { categoryLabel($0.category) }.joined(separator: " / ") }
+    /// Personal spending and refunds are distributed proportionally, with exact integer totals.
+    func categoryDistribution(total: Int) -> [String: Int] {
+        let parts = allocatedCategories
+        guard total >= 0, total <= cents, !parts.isEmpty else { return [:] }
+        let amounts = (try? allocateRefund(total, capacities: parts.map(\.cents))) ?? Array(repeating: 0, count: parts.count)
+        var result: [String: Int] = [:]
+        for (part, amount) in zip(parts, amounts) { result[part.category, default: 0] += amount }
+        return result
+    }
+    func personalAmount(category name: String) -> Int { categoryDistribution(total: personal)[name] ?? 0 }
+    func hasCategory(_ name: String) -> Bool { allocatedCategories.contains { $0.category == name } }
+}
+extension Ledger {
+    func accountName(_ id: String?) -> String {
+        paymentAccounts.first(where: { $0.id == id })?.name ?? "未指定账户"
+    }
+    func resolvePaymentAccount(source: String, suffix: String? = nil, explicitName: String? = nil) throws -> String? {
+        if let name = explicitName?.trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty {
+            let matches = paymentAccounts.filter { !$0.archived && friendKey($0.name) == friendKey(name) }
+            guard matches.count == 1 else { throw LedgerError.invalid("付款账户名称不存在或不唯一，请先在账户管理建立账户。") }
+            return matches[0].id
+        }
+        if let suffix, !suffix.isEmpty {
+            let matches = paymentAccounts.filter { !$0.archived && $0.provider == source && $0.lastFour == suffix }
+            return matches.count == 1 ? matches[0].id : nil
+        }
+        guard let id = sourceAccountDefaults[source], paymentAccounts.contains(where: { $0.id == id && !$0.archived }) else { return nil }
+        return id
+    }
+    mutating func savePaymentAccount(_ account: PaymentAccount) throws {
+        var copy = self
+        guard !copy.paymentAccounts.contains(where: { $0.id != account.id && friendKey($0.name) == friendKey(account.name) }) else { throw LedgerError.invalid("账户名称已存在。") }
+        if let i = copy.paymentAccounts.firstIndex(where: { $0.id == account.id }) { copy.paymentAccounts[i] = account }
+        else { copy.paymentAccounts.append(account) }
+        if account.archived { copy.sourceAccountDefaults = copy.sourceAccountDefaults.filter { $0.value != account.id } }
+        self = try copy.validated()
+    }
+    func validateBookkeeping() throws {
+        guard paymentAccounts.count <= 100, Set(paymentAccounts.map(\.id)).count == paymentAccounts.count,
+              Set(paymentAccounts.map { friendKey($0.name) }).count == paymentAccounts.count else { throw LedgerError.invalid("账户资料无效。") }
+        for a in paymentAccounts {
+            guard !a.id.isEmpty, a.id.count <= 100, !friendKey(a.name).isEmpty, a.name.count <= 60,
+                  ["bank", "wallet", "credit", "cash"].contains(a.kind), a.provider.count <= 60,
+                  a.lastFour.isEmpty || (a.lastFour.count == 4 && a.lastFour.allSatisfy({ $0.isASCII && $0.isNumber })) else { throw LedgerError.invalid("请检查账户名称和卡号末四位。") }
+        }
+        let validDefaults = sourceAccountDefaults.allSatisfy { pair in
+            pair.key.count <= 60 && paymentAccounts.contains(where: { $0.id == pair.value && !$0.archived })
+        }
+        guard sourceAccountDefaults.count <= 100, validDefaults else { throw LedgerError.invalid("默认付款账户无效。") }
+        for notice in tngNotices {
+            guard notice.paymentAccountID == nil || paymentAccounts.contains(where: { $0.id == notice.paymentAccountID }) else { throw LedgerError.invalid("通知关联账户无效。") }
+        }
+        for e in expenses {
+            guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20,
+                  (e.tags ?? []).allSatisfy({ !friendKey($0).isEmpty && $0.count <= 40 }),
+                  Set((e.tags ?? []).map(friendKey)).count == (e.tags?.count ?? 0),
+                  e.paymentAccountID == nil || paymentAccounts.contains(where: { $0.id == e.paymentAccountID }) else { throw LedgerError.invalid("备注、标签或付款账户无效。") }
+            if let parts = e.categoryAllocations, !parts.isEmpty {
+                guard (2...20).contains(parts.count), Set(parts.map(\.id)).count == parts.count,
+                      Set(parts.map(\.category)).count == parts.count,
+                      parts.allSatisfy({ !$0.id.isEmpty && categoryNames.contains($0.category) && $0.cents > 0 && $0.cents <= 10_000_000_000 }),
+                      parts.reduce(0, { $0 + $1.cents }) == e.cents else { throw LedgerError.invalid("分类金额合计必须等于付款 MYR 总额，分类不能重复。") }
+            }
+        }
+        guard expenseHistory.count <= 300, Set(expenseHistory.map(\.id)).count == expenseHistory.count else { throw LedgerError.invalid("修改历史无效。") }
+        for h in expenseHistory {
+            guard h.date.timeIntervalSince1970.isFinite, h.before != nil || h.after != nil,
+                  h.before == nil || h.before?.id == h.expenseID, h.after == nil || h.after?.id == h.expenseID else { throw LedgerError.invalid("修改历史记录无效。") }
+        }
+        try validateStatementLines()
+    }
+    mutating func captureExpenseChanges(from old: Ledger) {
+        let previous = Dictionary(uniqueKeysWithValues: old.expenses.map { ($0.id, $0) })
+        let current = Dictionary(uniqueKeysWithValues: expenses.map { ($0.id, $0) })
+        let ids = Set(previous.keys).union(current.keys).sorted()
+        let new = ids.compactMap { id -> ExpenseRevision? in
+            guard previous[id] != current[id] else { return nil }
+            return ExpenseRevision(expenseID: id, before: previous[id], after: current[id])
+        }
+        var counts: [String: Int] = [:]
+        expenseHistory = Array((new + expenseHistory).filter { entry in
+            counts[entry.expenseID, default: 0] += 1
+            return counts[entry.expenseID, default: 0] <= 20
+        }.prefix(300))
+    }
+    mutating func restoreExpenseRevision(_ id: String) throws {
+        guard let revision = expenseHistory.first(where: { $0.id == id }), let before = revision.before,
+              let after = revision.after, let i = expenses.firstIndex(where: { $0.id == revision.expenseID }), expenses[i] == after else {
+            throw LedgerError.invalid("账目已有后续修改，请先撤销较新的修改；删除的账目请使用原有撤销删除或备份恢复。")
+        }
+        guard before.shares == after.shares, before.refunds == after.refunds else { throw LedgerError.invalid("分账、还款和退款请在对应功能撤销，避免关联记录不一致。") }
+        var copy = self; copy.expenses[i] = before
+        self = try copy.validated()
+    }
+}
+
+struct StatementLine: Codable, Identifiable, Equatable {
+    var id: String
+    var accountID: String
+    var date: Date
+    var description: String
+    var cents: Int
+    var direction: String // debit, credit
+    var reference: String
+    var importedAt = Date()
+    var status = "pending" // pending, matched, posted, difference, review, resolved, ignored
+    var expenseID: String? = nil
+    var noticeID: String? = nil
+}
+struct StatementMapping: Equatable {
+    var dateColumn = 0
+    var descriptionColumn = 1
+    var amountColumn = 2
+    var debitColumn = -1
+    var creditColumn = -1
+    var referenceColumn = -1
+    var useDebitCredit = false
+    var positiveIsDebit = true
+    var dateFormat = "dd/MM/yyyy"
+}
+/// RFC-style quoted CSV fields, including embedded newlines and doubled quotes.
+func readStatementCSV(_ data: Data) throws -> [[String]] {
+    guard data.count <= 2_000_000 else { throw LedgerError.invalid("CSV 文件不能超过 2 MB。") }
+    guard var text = String(data: data, encoding: .utf8) ?? String(data: data, encoding: .utf16) else { throw LedgerError.invalid("请使用 UTF-8 或 UTF-16 CSV 文件。") }
+    if text.first == "\u{FEFF}" { text.removeFirst() }
+    text = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+    var rows: [[String]] = []; var row: [String] = []; var field = ""
+    var quoted = false; var closed = false
+    let chars = Array(text); var i = 0
+    while i < chars.count {
+        let ch = chars[i]
+        if quoted {
+            if ch == "\"" {
+                if i + 1 < chars.count && chars[i + 1] == "\"" { field.append("\""); i += 1 }
+                else { quoted = false; closed = true }
+            } else { field.append(ch) }
+        } else if ch == "," { row.append(field); field = ""; closed = false }
+        else if ch == "\n" {
+            row.append(field)
+            if row.contains(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) { rows.append(row) }
+            row = []; field = ""; closed = false
+        } else if ch == "\"" {
+            guard field.isEmpty && !closed else { throw LedgerError.invalid("CSV 引号格式无效。") }
+            quoted = true
+        } else {
+            guard !closed else {
+                if ch == " " || ch == "\t" { i += 1; continue }
+                throw LedgerError.invalid("CSV 引号后存在无效字符。")
+            }
+            field.append(ch)
+        }
+        guard field.count <= 8000, row.count <= 100, rows.count <= 10_000 else { throw LedgerError.invalid("CSV 行数或字段过长。") }
+        i += 1
+    }
+    guard !quoted else { throw LedgerError.invalid("CSV 引号未闭合。") }
+    if !field.isEmpty || !row.isEmpty || closed { row.append(field); if row.contains(where: { !$0.isEmpty }) { rows.append(row) } }
+    guard rows.count >= 2, rows.count <= 10_001, rows[0].count >= 3 else { throw LedgerError.invalid("CSV 需要列标题和至少一行交易数据。") }
+    return rows
+}
+func statementAmount(_ value: String) throws -> Int {
+    var text = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+    if text.isEmpty { return 0 }
+    if text.hasPrefix("MYR") { text = String(text.dropFirst(3)).trimmingCharacters(in: .whitespaces) }
+    else if text.hasPrefix("RM") { text = String(text.dropFirst(2)).trimmingCharacters(in: .whitespaces) }
+    var negative = false
+    if text.hasPrefix("(") && text.hasSuffix(")") { negative = true; text = String(text.dropFirst().dropLast()) }
+    if text.hasPrefix("-") { guard !negative else { throw LedgerError.invalid("金额符号无效。") }; negative = true; text.removeFirst() }
+    else if text.hasPrefix("+") { text.removeFirst() }
+    guard text.range(of: #"\A(?:[0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(?:\.[0-9]{1,2})?\z"#, options: .regularExpression) != nil else { throw LedgerError.invalid("金额格式无效，仅支持 MYR。") }
+    text = text.replacingOccurrences(of: ",", with: "")
+    if Decimal(string: text) == 0 { return 0 }
+    let cents = try toCents(text)
+    return negative ? -cents : cents
+}
+func parseStatementRows(_ rows: [[String]], mapping: StatementMapping, accountID: String) throws -> [StatementLine] {
+    guard let header = rows.first, !accountID.isEmpty else { throw LedgerError.invalid("请选择付款账户。") }
+    var required = [mapping.dateColumn, mapping.descriptionColumn]
+    required += mapping.useDebitCredit ? [mapping.debitColumn, mapping.creditColumn] : [mapping.amountColumn]
+    guard required.allSatisfy({ header.indices.contains($0) }), Set(required).count == required.count else { throw LedgerError.invalid("日期、描述和金额列必须正确且不重复。") }
+    if mapping.referenceColumn >= 0 { guard header.indices.contains(mapping.referenceColumn), !required.contains(mapping.referenceColumn) else { throw LedgerError.invalid("交易编号列无效。") } }
+    let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian); formatter.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")
+    formatter.dateFormat = mapping.dateFormat; formatter.isLenient = false
+    let batchData = try JSONEncoder().encode(rows)
+    let batchKey = SHA256.hash(data: batchData).map { String(format: "%02x", $0) }.joined()
+    var result: [StatementLine] = []; var occurrences: [String: Int] = [:]
+    for (offset, row) in rows.dropFirst().enumerated() {
+        do {
+            guard row.count == header.count else { throw LedgerError.invalid("列数与标题不一致。") }
+            let rawDate = row[mapping.dateColumn].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let date = formatter.date(from: rawDate), formatter.string(from: date) == rawDate,
+                  date.timeIntervalSince1970 >= 0, date <= Date() else { throw LedgerError.invalid("日期格式不符或日期在未来。") }
+            let description = row[mapping.descriptionColumn].trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !description.isEmpty, description.count <= 1000 else { throw LedgerError.invalid("描述为空或过长。") }
+            let cents: Int; let direction: String
+            if mapping.useDebitCredit {
+                let debit = try statementAmount(row[mapping.debitColumn]), credit = try statementAmount(row[mapping.creditColumn])
+                guard debit >= 0, credit >= 0, (debit > 0) != (credit > 0) else { throw LedgerError.invalid("Debit / Credit 必须只有一侧有正金额。") }
+                cents = max(debit, credit); direction = debit > 0 ? "debit" : "credit"
+            } else {
+                let signed = try statementAmount(row[mapping.amountColumn])
+                guard signed != 0 else { throw LedgerError.invalid("交易金额不能为零。") }
+                cents = abs(signed); direction = ((signed > 0) == mapping.positiveIsDebit) ? "debit" : "credit"
+            }
+            let reference = mapping.referenceColumn >= 0 ? row[mapping.referenceColumn].trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            guard reference.count <= 200 else { throw LedgerError.invalid("交易编号过长。") }
+            // Include occurrence to preserve two identical real transactions in one statement.
+            let fields = [batchKey, accountID, String(Int(date.timeIntervalSince1970)), description, String(cents), direction, reference]
+            let data = try JSONEncoder().encode(fields)
+            let base = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            let occurrence = occurrences[base, default: 0]; occurrences[base] = occurrence + 1
+            result.append(StatementLine(id: base + ":" + String(occurrence), accountID: accountID, date: date, description: description, cents: cents, direction: direction, reference: reference))
+        } catch { throw LedgerError.invalid("CSV 第 \(offset + 2) 行：\(error.localizedDescription)") }
+    }
+    return result
+}
+extension Ledger {
+    func validateStatementLines() throws {
+        guard statementLines.count <= 10_000, Set(statementLines.map(\.id)).count == statementLines.count else { throw LedgerError.invalid("对账记录无效或超过 10,000 行。") }
+        for line in statementLines {
+            guard !line.id.isEmpty, line.id.count <= 200, paymentAccounts.contains(where: { $0.id == line.accountID }), line.date.timeIntervalSince1970.isFinite,
+                  line.cents > 0, line.cents <= 10_000_000_000, line.description.count <= 1000, !line.description.isEmpty,
+                  line.reference.count <= 200, ["debit", "credit"].contains(line.direction),
+                  ["pending", "matched", "posted", "difference", "review", "resolved", "ignored"].contains(line.status) else { throw LedgerError.invalid("对账行资料无效。") }
+        }
+    }
+    mutating func importStatement(_ lines: [StatementLine]) throws -> Int {
+        let existing = Set(statementLines.map(\.id))
+        guard Set(lines.map(\.id)).count == lines.count else { throw LedgerError.invalid("导入批次包含重复标识。") }
+        let additions = lines.filter { !existing.contains($0.id) }
+        var copy = self; copy.statementLines.append(contentsOf: additions)
+        self = try copy.validated(); return additions.count
+    }
+    func statementCandidates(_ line: StatementLine) -> [Expense] {
+        guard line.direction == "debit" else { return [] }
+        return expenses.filter { entry in
+            guard entry.paymentAccountID == nil || entry.paymentAccountID == line.accountID else { return false }
+            let reference = !line.reference.isEmpty && entry.transactionReference == line.reference
+            let nearby = abs(entry.date.timeIntervalSince(line.date)) <= 3 * 86400
+            return reference || (nearby && (entry.cents == line.cents || merchantIdentity(entry.merchant) == merchantIdentity(line.description)))
+        }.sorted { a, b in
+            let aExact = a.cents == line.cents, bExact = b.cents == line.cents
+            if aExact != bExact { return aExact }
+            return abs(a.date.timeIntervalSince(line.date)) < abs(b.date.timeIntervalSince(line.date))
+        }
+    }
+    mutating func linkStatement(_ id: String, expenseID: String) throws {
+        guard let i = statementLines.firstIndex(where: { $0.id == id }), ["pending", "difference"].contains(statementLines[i].status),
+              statementLines[i].direction == "debit", let e = expenses.firstIndex(where: { $0.id == expenseID }),
+              expenses[e].paymentAccountID == nil || expenses[e].paymentAccountID == statementLines[i].accountID,
+              !statementLines.contains(where: { $0.id != id && $0.expenseID == expenseID && $0.status != "ignored" }) else { throw LedgerError.invalid("账目已关联其他行、账户不同或对账行已处理。") }
+        expenses[e].paymentAccountID = statementLines[i].accountID
+        statementLines[i].expenseID = expenseID
+        statementLines[i].status = expenses[e].cents == statementLines[i].cents ? "matched" : "difference"
+    }
+    mutating func postStatementExpense(_ id: String, category: String, confirmDistinct: Bool) throws {
+        guard let i = statementLines.firstIndex(where: { $0.id == id }), statementLines[i].status == "pending", statementLines[i].direction == "debit", categoryNames.contains(category) else { throw LedgerError.invalid("此行已处理或不是支出，请刷新。") }
+        let line = statementLines[i]
+        guard confirmDistinct || statementCandidates(line).isEmpty else { throw LedgerError.invalid("找到可能的已有账目，请核对后确认这是另一笔。") }
+        let merchant = String(line.description.prefix(200))
+        let expense = Expense(merchant: merchant, cents: line.cents, date: line.date, category: category, source: "账单补录", transactionReference: line.reference.isEmpty ? nil : line.reference, paymentAccountID: line.accountID, note: line.description)
+        expenses.append(expense); statementLines[i].expenseID = expense.id; statementLines[i].status = "posted"
+    }
+    mutating func reviewStatementNotice(_ id: String) throws -> String {
+        guard let i = statementLines.firstIndex(where: { $0.id == id }), statementLines[i].status == "pending" else { throw LedgerError.invalid("此行已处理，请刷新。") }
+        let line = statementLines[i]
+        guard tngNotices.count < 5000 else { throw LedgerError.invalid("待确认通知已达上限。") }
+        var notice = TNGNotice(body: line.description + "\n" + money(line.cents), title: "账单对账", date: line.date, usesReceivedDate: false, kind: line.direction == "credit" ? "incoming" : "unknown", status: "pending", cents: line.cents, party: String(line.description.prefix(200)))
+        notice.paymentAccountID = line.accountID
+        notice.sourceBank = "银行 / TNG"; notice.bankReference = line.reference.isEmpty ? nil : line.reference
+        tngNotices.append(notice); statementLines[i].noticeID = notice.id; statementLines[i].status = "review"
+        return notice.id
+    }
+    mutating func ignoreStatement(_ id: String) throws {
+        guard let i = statementLines.firstIndex(where: { $0.id == id }), ["pending", "difference"].contains(statementLines[i].status) else { throw LedgerError.invalid("先撤销此行已确认的关联。") }
+        statementLines[i].status = "ignored"; statementLines[i].expenseID = nil
+    }
+    mutating func reopenStatement(_ id: String) throws {
+        guard let i = statementLines.firstIndex(where: { $0.id == id }) else { return }
+        if let noticeID = statementLines[i].noticeID, tngNotices.contains(where: { $0.id == noticeID }) { throw LedgerError.invalid("请在关联通知中撤销或重新确认用途。") }
+        statementLines[i].noticeID = nil
+        // Only removes the reconciliation link; never deletes a real expense.
+        statementLines[i].status = "pending"; statementLines[i].expenseID = nil
+    }
+    mutating func refreshStatementLinks() {
+        let records = Dictionary(uniqueKeysWithValues: expenses.map { ($0.id, $0) })
+        let notices = Dictionary(uniqueKeysWithValues: tngNotices.map { ($0.id, $0) })
+        for i in statementLines.indices {
+            if let noticeID = statementLines[i].noticeID, let notice = notices[noticeID] {
+                if let expenseID = notice.expenseID { statementLines[i].expenseID = expenseID; statementLines[i].status = "posted" }
+                else { statementLines[i].expenseID = nil; statementLines[i].status = ["pending", "transfer"].contains(notice.status) ? "review" : "resolved" }
+            } else if statementLines[i].noticeID != nil {
+                statementLines[i].noticeID = nil
+                if statementLines[i].expenseID == nil { statementLines[i].status = "pending" }
+            }
+            if let expenseID = statementLines[i].expenseID {
+                if let entry = records[expenseID] {
+                    if entry.cents != statementLines[i].cents || entry.paymentAccountID != statementLines[i].accountID { statementLines[i].status = "difference" }
+                    else if statementLines[i].status == "difference" { statementLines[i].status = "matched" }
+                } else { statementLines[i].status = "pending"; statementLines[i].expenseID = nil; statementLines[i].noticeID = nil }
+            }
+        }
+    }
+}
+
+
+extension Ledger {
+    func statementNoticeCandidates(_ line: StatementLine) -> [TNGNotice] {
+        tngNotices.filter { notice in
+            guard notice.id != line.noticeID, notice.expenseID == nil, notice.cents == line.cents,
+                  notice.paymentAccountID == nil || notice.paymentAccountID == line.accountID,
+                  abs(notice.date.timeIntervalSince(line.date)) <= 3 * 86400 else { return false }
+            return line.direction == "credit" ? notice.kind == "incoming" : notice.kind == "transfer"
+        }.sorted { $0.date > $1.date }
+    }
+    mutating func linkStatementNotice(_ id: String, noticeID: String) throws {
+        guard let i = statementLines.firstIndex(where: { $0.id == id }), statementLines[i].status == "pending",
+              let n = tngNotices.firstIndex(where: { $0.id == noticeID }),
+              statementNoticeCandidates(statementLines[i]).contains(where: { $0.id == noticeID }),
+              !statementLines.contains(where: { $0.id != id && $0.noticeID == noticeID }) else { throw LedgerError.invalid("此通知已关联其他行，或不是同额同方向的记录。") }
+        tngNotices[n].paymentAccountID = statementLines[i].accountID
+        statementLines[i].noticeID = noticeID
+        statementLines[i].status = ["pending", "transfer"].contains(tngNotices[n].status) ? "review" : "resolved"
     }
 }

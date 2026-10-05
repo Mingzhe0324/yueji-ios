@@ -37,8 +37,12 @@ final class LocalStore {
         NSFileCoordinator().coordinate(writingItemAt: file, options: .forMerging, error: &error) { _ in
             output = Result {
                 var ledger = try self.readUnlocked()
+                let originalLedger = ledger
                 let previous = try Self.encode(ledger)
                 let result = try action(&ledger)
+                _ = try ledger.validated()
+                ledger.captureExpenseChanges(from: originalLedger)
+                ledger.refreshStatementLinks()
                 let next = try Self.encode(ledger.validated())
                 guard next.count <= 20_000_000 else { throw LedgerError.invalid("备份不能超过 20 MB。") }
                 if previous != next {

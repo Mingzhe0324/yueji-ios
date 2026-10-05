@@ -336,7 +336,7 @@ extension Ledger {
                 let net = s.cents - s.refunded
                 result.net += net; result.refunds += s.refunded
                 result.owed += max(0, s.owed); result.payable += max(0, -s.owed)
-                result.categories[e.category, default: 0] += net
+                for (category, amount) in e.categoryDistribution(total: net) { result.categories[category, default: 0] += amount }
             }
         }
         return result
@@ -361,7 +361,7 @@ extension Ledger {
             for s in e.shares where friendKey(s.name) == key {
                 net += s.cents - s.refunded; paid += s.repaid; returned += s.returned
                 owed += max(0, s.owed); payable += max(0, -s.owed)
-                lines.append("\n\(dateLabel(e.date)) · \(e.merchant) · \(categoryLabel(e.category))")
+                lines.append("\n\(dateLabel(e.date)) · \(e.merchant) · \(e.categorySummary)")
                 lines.append(tr("份额 / 退款：", "Share / refund: ", "Bahagian / pulangan: ") + money(s.cents) + " / " + money(s.refunded))
                 lines.append(tr("已还 / 已退回：", "Repaid / returned: ", "Dibayar / dipulangkan: ") + money(s.repaid) + " / " + money(s.returned))
                 for r in s.repayments { lines.append("  \(dateLabel(r.date)) · " + tr("还款 ", "Repayment ", "Bayaran ") + money(r.cents)) }
@@ -493,7 +493,13 @@ extension Ledger {
         }
         if let i = customCategories.firstIndex(where: { $0.id == value.id }) {
             let old = customCategories[i].name
-            for j in expenses.indices where expenses[j].category == old { expenses[j].category = value.name }
+            for j in expenses.indices {
+                if expenses[j].category == old { expenses[j].category = value.name }
+                if var parts = expenses[j].categoryAllocations {
+                    for k in parts.indices where parts[k].category == old { parts[k].category = value.name }
+                    expenses[j].categoryAllocations = parts
+                }
+            }
             for j in recurring.indices where recurring[j].category == old { recurring[j].category = value.name }
             for key in Array(merchantCategories.keys) where merchantCategories[key] == old { merchantCategories[key] = value.name }
             customCategories[i] = value
@@ -501,13 +507,15 @@ extension Ledger {
     }
     mutating func deleteCategory(_ id: String) throws {
         guard let value = customCategories.first(where: { $0.id == id }) else { return }
-        guard !expenses.contains(where: { $0.category == value.name }), !recurring.contains(where: { $0.category == value.name }), !merchantCategories.values.contains(value.name) else {
+        guard !expenses.contains(where: { $0.hasCategory(value.name) }), !recurring.contains(where: { $0.category == value.name }), !merchantCategories.values.contains(value.name) else {
             throw reviewError("此分类仍被账目、固定消费或商户规则使用，请先修改这些记录的分类。", "This category is used by entries, schedules or merchant rules. Reassign them before deleting it.", "Kategori digunakan oleh rekod, jadual atau peraturan peniaga. Tukar kategori dahulu.")
         }
         customCategories.removeAll { $0.id == id }
     }
     func spending(in month: Date, category: String? = nil) -> Int {
-        expenses.filter { monthKey($0.date) == monthKey(month) && (category == nil || $0.category == category) }.reduce(0) { $0 + $1.personal }
+        expenses.filter { monthKey($0.date) == monthKey(month) }.reduce(0) { total, entry in
+            total + (category.map { entry.personalAmount(category: $0) } ?? entry.personal)
+        }
     }
 }
 func optionalMoney(_ value: String) throws -> Int? {
@@ -519,6 +527,7 @@ func optionalMoney(_ value: String) throws -> Int? {
 struct LedgerFilter: Equatable {
     var category = ""
     var source = ""
+    var accountID = ""
     var minimum = ""
     var maximum = ""
     func validate() throws {
@@ -547,14 +556,15 @@ extension Ledger {
         if splits {
             rows = [["expense_id", "date", "merchant", "category", "friend", "share_MYR", "refund_MYR", "repaid_MYR", "returned_MYR", "owed_MYR", "payable_back_MYR"]]
             for e in entries { for s in e.shares {
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, categoryLabel(e.category), s.name, Currency.input(s.cents, "MYR"), Currency.input(s.refunded, "MYR"), Currency.input(s.repaid, "MYR"), Currency.input(s.returned, "MYR"), Currency.input(max(0, s.owed), "MYR"), Currency.input(max(0, -s.owed), "MYR")])
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, s.name, Currency.input(s.cents, "MYR"), Currency.input(s.refunded, "MYR"), Currency.input(s.repaid, "MYR"), Currency.input(s.returned, "MYR"), Currency.input(max(0, s.owed), "MYR"), Currency.input(max(0, -s.owed), "MYR")])
             } }
         } else {
-            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR"]]
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "payment_account", "category_allocations_MYR", "note", "tags"]]
             for e in entries {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, categoryLabel(e.category), sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1"])
+                let allocationText = e.allocatedCategories.map { $0.category + ":" + Currency.input($0.cents, "MYR") }.joined(separator: "; ")
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", accountName(e.paymentAccountID), allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; ")])
             }
         }
         return csvData(rows)
@@ -570,11 +580,12 @@ extension Ledger {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return expenses.filter { e in
             guard monthKey(e.date) == period,
-                  filter.category.isEmpty || filter.category == e.category,
+                  filter.category.isEmpty || e.hasCategory(filter.category),
+                  filter.accountID.isEmpty || filter.accountID == e.paymentAccountID,
                   filter.source.isEmpty || filter.source == e.source else { return false }
             if let low, e.cents < low { return false }
             if let high, e.cents > high { return false }
-            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || categoryLabel(e.category).localizedCaseInsensitiveContains(query)
+            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || e.categorySummary.localizedCaseInsensitiveContains(query) || (e.note ?? "").localizedCaseInsensitiveContains(query) || (e.tags ?? []).contains(where: { $0.localizedCaseInsensitiveContains(query) }) || accountName(e.paymentAccountID).localizedCaseInsensitiveContains(query)
         }.sorted { $0.date > $1.date }
     }
 }
