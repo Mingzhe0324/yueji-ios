@@ -547,9 +547,9 @@ final class TNGTests: XCTestCase {
         _ = try ledger.receiveTNG(body: "Reload successful RM50", date: nil, eventID: nil, now: now)
         XCTAssertEqual(ledger.expenses.count, 1); XCTAssertEqual(ledger.expenses[0].source, "TNG")
         XCTAssertEqual(ledger.spending(in: now), 255)
-        XCTAssertEqual(ledger.tngNotices.map(\.status), ["recorded", "transfer"])
+        XCTAssertEqual(ledger.tngNotices.map(\.status), ["recorded", "transfer", "pending"])
         XCTAssertTrue(ledger.tngNotices[0].usesReceivedDate)
-        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).tngNotices.count, 2)
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).tngNotices.count, 3)
     }
     func testPossibleDuplicatePreservedAndCanConfirmDistinctPayment() throws {
         var ledger = Ledger(); let now = Date(); let body = "You have paid RM2.55 for MySiswaPlace."
@@ -712,10 +712,7 @@ final class TNGAllowlistTests: XCTestCase {
             ("Payment", "Payment failed RM2.55"),
             ("", "Offer: You have paid RM2.55 for Shop."),
             ("Promo", "You have paid RM2.55 for Shop."),
-            ("Transfer Successful", "You have paid RM2.55 for Shop."),
-            ("Payment", "RM 0.01 has been successfully transferred to FRIEND."),
-            ("", "Reload successful RM50"),
-            ("", "You received RM2.55")
+            ("", "No transaction information")
         ]
         for (title, body) in notices {
             _ = try ledger.receiveTNG(body: body, title: title, date: nil, eventID: "ignored-event")
@@ -1492,5 +1489,33 @@ final class ConsecutiveDeletionTests: XCTestCase {
         try ledger.restoreDeletedRecords(undo)
         XCTAssertEqual(ledger.tngNotices.count, 11)
         XCTAssertEqual(Set(ledger.tngNotices.map(\.id)), Set(originals.map(\.id) + [newID]))
+    }
+}
+
+final class NotificationBuild58Tests: XCTestCase {
+    func testDuitNowAndRFID() throws {
+        let paid = try XCTUnwrap(parseTNG("You have paid RM40.00 to JENG PAN MEE.", title: "DuitNow Payment"))
+        XCTAssertEqual(paid.cents, 4000)
+        XCTAssertEqual(paid.party, "JENG PAN MEE")
+        let toll = try XCTUnwrap(parseTNG("RM10.58 was deducted via RFID for toll payment on 04-Oct-2026 17:24", title: "Successful Toll Payment"))
+        XCTAssertEqual(toll.cents, 1058)
+        XCTAssertEqual(toll.transactionDate, ISO8601DateFormatter().date(from: "2026-10-04T09:24:00Z"))
+        XCTAssertNil(parseTNG("RM10.58 was deducted via RFID for toll payment on 31-Feb-2026 17:24", title: "Successful Toll Payment"))
+    }
+    func testUnknownRetainedAndRoundTrip() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "Purchase successful MYR 12.00 at NEW SHOP", title: "HLB Transaction", date: nil, eventID: nil)
+        XCTAssertEqual(ledger.expenses.count, 0)
+        XCTAssertEqual(ledger.tngNotices.first?.kind, "unknown")
+        XCTAssertEqual(ledger.tngNotices.first?.provider, "Hong Leong")
+        let copy = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        XCTAssertEqual(copy.tngNotices.first?.body, ledger.tngNotices.first?.body)
+        XCTAssertNotNil(copy.tngNotices.first?.reviewReason)
+    }
+    func testPromotionsAndFailuresDoNotEnterReview() {
+        XCTAssertFalse(shouldReviewFinancialNotification("Payment failed RM40.00", title: "Payment"))
+        XCTAssertFalse(shouldReviewFinancialNotification("Offer: pay RM40.00", title: "Promotion"))
+        XCTAssertFalse(shouldReviewFinancialNotification("Your OTP is 123456", title: "TNG"))
+        XCTAssertTrue(shouldReviewFinancialNotification("Refund RM40.00 credited", title: "Refund"))
     }
 }

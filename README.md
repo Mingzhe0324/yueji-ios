@@ -1,4 +1,4 @@
-# 月记 YueJi · 1.40.4（build 57）
+# 月记 YueJi · 1.42.0（build 58）
 
 本版以 1.40.3 build 54 为基础，仅更新 App 图标资源与 IPA 图标元数据，补齐 iPhone/iPad 图标尺寸及 AltStore 读取用 PNG。通知使用系统 App 图标。原有 Swift 功能源码保持不变；不包含之后新增的云账号或登录入口。更新后系统或 AltStore 可能仍保留图标缓存，请先重新打开界面，勿为图标缓存删除未备份账本。
 
@@ -41,3 +41,16 @@
 上传完整项目（包含 `.github` 文件夹）→ GitHub Actions → Build YueJi iPhone App → Run workflow → 下载 IPA，用 AltStore 签名安装。
 
 需 Xcode 26+ 构建。本版已完成静态检查；Xcode 编译、自动测试和真机效果仍待验证。
+
+
+## build 58 通知识别更新
+- 支持 DuitNow Payment：You have paid RM40.00 to JENG PAN MEE.
+- 支持 Successful Toll Payment：RFID 扣费，正文日期按马来西亚时区解析。
+- 共用银行 / TNG 入口；陌生交易通知保留原文与原因，待确认，不自动记支出。
+- 同来源近时间交易与跨来源同金额同商户交易保留疑似重复，需人工确认。没有共同交易编号时无法保证银行 / TNG 一定关联成功。
+- 待确认详情提供“重新识别通知”与“AI 辅助判断”。AI 使用设备本机 Foundation Models，只给建议；设备不支持或模型不可用时保留人工确认流程。
+- 退款、充值和陌生资金方向只待确认，不自动按支出处理。已知银行收款 / 转出继续沿用原有用途确认。
+- 沿用现有快捷指令，传入 Body / Title / Date，无需另建自动化。
+- 旧版本未保存的通知无法恢复；需要再次传入正文。此次没有添加截图补录或其他已移除工具。
+
+验证：结构检查通过；新增 XCTest 覆盖两种截图格式、RFID 日期、未知通知保存与序列化、推广 / 失败过滤。Linux 环境无 Xcode，未运行原生 XCTest、未生成 IPA。使用随包 GitHub Actions 执行原生测试和 IPA 构建。

@@ -1082,6 +1082,7 @@ struct TNGNoticeView: View {
     @State private var amount = ""
     @State private var date = Date()
     @State private var category = "其他"
+    @State private var analyzing = false
     @State private var initialized = false
     @State private var excluding = false
     @State private var confirming = false
@@ -1096,6 +1097,36 @@ struct TNGNoticeView: View {
                     if let reference = notice.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
                     if !notice.title.isEmpty { Text(notice.title) }
                     Text(notice.body).textSelection(.enabled)
+                    if let reason = notice.reviewReason { Text(reason).foregroundStyle(.orange) }
+                    if let suggestion = notice.aiSuggestion { Text("AI 建议（请核对）：" + suggestion).font(.caption) }
+                    if notice.kind == "unknown" {
+                        Button(analyzing ? "AI 分析中…" : "AI 辅助判断") {
+                            analyzing = true
+                            Task { @MainActor in
+                                let advice = await financialAIAdvice(body: notice.body, title: notice.title)
+                                do {
+                                    try LocalStore.shared.change { ledger in
+                                        guard let i = ledger.tngNotices.firstIndex(where: { $0.id == id }), ledger.tngNotices[i].status == "pending" else { return }
+                                        ledger.tngNotices[i].aiSuggestion = advice
+                                    }
+                                    model.reload()
+                                } catch { self.error = error.localizedDescription }
+                                analyzing = false
+                            }
+                        }.disabled(analyzing)
+                        Button("重新识别通知") {
+                            do {
+                                try LocalStore.shared.change { ledger in
+                                    guard let old = ledger.tngNotices.first(where: { $0.id == id }), old.status == "pending", old.expenseID == nil else { return }
+                                    guard parseFinancialNotification(old.body, title: old.title) != nil else { throw LedgerError.invalid("当前仍未识别，请核对原文后手动确认。") }
+                                    ledger.tngNotices.removeAll { $0.id == id }
+                                    _ = try ledger.receiveTNG(body: old.body, title: old.title, date: old.date, eventID: nil)
+                                    if let i = ledger.tngNotices.indices.last { ledger.tngNotices[i].id = old.id }
+                                }
+                                model.reload()
+                            } catch { self.error = error.localizedDescription }
+                        }
+                    }
                     Text(dateLabel(notice.date, time: true)).font(.caption)
                     if notice.usesReceivedDate { Text(tr("时间为接收时间，正文没有交易日期。补录旧通知时请修改账目日期。", "Uses received time; body has no transaction date. Edit the entry date when importing an old notice.", "Menggunakan masa diterima; teks tiada tarikh transaksi. Ubah tarikh rekod bagi notifikasi lama.")).font(.caption) }
                     if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
