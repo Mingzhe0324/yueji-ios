@@ -3,17 +3,30 @@ import UniformTypeIdentifiers
 import UIKit
 
 private let ink = Color(uiColor: .systemBlue)
-struct GlassPanel<Content: View>: View {
+enum YueJiMotion {
+    static let standard = Animation.smooth(duration: 0.32)
+    static let detail = Animation.smooth(duration: 0.4)
+    static let press = Animation.smooth(duration: 0.18)
+}
+
+struct YueJiCardButtonStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
+            .animation(reduceMotion ? nil : YueJiMotion.press, value: configuration.isPressed)
+    }
+}
+
+struct GlassPanel<Content: View>: View {
+    @Environment(\.colorScheme) private var scheme
     @ViewBuilder var content: Content
     var body: some View {
-        content.padding(24).frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
-            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(.primary.opacity(0.05)))
-            .opacity(appeared || reduceMotion ? 1 : 0)
-            .offset(y: appeared || reduceMotion ? 0 : 4)
-            .onAppear { withAnimation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.94)) { appeared = true } }
+        content.padding(20).frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(.primary.opacity(scheme == .dark ? 0.07 : 0.025)))
+            .shadow(color: .black.opacity(scheme == .dark ? 0 : 0.025), radius: 12, x: 0, y: 4)
     }
 }
 extension View {
@@ -24,24 +37,26 @@ struct PageIntroduction: View {
     let title: String
     let subtitle: String
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text("YUEJI").font(.caption.weight(.semibold)).tracking(3).foregroundStyle(.secondary)
-            Text(title).font(.largeTitle.weight(.bold)).fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 7) {
+            Text(title).font(.largeTitle.weight(.bold)).tracking(-0.7).fixedSize(horizontal: false, vertical: true)
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10)
-            .padding(.horizontal, 24)
-            .modifier(YueJiEntrance())
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+            .padding(.horizontal, 20)
     }
 }
 private struct YueJiListSurface: ViewModifier {
     func body(content: Content) -> some View {
-        content.listStyle(.insetGrouped).listSectionSpacing(22)
+        content.listStyle(.insetGrouped).listSectionSpacing(20)
             .scrollContentBackground(.hidden).background(Color(uiColor: .systemGroupedBackground))
-            .modifier(YueJiEntrance())
     }
 }
 extension View {
     func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
+    func yuejiSheetSurface() -> some View {
+        self.presentationDragIndicator(.visible)
+            .presentationCornerRadius(28)
+            .presentationBackground(Color(uiColor: .systemGroupedBackground))
+    }
 }
 
 struct MainView: View {
@@ -70,7 +85,6 @@ struct MainView: View {
             FriendsView().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
         }.tint(ink)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: selectedTab)
             .overlay {
                 if !model.didFinishLaunch && openingEnabled {
                     OpeningAnimationView(sound: !model.isPreview)
@@ -80,7 +94,7 @@ struct MainView: View {
             .task {
                 model.reload(postRecurring: false)
                 if !model.didFinishLaunch {
-                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(1600)) } catch { return } }
+                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(850)) } catch { return } }
                     withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
                 }
                 openPendingNotification()
@@ -118,8 +132,6 @@ struct MainView: View {
                     Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
                 } } }.ledgerFeedback(modal: true)
             }
-            .animation(reduceMotion ? nil : .spring(response: 0.42, dampingFraction: 0.82), value: model.savedNotice)
-            .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: model.undoEntries.count)
             .task(id: model.savedNotice) {
                 guard let token = model.savedNotice else { return }
                 do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
@@ -140,7 +152,7 @@ struct MonthPicker: View {
                 .buttonStyle(.borderless)
                 .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
             Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
-                .font(.headline).contentTransition(.opacity).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+                .font(.subheadline.weight(.semibold)).contentTransition(.opacity).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 25).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
                     guard abs(dx) > 45, abs(dx) > abs(dy) * 1.5 else { return }
@@ -150,9 +162,9 @@ struct MonthPicker: View {
             Button { shift(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
-        }
+        }.padding(3).background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
-    private func shift(_ n: Int) { FeedbackHaptics.selection(); withAnimation(reduceMotion ? nil : .spring(response: 0.32, dampingFraction: 0.9)) { month = shiftedMonth(month, by: n) } }
+    private func shift(_ n: Int) { FeedbackHaptics.selection(); withAnimation(reduceMotion ? nil : YueJiMotion.standard) { month = shiftedMonth(month, by: n) } }
 }
 struct DashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -164,6 +176,7 @@ struct DashboardView: View {
     @State private var reviewing: Expense?
     @State private var budgetText = ""
     @State private var budgeting = false
+    @State private var showingBreakdown = false
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
     private var monthBinding: Binding<Date> { Binding(get: { month }, set: { monthTimestamp = $0.timeIntervalSince1970 }) }
     private var entries: [Expense] { model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) } }
@@ -174,16 +187,21 @@ struct DashboardView: View {
         NavigationStack {
             ScrollViewReader { guideScroll in
             ScrollView {
-                VStack(spacing: 24) {
-                    PageIntroduction(title: tr("每一笔，心里有数", "A clearer everyday", "Belanja lebih jelas"), subtitle: tr("记录消费，轻松分账。", "Track spending. Share fairly.", "Jejak belanja. Kongsi dengan adil."))
+                VStack(spacing: 20) {
+                    dashboardHeading
                     MonthPicker(month: monthBinding)
                     spendingCard
                     PendingBookkeepingCard()
+                    quickActions
                     recentCard
                     NavigationLink { SavingsGoalsView() } label: {
                         GlassPanel {
                             VStack(alignment: .leading, spacing: 12) {
-                                Label(tr("储蓄目标", "Savings goals", "Matlamat simpanan"), systemImage: "target").font(.headline)
+                                HStack {
+                                    Label(tr("储蓄目标", "Savings goals", "Matlamat simpanan"), systemImage: "target").font(.headline)
+                                    Spacer()
+                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                                }
                                 if let goal = model.ledger.savingsGoals.first(where: { $0.balance < $0.target }) ?? model.ledger.savingsGoals.first {
                                     HStack { Text(goal.name); Spacer(); Text(money(goal.balance)).monospacedDigit() }
                                     ProgressView(value: goal.progress).tint(.blue)
@@ -193,15 +211,15 @@ struct DashboardView: View {
                                 }
                             }
                         }
-                    }.buttonStyle(.plain)
-                    DisclosureGroup(tr("收支与分类明细", "Payment & category details", "Butiran bayaran & kategori")) {
+                    }.buttonStyle(YueJiCardButtonStyle())
+                    DisclosureGroup(tr("收支与分类明细", "Payment & category details", "Butiran bayaran & kategori"), isExpanded: $showingBreakdown.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                         VStack(spacing: 16) { balancesCard; categoriesCard }.padding(.top, 12)
                     }.font(.subheadline.weight(.medium))
                     NavigationLink { OverviewToolsView(month: month) } label: {
                         Label(tr("更多工具", "More tools", "Alat lain"), systemImage: "square.grid.2x2")
                             .frame(maxWidth: .infinity, minHeight: 44)
-                    }.yuejiPrimaryButton().buttonBorderShape(.capsule)
-                }.padding(24).frame(maxWidth: 640).frame(maxWidth: .infinity)
+                    }.buttonStyle(.borderless).font(.subheadline.weight(.semibold))
+                }.padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 24).frame(maxWidth: 640).frame(maxWidth: .infinity)
             }
             .task(id: guideFocus) {
                 guard model.isPreview, let guideFocus else { return }
@@ -266,37 +284,83 @@ struct DashboardView: View {
                 }
                 ForEach(recent) { entry in
                     Button { reviewing = entry } label: { ExpenseRow(entry: entry) }
-                        .buttonStyle(.plain).yuejiZoomSource(id: entry.id, namespace: navigationMotion)
+                        .buttonStyle(YueJiCardButtonStyle()).yuejiZoomSource(id: entry.id, namespace: navigationMotion)
                     if entry.id != recent.last?.id { Divider() }
                 }
             }
         }
     }
-    private var spendingCard: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 18) {
-                Label(tr("本月 · 我的实际消费", "This month · my spending", "Bulan ini · belanja saya"), systemImage: "chart.pie.fill")
-                    .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
-                AnimatedMoney(cents: personal, animateOnAppear: true)
-                    .font(.system(.largeTitle, design: .default, weight: .bold))
-                    .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
-                Text(tr("已扣除朋友承担的份额和属于你的退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan bayaran balik anda"))
-                    .font(.caption).foregroundStyle(.secondary)
-                Divider()
-                if budget > 0 {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Budget remaining", "Baki bajet"))
-                        Spacer()
-                        AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
-                    }.font(.subheadline)
-                    SpendingMeter(value: personal, total: budget, color: personal > budget ? .orange : ink)
-                }
-                Button { budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""; budgeting = true } label: {
-                    Label(budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置本月预算", "Set this month’s budget", "Tetapkan bajet bulan ini"), systemImage: "slider.horizontal.3")
-                        .font(.subheadline.weight(.medium)).padding(.vertical, 4)
-                }
+    private var dashboardHeading: some View {
+        HStack(alignment: .center, spacing: 14) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("日常，心里有数。", "Everyday, in balance.", "Harian, lebih teratur."))
+                    .font(.title.bold()).tracking(-0.6)
+                Text(tr("每一笔，都好好记录。", "A little clarity in every entry.", "Setiap rekod membawa kejelasan."))
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            Image(systemName: "moon.stars.fill").font(.title2).foregroundStyle(ink)
+                .frame(width: 48, height: 48)
+                .background(ink.opacity(0.09), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .accessibilityHidden(true)
+        }.padding(.vertical, 6)
+    }
+    private var quickActions: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+            NavigationLink { AutomationSetupView() } label: {
+                DashboardQuickAction(title: tr("自动记账", "Automation", "Automasi"), subtitle: "TNG · Bank · Apple Pay", symbol: "bolt.fill", color: .blue)
             }
-        }
+            NavigationLink { ReceiptScanView() } label: {
+                DashboardQuickAction(title: tr("扫描收据", "Scan receipt", "Imbas resit"), subtitle: tr("拍下，核对，记好", "Scan, review, save", "Imbas, semak, simpan"), symbol: "doc.viewfinder", color: .teal)
+            }
+        }.buttonStyle(YueJiCardButtonStyle())
+    }
+    private var spendingCard: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack {
+                Label(tr("本月个人消费", "Personal spending", "Belanja peribadi"), systemImage: "chart.pie.fill")
+                    .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
+                Spacer(minLength: 4)
+                Text("MYR").font(.caption2.weight(.semibold)).foregroundStyle(ink)
+                    .padding(.horizontal, 9).padding(.vertical, 5).background(ink.opacity(0.08), in: Capsule())
+            }
+            AnimatedMoney(cents: personal)
+                .font(.system(.largeTitle, design: .rounded, weight: .bold))
+                .tracking(-1).foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
+            Text(tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
+                .font(.caption).foregroundStyle(.secondary)
+            Divider().overlay(ink.opacity(0.04))
+            if budget > 0 {
+                ViewThatFits(in: .horizontal) {
+                    HStack {
+                        Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
+                        Spacer(minLength: 16)
+                        AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
+                    }
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
+                        AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
+                    }
+                }.font(.subheadline).foregroundStyle(personal > budget ? Color.orange : Color.primary)
+                SpendingMeter(value: personal, total: budget, color: personal > budget ? .orange : ink)
+            }
+            HStack {
+                Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja")).font(.caption).foregroundStyle(.secondary)
+                Spacer()
+                Button { budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""; budgeting = true } label: {
+                    Label(budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"), systemImage: "slider.horizontal.3")
+                        .font(.subheadline.weight(.medium)).frame(minHeight: 44)
+                }.buttonStyle(.borderless)
+            }
+        }.padding(24).frame(maxWidth: .infinity, alignment: .leading)
+            .background {
+                RoundedRectangle(cornerRadius: 28, style: .continuous)
+                    .fill(Color(uiColor: .secondarySystemGroupedBackground))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 28, style: .continuous)
+                            .fill(LinearGradient(colors: [ink.opacity(0.10), ink.opacity(0.015), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    }
+            }
+            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(ink.opacity(0.09)))
     }
     private var balancesCard: some View {
         GlassPanel {
@@ -372,6 +436,23 @@ struct OverviewToolsView: View {
         }.yuejiListSurface().navigationTitle(tr("更多工具", "More tools", "Alat lain")).navigationBarTitleDisplayMode(.inline)
     }
 }
+struct DashboardQuickAction: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    let color: Color
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Image(systemName: symbol).font(.body.weight(.semibold)).foregroundStyle(color)
+                .frame(width: 34, height: 34).background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 11, style: .continuous))
+                .accessibilityHidden(true)
+            Text(title).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+            Text(subtitle).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, alignment: .leading).padding(16)
+            .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+    }
+}
 struct DashboardLinkLabel: View {
     let title: String
     let symbol: String
@@ -406,24 +487,39 @@ struct SpendingMeter: View {
 struct ExpenseRow: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     let entry: Expense
+    private var symbol: String {
+        if entry.fuel { return "fuelpump.fill" }
+        if entry.recurringKey != nil { return "repeat" }
+        return ["餐饮": "fork.knife", "交通": "tram.fill", "购物": "bag.fill", "账单": "doc.text.fill", "娱乐": "gamecontroller.fill"][entry.category] ?? "tag.fill"
+    }
+    private var categoryColor: Color {
+        switch entry.category {
+        case "餐饮": return .orange
+        case "交通": return .blue
+        case "购物": return .purple
+        case "账单": return .teal
+        case "娱乐": return .pink
+        default: return .indigo
+        }
+    }
     private var rowLayout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .center, spacing: 12)) }
     var body: some View {
         rowLayout {
-            Image(systemName: entry.fuel ? "fuelpump.fill" : entry.recurringKey != nil ? "repeat" : "creditcard.fill")
-                .font(.title3).foregroundStyle(ink).frame(width: 42, height: 42)
-                .background(ink.opacity(0.08), in: RoundedRectangle(cornerRadius: 14)).accessibilityHidden(true)
+            Image(systemName: symbol)
+                .font(.body.weight(.semibold)).foregroundStyle(categoryColor).frame(width: 44, height: 44)
+                .background(categoryColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                if ["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"].contains(entry.source) {
+                if ["Apple Pay", "TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"].contains(entry.source) {
                     Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                 }
-                Text(entry.merchant).font(.headline)
-                Text(entry.categorySummary).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                Text(dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary)
+                Text(entry.merchant).font(.body.weight(.semibold))
+                Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                if let note = entry.note, !note.isEmpty { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
                 if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + "+" + money(entry.refunded)).font(.caption).foregroundStyle(.green) }
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.caption) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            Text("−" + money(entry.cents)).foregroundStyle(.red).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            Text("−" + money(entry.cents)).foregroundStyle(.primary).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
         }.padding(.vertical, 10)
     }
 }
@@ -517,7 +613,7 @@ struct ExpensesView: View {
                         }
                     } header: { Text(dateLabel(day.date)) }
                 }
-            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .easeInOut(duration: 0.22), value: filter)
+            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : YueJiMotion.standard, value: filter)
                 .refreshable { model.reload(postRecurring: false) }
                 .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
                 .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
@@ -541,7 +637,7 @@ struct ExpensesView: View {
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
                 .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
-                .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: days.flatMap { $0.entries.map(\.id) })
+                .animation(reduceMotion ? nil : YueJiMotion.standard, value: days.flatMap { $0.entries.map(\.id) })
         }
     }
 }
@@ -659,7 +755,7 @@ struct ExpenseDetailView: View {
             .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
             .onChange(of: entry == nil) { _, missing in if missing { dismiss() } }
         }
-        .presentationDragIndicator(.visible).presentationCornerRadius(28)
+        .yuejiSheetSurface()
     }
 }
 
@@ -680,7 +776,7 @@ private struct ExpenseDeletionConfirmation: ViewModifier {
             Button(tr("删除", "Delete", "Padam"), role: .destructive) {
                 guard !model.isPreview else { return }
                 do {
-                    try withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88)) {
+                    try withAnimation(reduceMotion ? nil : YueJiMotion.standard) {
                         try model.deleteExpense(entry)
                     }
                     onDeleted()
@@ -817,10 +913,10 @@ struct ExpenseEditor: View {
                     }
                 }
             }.disabled(saving).interactiveDismissDisabled(saving)
-                .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: splitting)
-                .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88), value: people.count)
+                .animation(reduceMotion ? nil : YueJiMotion.standard, value: splitting)
+                .animation(reduceMotion ? nil : YueJiMotion.standard, value: people.count)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
-                .navigationTitle(tr("记账 / 分账", "Expense / split", "Belanja / pembahagian")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
+                .navigationTitle(tr("记账 / 分账", "Expense / split", "Belanja / pembahagian")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
                     if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
                     else { Text(tr("保存", "Save", "Simpan")) }
@@ -961,7 +1057,7 @@ struct FriendsView: View {
                     NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: .teal) }
                     NavigationLink { SplitHistoryView() } label: { Label(tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), systemImage: "list.bullet.rectangle") }
                 }
-            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: settled).yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.inline)
+            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : YueJiMotion.standard, value: settled).yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.inline)
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
         }
@@ -1036,7 +1132,7 @@ struct RepaymentView: View {
                 TextField(target.share.owed < 0 ? tr("退回金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR") : tr("收到金额 · MYR", "Amount received · MYR", "Amaun diterima · MYR"), text: $amount).keyboardType(.decimalPad)
                 DatePicker(tr("还款日期", "Repayment date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                 Text(tr("还款只减少欠款，不重复计作收入。", "Repayments reduce debt and are not counted as new income.", "Bayaran balik mengurangkan hutang dan bukan pendapatan baharu."))
-            }.navigationTitle(tr("记录还款", "Repayment", "Bayaran balik")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
+            }.navigationTitle(tr("记录还款", "Repayment", "Bayaran balik")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .onAppear { amount = Currency.input(abs(target.share.owed), "MYR") }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(amount); try LocalStore.shared.change { if target.share.owed < 0 { try $0.returnToFriend(expenseID: target.expense.id, shareID: target.share.id, cents: n, date: date) } else { try $0.repay(expenseID: target.expense.id, shareID: target.share.id, cents: n, date: date) } }; model.reload(); model.showSaved(); dismiss() } catch { self.error = error.localizedDescription } } } }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -1069,8 +1165,19 @@ struct SettingsView: View {
             else if guideDestination == "about" { aboutPage }
             else {
             List {
-                Section { PageIntroduction(title: tr("让月记更适合你", "Make it yours", "Sesuaikan YueJi"), subtitle: tr("外观、提醒与备份，都在这里。", "Appearance, reminders and backups in one place.", "Paparan, peringatan dan sandaran di sini.")) }
-                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                Section {
+                    HStack(spacing: 16) {
+                        Image(systemName: "moon.stars.fill").font(.title2.weight(.medium))
+                            .foregroundStyle(.white).frame(width: 56, height: 56)
+                            .background(LinearGradient(colors: [.blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text("月记 YueJi").font(.title3.weight(.semibold))
+                            Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod.")).font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }.padding(.vertical, 8)
+                }
+
 
                 Section {
                     NavigationLink { appearancePage } label: {
@@ -1082,7 +1189,7 @@ struct SettingsView: View {
                 } header: { Text(tr("个人偏好", "Personalize", "Peribadikan")) }
                 Section {
                     NavigationLink { AutomationSetupView() } label: {
-                        SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
+                        SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: .teal)
                     }
                     NavigationLink("标签与项目") { ExpenseTagsView() }
                     NavigationLink { categoriesPage } label: {
@@ -2148,8 +2255,8 @@ struct SavedFeedback: View {
         HStack(spacing: 10) {
             if mascot { MoonBuddy(size: 42, celebrating: true, reaction: token) }
             Label(message, systemImage: "checkmark.circle.fill")
-                .font(.subheadline.weight(.semibold)).foregroundStyle(ink)
-        }.padding(.horizontal, 16).padding(.vertical, 6).ledgerGlass()
+                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+        }.padding(.horizontal, 18).padding(.vertical, 12).ledgerGlass()
             .padding(.top, 8).allowsHitTesting(false)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(message)
@@ -2159,72 +2266,28 @@ struct SavedFeedback: View {
 private struct OpeningAnimationView: View {
     var sound = true
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var phase
     @AppStorage("playfulAnimations") private var playful = true
     @State private var entered = false
-    @State private var titled = false
-    @State private var orbit = false
-    @State private var burst = false
-    @State private var farewell = false
-    @State private var greeting = UUID()
-    private let night = Color(red: 0.02, green: 0.045, blue: 0.15)
-    private var motion: Bool { playful && !reduceMotion }
     var body: some View {
         ZStack {
-            night.ignoresSafeArea()
-            RadialGradient(colors: [Color.blue.opacity(0.30), night], center: .center, startRadius: 10, endRadius: 380).ignoresSafeArea()
-            GeometryReader { geometry in
-                ForEach(0..<24, id: \.self) { i in
-                    Circle().fill(i.isMultiple(of: 3) ? Color.yellow : Color.white)
-                        .frame(width: i.isMultiple(of: 3) ? 4 : 2, height: i.isMultiple(of: 3) ? 4 : 2)
-                        .position(x: geometry.size.width * CGFloat((i * 37 + 11) % 100) / 100,
-                                  y: geometry.size.height * CGFloat((i * 23 + 7) % 100) / 100)
-                        .opacity(entered ? 0.7 : 0.1)
-                }
-            }.allowsHitTesting(false)
-            VStack(spacing: 28) {
+            Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+            VStack(spacing: 24) {
                 ZStack {
-                    Circle().fill(Color.indigo.opacity(0.35)).frame(width: 240, height: 240)
-                        .blur(radius: 35).scaleEffect(burst ? 1.4 : 0.6)
-                    ForEach(0..<12, id: \.self) { i in
-                        Image(systemName: i.isMultiple(of: 3) ? "sparkle" : "circle.fill")
-                            .font(.system(size: i.isMultiple(of: 3) ? 18 : 5))
-                            .foregroundStyle(i.isMultiple(of: 2) ? Color.yellow : Color.cyan)
-                            .offset(y: burst ? -153 : -65)
-                            .rotationEffect(.degrees(Double(i) * 30 + (orbit ? 110 : -40)))
-                            .opacity(entered ? 0.9 : 0)
-                    }
-                    Circle().stroke(.white.opacity(0.055), lineWidth: 1).frame(width: 270, height: 270)
-                    Circle().stroke(.white.opacity(0.07), lineWidth: 1).frame(width: 320, height: 320)
-                    MoonBuddy(size: 235, celebrating: true, animated: motion, reaction: greeting, gesture: .star)
-                        .scaleEffect(entered || !motion ? (farewell ? 1.06 : 1) : 0.25)
-                        .rotationEffect(.degrees(entered || !motion ? 0 : -35))
-                        .opacity(entered || !motion ? 1 : 0)
-                }.frame(height: 320)
-                VStack(spacing: 12) {
-                    Text("月记").font(.system(size: 36, weight: .bold, design: .rounded)).tracking(6)
-                    Text("YUEJI").font(.system(size: 11, weight: .semibold, design: .rounded)).tracking(5).foregroundStyle(.white.opacity(0.55))
-                    Text(tr("每一笔，离目标近一点。", "A little closer, with every entry.", "Setiap rekod, semakin dekat."))
-                        .font(.subheadline).foregroundStyle(.white.opacity(0.78)).padding(.top, 6)
-                }.foregroundStyle(.white).opacity(titled || !motion ? 1 : 0)
-                    .offset(y: titled || !motion ? 0 : 10)
-            }.padding(.horizontal, 24).offset(y: -20)
+                    Circle().fill(ink.opacity(0.06)).frame(width: 172, height: 172)
+                    Circle().strokeBorder(ink.opacity(0.08), lineWidth: 1).frame(width: 206, height: 206)
+                    MoonBuddy(size: 116, celebrating: false, animated: false)
+                }
+                VStack(spacing: 8) {
+                    Text("月记").font(.largeTitle.bold()).tracking(3)
+                    Text("YUEJI").font(.caption2.weight(.semibold)).tracking(4).foregroundStyle(.secondary)
+                }
+            }
+            .opacity(entered || reduceMotion || !playful ? 1 : 0)
+            .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.97)
         }
-        .task(id: phase) {
-            guard phase == .active else { return }
-            guard motion else { entered = true; titled = true; burst = true; return }
-            if sound { FeedbackSounds.shared.play(.launch) }
-            do {
-                withAnimation(.spring(response: 0.5, dampingFraction: 0.68)) { entered = true }
-                withAnimation(.easeInOut(duration: 1.2)) { orbit = true }
-                try await Task.sleep(for: .milliseconds(250))
-                withAnimation(.spring(response: 0.45, dampingFraction: 0.7)) { burst = true }
-                try await Task.sleep(for: .milliseconds(200))
-                withAnimation(.easeOut(duration: 0.6)) { titled = true }
-                try await Task.sleep(for: .milliseconds(300))
-                try await Task.sleep(for: .milliseconds(300))
-                withAnimation(.easeInOut(duration: 0.6)) { farewell = true }
-            } catch { return }
+        .task {
+            if sound && playful && !reduceMotion { FeedbackSounds.shared.play(.saved) }
+            withAnimation(reduceMotion || !playful ? nil : YueJiMotion.detail) { entered = true }
         }
         .onDisappear { FeedbackSounds.shared.stop() }
         .accessibilityElement(children: .ignore).accessibilityLabel("月记 YueJi")
@@ -2249,20 +2312,21 @@ private struct LedgerFeedbackHost: ViewModifier {
                                 Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
                                     .font(.subheadline.weight(.medium))
                                 Button(tr("撤销", "Undo", "Batal padam")) {
-                                    withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.88)) { model.undoDeletion() }
+                                    withAnimation(reduceMotion ? nil : YueJiMotion.standard) { model.undoDeletion() }
                                 }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44)
                             }.padding(.horizontal, 16).ledgerGlass().padding(.horizontal, 24).padding(.top, 8)
                         }
                         if let token = model.savedNotice {
                             SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
+                                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -8)))
                         }
                     }
                 }
             }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
             .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.savedNotice)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.2), value: model.undoEntries.count)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.savedNotice)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.undoEntries.count)
     }
 }
 extension View {
@@ -2376,3 +2440,18 @@ struct NotificationDestinationView: View {
         }.ledgerFeedback(modal: true)
     }
 }
+
+#if DEBUG
+/// Renders the actual screens with isolated sample data; never reads or writes the user's ledger.
+private struct YueJiDesignPreviews: PreviewProvider {
+    @MainActor static var previews: some View {
+        Group {
+            DashboardView().preferredColorScheme(.light).previewDisplayName("Overview · Light")
+            DashboardView().preferredColorScheme(.dark).previewDisplayName("Overview · Dark")
+            ExpensesView().preferredColorScheme(.light).previewDisplayName("Ledger · Light")
+            SettingsView().preferredColorScheme(.dark).previewDisplayName("Settings · Dark")
+            DashboardView().environment(\.dynamicTypeSize, .accessibility3).previewDisplayName("Overview · Large text")
+        }.environmentObject(LedgerModel(previewLedger: GuideSample.ledger()))
+    }
+}
+#endif

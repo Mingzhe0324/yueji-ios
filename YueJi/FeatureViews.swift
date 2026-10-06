@@ -193,7 +193,7 @@ struct RecurringEditor: View {
                 DisclosureGroup(tr("周期与修改说明", "Schedule details", "Butiran jadual")) {
                 Text(tr("编辑金额只影响未来未入账项目。更改周期或首次日期请暂停旧项目，再新增。每月 31 日会在短月份落到月底。", "Amount edits affect unrecorded occurrences only. To change cycle or start date, pause this schedule and create another. The 31st uses month-end in shorter months.", "Perubahan amaun hanya untuk tempoh belum direkod. Untuk ubah kitaran atau tarikh mula, jeda jadual ini dan cipta baharu. Tarikh 31 menggunakan hujung bulan bagi bulan pendek.")).font(.footnote)
                 }
-            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
+            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() }.disabled(rateBusy) } }
                 .onAppear { if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
                 .task(id: currency) {
@@ -633,7 +633,7 @@ struct AutomationStatusView: View {
                     if !event.detail.isEmpty { Text(event.detail).font(.footnote).foregroundStyle(event.outcome == "failed" ? Color.red : Color.secondary) }
                 }
             }
-        }.navigationTitle(tr("自动记账状态", "Automation status", "Status automasi")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("自动记账状态", "Automation status", "Status automasi")).navigationBarTitleDisplayMode(.inline)
             .task { loadRecoveryInputs() }
     }
     private func loadRecoveryInputs() {
@@ -746,7 +746,7 @@ struct RestorePreviewView: View {
                     Text(tr("恢复会替换账本。当前数据另存为「上次导入前的数据」，不受 30 份备份轮换影响；下次恢复时会更新这份副本。通知设置属于本机设置，不随账本恢复。", "Restoring replaces the ledger. Current data is kept separately as data before last restore, outside the 30-snapshot rotation. The next restore replaces that recovery copy. Notification preferences remain on this device.", "Pemulihan menggantikan lejar. Data semasa disimpan berasingan daripada 30 sandaran sebagai data sebelum pemulihan terakhir. Pemulihan seterusnya menggantikan salinan itu. Pilihan notifikasi kekal pada peranti ini."))
                     Button(tr("恢复这份备份", "Restore this backup", "Pulihkan sandaran ini"), role: .destructive) { confirm = true }
                 }
-            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
+            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
                 .confirmationDialog(tr("确认替换当前账本？", "Replace the current ledger?", "Ganti lejar semasa?"), isPresented: $confirm, titleVisibility: .visible) {
                     Button(tr("确认恢复", "Restore", "Pulihkan"), role: .destructive) {
@@ -827,7 +827,7 @@ struct NotificationSettingsView: View {
                 }
                 Text(tr("每日提醒每天一次，即使当天已有账目也会提醒。系统专注模式或通知摘要可能延后显示。首次开启请允许通知；修改 App 语言后重新保存可更新提醒语言。", "Reminds once daily even if entries already exist. Focus or Scheduled Summary may delay display. Allow notifications when enabling them. Save again after changing app language to update reminder text.", "Mengingatkan sekali sehari walaupun rekod sudah ada. Focus atau ringkasan berjadual mungkin melambatkan paparan. Benarkan notifikasi semasa mengaktifkan. Simpan semula selepas menukar bahasa aplikasi.")).font(.footnote)
             }
-        }.navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi")).navigationBarTitleDisplayMode(.inline)
             .task {
                 let d = UserDefaults.standard
                 let minutes = d.object(forKey: "reminderMinutes") == nil ? 21 * 60 : d.integer(forKey: "reminderMinutes")
@@ -943,7 +943,7 @@ struct CategoryEditor: View {
                     ForEach(CustomCategory.colors, id: \.self) { value in Label(categoryColorLabel(value), systemImage: "circle.fill").foregroundStyle(categoryColor(value)).tag(value) }
                 }
                 Label(name.isEmpty ? tr("分类预览", "Preview", "Pratonton") : name, systemImage: icon).foregroundStyle(categoryColor(color)).font(.title2).padding()
-            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
+            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .onAppear { name = initial.name; icon = initial.icon; color = initial.color }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
@@ -1012,10 +1012,10 @@ struct AnimatedMoney: View {
     var body: some View {
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
-            .animation(reduceMotion ? nil : .spring(response: 0.46, dampingFraction: 0.9), value: cents)
+            .animation(reduceMotion ? nil : YueJiMotion.detail, value: cents)
             .opacity(!animateOnAppear || appeared || reduceMotion ? 1 : 0)
-            .scaleEffect(!animateOnAppear || appeared || reduceMotion ? 1 : 0.96, anchor: .leading)
-            .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.9), value: appeared)
+            .scaleEffect(!animateOnAppear || appeared || reduceMotion ? 1 : 0.99, anchor: .leading)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: appeared)
             .onAppear { appeared = true }
     }
 }
@@ -1040,7 +1040,7 @@ struct LedgerFilterEditor: View {
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
                 Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户、备注和标签可在账本搜索。多分类按包含分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants in the ledger search field.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dalam carian lejar.")).font(.footnote)
                 Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
-            }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).presentationDragIndicator(.visible).presentationCornerRadius(28)
+            }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
                     ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna")) { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } } }
