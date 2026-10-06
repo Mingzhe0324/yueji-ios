@@ -567,74 +567,89 @@ struct AutomationStatusView: View {
     @State private var recoveryInputs: [AutomationDelivery] = []
     @State private var recoveryError: String?
     @State private var retrying = false
+    private var pendingCount: Int { model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.count }
     private func outcome(_ key: String, source: String) -> String {
         switch key {
-        case "pending": return tr("待确认", "Needs review", "Perlu semakan")
+        case "pending": return tr("等你确认", "Needs your review", "Perlu semakan anda")
         case "resolved": return tr("已确认用途", "Purpose confirmed", "Tujuan disahkan")
-        case "saved": return tr("成功入账", "Saved", "Disimpan")
-        case "duplicate": return tr("已拦截重复", "Duplicate blocked", "Pendua disekat")
-        case "ignored": return tr("已收到 · 未识别或非交易", "Received · unsupported or not a transaction", "Diterima · tidak disokong atau bukan transaksi")
-        case "checked": return source != "Recurring" ? tr("通知已处理", "Notification processed", "Notifikasi diproses") : tr("已检查到期项目", "Schedules checked", "Jadual disemak")
-        default: return tr("失败", "Failed", "Gagal")
+        case "saved": return tr("已记到账本", "Added to your ledger", "Ditambah ke lejar")
+        case "duplicate": return tr("已跳过重复记录", "Duplicate skipped", "Pendua dilangkau")
+        case "ignored": return tr("没有记成消费", "Not recorded as spending", "Tidak direkod sebagai belanja")
+        case "checked": return source == "Recurring" ? tr("已检查固定消费", "Recurring bills checked", "Bil berulang disemak") : tr("已处理", "Processed", "Diproses")
+        default: return tr("未能完成记账", "Could not finish recording", "Rekod tidak dapat diselesaikan")
         }
     }
     var body: some View {
         List {
-            Section("已接收 · 等待重试") {
-                LabeledContent("暂存交易输入", value: String(recoveryInputs.count))
-                Text("TNG、银行和 Apple Pay 已传入的输入会先暂存，写入失败可在下次打开时重试。自动失败 3 次后暂停，保留原因。不会读取未传入的交易。")
-                    .font(.footnote)
-                if let recoveryError { Text(recoveryError).foregroundStyle(.red) }
-                Button(retrying ? "正在重试…" : "重试已接收的交易") {
-                    retrying = true
-                    Task {
-                        recoveryError = await AutomationRecovery.shared.retryPending(manual: true)
-                        model.reload(postRecurring: false)
-                        loadRecoveryInputs(); retrying = false
+            if pendingCount > 0 {
+                Section(tr("需要你确认", "Needs your review", "Perlu semakan anda")) {
+                    NavigationLink { TNGInboxView(pendingOnly: true) } label: {
+                        LabeledContent(tr("确认交易用途", "Review transactions", "Semak transaksi"), value: String(pendingCount))
                     }
-                }.disabled(retrying || recoveryInputs.isEmpty)
-                ForEach(Array(recoveryInputs.prefix(20))) { input in
-                    DisclosureGroup(input.source + " · " + dateLabel(input.receivedAt, time: true)) {
-                        Text(input.lastError ?? "已暂存，等待完成处理。").font(.caption)
-                        Text("失败尝试：\(input.attempts) 次" + (input.attempts >= 3 ? " · 自动重试已暂停" : ""))
-                            .font(.caption)
-                        if input.kind == "notification" { Text(input.title + "\n" + input.body).font(.caption).textSelection(.enabled) }
-                        else { Text(input.merchant + " · " + input.currency + " " + String(input.amount ?? 0)).font(.caption) }
-                    }
+                    Text(tr("有些交易需要你选择是消费、转账或其他用途。", "Some transactions need you to confirm their purpose.", "Sesetengah transaksi memerlukan pengesahan tujuan anda."))
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
             }
-            Section("处理概览") {
-                Text("漏记排查：没有本次调用记录 → 检查快捷指令触发范围；有待确认记录 → 核对原文或疑似重复；已入账但无横幅 → 检查系统通知。付款与转账都应传入，触发条件不要只限定 Transfer。")
-                    .font(.footnote)
-                NavigationLink("系统通知状态 / 测试") { NotificationSettingsView() }
-                LabeledContent("已自动入账（当前账本）", value: String(model.ledger.expenses.filter { $0.source != "手动" && $0.source != "固定消费" && $0.source != "账单补录" }.count))
-                LabeledContent("待确认通知", value: String(model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.count))
-                LabeledContent("疑似重复待确认", value: String(model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count))
-                LabeledContent("失败（最近 100 次调用）", value: String(model.ledger.automationEvents.filter { $0.outcome == "failed" }.count))
-                NavigationLink("查看待确认通知") { TNGInboxView(pendingOnly: true) }
-                if let last = model.ledger.automationEvents.first { Text("最近收到 / 调用：" + dateLabel(last.date, time: true)).font(.caption) }
+            if !recoveryInputs.isEmpty || recoveryError != nil {
+                Section(tr("还没保存的账目", "Entries waiting to save", "Rekod menunggu untuk disimpan")) {
+                    if !recoveryInputs.isEmpty {
+                        LabeledContent(tr("等待保存", "Waiting to save", "Menunggu untuk disimpan"), value: String(recoveryInputs.count))
+                        Text(tr("资料已保留，打开月记时会再次尝试。你也可以现在重试。", "The details are kept for another attempt when you open YueJi. You can also retry now.", "Butiran disimpan untuk dicuba semula apabila YueJi dibuka. Anda juga boleh cuba sekarang."))
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    if let recoveryError {
+                        DisclosureGroup(tr("查看未完成的原因", "Why it could not finish", "Sebab tidak selesai")) {
+                            Text(recoveryError).font(.footnote).textSelection(.enabled)
+                        }
+                    }
+                    Button(retrying ? tr("正在重试…", "Retrying…", "Sedang mencuba…") : tr("再试一次", "Try again", "Cuba lagi")) {
+                        retrying = true
+                        Task {
+                            recoveryError = await AutomationRecovery.shared.retryPending(manual: true)
+                            model.reload(postRecurring: false)
+                            loadRecoveryInputs(); retrying = false
+                        }
+                    }.disabled(retrying)
+                    ForEach(Array(recoveryInputs.prefix(20))) { input in
+                        DisclosureGroup(input.source + " · " + dateLabel(input.receivedAt, time: true)) {
+                            Text(input.attempts >= 3
+                                 ? tr("多次尝试后仍未保存，请查看原因后再试。", "Still unsaved after several attempts. Review the reason before retrying.", "Masih belum disimpan selepas beberapa cubaan. Semak sebab sebelum mencuba lagi.")
+                                 : tr("资料已保留，等待保存。", "Details kept, waiting to save.", "Butiran disimpan, menunggu untuk direkod."))
+                                .font(.footnote).foregroundStyle(.secondary)
+                            if let error = input.lastError { Text(error).font(.footnote).textSelection(.enabled) }
+                        }
+                    }
+                }
             }
             Section {
-                ForEach(["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB", "银行 / TNG", "Apple Pay"], id: \.self) { source in
-                    if let last = model.ledger.automationEvents.first(where: { $0.source == source }) {
-                        LabeledContent(source + tr(" 最近调用", " last call", " panggilan terakhir"), value: dateLabel(last.date, time: true))
-                    } else {
-                        Text(source + tr(" 暂无调用记录", " has no call logs yet", " belum ada log panggilan"))
-                    }
+                if model.ledger.automationEvents.isEmpty {
+                    Text(tr("还没有收到付款资料", "No payment details received yet", "Belum menerima butiran bayaran")).font(.headline)
+                    Text(tr("先完成自动记账设置；收到资料后，处理结果会出现在这里。", "Set up automatic recording first. Results appear here after payment details arrive.", "Sediakan rekod automatik dahulu. Hasil akan muncul selepas butiran bayaran diterima."))
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
-                Text(tr("银行与 TNG：未识别也会留下日志；若本次没有新日志，请先检查快捷指令是否触发或报错。", "Bank and TNG: unsupported notices are logged too. If no new log appears, check whether Shortcuts triggered or reported an error.", "TNG: notifikasi tidak disokong juga dilog. Jika tiada log baharu, semak pencetus atau ralat Pintasan.")).font(.footnote)
-                Button(tr("刷新", "Refresh", "Muat semula")) { model.reload(); loadRecoveryInputs() }
-                Text(tr("显示实际调用记录，不代表快捷指令已启用或签名仍有效。App 无法检测没有触发的交易，也无法判断是否漏账。最多保留 100 条；日志写入失败时无法留痕。", "Shows actual action calls, not whether Shortcuts is enabled or signing is valid. The app cannot detect transactions that never triggered or establish completeness. Keeps 100 events; storage failure may prevent logging.", "Memaparkan panggilan tindakan sebenar, bukan status pengaktifan Pintasan atau tandatangan. Aplikasi tidak dapat mengesan transaksi yang tidak tercetus atau memastikan kelengkapan. Menyimpan 100 peristiwa; kegagalan storan boleh menghalang log.")).font(.footnote)
-            }
-            ForEach(model.ledger.automationEvents) { event in
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(event.source + " · " + outcome(event.outcome, source: event.source)).font(.headline)
-                    Text(dateLabel(event.date, time: true)).font(.caption)
-                    if !event.detail.isEmpty { Text(event.detail).font(.footnote).foregroundStyle(event.outcome == "failed" ? Color.red : Color.secondary) }
+                ForEach(model.ledger.automationEvents) { event in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(event.source + " · " + outcome(event.outcome, source: event.source)).font(.body.weight(.medium))
+                        Text(dateLabel(event.date, time: true)).font(.footnote).foregroundStyle(.secondary)
+                        if event.outcome == "failed", !event.detail.isEmpty {
+                            DisclosureGroup(tr("查看原因", "View reason", "Lihat sebab")) {
+                                Text(event.detail).font(.footnote).textSelection(.enabled)
+                            }
+                        }
+                    }.padding(.vertical, 4)
                 }
+            } header: {
+                Text(tr("最近记录", "Recent activity", "Aktiviti terkini"))
+            } footer: {
+                Text(tr("这里只显示月记收到的资料。若少了一笔，请检查快捷指令设置。", "Only details received by YueJi appear here. Check Shortcuts if a transaction is missing.", "Hanya butiran yang diterima YueJi dipaparkan. Semak Pintasan jika transaksi tiada."))
             }
-        }.yuejiListSurface().navigationTitle(tr("自动记账状态", "Automation status", "Status automasi")).navigationBarTitleDisplayMode(.inline)
+            Section {
+                NavigationLink(tr("查看设置步骤", "Setup instructions", "Langkah persediaan")) { AutomationSetupView() }
+                NavigationLink(tr("记账通知", "Recording notifications", "Notifikasi rekod")) { NotificationSettingsView() }
+            }
+        }.yuejiListSurface().navigationTitle(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")).navigationBarTitleDisplayMode(.inline)
             .task { loadRecoveryInputs() }
+            .refreshable { recoveryError = nil; model.reload(postRecurring: false); loadRecoveryInputs() }
     }
     private func loadRecoveryInputs() {
         do { recoveryInputs = try AutomationInbox.shared.pending() }
@@ -695,14 +710,17 @@ struct MerchantRulesView: View {
     @EnvironmentObject var model: LedgerModel
     var body: some View {
         List {
-            Text(tr("开启“以后此商户使用这个分类”后，Apple Pay、TNG 和银行消费优先使用此规则，历史记录不会批量改变。商户名称忽略大小写与多余空格。", "Enable the merchant category option to apply it to future Apple Pay, TNG and bank expenses. History is unchanged. Names ignore case and extra spaces.", "Aktifkan pilihan kategori peniaga untuk Apple Pay, TNG dan bank seterusnya. Sejarah tidak berubah. Nama mengabaikan huruf besar dan ruang tambahan.")).font(.footnote)
+            Text(tr("记账时开启「以后此商户使用这个分类」，下次在同一家消费，月记会优先选用你记住的分类。", "Turn on the merchant category option when recording. YueJi will prefer that category next time you spend at the same merchant.", "Aktifkan pilihan kategori peniaga semasa merekod. YueJi akan mengutamakan kategori itu untuk belanja seterusnya di peniaga sama.")).font(.footnote)
+            if model.ledger.merchantCategories.isEmpty {
+                Text(tr("还没有记住的商户", "No remembered merchants yet", "Belum ada peniaga diingati")).foregroundStyle(.secondary)
+            }
             ForEach(model.ledger.merchantCategories.keys.sorted(), id: \.self) { merchant in
                 HStack {
                     Text(merchant); Spacer()
                     Text(categoryLabel(model.ledger.merchantCategories[merchant] ?? "其他"))
-                }.swipeActions { Button(role: .destructive) { model.change { $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("删除规则", "Delete rule", "Padam peraturan"), systemImage: "trash") } }
+                }.swipeActions { Button(role: .destructive) { model.change { $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("不再记住", "Forget category", "Lupakan kategori"), systemImage: "trash") } }
             }
-        }.navigationTitle(tr("商户分类规则", "Merchant rules", "Peraturan peniaga")).navigationBarTitleDisplayMode(.inline)
+        }.navigationTitle(tr("记住商户分类", "Remember merchant categories", "Ingat kategori peniaga")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct FriendStatementView: View {
@@ -771,29 +789,17 @@ struct NotificationSettingsView: View {
     @State private var time = Date()
     @State private var busy = false
     @State private var message: String?
-    @State private var permission = ""
-    @State private var deliveryStatus = ""
+    @State private var permission = tr("正在读取…", "Loading…", "Memuatkan…")
+    @State private var notificationHint = ""
     var body: some View {
         Form {
-            Section {
-                Toggle(tr("达到月度预算时提醒", "Alert when monthly budget is reached", "Maklum apabila bajet bulanan dicapai"), isOn: $budgetAlerts)
-                if budgetAlerts {
-                    Stepper(value: $budgetPercent, in: 1...200) {
-                        LabeledContent(tr("提醒比例", "Alert at", "Ingatkan pada"), value: "\(budgetPercent)%")
-                    }
-                    Text(tr("例如预算 RM1,000，设为 80% 时，个人消费达到 RM800 就提醒。", "For a RM1,000 budget, 80% alerts at RM800 of personal spending.", "Bagi bajet RM1,000, 80% mengingatkan pada belanja peribadi RM800."))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                Text(tr("预算开关和比例即时保存。每月最多提醒一次，修改比例不重置本月提醒；仅计算本月个人净消费。", "Budget toggle and percentage save immediately. One alert per month; changing the percentage does not reset it. Uses this month's net personal spending.", "Suis dan peratus bajet disimpan serta-merta. Sekali sebulan; perubahan peratus tidak menetapkan semula peringatan. Menggunakan belanja peribadi bersih bulan ini."))
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            Section(tr("其他通知", "Other notifications", "Notifikasi lain")) {
+            Section(tr("记账提醒", "Recording reminders", "Peringatan rekod")) {
                 Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
                 if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
-                Toggle(tr("自动记账结果通知", "Automatic recording notifications", "Notifikasi rekod automatik"), isOn: $results)
-                Toggle(tr("隐藏通知金额和姓名", "Hide amounts and names", "Sembunyikan amaun dan nama"), isOn: $hideDetails)
-                Text(tr("结果通知包含金额、商户和分类；失败时显示原因。只有快捷指令实际调用月记后才能报告结果，无法检测未触发的付款。", "Result notifications include amount, merchant and category, or a failure reason. They require Shortcuts to call YueJi; payments that never trigger it cannot be detected.", "Notifikasi mengandungi amaun, peniaga dan kategori, atau sebab kegagalan. Pintasan mesti memanggil YueJi; bayaran yang tidak mencetuskannya tidak dapat dikesan.")).font(.footnote)
-                Button(tr("保存其他通知设置", "Save other notification settings", "Simpan tetapan notifikasi lain")) {
+                Toggle(tr("自动记账后通知我", "Notify me after automatic recording", "Maklum selepas rekod automatik"), isOn: $results)
+                Toggle(tr("通知里隐藏金额和姓名", "Hide amounts and names in notifications", "Sembunyikan amaun dan nama dalam notifikasi"), isOn: $hideDetails)
+                Text(tr("收到付款资料后，月记会通过 iPhone 通知告诉你处理结果，并使用「月滴」提示音。", "After receiving payment details, YueJi sends the result as an iPhone notification with the MoonDrop sound.", "Selepas menerima butiran bayaran, YueJi menghantar hasil melalui notifikasi iPhone dengan bunyi MoonDrop.")).font(.footnote)
+                Button(tr("保存记账提醒", "Save recording reminders", "Simpan peringatan rekod")) {
                     busy = true
                     Task {
                         do {
@@ -807,26 +813,30 @@ struct NotificationSettingsView: View {
                 }
                 if busy { ProgressView() }
             }.disabled(busy)
-            Section {
-                Text(permission)
-                if !deliveryStatus.isEmpty { Text(deliveryStatus).font(.footnote) }
-                Text("月记专属提示音 · 月滴：1.08 秒轻柔三音铃声，适用于 TNG、银行和 Apple Pay 的自动记账结果。").font(.footnote)
-                Button("试听月记专属系统通知") {
-                    Task {
-                        results = true
-                        do {
-                            let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-                            try await LedgerNotifications.configure(daily: daily, results: true, hour: c.hour ?? 21, minute: c.minute ?? 0, budgetAlerts: budgetAlerts)
-                            await LedgerNotifications.result(title: "月记 · 月滴提示音", body: "这是月记专属的系统通知提示音。自动记账结果会显示金额、商户、分类和处理状态。")
-                        } catch { message = error.localizedDescription }
-                        await refreshPermission()
+            Section(tr("预算提醒", "Budget reminder", "Peringatan bajet")) {
+                Toggle(tr("达到月度预算时提醒", "Alert when monthly budget is reached", "Maklum apabila bajet bulanan dicapai"), isOn: $budgetAlerts)
+                if budgetAlerts {
+                    Stepper(value: $budgetPercent, in: 1...200) {
+                        LabeledContent(tr("提醒比例", "Alert at", "Ingatkan pada"), value: "\(budgetPercent)%")
                     }
+                    Text(tr("例如预算 RM1,000，设为 80% 时，个人消费达到 RM800 就提醒。", "For a RM1,000 budget, 80% alerts at RM800 of personal spending.", "Bagi bajet RM1,000, 80% mengingatkan pada belanja peribadi RM800."))
+                        .font(.footnote).foregroundStyle(.secondary)
                 }
-                Button(tr("打开 iPhone 通知设置", "Open iPhone notification settings", "Buka tetapan notifikasi iPhone")) {
+                Text(tr("预算提醒自动保存。按本月个人消费计算，每月最多提醒一次。", "Budget preferences save automatically. Based on your personal spending, with at most one alert a month.", "Pilihan bajet disimpan automatik. Berdasarkan belanja peribadi, paling banyak sekali sebulan."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section {
+                LabeledContent(tr("通知状态", "Notifications", "Notifikasi"), value: permission)
+                if !notificationHint.isEmpty { Text(notificationHint).font(.footnote).foregroundStyle(.secondary) }
+                Button(tr("前往 iPhone 设置", "Open iPhone Settings", "Buka Tetapan iPhone")) {
                     if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
                 }
-                Text(tr("每日提醒每天一次，即使当天已有账目也会提醒。系统专注模式或通知摘要可能延后显示。首次开启请允许通知；修改 App 语言后重新保存可更新提醒语言。", "Reminds once daily even if entries already exist. Focus or Scheduled Summary may delay display. Allow notifications when enabling them. Save again after changing app language to update reminder text.", "Mengingatkan sekali sehari walaupun rekod sudah ada. Focus atau ringkasan berjadual mungkin melambatkan paparan. Benarkan notifikasi semasa mengaktifkan. Simpan semula selepas menukar bahasa aplikasi.")).font(.footnote)
+            } header: {
+                Text(tr("iPhone 通知", "iPhone notifications", "Notifikasi iPhone"))
+            } footer: {
+                Text(tr("专注模式和通知摘要可能让提醒稍后出现。", "Focus and Scheduled Summary may delay reminders.", "Focus dan Ringkasan Berjadual mungkin melambatkan peringatan."))
             }
+
         }.yuejiListSurface().navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi")).navigationBarTitleDisplayMode(.inline)
             .task {
                 let d = UserDefaults.standard
@@ -856,17 +866,21 @@ struct NotificationSettingsView: View {
     private func refreshPermission() async {
         let settings = await UNUserNotificationCenter.current().notificationSettings()
         let status = settings.authorizationStatus
-        let defaults = UserDefaults.standard
-        deliveryStatus = defaults.string(forKey: "lastAutomaticNotificationStatus") ?? "尚未提交自动记账系统通知。"
-        if let last = defaults.object(forKey: "lastAutomaticNotificationDate") as? Date {
-            deliveryStatus += "\n最近尝试：" + dateLabel(last, time: true)
+        switch status {
+        case .authorized: permission = tr("已开启", "On", "Dihidupkan")
+        case .provisional: permission = tr("静默接收", "Delivered quietly", "Dihantar senyap")
+        case .denied: permission = tr("未开启", "Off", "Dimatikan")
+        default: permission = tr("等待允许", "Awaiting permission", "Menunggu kebenaran")
         }
-        if status == .provisional { deliveryStatus += "\n目前为临时授权，通知可能静默送达。" }
-        if settings.alertSetting != .enabled { deliveryStatus += "\n系统横幅未开启。" }
-        if settings.soundSetting != .enabled { deliveryStatus += "\n系统通知声音未开启。" }
-        permission = status == .authorized || status == .provisional
-            ? tr("系统通知权限：已允许", "System permission: allowed", "Kebenaran sistem: dibenarkan")
-            : tr("系统通知权限：尚未允许", "System permission: not allowed yet", "Kebenaran sistem: belum dibenarkan")
+        if status == .denied {
+            notificationHint = tr("请在 iPhone 设置中允许月记发送通知。", "Allow YueJi notifications in iPhone Settings.", "Benarkan notifikasi YueJi dalam Tetapan iPhone.")
+        } else if status == .authorized || status == .provisional {
+            if settings.alertSetting != .enabled || status == .provisional {
+                notificationHint = tr("想看到弹出的提醒，请在 iPhone 设置中开启通知横幅。", "Turn on banners in iPhone Settings to see pop-up reminders.", "Aktifkan sepanduk dalam Tetapan iPhone untuk melihat peringatan.")
+            } else if settings.soundSetting != .enabled {
+                notificationHint = tr("通知声音已关闭，可在 iPhone 设置中开启。", "Notification sounds are off. Enable them in iPhone Settings.", "Bunyi notifikasi dimatikan. Aktifkan dalam Tetapan iPhone.")
+            } else { notificationHint = "" }
+        } else { notificationHint = "" }
     }
 }
 
@@ -2874,6 +2888,8 @@ func normalizedExpenseTags(_ text: String) -> [String] {
 }
 struct ExpenseBookkeepingFields: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var tagsExpanded = false
     @Binding var splitCategories: Bool
     @Binding var allocations: [CategoryAllocationDraft]
     @Binding var note: String
@@ -2881,8 +2897,19 @@ struct ExpenseBookkeepingFields: View {
     let totalCents: Int
     private var allocated: Int { allocations.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
+        Section(tr("备注", "Note", "Nota")) {
+            TextField(tr("购买了什么？（选填）", "What was it for? (optional)", "Untuk apa? (pilihan)"), text: $note, axis: .vertical)
+                .lineLimit(1...4)
+            DisclosureGroup(isExpanded: $tagsExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
+                TextField(tr("用逗号分隔，例如旅行, 家庭", "Comma-separated, e.g. Trip, Family", "Pisahkan dengan koma, cth. Percutian, Keluarga"), text: $tagsText)
+                Text(tr("标签可汇总同一次旅行或活动。", "Group expenses for a trip or event using tags.", "Kumpulkan belanja perjalanan atau acara dengan tag."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            } label: {
+                LabeledContent(tr("标签", "Tags", "Tag"), value: tagsText.isEmpty ? tr("选填", "Optional", "Pilihan") : tagsText)
+            }
+        }
         Section("一笔消费，多种用途") {
-            Toggle("拆分这笔消费的分类", isOn: $splitCategories)
+            Toggle("拆分这笔消费的分类", isOn: $splitCategories.animation(reduceMotion ? nil : YueJiMotion.standard))
             if splitCategories {
                 ForEach($allocations) { $part in
                     HStack {
@@ -2896,18 +2923,14 @@ struct ExpenseBookkeepingFields: View {
                 }.disabled(allocations.count >= min(20, model.ledger.categoryNames.count))
                 LabeledContent("分类合计 / 付款总额", value: money(allocated) + " / " + money(totalCents))
                     .foregroundStyle(allocated == totalCents ? Color.secondary : Color.orange)
-                Text("至少两类且合计必须相等。金额使用 MYR；分账及退款后的个人净消费按这些比例统计。多分类不会记为单一商户规则。").font(.caption)
+                Text("至少两类，MYR 合计须等于付款总额。个人净消费按分类比例统计。").font(.footnote).foregroundStyle(.secondary)
             }
         }.onChange(of: splitCategories) { _, enabled in
             if enabled && allocations.isEmpty {
                 allocations = Array(model.ledger.categoryNames.prefix(2)).map { CategoryAllocationDraft(category: $0) }
             }
         }
-        Section("备注与标签") {
-            TextField("备注，例如购买了什么", text: $note, axis: .vertical).lineLimit(2...5)
-            TextField("标签，用逗号分隔，例如槟城旅行, 家庭", text: $tagsText)
-            Text("分类说明花在什么；标签用来汇总同一次旅行、活动或项目。").font(.caption)
-        }
+
     }
 }
 struct ExpenseBookkeepingDetails: View {
@@ -2919,9 +2942,15 @@ struct ExpenseBookkeepingDetails: View {
                 ForEach(entry.allocatedCategories) { part in
                     LabeledContent(categoryLabel(part.category), value: money(part.cents))
                 }
-                Text("以上为付款总額分配；个人净消费按比例统计。").font(.caption)
+                Text("以上为付款总額分配；个人净消费按比例统计。").font(.footnote).foregroundStyle(.secondary)
+            } else {
+                LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
             }
-            if let note = entry.note, !note.isEmpty { Text(note).textSelection(.enabled) }
+            if let note = entry.note, !note.isEmpty {
+                Text(note).textSelection(.enabled)
+            } else {
+                Text(tr("未填写备注", "No note", "Tiada nota")).foregroundStyle(.secondary)
+            }
             ForEach(entry.tags ?? [], id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
         }
     }
@@ -2931,12 +2960,14 @@ struct PendingBookkeepingCard: View {
     private var pending: Int { model.ledger.tngNotices.filter { ["pending", "transfer"].contains($0.status) }.count }
     private var duplicates: Int { model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count }
     var body: some View {
-        GlassPanel {
-            VStack(alignment: .leading, spacing: 12) {
-                Label("待处理", systemImage: "tray.full.fill").font(.headline)
-                NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text("\(pending) 笔通知待确认 · 其中 \(duplicates) 笔疑似重复") }
-                NavigationLink("查看自动记账状态") { AutomationStatusView() }.font(.caption)
-            }.frame(maxWidth: .infinity, alignment: .leading)
+        if pending > 0 {
+            GlassPanel {
+                VStack(alignment: .leading, spacing: 12) {
+                    Label("待处理", systemImage: "tray.full.fill").font(.headline)
+                    NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? "\(pending) 笔待确认 · \(duplicates) 笔疑似重复" : "\(pending) 笔通知待确认") }
+                    NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
         }
     }
 }

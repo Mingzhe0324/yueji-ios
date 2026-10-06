@@ -79,11 +79,11 @@ struct MainView: View {
     }
     var body: some View {
         TabView(selection: $selectedTab) {
-            DashboardView().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView().tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
-            RecurringView().tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
-            FriendsView().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
-            SettingsView().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
+            DashboardView().ledgerFeedback().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
+            ExpensesView().ledgerFeedback().tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
+            RecurringView().ledgerFeedback().tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
+            FriendsView().ledgerFeedback().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
+            SettingsView().ledgerFeedback().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
         }.tint(ink)
             .overlay {
                 if !model.didFinishLaunch && openingEnabled {
@@ -106,8 +106,10 @@ struct MainView: View {
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification() }) {
                 UsageGuideView()
             }
-            .onChange(of: selectedTab) { _, _ in FeedbackHaptics.selection() }
-            .ledgerFeedback()
+            .onChange(of: selectedTab) { _, _ in
+                FeedbackHaptics.selection()
+                model.savedNotice = nil
+            }
             .safeAreaInset(edge: .top) {
                 if model.didFinishLaunch && model.newTNGCount > 0 {
                     HStack {
@@ -134,7 +136,7 @@ struct MainView: View {
             }
             .task(id: model.savedNotice) {
                 guard let token = model.savedNotice else { return }
-                do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
+                do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 6 : 3)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
             .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); openPendingNotification(); Task { if let error = await AutomationRecovery.shared.retryPending() { model.error = error }; await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
@@ -250,7 +252,7 @@ struct DashboardView: View {
                 .background(.bar)
             }
             .sheet(item: $reviewing) { entry in
-                ExpenseDetailView(id: entry.id).yuejiZoom(id: entry.id, namespace: navigationMotion).ledgerFeedback(modal: true)
+                ExpenseDetailView(id: entry.id).ledgerFeedback(modal: true)
             }
             .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
             .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
@@ -320,14 +322,14 @@ struct DashboardView: View {
                 Label(tr("本月个人消费", "Personal spending", "Belanja peribadi"), systemImage: "chart.pie.fill")
                     .font(.subheadline.weight(.medium)).foregroundStyle(.secondary)
                 Spacer(minLength: 4)
-                Text("MYR").font(.caption2.weight(.semibold)).foregroundStyle(ink)
+                Text("MYR").font(.footnote.weight(.semibold)).foregroundStyle(ink)
                     .padding(.horizontal, 9).padding(.vertical, 5).background(ink.opacity(0.08), in: Capsule())
             }
             AnimatedMoney(cents: personal)
                 .font(.system(.largeTitle, design: .rounded, weight: .bold))
                 .tracking(-1).foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
             Text(tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
-                .font(.caption).foregroundStyle(.secondary)
+                .font(.footnote).foregroundStyle(.secondary)
             Divider().overlay(ink.opacity(0.04))
             if budget > 0 {
                 ViewThatFits(in: .horizontal) {
@@ -344,7 +346,7 @@ struct DashboardView: View {
                 SpendingMeter(value: personal, total: budget, color: personal > budget ? .orange : ink)
             }
             HStack {
-                Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja")).font(.caption).foregroundStyle(.secondary)
+                Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja")).font(.footnote).foregroundStyle(.secondary)
                 Spacer()
                 Button { budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""; budgeting = true } label: {
                     Label(budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"), systemImage: "slider.horizontal.3")
@@ -355,10 +357,6 @@ struct DashboardView: View {
             .background {
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .fill(Color(uiColor: .secondarySystemGroupedBackground))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 28, style: .continuous)
-                            .fill(LinearGradient(colors: [ink.opacity(0.10), ink.opacity(0.015), .clear], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    }
             }
             .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(ink.opacity(0.09)))
     }
@@ -510,13 +508,13 @@ struct ExpenseRow: View {
                 .background(categoryColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 if ["Apple Pay", "TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"].contains(entry.source) {
-                    Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 Text(entry.merchant).font(.body.weight(.semibold))
-                Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                if let note = entry.note, !note.isEmpty { Text(note).font(.caption).foregroundStyle(.secondary).lineLimit(1) }
-                if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + "+" + money(entry.refunded)).font(.caption).foregroundStyle(.green) }
-                if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.caption) }
+                Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                if let note = entry.note, !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
+                if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + "+" + money(entry.refunded)).font(.footnote).foregroundStyle(.green) }
+                if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.footnote) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
             Text("−" + money(entry.cents)).foregroundStyle(.primary).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
@@ -598,6 +596,7 @@ struct ExpensesView: View {
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
+                                .buttonStyle(.plain)
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -632,7 +631,7 @@ struct ExpensesView: View {
                 }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
                 .sheet(item: $reviewing) { entry in
-                    ExpenseDetailView(id: entry.id).yuejiZoom(id: entry.id, namespace: expenseTransition).ledgerFeedback(modal: true)
+                    ExpenseDetailView(id: entry.id).ledgerFeedback(modal: true)
                 }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
@@ -679,7 +678,10 @@ struct ExpenseDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var editing: Expense?
     @State private var deleting: Expense?
-    private var entry: Expense? { model.ledger.expenses.first { $0.id == id } }
+    // Hold the last real content until the native dismissal has finished.
+    @State private var lastVisibleEntry: Expense?
+    private var liveEntry: Expense? { model.ledger.expenses.first { $0.id == id } }
+    private var entry: Expense? { liveEntry ?? lastVisibleEntry }
 
     var body: some View {
         NavigationStack {
@@ -687,10 +689,10 @@ struct ExpenseDetailView: View {
                 if let entry {
                     Section {
                         VStack(spacing: 12) {
-                            Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
                             Text(money(entry.cents)).font(.system(.largeTitle, design: .rounded, weight: .bold))
                                 .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
                             Text(entry.merchant).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                            Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
                             Text(dateLabel(entry.date, time: true)).font(.subheadline).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 20)
                     }
@@ -744,16 +746,22 @@ struct ExpenseDetailView: View {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
                                 .frame(maxWidth: .infinity, minHeight: 48)
                         }.yuejiPrimaryButton().buttonBorderShape(.capsule)
-                        Button { deleting = entry } label: {
+                        Button(role: .destructive) { deleting = entry } label: {
                             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                                 .frame(minWidth: 72, minHeight: 48)
-                        }.buttonStyle(.bordered).buttonBorderShape(.capsule)
-                    }.padding(.horizontal, 24).padding(.vertical, 10).background(.bar)
+                        }.buttonStyle(.bordered).tint(.red).buttonBorderShape(.capsule)
+                    }.disabled(liveEntry == nil).padding(.horizontal, 24).padding(.vertical, 10).background(.bar)
                 }
             }
             .sheet(item: $editing) { ExpenseEditor(original: $0) }
-            .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
-            .onChange(of: entry == nil) { _, missing in if missing { dismiss() } }
+            .modifier(ExpenseDeletionConfirmation(expense: $deleting))
+            .onAppear { if let liveEntry { lastVisibleEntry = liveEntry } }
+            .onChange(of: liveEntry) { _, updated in
+                if let updated { lastVisibleEntry = updated } else { dismiss() }
+            }
+            .transaction { transaction in
+                if liveEntry == nil { transaction.animation = nil }
+            }
         }
         .yuejiSheetSurface()
     }
@@ -762,7 +770,6 @@ struct ExpenseDetailView: View {
 /// A captured presenting value survives the dialog resetting its binding.
 private struct ExpenseDeletionConfirmation: ViewModifier {
     @EnvironmentObject private var model: LedgerModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var expense: Expense?
     var onDeleted: () -> Void = {}
     @State private var failure: String?
@@ -776,9 +783,7 @@ private struct ExpenseDeletionConfirmation: ViewModifier {
             Button(tr("删除", "Delete", "Padam"), role: .destructive) {
                 guard !model.isPreview else { return }
                 do {
-                    try withAnimation(reduceMotion ? nil : YueJiMotion.standard) {
-                        try model.deleteExpense(entry)
-                    }
+                    try model.deleteExpense(entry)
                     onDeleted()
                 } catch { failure = error.localizedDescription }
             }
@@ -809,6 +814,9 @@ struct ExpenseEditor: View {
     var startWithSplit = false
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var foreignExpanded = false
+    private enum Field: Hashable { case amount, merchant, rate }
+    @FocusState private var focusedField: Field?
     @State private var deleting: Expense?
     @State private var name = ""
     @State private var amount = ""
@@ -842,68 +850,23 @@ struct ExpenseEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                paymentSection
+                merchantSection
+                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0)
+                currencySection
+                friendSplitSection
                 if let original {
                     Section { NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: original.id) } }
-                    if original.refunded > 0 { Text(tr("已有退款，金额、日期和分账已锁定。需修改时先撤销相关退款。", "Refunds exist. Amount, date and splits are locked. Undo refunds before changing these.", "Bayaran balik wujud. Amaun, tarikh dan pembahagian dikunci. Batalkan bayaran balik sebelum mengubahnya.")).font(.caption) }
+                    if original.refunded > 0 { Text(tr("已有退款，金额、日期和分账已锁定。需修改时先撤销相关退款。", "Refunds exist. Amount, date and splits are locked. Undo refunds before changing these.", "Bayaran balik wujud. Amaun, tarikh dan pembahagian dikunci. Batalkan bayaran balik sebelum mengubahnya.")).font(.footnote).foregroundStyle(.secondary) }
                 }
                 if let summary = (original ?? initialDraft)?.receiptSummary {
-                    Section(tr("收据税费", "Receipt charges", "Caj resit")) { Text(summary).font(.caption); ShareLink(item: summary) { Label(tr("分享明细", "Share details", "Kongsi butiran"), systemImage: "square.and.arrow.up") } }
+                    Section(tr("收据税费", "Receipt charges", "Caj resit")) {
+                        DisclosureGroup(tr("查看明细", "View details", "Lihat butiran")) {
+                            Text(summary).font(.subheadline).textSelection(.enabled)
+                            ShareLink(item: summary) { Label(tr("分享明细", "Share details", "Kongsi butiran"), systemImage: "square.and.arrow.up") }
+                        }
+                    }
                 }
-                Section(tr("实际付款", "Payment", "Bayaran")) {
-                    TextField(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), text: $name)
-                    Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
-                        currency = code
-                        if let q = model.ledger.rates[code] { rate = q.text; rateDate = q.date; rateSource = q.source }
-                        else { rate = ""; rateSource = "Manual"; rateDate = Date() }
-                    })) { ForEach(Currency.codes, id: \.self) { Text($0).tag($0) } }
-                    TextField(tr("原币金额", "Original amount", "Amaun asal"), text: $amount).keyboardType(.decimalPad).font(.largeTitle.weight(.semibold)).monospacedDigit().padding(.vertical, 8)
-                    if currency != "MYR" {
-                        if rateLoading { ProgressView() }
-                        if !rateNote.isEmpty { Text(rateNote).font(.caption).foregroundStyle(.secondary) }
-                        Text("1 \(currency) = ? MYR").font(.caption)
-                        TextField(tr("汇率", "Exchange rate", "Kadar pertukaran"), text: $rate).keyboardType(.decimalPad).disabled(rateLoading)
-                        Text(tr("可填写银行实际汇率。保存后不会随参考汇率变化。", "You may enter your bank's actual rate. Saved entries will not change with market rates.", "Anda boleh isi kadar sebenar bank. Rekod disimpan tidak berubah mengikut kadar pasaran.")).font(.caption)
-                        if let n = try? total() { LabeledContent(tr("换算为", "Converted to", "Ditukar kepada"), value: money(n)) }
-                    }
-                    DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 120))], spacing: 10) {
-                        ForEach(model.ledger.categoryNames, id: \.self) { item in
-                            Button {
-                                withAnimation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.65)) { category = item }
-                                if !model.isPreview { FeedbackHaptics.selection() }
-                            } label: {
-                                HStack { CategoryBadge(name: item); if category == item { Image(systemName: "checkmark") } }
-                                    .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44)
-                                    .padding(.horizontal, 8)
-                                    .background(category == item ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-                                    .scaleEffect(category == item && !reduceMotion ? 1.03 : 1)
-                            }.buttonStyle(.plain).accessibilityAddTraits(category == item ? .isSelected : [])
-                        }
-                    }.accessibilityLabel(tr("分类", "Category", "Kategori"))
-                    Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
-                }.disabled((original?.refunded ?? 0) > 0)
-                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0)
-                Section {
-                    Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
-                    if splitting {
-                        Toggle(tr("行程油费", "Trip fuel cost", "Kos minyak perjalanan"), isOn: $fuel).onChange(of: fuel) { _, value in if value { category = "交通" } }
-                        Picker(tr("分摊方式", "Split method", "Cara pembahagian"), selection: $equal) { Text(tr("平均", "Equal", "Sama rata")).tag(true); Text(tr("自定", "Custom", "Tersuai")).tag(false) }.pickerStyle(.segmented)
-                        if equal { Toggle(tr("我也参与分摊", "Include my share", "Termasuk bahagian saya"), isOn: $includeMe) }
-                        ForEach($people) { $p in
-                            HStack {
-                                TextField(tr("朋友姓名", "Friend's name", "Nama rakan"), text: $p.name)
-                                if !equal { TextField("MYR", text: $p.amount).keyboardType(.decimalPad) }
-                                Button(role: .destructive) { people.removeAll { $0.id == p.id } } label: { Image(systemName: "minus.circle") }.disabled(!p.repayments.isEmpty || people.count == 1)
-                            }
-                        }
-                        Button(tr("添加朋友", "Add friend", "Tambah rakan")) { people.append(FriendDraft()) }
-                        if equal, let n = try? total() {
-                            let values = equalShares(total: n, count: people.count, includeMe: includeMe)
-                            ForEach(Array(values.enumerated()), id: \.offset) { i, v in Text("\(people[i].name): \(money(v))") }
-                            Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(n - values.reduce(0, +)))
-                        }
-                    }
-                } footer: { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) }.disabled((original?.refunded ?? 0) > 0)
                 if let original {
                     Section {
                         Button(role: .destructive) { deleting = original } label: {
@@ -912,15 +875,22 @@ struct ExpenseEditor: View {
                         }
                     }
                 }
-            }.disabled(saving).interactiveDismissDisabled(saving)
+            }.yuejiListSurface().scrollDismissesKeyboard(.interactively)
+                .disabled(saving).interactiveDismissDisabled(saving)
                 .animation(reduceMotion ? nil : YueJiMotion.standard, value: splitting)
                 .animation(reduceMotion ? nil : YueJiMotion.standard, value: people.count)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
-                .navigationTitle(tr("记账 / 分账", "Expense / split", "Belanja / pembahagian")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
+                .navigationTitle(original == nil ? tr("新增账目", "New expense", "Belanja baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
                     if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
                     else { Text(tr("保存", "Save", "Simpan")) }
                 }.disabled(rateLoading || saving) } }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button(tr("完成", "Done", "Selesai")) { finishKeyboard() }
+                    }
+                }
                 .onAppear { load() }
                 .task(id: currency) {
                     guard !model.isPreview else { return }
@@ -939,6 +909,80 @@ struct ExpenseEditor: View {
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
         }
     }
+    private var paymentSection: some View {
+        Section(tr("实际付款", "Payment", "Bayaran")) {
+            HStack(alignment: .firstTextBaseline, spacing: 12) {
+                Text(currency).font(.headline).foregroundStyle(.secondary)
+                TextField("0.00", text: $amount)
+                    .keyboardType(.decimalPad).focused($focusedField, equals: .amount)
+                    .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                    .monospacedDigit().padding(.vertical, 12)
+                    .accessibilityLabel(tr("付款金额", "Payment amount", "Amaun bayaran"))
+            }
+            if currency != "MYR", let converted = try? total() {
+                LabeledContent(tr("折合 MYR", "Equivalent in MYR", "Nilai dalam MYR"), value: money(converted))
+                    .font(.subheadline)
+            }
+        }.disabled((original?.refunded ?? 0) > 0)
+    }
+    private var merchantSection: some View {
+        Section(tr("商户与分类", "Merchant and category", "Peniaga dan kategori")) {
+            TextField(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), text: $name)
+                .focused($focusedField, equals: .merchant).submitLabel(.done)
+                .onSubmit { finishKeyboard() }
+            Picker(tr("分类", "Category", "Kategori"), selection: $category) {
+                ForEach(model.ledger.categoryNames, id: \.self) { item in
+                    Text(categoryLabel(item)).tag(item)
+                }
+            }.pickerStyle(.navigationLink)
+        }.disabled((original?.refunded ?? 0) > 0)
+    }
+    private var currencySection: some View {
+        Section {
+            Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
+            DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
+            DisclosureGroup(isExpanded: $foreignExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
+                Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
+                    currency = code
+                    if let q = model.ledger.rates[code] { rate = q.text; rateDate = q.date; rateSource = q.source }
+                    else { rate = ""; rateSource = "Manual"; rateDate = Date() }
+                })) { ForEach(Currency.codes, id: \.self) { Text($0).tag($0) } }
+                if currency != "MYR" {
+                    if rateLoading { ProgressView() }
+                    if !rateNote.isEmpty { Text(rateNote).font(.footnote).foregroundStyle(.secondary) }
+                    Text("1 \(currency) = ? MYR").font(.footnote).foregroundStyle(.secondary)
+                    TextField(tr("汇率", "Exchange rate", "Kadar pertukaran"), text: $rate).keyboardType(.decimalPad).focused($focusedField, equals: .rate).disabled(rateLoading)
+                    Text(tr("可填写银行实际汇率。保存后不会随参考汇率变化。", "You may enter your bank's actual rate. Saved entries will not change with market rates.", "Anda boleh isi kadar sebenar bank. Rekod disimpan tidak berubah mengikut kadar pasaran.")).font(.footnote).foregroundStyle(.secondary)
+                    if let n = try? total() { LabeledContent(tr("换算为", "Converted to", "Ditukar kepada"), value: money(n)) }
+                }
+            } label: {
+                LabeledContent(tr("外币与汇率", "Currency and rate", "Mata wang dan kadar"), value: currency)
+            }
+        }.disabled((original?.refunded ?? 0) > 0)
+    }
+    private var friendSplitSection: some View {
+        Section {
+            Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
+            if splitting {
+                Toggle(tr("行程油费", "Trip fuel cost", "Kos minyak perjalanan"), isOn: $fuel).onChange(of: fuel) { _, value in if value { category = "交通" } }
+                Picker(tr("分摊方式", "Split method", "Cara pembahagian"), selection: $equal) { Text(tr("平均", "Equal", "Sama rata")).tag(true); Text(tr("自定", "Custom", "Tersuai")).tag(false) }.pickerStyle(.segmented)
+                if equal { Toggle(tr("我也参与分摊", "Include my share", "Termasuk bahagian saya"), isOn: $includeMe) }
+                ForEach($people) { $p in
+                    HStack {
+                        TextField(tr("朋友姓名", "Friend's name", "Nama rakan"), text: $p.name)
+                        if !equal { TextField("MYR", text: $p.amount).keyboardType(.decimalPad) }
+                        Button(role: .destructive) { people.removeAll { $0.id == p.id } } label: { Image(systemName: "minus.circle") }.disabled(!p.repayments.isEmpty || people.count == 1)
+                    }
+                }
+                Button(tr("添加朋友", "Add friend", "Tambah rakan")) { people.append(FriendDraft()) }
+                if equal, let n = try? total() {
+                    let values = equalShares(total: n, count: people.count, includeMe: includeMe)
+                    ForEach(Array(values.enumerated()), id: \.offset) { i, v in Text("\(people[i].name): \(money(v))") }
+                    Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(n - values.reduce(0, +)))
+                }
+            }
+        } footer: { if splitting { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) } }.disabled((original?.refunded ?? 0) > 0)
+    }
     private func load() {
         guard !initialized else { return }; initialized = true
         if original == nil { date = initialDate; splitting = startWithSplit }
@@ -950,11 +994,18 @@ struct ExpenseEditor: View {
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
+            foreignExpanded = currency != "MYR"
             if let fx = e.foreign { rate = fx.quote.text; rateDate = fx.quote.date; rateSource = fx.quote.source }
         }
     }
+    private func finishKeyboard() {
+        focusedField = nil
+        // Includes fields in the reusable note, category-allocation and friend rows.
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
     private func beginSave() {
         guard !saving else { return }
+        finishKeyboard()
         saving = true
         Task { @MainActor in
             await Task.yield()
@@ -1184,19 +1235,21 @@ struct SettingsView: View {
                         SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
                     }.guideTarget("settings.appearance")
                     NavigationLink { NotificationSettingsView() } label: {
-                        SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("预算、每日记账", "Budget and daily reminders", "Bajet dan peringatan harian"), symbol: "bell.fill", color: .orange)
+                        SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("记账结果、每日提醒和预算", "Saved entries, daily reminders and budget", "Rekod, peringatan harian dan bajet"), symbol: "bell.fill", color: .orange)
                     }
-                } header: { Text(tr("个人偏好", "Personalize", "Peribadikan")) }
+                } header: { Text(tr("使用习惯", "Your preferences", "Pilihan anda")) }
                 Section {
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: .teal)
                     }
-                    NavigationLink("标签与项目") { ExpenseTagsView() }
+                    NavigationLink { ExpenseTagsView() } label: {
+                        SimpleSettingsRow(title: tr("标签与项目", "Tags & projects", "Tag & projek"), subtitle: tr("整理旅行、活动等相关开销", "Group spending for trips and events", "Kumpulkan belanja perjalanan dan acara"), symbol: "tag.fill", color: .purple)
+                    }
                     NavigationLink { categoriesPage } label: {
-                        SimpleSettingsRow(title: tr("分类与规则", "Categories & rules", "Kategori & peraturan"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)
+                        SimpleSettingsRow(title: tr("消费分类", "Spending categories", "Kategori belanja"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)
                     }
                     NavigationLink { RatesView() } label: {
-                        SimpleSettingsRow(title: tr("币种与汇率", "Currencies & rates", "Mata wang & kadar"), subtitle: tr("统计币种 MYR", "Totals in MYR", "Jumlah dalam MYR"), symbol: "globe", color: .green)
+                        SimpleSettingsRow(title: tr("外币记账", "Foreign currency", "Mata wang asing"), subtitle: tr("把外币消费换算成马币", "Convert spending to ringgit", "Tukar belanja kepada ringgit"), symbol: "globe", color: .green)
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
@@ -1210,9 +1263,9 @@ struct SettingsView: View {
                         SimpleSettingsRow(title: tr("更多工具", "More tools", "Alat lain"), subtitle: tr("月度对比、消费预览与查重", "Comparisons, upcoming bills & duplicates", "Perbandingan, bil & pendua"), symbol: "square.grid.2x2.fill", color: .blue)
                     }
                     Button { showingUsageGuide = true } label: {
-                        SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("记账、自动化与朋友还款", "Expenses, automation and repayments", "Belanja, automasi dan bayaran balik"), symbol: "book.fill", color: .green)
+                        SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("一步步学会使用月记", "Learn YueJi step by step", "Belajar YueJi langkah demi langkah"), symbol: "book.fill", color: .green)
                     }
-                } header: { Text(tr("数据与帮助", "Data & help", "Data & bantuan")) }
+                } header: { Text(tr("备份与帮助", "Backups & help", "Sandaran & bantuan")) }
             }.yuejiListSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.inline)
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
@@ -1239,40 +1292,40 @@ struct SettingsView: View {
                     }
 
             }
-        }.navigationTitle(tr("外观与语言", "Appearance & language", "Paparan & bahasa"))
+        }.yuejiListSurface().navigationTitle(tr("外观与语言", "Appearance & language", "Paparan & bahasa"))
     }
     private var categoriesPage: some View {
         List {
             NavigationLink(tr("管理分类", "Manage categories", "Urus kategori")) { CategoriesView() }
-            NavigationLink(tr("商户分类规则", "Merchant category rules", "Peraturan kategori peniaga")) { MerchantRulesView() }
-        }.navigationTitle(tr("分类与规则", "Categories & rules", "Kategori & peraturan"))
+            NavigationLink(tr("记住商户分类", "Remember merchant categories", "Ingat kategori peniaga")) { MerchantRulesView() }
+        }.yuejiListSurface().navigationTitle(tr("消费分类", "Spending categories", "Kategori belanja"))
     }
     private var backupPage: some View {
         Form {
-                Section(tr("数据与备份", "Data & backups", "Data & sandaran")) {
-                    Text(tr("每次修改前保留旧版，最多 30 份本地备份。卸载会删除本地数据，请定期导出到文件或 iCloud Drive。", "Keeps up to 30 local snapshots before changes. Uninstalling deletes local data. Export to Files or iCloud Drive regularly.", "Menyimpan sehingga 30 sandaran tempatan sebelum perubahan. Nyahpasang memadam data tempatan. Eksport ke Files atau iCloud Drive secara berkala.")).font(.footnote)
-                    NavigationLink(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")) { CSVExportView() }
-                    Button(tr("导出完整备份", "Export full backup", "Eksport sandaran penuh")) { do { document = LedgerDocument(data: try LocalStore.exportData(LocalStore.shared.read())); exporting = true } catch { model.error = error.localizedDescription } }
-                    Button(tr("恢复 JSON 备份", "Restore JSON backup", "Pulihkan sandaran JSON")) { importing = true }
+                Section(tr("保管好你的账本", "Keep your ledger safe", "Simpan lejar dengan selamat")) {
+                    Text(tr("换手机或卸载前，请先把完整备份存到「文件」或 iCloud Drive。", "Save a complete backup to Files or iCloud Drive before changing phones or uninstalling.", "Simpan sandaran lengkap ke Files atau iCloud Drive sebelum menukar telefon atau menyahpasang.")).font(.footnote)
+                    NavigationLink(tr("导出账单表格", "Export a spreadsheet", "Eksport hamparan")) { CSVExportView() }
+                    Button(tr("保存一份完整备份", "Save a complete backup", "Simpan sandaran lengkap")) { do { document = LedgerDocument(data: try LocalStore.exportData(LocalStore.shared.read())); exporting = true } catch { model.error = error.localizedDescription } }
+                    Button(tr("从备份文件恢复", "Restore from a backup file", "Pulihkan daripada fail sandaran")) { importing = true }
                     if FileManager.default.fileExists(atPath: LocalStore.shared.recoveryFile.path) {
                         Button(tr("恢复上次导入前的数据", "Recover data before last restore", "Pulihkan data sebelum pemulihan terakhir")) {
                             do { restorePreview = try RestorePreview(data: Data(contentsOf: LocalStore.shared.recoveryFile)) } catch { model.error = error.localizedDescription }
                         }
                     }
-                    DisclosureGroup(tr("本机历史备份", "Local snapshot history", "Sejarah sandaran tempatan")) {
+                    DisclosureGroup(tr("找回较早的账本", "Recover an earlier ledger", "Pulihkan lejar terdahulu")) {
                     ForEach(backups, id: \.self) { url in Button { do { restorePreview = try RestorePreview(data: Data(contentsOf: url)) } catch { model.error = error.localizedDescription } } label: {
                         Text(tr("恢复：", "Restore: ", "Pulihkan: ") + backupTitle(url))
                     } }
                     }
                 }
 
-        }.navigationTitle(tr("备份与导出", "Backups & export", "Sandaran & eksport")).onAppear { loadBackups() }
+        }.yuejiListSurface().navigationTitle(tr("备份与导出", "Backups & export", "Sandaran & eksport")).onAppear { loadBackups() }
     }
     private var aboutPage: some View {
         List {
             Text(installedVersionLabel)
-            Text(tr("免费侧载签名每 7 天需要刷新；过期会影响 App 和自动记账。", "Free sideload signing needs renewal every 7 days. Expiry affects the app and automatic recording.", "Tandatangan sideload percuma perlu diperbaharui setiap 7 hari. Tamat tempoh menjejaskan aplikasi dan rekod automatik."))
-        }.navigationTitle(tr("关于月记", "About YueJi", "Tentang YueJi"))
+            Text(tr("如果通过 AltStore 安装，请按时刷新月记，以免无法打开或中断自动记账。", "If installed with AltStore, refresh YueJi on time to keep the app and automatic recording available.", "Jika dipasang melalui AltStore, segarkan YueJi tepat pada masanya supaya aplikasi dan rekod automatik terus tersedia."))
+        }.yuejiListSurface().navigationTitle(tr("关于月记", "About YueJi", "Tentang YueJi"))
     }
     private func loadBackups() { guard !model.isPreview else { return }; do { backups = try LocalStore.shared.backups() } catch { model.error = error.localizedDescription } }
     private func backupTitle(_ url: URL) -> String { guard let s = url.lastPathComponent.split(separator: "-").first, let ms = Double(s) else { return url.lastPathComponent }; return dateLabel(Date(timeIntervalSince1970: ms / 1000), time: true) }
@@ -1388,7 +1441,7 @@ struct SimpleSettingsRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.body).foregroundStyle(.primary)
-                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 6)
     }
@@ -1403,13 +1456,13 @@ struct AutomationSetupView: View {
                     SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: .blue)
                 }.guideTarget("automation.apple")
                 NavigationLink { TNGInboxView() } label: {
-                    SimpleSettingsRow(title: tr("银行与 TNG", "Banks and TNG", "Bank dan TNG"), subtitle: tr("通知接入与待确认", "Notification setup & review", "Persediaan notifikasi & semakan"), symbol: "bell.badge.fill", color: .teal)
+                    SimpleSettingsRow(title: tr("银行与 TNG", "Banks and TNG", "Bank dan TNG"), subtitle: tr("设置付款记录，确认收到的交易", "Set up recording and review transactions", "Sediakan rekod dan semak transaksi"), symbol: "bell.badge.fill", color: .teal)
                 }.guideTarget("automation.tng")
-            } footer: { Text(tr("先在快捷指令完成设置，再用实际运行记录确认结果。", "Set up Shortcuts, then verify actual results in the log.", "Sediakan Pintasan, kemudian sahkan hasil sebenar dalam log.")) }
+            } footer: { Text(tr("跟着说明在「快捷指令」设置一次。之后收到的付款资料会交给月记处理。", "Follow the steps in Shortcuts once. Payment details it receives can then be sent to YueJi.", "Ikut langkah dalam Pintasan sekali. Butiran bayaran yang diterima kemudian boleh dihantar ke YueJi.")) }
             Section {
-                NavigationLink(tr("查看运行记录", "View activity log", "Lihat log aktiviti")) { AutomationStatusView() }
+                NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }
             }
-        }.navigationTitle(tr("自动记账", "Automatic recording", "Rekod automatik")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("自动记账", "Automatic recording", "Rekod automatik")).navigationBarTitleDisplayMode(.inline)
     }
 }
 private struct YueJiPrimaryButton: ViewModifier {
@@ -2257,7 +2310,7 @@ struct SavedFeedback: View {
             Label(message, systemImage: "checkmark.circle.fill")
                 .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
         }.padding(.horizontal, 18).padding(.vertical, 12).ledgerGlass()
-            .padding(.top, 8).allowsHitTesting(false)
+            .allowsHitTesting(false)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(message)
     }
@@ -2304,29 +2357,49 @@ private struct LedgerFeedbackHost: ViewModifier {
     private var visible: Bool { model.feedbackOwners.isVisible(modal ? owner : nil) }
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .top) {
-                if visible {
-                    VStack(spacing: 8) {
-                        if !model.undoEntries.isEmpty {
-                            HStack(spacing: 16) {
-                                Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
-                                    .font(.subheadline.weight(.medium))
-                                Button(tr("撤销", "Undo", "Batal padam")) {
-                                    withAnimation(reduceMotion ? nil : YueJiMotion.standard) { model.undoDeletion() }
-                                }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44)
-                            }.padding(.horizontal, 16).ledgerGlass().padding(.horizontal, 24).padding(.top, 8)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                Group {
+                    if visible && (!model.undoEntries.isEmpty || model.savedNotice != nil) {
+                        VStack(spacing: 0) {
+                            if !model.undoEntries.isEmpty {
+                                ViewThatFits(in: .horizontal) {
+                                    HStack(spacing: 16) { deletionStatus; undoButton }
+                                    VStack(spacing: 4) { deletionStatus; undoButton }
+                                }
+                                .padding(.horizontal, 18).padding(.vertical, 6).ledgerGlass()
+                            } else if let token = model.savedNotice {
+                                SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
+                                    .id(token)
+                            }
                         }
-                        if let token = model.savedNotice {
-                            SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
-                                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -8)))
-                        }
+                        .frame(maxWidth: 520).padding(.horizontal, 20).padding(.vertical, 8)
+                        .frame(maxWidth: .infinity)
+                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8)))
                     }
                 }
+                .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.savedNotice)
+                .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.undoEntries.count)
             }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
             .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
-            .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.savedNotice)
-            .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.undoEntries.count)
+    }
+    private var deletionStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if model.savedNotice != nil {
+                Label(model.feedbackMessage, systemImage: "checkmark.circle.fill")
+                    .font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
+            }
+            deletionLabel
+        }
+    }
+    private var deletionLabel: some View {
+        Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
+            .font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+    }
+    private var undoButton: some View {
+        Button(tr("撤销", "Undo", "Batal padam")) {
+            withAnimation(reduceMotion ? nil : YueJiMotion.standard) { model.undoDeletion() }
+        }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44)
     }
 }
 extension View {
@@ -2450,6 +2523,10 @@ private struct YueJiDesignPreviews: PreviewProvider {
             DashboardView().preferredColorScheme(.dark).previewDisplayName("Overview · Dark")
             ExpensesView().preferredColorScheme(.light).previewDisplayName("Ledger · Light")
             SettingsView().preferredColorScheme(.dark).previewDisplayName("Settings · Dark")
+            ExpenseEditor(original: nil).preferredColorScheme(.light).previewDisplayName("New expense · Light")
+            ExpenseEditor(original: GuideSample.ledger().expenses.first).preferredColorScheme(.dark).previewDisplayName("Edit expense · Dark")
+            ExpenseDetailView(id: "guide-lunch").preferredColorScheme(.dark).previewDisplayName("Entry details · Dark")
+            ExpenseEditor(original: nil).environment(\.dynamicTypeSize, .accessibility3).previewDisplayName("New expense · Large text")
             DashboardView().environment(\.dynamicTypeSize, .accessibility3).previewDisplayName("Overview · Large text")
         }.environmentObject(LedgerModel(previewLedger: GuideSample.ledger()))
     }
