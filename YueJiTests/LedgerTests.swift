@@ -4,6 +4,91 @@ import AVFoundation
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    func testScreenshotPaymentTransferAndPoints() throws {
+        var ledger = Ledger()
+        let payment = try ledger.processTNGNotification(body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: Date(), eventID: nil)
+        XCTAssertTrue(payment.accepted)
+        XCTAssertNotNil(payment.expenseID)
+        XCTAssertEqual(ledger.expenses.first?.cents, 1100)
+        XCTAssertEqual(ledger.expenses.first?.merchant, "HOW HAN ENG")
+        let transfer = try ledger.processTNGNotification(body: "RM 9.80 has been successfully transferred to TEOH JUN HONG.", title: "Transfer Successful.", date: Date(), eventID: nil)
+        XCTAssertTrue(transfer.accepted)
+        XCTAssertNil(transfer.expenseID)
+        XCTAssertNotNil(transfer.noticeID)
+        let points = try ledger.processTNGNotification(body: "You've received 11 points from your transaction! Use them now to redeem great rewards.", title: "You've just earned 11 points!", date: Date(), eventID: nil)
+        XCTAssertFalse(points.accepted)
+        XCTAssertNil(points.noticeID)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.tngNotices.count, 2)
+    }
+
+    func testCombinedTitleBodyAndCaseVariants() throws {
+        let parsed = try XCTUnwrap(parseFinancialNotification("DuitNow Payment\nYou have paid RM11.00 to HOW HAN ENG."))
+        XCTAssertEqual(parsed.cents, 1100)
+        XCTAssertEqual(parsed.party, "HOW HAN ENG")
+        XCTAssertEqual(parseTNG("you have paid RM11.00 to HOW HAN ENG.", title: "DuitNow   Payment")?.kind, "payment")
+        XCTAssertNil(parseFinancialNotification("Offer\nYou have paid RM11.00 to HOW HAN ENG."))
+        XCTAssertNil(parseFinancialNotification("DuitNow Payment\nPayment failed RM11.00"))
+    }
+
+    func testFixedShortcutIDDoesNotHideDifferentTransactions() throws {
+        var ledger = Ledger(); let now = Date()
+        _ = try ledger.receiveTNG(body: "RM 9.80 has been successfully transferred to TEOH JUN HONG.", title: "Transfer Successful.", date: now, eventID: "TNG")
+        _ = try ledger.receiveTNG(body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: now, eventID: "TNG")
+        _ = try ledger.receiveTNG(body: "You have paid RM12.00 to HOW HAN ENG.", title: "DuitNow Payment", date: now, eventID: "TNG")
+        XCTAssertEqual(ledger.expenses.map(\.cents), [1100, 1200])
+        _ = try ledger.receiveTNG(body: "You have paid RM12.00 to HOW HAN ENG.", title: "DuitNow Payment", date: now, eventID: "TNG")
+        XCTAssertEqual(ledger.expenses.count, 2)
+        XCTAssertEqual(ledger.tngNotices.count, 3)
+    }
+
+    func testExcludeReopenReconfirmPreservesNoteWithoutAutomaticSpending() throws {
+        var ledger = Ledger(); let now = Date()
+        _ = try ledger.receiveTNG(body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: now, eventID: "restore-note")
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        try ledger.setNoticeNote(id: id, note: "午餐")
+        XCTAssertEqual(ledger.expenses.first?.note, "午餐")
+        try ledger.excludeTNG(id: id)
+        XCTAssertEqual(ledger.spending(in: now), 0)
+        _ = try ledger.receiveTNG(body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: now, eventID: "restore-note")
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        try ledger.reopenExcludedNotice(id: id)
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+        XCTAssertNil(ledger.tngNotices[0].expenseID)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        try ledger.confirmTNGExpense(id: id, merchant: "HOW HAN ENG", cents: 1100, date: now, category: "餐饮")
+        XCTAssertEqual(ledger.spending(in: now), 1100)
+        XCTAssertEqual(ledger.expenses.first?.note, "午餐")
+        XCTAssertThrowsError(try ledger.confirmTNGExpense(id: id, merchant: "HOW HAN ENG", cents: 1100, date: now, category: "餐饮"))
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.tngNotices.first?.note, "午餐")
+        XCTAssertEqual(restored.expenses.count, 1)
+    }
+
+    func testBankTransferNotesAndExclusionCanBeReopened() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "Your transfer of RM0.01 to TEST PERSON is SUCCESSFUL.", title: "Transaction Notice", date: Date(), eventID: nil)
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        try ledger.setNoticeNote(id: id, note: "还朋友的钱")
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        try ledger.excludeTNG(id: id)
+        try ledger.reopenExcludedNotice(id: id)
+        XCTAssertEqual(ledger.tngNotices[0].status, "transfer")
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).tngNotices[0].note, "还朋友的钱")
+        XCTAssertThrowsError(try ledger.setNoticeNote(id: id, note: String(repeating: "x", count: 2001)))
+        XCTAssertEqual(ledger.tngNotices[0].note, "还朋友的钱")
+    }
+
+    func testReopeningLinkedExclusionRequiresUndoingResolution() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "You have paid RM11.00 for Cafe.", date: Date(), eventID: nil)
+        let id = ledger.tngNotices[0].id
+        try ledger.excludeTNG(id: id)
+        ledger.tngNotices[0].resolution = "duplicate"
+        XCTAssertThrowsError(try ledger.reopenExcludedNotice(id: id))
+        XCTAssertEqual(ledger.tngNotices[0].status, "ignored")
+    }
+
     @MainActor func testBundledFeedbackSoundsDecodeWithoutPlaying() throws {
         for name in ["LaunchChime", "SavedChime", "GoalChime", "DeleteCue", "RestoreCue", "DepositCue"] {
             let asset = try XCTUnwrap(NSDataAsset(name: name))

@@ -428,7 +428,12 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
 
     }
     static func prepareAutomaticResultsAuthorization() async {
-        // Enable by default only when no preference exists; respect a saved opt-out.
+        // Requested migration: enable system result alerts once on this update.
+        // Subsequent user changes remain respected.
+        if !UserDefaults.standard.bool(forKey: "automaticSystemAlertsBuild65") {
+            UserDefaults.standard.set(true, forKey: "automationNotifications")
+            UserDefaults.standard.set(true, forKey: "automaticSystemAlertsBuild65")
+        }
         UserDefaults.standard.register(defaults: ["automationNotifications": true])
         guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
         let center = UNUserNotificationCenter.current()
@@ -439,11 +444,17 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
     static func result(title: String, body: String, expenseID: String? = nil, noticeID: String? = nil) async {
         UserDefaults.standard.register(defaults: ["automationNotifications": true])
-        guard UserDefaults.standard.bool(forKey: "automationNotifications") else { return }
+        guard UserDefaults.standard.bool(forKey: "automationNotifications") else {
+            saveResultDelivery("自动记账结果通知开关已关闭。")
+            return
+        }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
-        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
-        let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = nil
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
+            saveResultDelivery("系统通知未获允许，请在 iPhone 设置 → 通知 → 月记开启。")
+            return
+        }
+        let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = .default
         registerActions()
         if let expenseID {
             content.categoryIdentifier = "yueji.expense"
@@ -453,7 +464,16 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             content.userInfo = ["recordID": noticeID, "recordKind": "notice"]
         }
         // Notification failure must never roll back or retry a successfully recorded payment.
-        try? await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
+        do {
+            try await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
+            saveResultDelivery(settings.authorizationStatus == .provisional
+                ? "已交给 iOS（临时授权，可能静默送达）；请开启横幅与声音。"
+                : "已交给 iOS；实际横幅、声音和锁屏显示受系统通知设置及专注模式控制。")
+        } catch { saveResultDelivery("系统通知提交失败：" + error.localizedDescription) }
+    }
+    private static func saveResultDelivery(_ message: String) {
+        UserDefaults.standard.set(message, forKey: "lastAutomaticNotificationStatus")
+        UserDefaults.standard.set(Date(), forKey: "lastAutomaticNotificationDate")
     }
 }
 

@@ -578,6 +578,9 @@ struct AutomationStatusView: View {
     var body: some View {
         List {
             Section("处理概览") {
+                Text("漏记排查：没有本次调用记录 → 检查快捷指令触发范围；有待确认记录 → 核对原文或疑似重复；已入账但无横幅 → 检查系统通知。付款与转账都应传入，触发条件不要只限定 Transfer。")
+                    .font(.footnote)
+                NavigationLink("系统通知状态 / 测试") { NotificationSettingsView() }
                 LabeledContent("已自动入账（当前账本）", value: String(model.ledger.expenses.filter { $0.source != "手动" && $0.source != "固定消费" && $0.source != "账单补录" }.count))
                 LabeledContent("待确认通知", value: String(model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.count))
                 LabeledContent("疑似重复待确认", value: String(model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count))
@@ -738,6 +741,7 @@ struct NotificationSettingsView: View {
     @State private var busy = false
     @State private var message: String?
     @State private var permission = ""
+    @State private var deliveryStatus = ""
     var body: some View {
         Form {
             Section {
@@ -774,6 +778,18 @@ struct NotificationSettingsView: View {
             }.disabled(busy)
             Section {
                 Text(permission)
+                if !deliveryStatus.isEmpty { Text(deliveryStatus).font(.footnote) }
+                Button("测试系统通知（横幅 / 声音）") {
+                    Task {
+                        results = true
+                        do {
+                            let c = Calendar.current.dateComponents([.hour, .minute], from: time)
+                            try await LedgerNotifications.configure(daily: daily, results: true, hour: c.hour ?? 21, minute: c.minute ?? 0, budgetAlerts: budgetAlerts)
+                            await LedgerNotifications.result(title: "月记 · 系统通知测试", body: "系统通知测试成功。自动记账后将在此显示金额、商户、分类和处理状态。")
+                        } catch { message = error.localizedDescription }
+                        await refreshPermission()
+                    }
+                }
                 Button(tr("打开 iPhone 通知设置", "Open iPhone notification settings", "Buka tetapan notifikasi iPhone")) {
                     if let url = URL(string: UIApplication.openNotificationSettingsURLString) { UIApplication.shared.open(url) }
                 }
@@ -806,7 +822,16 @@ struct NotificationSettingsView: View {
         } catch { message = error.localizedDescription }
     }
     private func refreshPermission() async {
-        let status = await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+        let settings = await UNUserNotificationCenter.current().notificationSettings()
+        let status = settings.authorizationStatus
+        let defaults = UserDefaults.standard
+        deliveryStatus = defaults.string(forKey: "lastAutomaticNotificationStatus") ?? "尚未提交自动记账系统通知。"
+        if let last = defaults.object(forKey: "lastAutomaticNotificationDate") as? Date {
+            deliveryStatus += "\n最近尝试：" + dateLabel(last, time: true)
+        }
+        if status == .provisional { deliveryStatus += "\n目前为临时授权，通知可能静默送达。" }
+        if settings.alertSetting != .enabled { deliveryStatus += "\n系统横幅未开启。" }
+        if settings.soundSetting != .enabled { deliveryStatus += "\n系统通知声音未开启。" }
         permission = status == .authorized || status == .provisional
             ? tr("系统通知权限：已允许", "System permission: allowed", "Kebenaran sistem: dibenarkan")
             : tr("系统通知权限：尚未允许", "System permission: not allowed yet", "Kebenaran sistem: belum dibenarkan")
@@ -1088,6 +1113,38 @@ struct TNGInboxView: View {
             }
     }
 }
+struct NoticeNoteSection: View {
+    @EnvironmentObject var model: LedgerModel
+    let id: String
+    @State private var note = ""
+    @State private var error: String?
+    private var savedNote: String {
+        guard let n = model.ledger.tngNotices.first(where: { $0.id == id }) else { return "" }
+        if let expenseID = n.expenseID, let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
+            return entry.note ?? ""
+        }
+        return n.note ?? ""
+    }
+    var body: some View {
+        Section("交易备注") {
+            TextField("例如：午餐、替朋友付款、转入自己的账户", text: $note, axis: .vertical).lineLimit(2...5)
+            Text("\(note.count) / 2000").font(.caption).foregroundStyle(.secondary)
+            Button("保存备注") {
+                do {
+                    try LocalStore.shared.change { try $0.setNoticeNote(id: id, note: note) }
+                    model.reload(); model.showSaved(message: "备注已保存")
+                } catch { self.error = error.localizedDescription }
+            }.disabled(note == savedNote || note.count > 2000)
+            Text("付款、转账、收款及已排除记录均可备注；保存备注不会改变消费统计。").font(.caption)
+        }
+        .onAppear { note = savedNote }
+        .onChange(of: savedNote) { old, new in if note == old { note = new } }
+        .alert("无法保存备注", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+            Button("OK") {}
+        } message: { Text(error ?? "") }
+    }
+}
+
 struct TNGNoticeView: View {
     @EnvironmentObject var model: LedgerModel
     let id: String
@@ -1106,6 +1163,7 @@ struct TNGNoticeView: View {
     var body: some View {
         Form {
             if let notice {
+                NoticeNoteSection(id: id)
                 Section {
                     TNGTimelineRow(notice: notice)
                     if let reference = notice.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
@@ -1134,8 +1192,13 @@ struct TNGNoticeView: View {
                                     guard let old = ledger.tngNotices.first(where: { $0.id == id }), old.status == "pending", old.expenseID == nil else { return }
                                     guard parseFinancialNotification(old.body, title: old.title) != nil else { throw LedgerError.invalid("当前仍未识别，请核对原文后手动确认。") }
                                     ledger.tngNotices.removeAll { $0.id == id }
+                                    let countBefore = ledger.tngNotices.count
                                     _ = try ledger.receiveTNG(body: old.body, title: old.title, date: old.date, eventID: nil)
-                                    if let i = ledger.tngNotices.indices.last { ledger.tngNotices[i].id = old.id }
+                                    guard ledger.tngNotices.count > countBefore else { throw LedgerError.invalid("此交易已处理，请核对已有记录。原待确认通知已保留。") }
+                                    if let i = ledger.tngNotices.indices.last {
+                                        ledger.tngNotices[i].id = old.id
+                                        try ledger.setNoticeNote(id: old.id, note: old.note ?? "")
+                                    }
                                 }
                                 model.reload()
                             } catch { self.error = error.localizedDescription }
@@ -1166,6 +1229,15 @@ struct TNGNoticeView: View {
                 }
                 if notice.status != "ignored" {
                     Button(tr("不计消费 / 排除此通知", "Exclude from spending", "Kecualikan daripada belanja"), role: .destructive) { excluding = true }
+                } else if notice.resolution == nil {
+                    Section("重新计入消费") {
+                        Text("排除期间不计入消费。重新打开后，请核对金额与分类，再点「计入消费」。不会自动新增或重复记账。")
+                            .font(.footnote)
+                        Button("撤销排除 · 重新确认") {
+                            do { try LocalStore.shared.change { try $0.reopenExcludedNotice(id: id) }; model.reload() }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    }
                 }
             }
         }.navigationTitle(notice?.provider ?? "TNG")
@@ -2141,6 +2213,7 @@ struct TNGIncomingView: View {
     var body: some View {
         Form {
             if let n = notice {
+                NoticeNoteSection(id: id)
                 if n.status == "pending" { NavigationLink("账户转账 / 充值 / 退款关联") { FinancialNoticeReviewView(id: id) } }
                 if n.resolution != nil { NoticeResolutionSection(notice: n) }
                 Section {
@@ -2682,6 +2755,7 @@ struct FinancialNoticeReviewView: View {
         Form {
             if let notice {
                 Section { Text(notice.title); Text(notice.body).font(.caption).textSelection(.enabled) }
+                NoticeNoteSection(id: id)
                 Section("确认用途") {
                     Picker("这是什么交易？", selection: $purpose) {
                         Text("请选择用途").tag("")
@@ -2868,4 +2942,3 @@ struct TagSpendingView: View {
         }.navigationTitle("#" + tag)
     }
 }
-

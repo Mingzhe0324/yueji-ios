@@ -139,7 +139,7 @@ struct Ledger: Codable {
                   n.kind != "incoming" || (n.cents != nil && n.party != nil && n.expenseID == nil && ["pending", "ignored", "repayment", "income", "ownTransfer"].contains(n.status)),
                   !["repayment", "income", "ownTransfer"].contains(n.status) || n.kind == "incoming" else { throw LedgerError.invalid("Invalid incoming record") }
 
-            guard !n.id.isEmpty, !n.body.isEmpty, n.body.count <= 8000, n.title.count <= 500,
+            guard !n.id.isEmpty, !n.body.isEmpty, n.body.count <= 8000, n.title.count <= 500, (n.note?.count ?? 0) <= 2000,
                   n.date.timeIntervalSince1970 >= 0, n.date.timeIntervalSince1970 < 4_102_444_800,
                   ["payment", "transfer", "incoming", "unknown"].contains(n.kind), ["recorded", "transfer", "pending", "ignored", "repayment", "income", "ownTransfer"].contains(n.status),
                   n.cents == nil || (n.cents! > 0 && n.cents! <= 10_000_000_000), (n.party?.count ?? 0) <= 200 else { throw LedgerError.invalid("账本格式或版本无效。") }
@@ -270,6 +270,7 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var sourceBank: String? = nil
     var accountSuffix: String? = nil
     var bankReference: String? = nil
+    var note: String? = nil
     var provider: String { sourceBank ?? "TNG" }
 }
 struct TNGParsed {
@@ -288,7 +289,7 @@ func tngSignedAmount(_ notice: TNGNotice) -> String {
     (notice.kind == "incoming" ? "+" : "−") + money(notice.cents ?? 0)
 }
 func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
-    let titleKey = friendKey(title).replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
+    let titleKey = friendKey(title.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")).replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
     guard ["", "payment", "duitnow payment", "successful toll payment", "transfer successful", "duitnow transfer is successful", "ka-ching! incoming money", "you've received money"].contains(titleKey) else { return nil }
     let text = body.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
     if titleKey.isEmpty || titleKey == "ka-ching! incoming money" {
@@ -340,7 +341,7 @@ func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
     ]
     for (kind, expectedTitle, pattern) in patterns {
         guard titleKey.isEmpty || titleKey == expectedTitle else { continue }
-        guard let regex = try? NSRegularExpression(pattern: pattern),
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let amountRange = Range(match.range(at: 1), in: text), let nameRange = Range(match.range(at: 2), in: text),
               let cents = try? toCents(String(text[amountRange])) else { continue }
@@ -422,7 +423,15 @@ extension Ledger {
         let referenceKey = verified.reference.map { "bank:" + verified.sourceBank + ":" + verified.kind + ":" + (verified.accountSuffix ?? "") + ":" + $0 }
         let identity = referenceKey ?? (explicit.isEmpty ? nil : (verified.sourceBank == "TNG" ? explicit : verified.sourceBank + ":" + verified.kind + ":" + explicit))
         let eventKey = identity.map { "tng:" + SHA256.hash(data: Data($0.utf8)).map { String(format: "%02x", $0) }.joined() }
-        if let eventKey, seenEvents.contains(eventKey) { return tr("相同交易标识已处理，未重复记录。", "This transaction ID was already processed.", "ID transaksi ini sudah diproses.") }
+        // A constant Shortcut input must not suppress unrelated payments forever.
+        // Verified bank references remain authoritative; external IDs also require matching content.
+        if let eventKey, seenEvents.contains(eventKey), verified.reference != nil || !tngNotices.contains(where: {
+            $0.provider == verified.sourceBank && $0.bankReference == explicit
+        }) || tngNotices.contains(where: {
+            $0.provider == verified.sourceBank && $0.bankReference == explicit &&
+            $0.kind == verified.kind && $0.cents == verified.cents &&
+            merchantIdentity($0.party ?? "") == merchantIdentity(verified.party)
+        }) { return tr("相同交易标识及交易内容已处理，未重复记录。", "This transaction was already processed.", "Transaksi ini sudah diproses.") }
         guard tngNotices.count < 5000 else { throw reviewError("TNG 通知记录已达上限，请先导出备份并清理已处理通知。", "TNG inbox is full. Export a backup and clear processed notices.", "Peti TNG penuh. Eksport sandaran dan kosongkan notifikasi selesai.") }
         let parsed: TNGParsed? = verified
         let partyKey = merchantIdentity(verified.party)
@@ -463,7 +472,8 @@ extension Ledger {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].expenseID == nil, tngNotices[i].kind != "incoming", ["pending", "transfer"].contains(tngNotices[i].status),
               cents > 0, cents <= 10_000_000_000, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               merchant.count <= 200, categoryNames.contains(category), date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("付款或分账数据无效。") }
-        let expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference)
+        var expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference)
+        expense.note = tngNotices[i].note
         expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
         if remember { merchantCategories[friendKey(expense.merchant)] = category }
     }
@@ -478,8 +488,31 @@ extension Ledger {
                 throw reviewError("此账目已有分账或退款，请先在账本处理，避免丢失记录。", "Resolve existing splits or refunds in the ledger first.", "Selesaikan bahagian atau pulangan dalam lejar dahulu.")
             }
             expenses.removeAll { $0.id == expenseID }
+            tngNotices[i].note = entry.note
         }
         tngNotices[i].status = "ignored" // Keep linkage as a tombstone: no accidental replay.
+    }
+    mutating func reopenExcludedNotice(id: String) throws {
+        guard let i = tngNotices.firstIndex(where: { $0.id == id }),
+              tngNotices[i].status == "ignored", tngNotices[i].resolution == nil else {
+            throw LedgerError.invalid("通知已改变；有关联的记录请先撤销关联。")
+        }
+        if let linked = tngNotices[i].expenseID, expenses.contains(where: { $0.id == linked }) {
+            throw LedgerError.invalid("关联消费仍存在，请先核对，避免重复入账。")
+        }
+        // Explicit user action reopens review, never silently recreates spending.
+        tngNotices[i].expenseID = nil
+        tngNotices[i].status = tngNotices[i].kind == "transfer" ? "transfer" : "pending"
+    }
+    mutating func setNoticeNote(id: String, note: String) throws {
+        guard note.count <= 2000, let i = tngNotices.firstIndex(where: { $0.id == id }) else {
+            throw LedgerError.invalid("备注最多 2000 字，或通知已删除。")
+        }
+        let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
+        tngNotices[i].note = trimmed.isEmpty ? nil : trimmed
+        if let linked = tngNotices[i].expenseID, let e = expenses.firstIndex(where: { $0.id == linked }) {
+            expenses[e].note = tngNotices[i].note
+        }
     }
 }
 
@@ -624,7 +657,17 @@ struct FeedbackPresentationOwners {
 /// Only the nine observed bank templates; unrelated notifications are never posted.
 func parseFinancialNotification(_ body: String, title: String = "") -> TNGParsed? {
     if let bank = parseBankNotification(body, title: title) { return bank }
-    return parseTNG(body, title: title)
+    if let tng = parseTNG(body, title: title) { return tng }
+    // Some automations pass Title + newline + Body as one value.
+    // Only unwrap an exact known title and still require a complete verified body.
+    let lines = body.split(separator: "\n", maxSplits: 1).map(String.init)
+    if lines.count == 2 {
+        let heading = lines[0].trimmingCharacters(in: .whitespacesAndNewlines)
+        if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || friendKey(title) == friendKey(heading) {
+            return parseBankNotification(lines[1], title: heading) ?? parseTNG(lines[1], title: heading)
+        }
+    }
+    return nil
 }
 
 func parseBankNotification(_ body: String, title: String = "") -> TNGParsed? {

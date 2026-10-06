@@ -89,8 +89,8 @@ struct RecordTNGIntent: AppIntent {
             }
             // Keep an ignored delivery log, without alerts for advertisements or points.
             if result.accepted || shouldReviewFinancialNotification(body, title: notificationTitle ?? "") {
-                await BudgetAlertService.shared.check()
                 await LedgerNotifications.result(title: tr("自动记账结果", "Automatic recording result", "Hasil rekod automatik"), body: result.message, expenseID: result.expenseID, noticeID: result.noticeID)
+                await BudgetAlertService.shared.check()
             }
             return .result()
         } catch {
