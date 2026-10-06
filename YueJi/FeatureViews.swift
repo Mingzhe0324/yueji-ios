@@ -564,6 +564,9 @@ struct UpcomingView: View {
 }
 struct AutomationStatusView: View {
     @EnvironmentObject var model: LedgerModel
+    @State private var recoveryInputs: [AutomationDelivery] = []
+    @State private var recoveryError: String?
+    @State private var retrying = false
     private func outcome(_ key: String, source: String) -> String {
         switch key {
         case "pending": return tr("待确认", "Needs review", "Perlu semakan")
@@ -577,6 +580,29 @@ struct AutomationStatusView: View {
     }
     var body: some View {
         List {
+            Section("已接收 · 等待重试") {
+                LabeledContent("暂存交易输入", value: String(recoveryInputs.count))
+                Text("TNG、银行和 Apple Pay 已传入的输入会先暂存，写入失败可在下次打开时重试。自动失败 3 次后暂停，保留原因。不会读取未传入的交易。")
+                    .font(.footnote)
+                if let recoveryError { Text(recoveryError).foregroundStyle(.red) }
+                Button(retrying ? "正在重试…" : "重试已接收的交易") {
+                    retrying = true
+                    Task {
+                        recoveryError = await AutomationRecovery.shared.retryPending(manual: true)
+                        model.reload(postRecurring: false)
+                        loadRecoveryInputs(); retrying = false
+                    }
+                }.disabled(retrying || recoveryInputs.isEmpty)
+                ForEach(Array(recoveryInputs.prefix(20))) { input in
+                    DisclosureGroup(input.source + " · " + dateLabel(input.receivedAt, time: true)) {
+                        Text(input.lastError ?? "已暂存，等待完成处理。").font(.caption)
+                        Text("失败尝试：\(input.attempts) 次" + (input.attempts >= 3 ? " · 自动重试已暂停" : ""))
+                            .font(.caption)
+                        if input.kind == "notification" { Text(input.title + "\n" + input.body).font(.caption).textSelection(.enabled) }
+                        else { Text(input.merchant + " · " + input.currency + " " + String(input.amount ?? 0)).font(.caption) }
+                    }
+                }
+            }
             Section("处理概览") {
                 Text("漏记排查：没有本次调用记录 → 检查快捷指令触发范围；有待确认记录 → 核对原文或疑似重复；已入账但无横幅 → 检查系统通知。付款与转账都应传入，触发条件不要只限定 Transfer。")
                     .font(.footnote)
@@ -597,7 +623,7 @@ struct AutomationStatusView: View {
                     }
                 }
                 Text(tr("银行与 TNG：未识别也会留下日志；若本次没有新日志，请先检查快捷指令是否触发或报错。", "Bank and TNG: unsupported notices are logged too. If no new log appears, check whether Shortcuts triggered or reported an error.", "TNG: notifikasi tidak disokong juga dilog. Jika tiada log baharu, semak pencetus atau ralat Pintasan.")).font(.footnote)
-                Button(tr("刷新", "Refresh", "Muat semula")) { model.reload() }
+                Button(tr("刷新", "Refresh", "Muat semula")) { model.reload(); loadRecoveryInputs() }
                 Text(tr("显示实际调用记录，不代表快捷指令已启用或签名仍有效。App 无法检测没有触发的交易，也无法判断是否漏账。最多保留 100 条；日志写入失败时无法留痕。", "Shows actual action calls, not whether Shortcuts is enabled or signing is valid. The app cannot detect transactions that never triggered or establish completeness. Keeps 100 events; storage failure may prevent logging.", "Memaparkan panggilan tindakan sebenar, bukan status pengaktifan Pintasan atau tandatangan. Aplikasi tidak dapat mengesan transaksi yang tidak tercetus atau memastikan kelengkapan. Menyimpan 100 peristiwa; kegagalan storan boleh menghalang log.")).font(.footnote)
             }
             ForEach(model.ledger.automationEvents) { event in
@@ -608,6 +634,11 @@ struct AutomationStatusView: View {
                 }
             }
         }.navigationTitle(tr("自动记账状态", "Automation status", "Status automasi")).navigationBarTitleDisplayMode(.inline)
+            .task { loadRecoveryInputs() }
+    }
+    private func loadRecoveryInputs() {
+        do { recoveryInputs = try AutomationInbox.shared.pending() }
+        catch { recoveryError = error.localizedDescription }
     }
 }
 
@@ -779,13 +810,14 @@ struct NotificationSettingsView: View {
             Section {
                 Text(permission)
                 if !deliveryStatus.isEmpty { Text(deliveryStatus).font(.footnote) }
-                Button("测试系统通知（横幅 / 声音）") {
+                Text("月记专属提示音 · 月滴：1.08 秒轻柔三音铃声，适用于 TNG、银行和 Apple Pay 的自动记账结果。").font(.footnote)
+                Button("试听月记专属系统通知") {
                     Task {
                         results = true
                         do {
                             let c = Calendar.current.dateComponents([.hour, .minute], from: time)
                             try await LedgerNotifications.configure(daily: daily, results: true, hour: c.hour ?? 21, minute: c.minute ?? 0, budgetAlerts: budgetAlerts)
-                            await LedgerNotifications.result(title: "月记 · 系统通知测试", body: "系统通知测试成功。自动记账后将在此显示金额、商户、分类和处理状态。")
+                            await LedgerNotifications.result(title: "月记 · 月滴提示音", body: "这是月记专属的系统通知提示音。自动记账结果会显示金额、商户、分类和处理状态。")
                         } catch { message = error.localizedDescription }
                         await refreshPermission()
                     }

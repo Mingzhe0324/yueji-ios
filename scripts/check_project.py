@@ -72,3 +72,13 @@ print('PASS: 1024px opaque icon and six decodable PCM sound assets.')
 for source in (root / 'YueJi').glob('*.swift'):
     assert 'removingExpenseIDs' not in source.read_text(), f'Stale deletion state in {source.name}'
 print('PASS: no references to removed delayed-deletion state.')
+
+# System notification sounds must be standalone resources, not catalog-only data.
+assert 'YueJiMoonDrop.wav' in resources
+with wave.open(str(root / 'YueJi/YueJiMoonDrop.wav')) as wav:
+    assert wav.getnchannels() == 1 and wav.getsampwidth() == 2 and wav.getframerate() == 44100
+    assert 1.0 <= wav.getnframes() / wav.getframerate() <= 1.2
+    pcm = struct.unpack('<' + 'h' * wav.getnframes(), wav.readframes(wav.getnframes()))
+    assert max(abs(v) for v in pcm) == 12000
+    assert pcm[0] == 0 and pcm[-1] == 0
+print('PASS: bundled original notification sound, PCM format, duration, peak and silent endpoints.')

@@ -125,7 +125,7 @@ struct MainView: View {
                 do { try await Task.sleep(for: .seconds(4.5)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
-            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); openPendingNotification(); Task { await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
+            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); openPendingNotification(); Task { if let error = await AutomationRecovery.shared.retryPending() { model.error = error }; await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }

@@ -334,17 +334,17 @@ func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
         }
     }
     let patterns = [
-        ("payment", "duitnow payment", #"\AYou have paid RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200})\.\z"#),
-        ("payment", "payment", #"\AYou have paid RM\s*([0-9]+(?:\.[0-9]{2})?) for (.{1,200})\.\z"#),
-        ("transfer", "transfer successful", #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) has been successfully transferred to (.{1,200})\.\z"#),
-        ("transfer", "duitnow transfer is successful", #"\AYou have successfully transferred RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200})\.\z"#)
+        ("payment", "duitnow payment", #"\AYou have paid RM\s*((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{2})?) to (.{1,200}?)\.?\z"#),
+        ("payment", "payment", #"\AYou have paid RM\s*((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{2})?) for (.{1,200}?)\.?\z"#),
+        ("transfer", "transfer successful", #"\ARM\s*((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{2})?) has been successfully transferred to (.{1,200}?)\.?\z"#),
+        ("transfer", "duitnow transfer is successful", #"\AYou have successfully transferred RM\s*((?:[0-9]{1,3}(?:,[0-9]{3})+|[0-9]+)(?:\.[0-9]{2})?) to (.{1,200}?)\.?\z"#)
     ]
     for (kind, expectedTitle, pattern) in patterns {
-        guard titleKey.isEmpty || titleKey == expectedTitle else { continue }
+        guard titleKey.isEmpty || titleKey == expectedTitle || (kind == "payment" && ["payment", "duitnow payment"].contains(titleKey)) else { continue }
         guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
               let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
               let amountRange = Range(match.range(at: 1), in: text), let nameRange = Range(match.range(at: 2), in: text),
-              let cents = try? toCents(String(text[amountRange])) else { continue }
+              let cents = try? toCents(String(text[amountRange]).replacingOccurrences(of: ",", with: "")) else { continue }
         let party = String(text[nameRange]).trimmingCharacters(in: .whitespacesAndNewlines)
         if !party.isEmpty { return TNGParsed(kind: kind, cents: cents, party: party) }
     }

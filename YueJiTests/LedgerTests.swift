@@ -4,6 +4,104 @@ import AVFoundation
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    @MainActor func testSystemNotificationSoundIsInMainBundleAndDecodes() throws {
+        let url = try XCTUnwrap(Bundle.main.url(forResource: "YueJiMoonDrop", withExtension: "wav"))
+        let player = try AVAudioPlayer(contentsOf: url)
+        XCTAssertEqual(player.duration, 1.08, accuracy: 0.002)
+        XCTAssertEqual(player.numberOfChannels, 1)
+        XCTAssertEqual(LedgerNotifications.automationSoundName, url.lastPathComponent)
+    }
+
+    func testRecoveryAfterCommitDoesNotPostAgain() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let inbox = AutomationInbox(folder: folder.appendingPathComponent("AutomationInbox"))
+        let delivery = AutomationDelivery(kind: "notification", body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment")
+        try inbox.save(delivery)
+        _ = try store.change { try $0.applyDelivery(delivery) }
+        // Simulate termination after commit but before inbox cleanup, then relaunch.
+        let retained = try XCTUnwrap(AutomationInbox(folder: inbox.folder).pending().first)
+        _ = try LocalStore(folder: folder).change { try $0.applyDelivery(retained) }
+        let ledger = try store.read()
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses[0].cents, 1100)
+        XCTAssertEqual(ledger.expenses[0].date.timeIntervalSince1970, delivery.receivedAt.timeIntervalSince1970, accuracy: 1)
+        XCTAssertTrue(ledger.tngNotices[0].usesReceivedDate)
+        XCTAssertTrue(ledger.seenEvents.contains(delivery.marker))
+        try inbox.remove(retained)
+        XCTAssertTrue(try inbox.pending().isEmpty)
+    }
+
+    func testFailedLedgerWriteRetainsInputAndManualRetryRecovers() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("ledger.json")
+        try Data("temporarily unreadable ledger".utf8).write(to: file)
+        let store = LocalStore(folder: folder)
+        let inbox = AutomationInbox(folder: folder.appendingPathComponent("AutomationInbox"))
+        let recovery = AutomationRecovery(store: store, inbox: inbox, sendsNotifications: false)
+        let delivery = AutomationDelivery(kind: "notification", body: "You have paid RM11.00 for Cafe.", title: "Payment")
+        do { _ = try await recovery.submit(delivery); XCTFail("Expected a storage error") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("暂存")) }
+        let pending = try XCTUnwrap(inbox.pending().first)
+        XCTAssertEqual(pending.id, delivery.id)
+        XCTAssertEqual(pending.attempts, 1)
+        XCTAssertNotNil(pending.lastError)
+        var paused = pending; paused.attempts = 3; paused.lastAttempt = nil
+        try inbox.save(paused)
+        try LocalStore.encode(Ledger()).write(to: file)
+        _ = await recovery.retryPending()
+        XCTAssertEqual(try inbox.pending().count, 1)
+        XCTAssertTrue(try store.read().expenses.isEmpty)
+        let error = await recovery.retryPending(manual: true)
+        XCTAssertNil(error)
+        XCTAssertTrue(try inbox.pending().isEmpty)
+        XCTAssertEqual(try store.read().expenses.count, 1)
+    }
+
+    func testThreeSourcesUseSameIdempotentIntake() throws {
+        var ledger = Ledger(); let now = Date()
+        let inputs = [
+            AutomationDelivery(kind: "notification", body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: now),
+            AutomationDelivery(kind: "notification", body: "Your transfer of RM0.01 to TEST PERSON is SUCCESSFUL.", title: "Transaction Notice", date: now),
+            AutomationDelivery(kind: "applePay", date: now, amount: 15, merchant: "Apple Cafe", currency: "MYR")
+        ]
+        for input in inputs { XCTAssertTrue(try ledger.applyDelivery(input).shouldNotify) }
+        for input in inputs { _ = try ledger.applyDelivery(input) }
+        XCTAssertEqual(ledger.expenses.count, 2)
+        XCTAssertEqual(ledger.tngNotices.count, 2)
+        XCTAssertEqual(ledger.spending(in: now), 2600)
+        XCTAssertEqual(ledger.tngNotices.last?.status, "transfer")
+    }
+
+    func testFailedConversionDoesNotCommitDeliveryMarker() throws {
+        var ledger = Ledger()
+        let input = AutomationDelivery(kind: "applePay", date: Date(), amount: 10, merchant: "Foreign Cafe", currency: "SGD")
+        XCTAssertThrowsError(try ledger.applyDelivery(input))
+        XCTAssertFalse(ledger.seenEvents.contains(input.marker))
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        ledger.rates["SGD"] = RateQuote(value: 3, date: Date(), source: "test")
+        _ = try ledger.applyDelivery(input)
+        _ = try ledger.applyDelivery(input)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses[0].cents, 3000)
+    }
+
+    func testNotificationVariantsAndUncertainTextAreRetainedSafely() throws {
+        XCTAssertEqual(parseTNG("You have paid RM1,234.50 to CAFE", title: "Payment")?.cents, 123450)
+        XCTAssertEqual(parseTNG("You have paid RM11.00 for CAFE", title: "DuitNow Payment")?.party, "CAFE")
+        XCTAssertNil(parseTNG("You have paid RM1,23.50 to CAFE", title: "Payment"))
+        var ledger = Ledger()
+        let unknown = AutomationDelivery(kind: "notification", body: "Purchase MYR12.00 at NEW SHOP", title: "HLB Transaction")
+        XCTAssertNotNil(try ledger.applyDelivery(unknown).noticeID)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        let points = AutomationDelivery(kind: "notification", body: "You've received 11 points from your transaction!", title: "You've just earned 11 points!")
+        XCTAssertFalse(try ledger.applyDelivery(points).shouldNotify)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+    }
+
     func testScreenshotPaymentTransferAndPoints() throws {
         var ledger = Ledger()
         let payment = try ledger.processTNGNotification(body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: Date(), eventID: nil)

@@ -383,6 +383,12 @@ import UserNotifications
 final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     static let shared = LedgerNotifications()
     static let dailyID = "yueji.daily-reminder"
+    static let automationSoundName = "YueJiMoonDrop.wav"
+    static var automationSound: UNNotificationSound {
+        // A real bundle resource, not an asset-catalog dataset: iOS resolves this filename itself.
+        guard Bundle.main.url(forResource: "YueJiMoonDrop", withExtension: "wav") != nil else { return .default }
+        return UNNotificationSound(named: UNNotificationSoundName(rawValue: automationSoundName))
+    }
     static func registerActions() {
         let view = UNNotificationAction(identifier: "view", title: tr("查看账目", "View record", "Lihat rekod"), options: [.foreground])
         let category = UNNotificationAction(identifier: "category", title: tr("修改分类", "Change category", "Ubah kategori"), options: [.foreground])
@@ -417,7 +423,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             let content = UNMutableNotificationContent()
             content.title = tr("今天的消费记好了吗？", "Have you recorded today's spending?", "Sudah rekod belanja hari ini?")
             content.body = tr("打开月记，补上今天的消费，也检查自动记账有没有遗漏。", "Open YueJi to record today's spending and check for missing automatic entries.", "Buka YueJi untuk merekod belanja hari ini dan semak rekod automatik yang terlepas.")
-            content.sound = .default
+            content.sound = LedgerNotifications.automationSound
             var components = DateComponents(); components.hour = hour; components.minute = minute
             let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
             try await center.add(UNNotificationRequest(identifier: dailyID, content: content, trigger: trigger))
@@ -442,7 +448,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             _ = try? await center.requestAuthorization(options: [.alert, .sound])
         }
     }
-    static func result(title: String, body: String, expenseID: String? = nil, noticeID: String? = nil) async {
+    static func result(title: String, body: String, expenseID: String? = nil, noticeID: String? = nil, deliveryID: String? = nil) async {
         UserDefaults.standard.register(defaults: ["automationNotifications": true])
         guard UserDefaults.standard.bool(forKey: "automationNotifications") else {
             saveResultDelivery("自动记账结果通知开关已关闭。")
@@ -454,7 +460,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             saveResultDelivery("系统通知未获允许，请在 iPhone 设置 → 通知 → 月记开启。")
             return
         }
-        let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = .default
+        let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = automationSound
         registerActions()
         if let expenseID {
             content.categoryIdentifier = "yueji.expense"
@@ -464,8 +470,11 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             content.userInfo = ["recordID": noticeID, "recordKind": "notice"]
         }
         // Notification failure must never roll back or retry a successfully recorded payment.
+        let request = UNNotificationRequest(identifier: "yueji.result." + (deliveryID ?? UUID().uuidString), content: content, trigger: nil)
         do {
-            try await center.add(UNNotificationRequest(identifier: "yueji.result." + UUID().uuidString, content: content, trigger: nil))
+            // Retry a rejected submission once, with the same identifier. Never retry the ledger write here.
+            do { try await center.add(request) }
+            catch { try await center.add(request) }
             saveResultDelivery(settings.authorizationStatus == .provisional
                 ? "已交给 iOS（临时授权，可能静默送达）；请开启横幅与声音。"
                 : "已交给 iOS；实际横幅、声音和锁屏显示受系统通知设置及专注模式控制。")
@@ -648,7 +657,7 @@ actor BudgetAlertService {
             ? tr("打开月记查看本月预算。", "Open YueJi to review your budget.", "Buka YueJi untuk menyemak bajet.")
             : tr("个人消费：", "Personal spending: ", "Belanja peribadi: ") + money(candidate.spent)
                 + tr("；预算：", "; budget: ", "; bajet: ") + money(candidate.budget)
-        content.sound = .default
+        content.sound = LedgerNotifications.automationSound
         do {
             try await center.add(UNNotificationRequest(identifier: "yueji.budget." + candidate.month, content: content, trigger: nil))
             defaults.set(true, forKey: key)
