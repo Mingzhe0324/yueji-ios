@@ -979,10 +979,6 @@ struct LedgerFilterEditor: View {
                     Text(tr("全部", "All", "Semua")).tag("")
                     ForEach(["手动", "Apple Pay", "TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB", "银行 / TNG", "固定消费", "账单补录"], id: \.self) { Text(sourceLabel($0)).tag($0) }
                 }
-                Picker("付款账户", selection: $value.accountID) {
-                    Text("全部账户").tag("")
-                    ForEach(model.ledger.paymentAccounts) { Text($0.name).tag($0.id) }
-                }
                 TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
                 Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户、备注和标签可在账本搜索。多分类按包含分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants in the ledger search field.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dalam carian lejar.")).font(.footnote)
@@ -2774,7 +2770,6 @@ struct ExpenseBookkeepingFields: View {
     @EnvironmentObject var model: LedgerModel
     @Binding var splitCategories: Bool
     @Binding var allocations: [CategoryAllocationDraft]
-    @Binding var accountID: String
     @Binding var note: String
     @Binding var tagsText: String
     let totalCents: Int
@@ -2802,12 +2797,7 @@ struct ExpenseBookkeepingFields: View {
                 allocations = Array(model.ledger.categoryNames.prefix(2)).map { CategoryAllocationDraft(category: $0) }
             }
         }
-        Section("账户、备注与标签") {
-            Picker("付款账户 / 卡片", selection: $accountID) {
-                Text("未指定").tag("")
-                ForEach(model.ledger.paymentAccounts.filter { !$0.archived || $0.id == accountID }) { Text($0.name).tag($0.id) }
-            }
-            NavigationLink("管理付款账户") { PaymentAccountsView() }
+        Section("备注与标签") {
             TextField("备注，例如购买了什么", text: $note, axis: .vertical).lineLimit(2...5)
             TextField("标签，用逗号分隔，例如槟城旅行, 家庭", text: $tagsText)
             Text("分类说明花在什么；标签用来汇总同一次旅行、活动或项目。").font(.caption)
@@ -2818,8 +2808,7 @@ struct ExpenseBookkeepingDetails: View {
     @EnvironmentObject var model: LedgerModel
     let entry: Expense
     var body: some View {
-        Section("账户与用途") {
-            LabeledContent("付款账户", value: model.ledger.accountName(entry.paymentAccountID))
+        Section("分类与备注") {
             if entry.allocatedCategories.count > 1 {
                 ForEach(entry.allocatedCategories) { part in
                     LabeledContent(categoryLabel(part.category), value: money(part.cents))
@@ -2828,7 +2817,6 @@ struct ExpenseBookkeepingDetails: View {
             }
             if let note = entry.note, !note.isEmpty { Text(note).textSelection(.enabled) }
             ForEach(entry.tags ?? [], id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
-            NavigationLink("修改历史与恢复") { ExpenseHistoryView(expenseID: entry.id) }
         }
     }
 }
@@ -2836,115 +2824,13 @@ struct PendingBookkeepingCard: View {
     @EnvironmentObject var model: LedgerModel
     private var pending: Int { model.ledger.tngNotices.filter { ["pending", "transfer"].contains($0.status) }.count }
     private var duplicates: Int { model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count }
-    private var statements: Int { model.ledger.statementLines.filter { ["pending", "difference", "review"].contains($0.status) }.count }
     var body: some View {
         GlassPanel {
             VStack(alignment: .leading, spacing: 12) {
                 Label("待处理", systemImage: "tray.full.fill").font(.headline)
                 NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text("\(pending) 笔通知待确认 · 其中 \(duplicates) 笔疑似重复") }
-                if statements > 0 { NavigationLink("\(statements) 行账单待核对") { StatementReconciliationView() } }
                 NavigationLink("查看自动记账状态") { AutomationStatusView() }.font(.caption)
             }.frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-}
-struct PaymentAccountsView: View {
-    @EnvironmentObject var model: LedgerModel
-    @State private var editing: PaymentAccount?
-    private let sources = ["TNG", "Apple Pay", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"]
-    var body: some View {
-        List {
-            Section("我的账户与卡片") {
-                ForEach(model.ledger.paymentAccounts) { account in
-                    Button { editing = account } label: {
-                        VStack(alignment: .leading) {
-                            Text(account.name + (account.archived ? "（已停用）" : ""))
-                            Text(account.provider + (account.lastFour.isEmpty ? "" : " · 尾号 " + account.lastFour)).font(.caption).foregroundStyle(.secondary)
-                        }
-                    }
-                }
-                Button("新增账户 / 卡片") { editing = PaymentAccount(name: "") }
-            }
-            Section("自动记账默认账户") {
-                ForEach(sources, id: \.self) { source in
-                    Picker(source, selection: Binding(get: { model.ledger.sourceAccountDefaults[source] ?? "" }, set: { value in
-                        model.change { ledger in if value.isEmpty { ledger.sourceAccountDefaults.removeValue(forKey: source) } else { ledger.sourceAccountDefaults[source] = value } }
-                    })) {
-                        Text("不自动指定").tag("")
-                        ForEach(model.ledger.paymentAccounts.filter { !$0.archived }) { Text($0.name).tag($0.id) }
-                    }
-                }
-                Text("Apple Pay 是付款方式，账户才是实际扣款卡。多张卡可在各自快捷指令的“付款账户名称”填不同账户名称。银行通知有尾号时优先匹配，不明确则保留未指定。这里只记录付款归属，不同步银行余额。").font(.caption)
-            }
-        }.navigationTitle("付款账户 / 卡片")
-            .sheet(item: $editing) { PaymentAccountEditor(account: $0) }
-    }
-}
-struct PaymentAccountEditor: View {
-    @EnvironmentObject var model: LedgerModel
-    @Environment(\.dismiss) private var dismiss
-    @State var account: PaymentAccount
-    @State private var error: String?
-    var body: some View {
-        NavigationStack {
-            Form {
-                TextField("名称，例如 HLB Visa 1234", text: $account.name)
-                Picker("类型", selection: $account.kind) { Text("银行账户").tag("bank"); Text("电子钱包").tag("wallet"); Text("信用卡").tag("credit"); Text("现金").tag("cash") }
-                Picker("银行 / 平台", selection: $account.provider) {
-                    Text("其他 / 现金").tag("")
-                    ForEach(["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"], id: \.self) { Text($0).tag($0) }
-                }
-                TextField("卡号 / 账号末四位（选填）", text: $account.lastFour).keyboardType(.numberPad)
-                Toggle("停用此账户", isOn: $account.archived)
-                Text("停用后历史账目仍保留，不再用于新的自动记账。").font(.caption)
-            }.navigationTitle("账户资料")
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button("取消") { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button("保存") {
-                        do { var value = account; value.name = value.name.trimmingCharacters(in: .whitespacesAndNewlines); try LocalStore.shared.change { try $0.savePaymentAccount(value) }; model.reload(); dismiss() }
-                        catch { self.error = error.localizedDescription }
-                    } }
-                }.alert("无法保存", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
-        }
-    }
-}
-struct ExpenseHistoryView: View {
-    @EnvironmentObject var model: LedgerModel
-    let expenseID: String
-    @State private var restoring: ExpenseRevision?
-    private var changes: [ExpenseRevision] { model.ledger.expenseHistory.filter { $0.expenseID == expenseID } }
-    var body: some View {
-        List {
-            Text("保留最近 300 条修改记录，每笔最多 20 条。可恢复仍与当前账目对应的修改前版本；涉及分账、还款或退款时需在原功能撤销。商户分类规则不会随账目恢复而改变。").font(.caption)
-            ForEach(changes) { revision in
-                Section(dateLabel(revision.date, time: true) + " · " + revision.summary) {
-                    if let before = revision.before { RevisionSnapshotView(title: "修改前", entry: before) }
-                    if let after = revision.after { RevisionSnapshotView(title: "修改后", entry: after) }
-                    if revision.before != nil && revision.after != nil {
-                        Button("恢复修改前版本") { restoring = revision }
-                            .disabled(model.ledger.expenses.first(where: { $0.id == expenseID }) != revision.after)
-                    }
-                }
-            }
-            if changes.isEmpty { Text("安装此版本后的修改会显示在这里。") }
-        }.navigationTitle("修改历史")
-            .confirmationDialog("恢复修改前的账目？", isPresented: Binding(get: { restoring != nil }, set: { if !$0 { restoring = nil } }), titleVisibility: .visible) {
-                Button("确认恢复") { if let revision = restoring { model.change { try $0.restoreExpenseRevision(revision.id) } }; restoring = nil }
-            }
-    }
-}
-struct RevisionSnapshotView: View {
-    @EnvironmentObject var model: LedgerModel
-    let title: String
-    let entry: Expense
-    var body: some View {
-        VStack(alignment: .leading, spacing: 5) {
-            Text(title).font(.caption.bold())
-            Text(entry.merchant + " · " + money(entry.cents))
-            Text(dateLabel(entry.date, time: true) + " · " + model.ledger.accountName(entry.paymentAccountID)).font(.caption)
-            Text(entry.allocatedCategories.map { $0.category + " " + money($0.cents) }.joined(separator: " / ")).font(.caption)
-            if let note = entry.note { Text(note).font(.caption) }
-            if let tags = entry.tags, !tags.isEmpty { Text(tags.map { "#" + $0 }.joined(separator: " ")).font(.caption) }
         }
     }
 }
@@ -2983,266 +2869,3 @@ struct TagSpendingView: View {
     }
 }
 
-func statementStatus(_ line: StatementLine) -> String {
-    switch line.status {
-    case "matched": return "已匹配"
-    case "posted": return "已补记"
-    case "difference": return "金额 / 账户不符"
-    case "review": return "用途待确认"
-    case "resolved": return "已确认其他用途"
-    case "ignored": return "已忽略"
-    default: return "待核对"
-    }
-}
-struct StatementReconciliationView: View {
-    @EnvironmentObject var model: LedgerModel
-    @State private var month = Date()
-    @State private var accountID = ""
-    @State private var pendingOnly = false
-    @State private var importing = false
-    private var lines: [StatementLine] {
-        model.ledger.statementLines.filter { monthKey($0.date) == monthKey(month) && (accountID.isEmpty || $0.accountID == accountID) }.sorted { $0.date > $1.date }
-    }
-    private var visible: [StatementLine] { lines.filter { !pendingOnly || ["pending", "difference", "review"].contains($0.status) } }
-    private var unmatchedExpenses: [Expense] {
-        let linked = Set(lines.compactMap(\.expenseID))
-        return model.ledger.expenses.filter { entry in
-            guard monthKey(entry.date) == monthKey(month), let id = entry.paymentAccountID else { return false }
-            return (accountID.isEmpty || id == accountID) && !linked.contains(entry.id)
-        }.sorted { $0.date > $1.date }
-    }
-    var body: some View {
-        List {
-            Section {
-                MonthPicker(month: $month)
-                Picker("账户", selection: $accountID) {
-                    Text("全部账户").tag("")
-                    ForEach(model.ledger.paymentAccounts) { Text($0.name).tag($0.id) }
-                }
-                LabeledContent("账单行数", value: String(lines.count))
-                LabeledContent("待核对 / 用途待确认", value: String(lines.filter { ["pending", "review"].contains($0.status) }.count))
-                LabeledContent("金额 / 账户不符", value: String(lines.filter { $0.status == "difference" }.count))
-                Toggle("只看待处理", isOn: $pendingOnly)
-                Button("导入 MYR CSV 账单") { importing = true }
-                Text("先建立付款账户，再导入带列标题的 CSV。导入只保存核对记录，不会自动改动消费。不同导出文件的重叠行需再次核对。").font(.caption)
-                NavigationLink("管理付款账户") { PaymentAccountsView() }
-            }
-            ForEach(visible) { line in
-                NavigationLink { StatementLineView(id: line.id) } label: {
-                    VStack(alignment: .leading, spacing: 5) {
-                        Text(line.description).lineLimit(2)
-                        Text((line.direction == "debit" ? "转出 " : "转入 ") + money(line.cents) + " · " + statementStatus(line)).font(.subheadline)
-                        Text(model.ledger.accountName(line.accountID) + " · " + dateLabel(line.date)).font(.caption).foregroundStyle(.secondary)
-                    }
-                }
-            }
-            if visible.isEmpty { Text("这个月份暂无对应对账记录。") }
-            Section {
-                DisclosureGroup("尚未匹配账单的消费（\(unmatchedExpenses.count) 笔）") {
-                    Text("可能不在本次账单导出范围，不代表一定漏账。").font(.caption)
-                    ForEach(unmatchedExpenses) { entry in NavigationLink { ExpenseDetailView(id: entry.id) } label: { ExpenseRow(entry: entry) } }
-                }
-            }
-        }.navigationTitle("月结对账")
-            .sheet(isPresented: $importing) { StatementImportView() }
-    }
-}
-struct StatementImportView: View {
-    @EnvironmentObject var model: LedgerModel
-    @Environment(\.dismiss) private var dismiss
-    @State private var rows: [[String]] = []
-    @State private var mapping = StatementMapping()
-    @State private var accountID = ""
-    @State private var choosing = false
-    @State private var preview: [StatementLine] = []
-    @State private var filename = ""
-    @State private var error: String?
-    @State private var result: String?
-    private var header: [String] { rows.first ?? [] }
-    private func column(_ title: String, selection: Binding<Int>, optional: Bool = false) -> some View {
-        Picker(title, selection: selection) {
-            if optional { Text("不提供").tag(-1) }
-            ForEach(header.indices, id: \.self) { index in Text("\(index + 1). " + header[index]).tag(index) }
-        }
-    }
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("选择文件与账户") {
-                    Picker("归属账户", selection: $accountID) {
-                        Text("请选择").tag("")
-                        ForEach(model.ledger.paymentAccounts.filter { !$0.archived }) { Text($0.name).tag($0.id) }
-                    }
-                    Button(filename.isEmpty ? "选择 CSV 文件" : filename) { choosing = true }
-                    Text("支持 MYR、UTF-8 / UTF-16、逗号分隔、有列标题的 CSV。PDF 和图片请先转成 CSV；不会发送账单到外部服务。").font(.caption)
-                }
-                if !rows.isEmpty {
-                    Section("对应账单列") {
-                        column("日期", selection: $mapping.dateColumn)
-                        column("描述 / 商户", selection: $mapping.descriptionColumn)
-                        column("交易编号", selection: $mapping.referenceColumn, optional: true)
-                        Toggle("借方 / 贷方分成两列", isOn: $mapping.useDebitCredit)
-                        if mapping.useDebitCredit {
-                            column("Debit / 转出", selection: $mapping.debitColumn)
-                            column("Credit / 转入", selection: $mapping.creditColumn)
-                        } else {
-                            column("金额", selection: $mapping.amountColumn)
-                            Toggle("正数代表转出，负数代表转入", isOn: $mapping.positiveIsDebit)
-                            Text(mapping.positiveIsDebit ? "正数＝转出；负数＝转入" : "正数＝转入；负数＝转出").font(.caption)
-                        }
-                        Picker("日期格式", selection: $mapping.dateFormat) {
-                            ForEach(["dd/MM/yyyy", "d/M/yyyy", "dd/M/yyyy", "d/MM/yyyy", "MM/dd/yyyy", "yyyy-MM-dd", "dd-MM-yyyy", "dd-MMM-yyyy", "yyyy-MM-dd HH:mm:ss", "dd/MM/yyyy HH:mm:ss"], id: \.self) { Text($0).tag($0) }
-                        }
-                        Text("首行样本：" + (rows.dropFirst().first ?? []).joined(separator: " | ")).font(.caption).textSelection(.enabled)
-                        Button("检查并预览") {
-                            do { preview = try parseStatementRows(rows, mapping: mapping, accountID: accountID) }
-                            catch { preview = []; self.error = error.localizedDescription }
-                        }
-                    }
-                }
-                if !preview.isEmpty {
-                    Section("预览（共 \(preview.count) 行）") {
-                        ForEach(preview.prefix(10)) { line in
-                            Text(dateLabel(line.date) + " · " + (line.direction == "debit" ? "转出 " : "转入 ") + money(line.cents) + " · " + line.description).font(.caption)
-                        }
-                        Button("保存核对记录") {
-                            do {
-                                let count = try LocalStore.shared.change { try $0.importStatement(preview) }
-                                model.reload(); result = "新增 \(count) 行；跳过 \(preview.count - count) 行重复导入。请在对应月份核对。"; preview = []
-                            } catch { self.error = error.localizedDescription }
-                        }
-                    }
-                }
-                if let result { Text(result).foregroundStyle(.secondary) }
-            }.navigationTitle("导入账单")
-                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
-                .onChange(of: mapping) { _, _ in preview = []; result = nil }
-                .onChange(of: accountID) { _, _ in preview = []; result = nil }
-                .fileImporter(isPresented: $choosing, allowedContentTypes: [.commaSeparatedText, .plainText]) { selection in
-                    do {
-                        let url = try selection.get(); let accessed = url.startAccessingSecurityScopedResource()
-                        defer { if accessed { url.stopAccessingSecurityScopedResource() } }
-                        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                        guard size <= 2_000_000 else { throw LedgerError.invalid("CSV 不能超过 2 MB。") }
-                        let data = try Data(contentsOf: url)
-                        rows = try readStatementCSV(data); filename = url.lastPathComponent; preview = []; result = nil
-                        mapping = StatementMapping()
-                        func index(_ names: [String], fallback: Int) -> Int {
-                            header.firstIndex(where: { value in names.contains(friendKey(value)) }) ?? fallback
-                        }
-                        mapping.dateColumn = index(["date", "transaction date", "日期"], fallback: 0)
-                        mapping.descriptionColumn = index(["description", "merchant", "details", "描述", "商户"], fallback: 1)
-                        mapping.amountColumn = index(["amount", "amount (myr)", "金额"], fallback: 2)
-                        mapping.referenceColumn = index(["reference", "ref", "transaction id", "交易编号"], fallback: -1)
-                        mapping.debitColumn = index(["debit", "withdrawal", "转出"], fallback: -1)
-                        mapping.creditColumn = index(["credit", "deposit", "转入"], fallback: -1)
-                        mapping.useDebitCredit = mapping.debitColumn >= 0 && mapping.creditColumn >= 0
-                    } catch { rows = []; preview = []; self.error = error.localizedDescription }
-                }
-                .alert("无法导入", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
-        }
-    }
-}
-struct StatementLineView: View {
-    @EnvironmentObject var model: LedgerModel
-    let id: String
-    @State private var selectedExpense = ""
-    @State private var selectedNotice = ""
-    @State private var category = "其他"
-    @State private var distinct = false
-    @State private var action = ""
-    @State private var confirm = false
-    @State private var editing: Expense?
-    @State private var error: String?
-    private var line: StatementLine? { model.ledger.statementLines.first { $0.id == id } }
-    private var candidates: [Expense] { line.map { model.ledger.statementCandidates($0) } ?? [] }
-    var body: some View {
-        Form {
-            if let line {
-                Section {
-                    Text(line.description).textSelection(.enabled)
-                    LabeledContent(line.direction == "debit" ? "转出" : "转入", value: money(line.cents))
-                    LabeledContent("日期", value: dateLabel(line.date))
-                    LabeledContent("账户", value: model.ledger.accountName(line.accountID))
-                    LabeledContent("状态", value: statementStatus(line))
-                    if !line.reference.isEmpty { Text("编号：" + line.reference).font(.caption) }
-                }
-                if let expenseID = line.expenseID, let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
-                    Section("关联账目") {
-                        ExpenseRow(entry: entry)
-                        if line.cents != entry.cents { Text("账单与账目相差 " + money(abs(line.cents - entry.cents))).foregroundStyle(.orange) }
-                        Button("核对并编辑账目") { editing = entry }
-                        NavigationLink("查看账目详情") { ExpenseDetailView(id: entry.id) }
-                    }
-                }
-                if let noticeID = line.noticeID {
-                    NavigationLink("查看 / 确认交易用途") {
-                        if let notice = model.ledger.tngNotices.first(where: { $0.id == noticeID }) {
-                            if notice.resolution != nil { TNGNoticeView(id: noticeID) }
-                            else if notice.kind == "incoming" { TNGIncomingView(id: noticeID) }
-                            else { FinancialNoticeReviewView(id: noticeID) }
-                        } else { Text("关联通知已清理。") }
-                    }
-                }
-                if ["pending", "difference"].contains(line.status) {
-                    if line.direction == "debit" {
-                        Section("核对已有消费") {
-                            if candidates.count > 1 { Text("找到多笔候选，请检查是否已重复记账。").foregroundStyle(.orange) }
-                            Picker("选择账目", selection: $selectedExpense) {
-                                Text("请选择").tag("")
-                                ForEach(candidates) { entry in Text(entry.merchant + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
-                            }
-                            Text("关联时会将未指定账户的账目归入本账单账户；金额不同会标记差异，不会自动修改金额。").font(.caption)
-                            Button("关联并核对") { action = "link"; confirm = true }.disabled(selectedExpense.isEmpty)
-                        }
-                    }
-                    if line.status == "pending" {
-                        let notices = model.ledger.statementNoticeCandidates(line)
-                        if !notices.isEmpty {
-                            Section("已有收款 / 转账通知") {
-                                Picker("选择对应通知", selection: $selectedNotice) {
-                                    Text("请选择").tag("")
-                                    ForEach(notices) { notice in Text((notice.party ?? notice.provider) + " · " + dateLabel(notice.date)).tag(notice.id) }
-                                }
-                                Button("关联已有通知") { action = "linkNotice"; confirm = true }.disabled(selectedNotice.isEmpty)
-                                Text("先核对这里，可避免把已记录的收入或转账再补一次。").font(.caption)
-                            }
-                        }
-                        if line.direction == "debit" {
-                            Section("确认确实漏记后补录") {
-                                Picker("分类", selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
-                                if !candidates.isEmpty { Toggle("已核对，这不是上面的已有账目", isOn: $distinct) }
-                                Button("补记为消费") { action = "post"; confirm = true }.disabled(!candidates.isEmpty && !distinct)
-                            }
-                        }
-                        Button("转至收入 / 转账 / 退款确认") { action = "review"; confirm = true }
-                    }
-                    Button("忽略此行（例如重复账单行）") { action = "ignore"; confirm = true }
-                } else if line.noticeID == nil {
-                    Button("解除对账关联，重新核对") { action = "reopen"; confirm = true }
-                    Text("解除关联保留真实账目；再次补记前请检查已有消费。").font(.caption)
-                }
-            }
-        }.navigationTitle("核对交易")
-            .onAppear { if let line { category = guessCategory(line.description) } }
-            .sheet(item: $editing) { ExpenseEditor(original: $0) }
-            .confirmationDialog("确认执行所选核对操作？", isPresented: $confirm, titleVisibility: .visible) {
-                Button("确认") {
-                    do {
-                        try LocalStore.shared.change { ledger in
-                            switch action {
-                            case "link": try ledger.linkStatement(id, expenseID: selectedExpense)
-                            case "linkNotice": try ledger.linkStatementNotice(id, noticeID: selectedNotice)
-                            case "post": try ledger.postStatementExpense(id, category: category, confirmDistinct: distinct)
-                            case "review": _ = try ledger.reviewStatementNotice(id)
-                            case "ignore": try ledger.ignoreStatement(id)
-                            case "reopen": try ledger.reopenStatement(id)
-                            default: break
-                            }
-                        }
-                        model.reload()
-                    } catch { self.error = error.localizedDescription }
-                }
-            }.alert("无法处理", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
-    }
-}

@@ -725,7 +725,6 @@ struct ExpenseEditor: View {
     @State private var rememberCategory = true
     @State private var splitCategories = false
     @State private var allocations: [CategoryAllocationDraft] = []
-    @State private var accountID = ""
     @State private var note = ""
     @State private var tagsText = ""
     @State private var splitting = false
@@ -787,7 +786,7 @@ struct ExpenseEditor: View {
                     }.accessibilityLabel(tr("分类", "Category", "Kategori"))
                     Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
                 }.disabled((original?.refunded ?? 0) > 0)
-                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, accountID: $accountID, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0)
+                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0)
                 Section {
                     Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
                     if splitting {
@@ -851,7 +850,7 @@ struct ExpenseEditor: View {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             splitCategories = !(e.categoryAllocations ?? []).isEmpty
             allocations = (e.categoryAllocations ?? []).map { CategoryAllocationDraft(id: $0.id, category: $0.category, amount: Currency.input($0.cents, "MYR")) }
-            accountID = e.paymentAccountID ?? ""; note = e.note ?? ""; tagsText = (e.tags ?? []).joined(separator: ", ")
+            note = e.note ?? ""; tagsText = (e.tags ?? []).joined(separator: ", ")
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -877,7 +876,6 @@ struct ExpenseEditor: View {
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
-            entry.paymentAccountID = accountID.isEmpty ? nil : accountID
             entry.note = note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note
             entry.tags = normalizedExpenseTags(tagsText)
             if splitCategories {
@@ -1086,8 +1084,6 @@ struct SettingsView: View {
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG", symbol: "bolt.fill", color: .teal)
                     }
-                    NavigationLink("付款账户 / 卡片") { PaymentAccountsView() }
-                    NavigationLink("月结对账（CSV）") { StatementReconciliationView() }
                     NavigationLink("标签与项目") { ExpenseTagsView() }
                     NavigationLink { categoriesPage } label: {
                         SimpleSettingsRow(title: tr("分类与规则", "Categories & rules", "Kategori & peraturan"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)

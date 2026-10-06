@@ -1688,7 +1688,6 @@ final class AutomationWorkflowTests: XCTestCase {
 }
 
 final class BookkeepingBuild62Tests: XCTestCase {
-    private func account() -> PaymentAccount { PaymentAccount(name: "TNG Wallet", kind: "wallet", provider: "TNG") }
     private func splitExpense() -> Expense {
         Expense(merchant: "Supermarket", cents: 10000, category: "餐饮", categoryAllocations: [CategoryAllocation(category: "餐饮", cents: 7000), CategoryAllocation(category: "购物", cents: 3000)])
     }
@@ -1724,28 +1723,12 @@ final class BookkeepingBuild62Tests: XCTestCase {
         XCTAssertEqual(ledger.expenses[0].categoryAllocations?[1].category, "家庭用品")
         _ = try ledger.validated()
     }
-    func testAccountsDefaultsSuffixAndExplicitCardName() throws {
-        var ledger = Ledger(); let wallet = account()
-        try ledger.savePaymentAccount(wallet); ledger.sourceAccountDefaults["TNG"] = wallet.id
-        let card = PaymentAccount(name: "HLB Visa", kind: "credit", provider: "Hong Leong", lastFour: "1234")
-        try ledger.savePaymentAccount(card)
-        XCTAssertEqual(try ledger.resolvePaymentAccount(source: "Hong Leong", suffix: "1234"), card.id)
-        XCTAssertNil(try ledger.resolvePaymentAccount(source: "Hong Leong", suffix: "5678"))
-        _ = try ledger.addPayment(amount: 15, merchant: "ABC", currency: "MYR", date: Date(), eventID: "card-62", paymentAccount: "HLB Visa")
-        XCTAssertEqual(ledger.expenses.last?.paymentAccountID, card.id)
-        _ = try ledger.receiveTNG(body: "You have paid RM2.00 for Cafe.", date: Date(), eventID: nil)
-        XCTAssertEqual(ledger.expenses.last?.paymentAccountID, wallet.id)
-        var archived = wallet; archived.archived = true; try ledger.savePaymentAccount(archived)
-        XCTAssertNil(ledger.sourceAccountDefaults["TNG"])
-        XCTAssertThrowsError(try ledger.resolvePaymentAccount(source: "TNG", explicitName: archived.name))
-        XCTAssertEqual(ledger.accountName(wallet.id), "TNG Wallet")
-    }
-    func testTagsNotesAccountAndSplitSearch() throws {
-        var ledger = Ledger(); let wallet = account(); ledger.paymentAccounts = [wallet]
-        var e = splitExpense(); e.note = "Family lunch"; e.tags = normalizedExpenseTags("槟城旅行, 家庭,槟城旅行"); e.paymentAccountID = wallet.id
+    func testTagsNotesAndSplitSearch() throws {
+        var ledger = Ledger()
+        var e = splitExpense(); e.note = "Family lunch"; e.tags = normalizedExpenseTags("槟城旅行, 家庭,槟城旅行")
         ledger.expenses = [e]
         XCTAssertEqual(e.tags?.count, 2)
-        var filter = LedgerFilter(); filter.category = "购物"; filter.accountID = wallet.id
+        var filter = LedgerFilter(); filter.category = "购物"
         XCTAssertEqual(try ledger.filteredEntries(in: e.date, search: "槟城", filter: filter).count, 1)
         XCTAssertEqual(try ledger.filteredEntries(in: e.date, search: "family lunch", filter: filter).count, 1)
         // The existing ISO-8601 backup format stores whole seconds, while Date()
@@ -1761,102 +1744,22 @@ final class BookkeepingBuild62Tests: XCTestCase {
         let exported = String(decoding: ledger.csv(month: nil, splits: false), as: UTF8.self)
         XCTAssertTrue(exported.contains("category_allocations_MYR")); XCTAssertTrue(exported.contains("槟城旅行"))
     }
-    func testOldBackupGetsEmptyNewCollections() throws {
-        let old = Ledger(expenses: [Expense(merchant: "Cafe", cents: 100)])
-        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(old)) as? [String: Any])
-        for key in ["paymentAccounts", "sourceAccountDefaults", "expenseHistory", "statementLines"] { object.removeValue(forKey: key) }
+    func testRemovedFeatureFieldsDoNotPreventBackupRestore() throws {
+        var e = splitExpense()
+        e.date = Date(timeIntervalSince1970: 1_759_680_000)
+        e.note = "Keep this purchase"; e.tags = ["旅行"]
+        let ledger = Ledger(expenses: [e])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        object["paymentAccounts"] = [["id": "legacy", "name": "Wallet", "kind": "wallet", "provider": "TNG", "lastFour": "", "archived": false]]
+        object["sourceAccountDefaults"] = ["TNG": "legacy"]
+        object["expenseHistory"] = [["id": "old-revision", "expenseID": e.id]]
+        object["statementLines"] = [["id": "old-line", "expenseID": e.id]]
+        var entries = try XCTUnwrap(object["expenses"] as? [[String: Any]])
+        entries[0]["paymentAccountID"] = "legacy"; object["expenses"] = entries
         let restored = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
-        XCTAssertTrue(restored.paymentAccounts.isEmpty); XCTAssertTrue(restored.expenseHistory.isEmpty)
-        XCTAssertNil(restored.expenses[0].categoryAllocations)
+        XCTAssertEqual(restored.expenses, [e])
+        let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(restored)) as? [String: Any])
+        for key in ["paymentAccounts", "sourceAccountDefaults", "expenseHistory", "statementLines"] { XCTAssertNil(saved[key]) }
+        XCTAssertEqual(restored.spending(in: e.date, category: "购物"), 3000)
     }
-    func testHistoryPersistsAndRestoresOnlyCurrentVersion() throws {
-        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
-        defer { try? FileManager.default.removeItem(at: folder) }
-        let store = LocalStore(folder: folder)
-        try store.change { $0.expenses = [Expense(merchant: "ABC", cents: 1000)] }
-        try store.change { $0.expenses[0].cents = 1200; $0.expenses[0].note = "Edited" }
-        let first = try XCTUnwrap(store.read().expenseHistory.first)
-        try store.change { $0.expenses[0].category = "购物" }
-        XCTAssertThrowsError(try store.change { try $0.restoreExpenseRevision(first.id) })
-        let newest = try XCTUnwrap(store.read().expenseHistory.first)
-        try store.change { try $0.restoreExpenseRevision(newest.id) }
-        try store.change { try $0.restoreExpenseRevision(first.id) }
-        let restored = try store.read()
-        XCTAssertEqual(restored.expenses[0].cents, 1000); XCTAssertNil(restored.expenses[0].note)
-        XCTAssertGreaterThan(restored.expenseHistory.count, 2)
-    }
-    func testCSVQuotedFieldsSignsAndInvalidRows() throws {
-        let data = Data("Date,Description,Amount,Ref\r\n01/10/2026,\"Cafe, \"\"Main\"\"\",10.00,A\r\n".utf8)
-        let rows = try readStatementCSV(data)
-        XCTAssertEqual(rows.count, 2); XCTAssertEqual(rows[1][1], "Cafe, \"Main\"")
-        XCTAssertEqual(try statementAmount("(1,234.50)"), -123450)
-        XCTAssertThrowsError(try statementAmount("1,23.50"))
-        XCTAssertThrowsError(try readStatementCSV(Data("a,b,c\n\"unterminated".utf8)))
-        var mapping = StatementMapping(); mapping.referenceColumn = 3
-        let lines = try parseStatementRows(rows, mapping: mapping, accountID: "wallet")
-        XCTAssertEqual(lines[0].cents, 1000); XCTAssertEqual(lines[0].direction, "debit")
-        let invalid = [["Date", "Description", "Amount"], ["31/02/2026", "Shop", "10.00"]]
-        XCTAssertThrowsError(try parseStatementRows(invalid, mapping: StatementMapping(), accountID: "wallet"))
-    }
-    func testImportIdempotencyAndRealIdenticalRowsPreserved() throws {
-        var ledger = Ledger(); let wallet = account(); ledger.paymentAccounts = [wallet]
-        let rows = [["Date", "Description", "Amount"], ["01/10/2026", "Cafe", "10.00"], ["01/10/2026", "Cafe", "10.00"]]
-        let parsed = try parseStatementRows(rows, mapping: StatementMapping(), accountID: wallet.id)
-        XCTAssertEqual(Set(parsed.map(\.id)).count, 2)
-        XCTAssertEqual(try ledger.importStatement(parsed), 2)
-        XCTAssertEqual(try ledger.importStatement(parsed), 0)
-        XCTAssertTrue(ledger.expenses.isEmpty)
-        XCTAssertEqual(ledger.statementLines.count, 2)
-    }
-    func testDebitCreditMappingAndAccountIsolation() throws {
-        let rows = [["Date", "Description", "Debit", "Credit"], ["01/10/2026", "Salary", "", "100.00"]]
-        var mapping = StatementMapping(); mapping.useDebitCredit = true; mapping.debitColumn = 2; mapping.creditColumn = 3
-        let parsed = try parseStatementRows(rows, mapping: mapping, accountID: "one")
-        XCTAssertEqual(parsed[0].direction, "credit")
-        var ledger = Ledger(); let one = account(), two = PaymentAccount(name: "Bank")
-        ledger.paymentAccounts = [one, two]
-        var line = parsed[0]; line.accountID = one.id; line.direction = "debit"
-        ledger.expenses = [Expense(merchant: "Salary", cents: 10000, date: line.date, paymentAccountID: two.id)]
-        XCTAssertTrue(ledger.statementCandidates(line).isEmpty)
-    }
-    func testStatementMatchingMismatchAndNoRepeatedPosting() throws {
-        var ledger = Ledger(); let wallet = account(); ledger.paymentAccounts = [wallet]
-        let date = Date().addingTimeInterval(-60)
-        let line = StatementLine(id: "line-62", accountID: wallet.id, date: date, description: "Shop", cents: 1000, direction: "debit", reference: "REF1")
-        ledger.statementLines = [line]; ledger.expenses = [Expense(merchant: "Shop", cents: 900, date: date)]
-        try ledger.linkStatement(line.id, expenseID: ledger.expenses[0].id)
-        XCTAssertEqual(ledger.statementLines[0].status, "difference"); XCTAssertEqual(ledger.expenses[0].cents, 900)
-        ledger.expenses[0].cents = 1000; ledger.refreshStatementLinks()
-        XCTAssertEqual(ledger.statementLines[0].status, "matched")
-        try ledger.reopenStatement(line.id)
-        XCTAssertThrowsError(try ledger.postStatementExpense(line.id, category: "购物", confirmDistinct: false))
-        try ledger.postStatementExpense(line.id, category: "购物", confirmDistinct: true)
-        XCTAssertThrowsError(try ledger.postStatementExpense(line.id, category: "购物", confirmDistinct: true))
-        XCTAssertEqual(ledger.expenses.count, 2)
-    }
-    func testStatementCanLinkExistingIncomeWithoutPostingAnother() throws {
-        var ledger = Ledger(); let wallet = account(); ledger.paymentAccounts = [wallet]
-        let date = Date().addingTimeInterval(-60)
-        _ = try ledger.receiveTNG(body: "ALICE has transferred RM10.00 to you.", date: date, eventID: nil)
-        let noticeID = try XCTUnwrap(ledger.tngNotices.last?.id)
-        try ledger.resolveTNGIncoming(id: noticeID, purpose: "income", date: date)
-        let line = StatementLine(id: "income-62", accountID: wallet.id, date: date, description: "ALICE", cents: 1000, direction: "credit", reference: "")
-        ledger.statementLines = [line]
-        try ledger.linkStatementNotice(line.id, noticeID: noticeID)
-        XCTAssertEqual(ledger.statementLines[0].status, "resolved")
-        XCTAssertEqual(ledger.tngNotices.count, 1); XCTAssertTrue(ledger.expenses.isEmpty)
-        _ = try ledger.validated()
-    }
-    func testDeletedStatementNoticeReturnsLineToPending() throws {
-        var ledger = Ledger(); let wallet = account(); ledger.paymentAccounts = [wallet]
-        ledger.statementLines = [StatementLine(id: "missing-notice", accountID: wallet.id, date: Date(), description: "Transfer", cents: 100, direction: "credit", reference: "")]
-        _ = try ledger.reviewStatementNotice("missing-notice")
-        XCTAssertEqual(ledger.statementLines[0].status, "review")
-        ledger.tngNotices = []
-        ledger.refreshStatementLinks()
-        XCTAssertEqual(ledger.statementLines[0].status, "pending")
-        XCTAssertNil(ledger.statementLines[0].noticeID)
-        _ = try ledger.validated()
-    }
-
 }
