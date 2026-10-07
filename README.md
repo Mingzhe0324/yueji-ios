@@ -1,5 +1,12 @@
 # 月记 YueJi · 1.51.0（build 69）
 
+## 1.51.2 / build 71：修复 Swift 编译错误
+
+修正通知文本标准化中的 Unicode 转义：使用 Swift 要求的 `\u{200B}` 与 `\u{FEFF}`。build70 中遗漏花括号，造成编译失败、测试无法开始；本版修复该阻塞。
+
+保留返现广告过滤与 TNG 输入兼容调整。已检查所有 App Swift 文件的同类转义、项目结构、版本配置和打包内容；当前环境没有 Swift／Xcode，尚未完成原生编译，需重新运行随包 GitHub Actions。此修复不代表已经确认付款通知漏触发的原因。
+
+
 ## 1.51.1 / build 70：返现广告过滤与 TNG 输入兼容
 
 - 忽略「Earn cashback in Singapore! / Make 2 QR payments with NETS QR and earn up to RM10 cashback.」这类促销通知：不建立待确认账目、不计消费，也不发送记账结果通知；最近自动记账仍可查看“已忽略”的调用结果。

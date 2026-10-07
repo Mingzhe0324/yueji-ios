@@ -289,8 +289,8 @@ func tngSignedAmount(_ notice: TNGNotice) -> String {
     (notice.kind == "incoming" ? "+" : "−") + money(notice.cents ?? 0)
 }
 func notificationText(_ value: String) -> String {
-    value.replacingOccurrences(of: "\u200B", with: "")
-        .replacingOccurrences(of: "\uFEFF", with: "")
+    value.replacingOccurrences(of: "\u{200B}", with: "")
+        .replacingOccurrences(of: "\u{FEFF}", with: "")
         .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
 }
 func notificationTitleKey(_ value: String) -> String {
