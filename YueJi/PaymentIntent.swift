@@ -6,17 +6,19 @@ import FoundationModels
 
 struct RecordApplePayIntent: AppIntent {
     static var title: LocalizedStringResource = "记录 Apple Pay 支出"
-    static var description = IntentDescription("将快捷指令提供的成功付款写入月记本地账本。不会读取银行或钱包历史记录。")
+    static var description = IntentDescription("记录成功付款，默认使用本次自动化运行的时刻。补录旧交易才开启使用指定交易时间；不会读取钱包历史。")
     static var openAppWhenRun: Bool = false
     @Parameter(title: "金额") var amount: Double
     @Parameter(title: "商户") var merchant: String
     @Parameter(title: "交易描述（可选）") var transactionDescription: String?
     @Parameter(title: "币种", default: "MYR") var currency: String
-    @Parameter(title: "交易时间") var transactionDate: Date
+    @Parameter(title: "指定交易时间（补录时使用）", kind: .dateTime) var transactionDate: Date?
+    @Parameter(title: "使用指定交易时间（补录旧交易）", default: false) var useTransactionDate: Bool
     @Parameter(title: "交易标识（可选）") var transactionID: String?
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        let delivery = AutomationDelivery(kind: "applePay", date: transactionDate, eventID: transactionID,
+        var delivery = AutomationDelivery(kind: "applePay", date: transactionDate, eventID: transactionID,
                                           amount: amount, merchant: merchant, currency: currency, description: transactionDescription ?? "")
+        delivery.useTransactionDate = useTransactionDate
         do {
             let result = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
@@ -58,15 +60,17 @@ struct YueJiShortcuts: AppShortcutsProvider {
 
 struct RecordTNGIntent: AppIntent {
     static var title: LocalizedStringResource = "记录银行与 TNG 通知"
-    static var description = IntentDescription("解析银行与 TNG 通知正文。已识别付款记为消费，转出及收款显示在账本，收款待确认用途；陌生交易格式保留待确认，推广及验证码忽略。")
+    static var description = IntentDescription("接收任意银行与 TNG 通知。明确的马币付款自动记账；转账、收款及无法确认的格式待确认，广告及验证码忽略。来源 App 名称可用于区分银行。")
     static var openAppWhenRun = false
     @Parameter(title: "通知正文") var body: String
     @Parameter(title: "通知标题（可选）") var notificationTitle: String?
-    @Parameter(title: "通知时间（可选）") var notificationDate: Date?
+    @Parameter(title: "通知时间（可选）", kind: .dateTime) var notificationDate: Date?
+    @Parameter(title: "来源 App 名称（可选）") var sourceApp: String?
     @Parameter(title: "交易标识（可选）") var transactionID: String?
     func perform() async throws -> some IntentResult {
-        let delivery = AutomationDelivery(kind: "notification", body: body, title: notificationTitle ?? "",
+        var delivery = AutomationDelivery(kind: "notification", body: body, title: notificationTitle ?? "",
                                           date: notificationDate, eventID: transactionID)
+        delivery.sourceApp = sourceApp
         do {
             _ = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()

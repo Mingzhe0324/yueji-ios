@@ -105,12 +105,18 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "A56472E961F58FFFAE622D5B";
 		};
+		"CE7300000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "audio.wav"; "path" = "YueJiIncoming.wav"; "sourceTree" = "<group>"; };
+		"CE7300000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CE7300000000000000000001"; };
+		"CE7300000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "audio.wav"; "path" = "YueJiOutgoing.wav"; "sourceTree" = "<group>"; };
+		"CE7300000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CE7300000000000000000003"; };
 		"CE6600000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "audio.wav"; "path" = "YueJiMoonDrop.wav"; "sourceTree" = "<group>"; };
 		"CE6600000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CE6600000000000000000001"; };
 		"E17E80AD8E2103CF3FC3FD96" = {
 			"isa" = "PBXGroup";
 			"children" = (
 				"CE6600000000000000000001",
+				"CE7300000000000000000001",
+				"CE7300000000000000000003",
 				"CB0000000000000000000001",
                 "CB1000000000000000000001",
                 "4272165E609CEB45988F02A0",
@@ -181,6 +187,8 @@
 			"buildActionMask" = 2147483647;
 			"files" = (
 				"CE6600000000000000000002",
+				"CE7300000000000000000002",
+				"CE7300000000000000000004",
 				"CB0000000000000000000002",
                 "CB1000000000000000000002",
                 "ABAD2E33A649C96D618F1E8D",

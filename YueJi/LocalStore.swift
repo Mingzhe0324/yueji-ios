@@ -16,17 +16,27 @@ struct AutomationDelivery: Codable, Identifiable {
     var attempts = 0
     var lastError: String? = nil
     var lastAttempt: Date? = nil
-    var source: String { kind == "applePay" ? "Apple Pay" : "银行 / TNG" }
+    var sourceApp: String? = nil
+    var useTransactionDate: Bool? = nil // nil preserves deliveries queued by older versions
+    var source: String { kind == "applePay" ? "Apple Pay" : notificationProvider(sourceApp: sourceApp, title: title, body: body) }
+    var applePayDate: Date { useTransactionDate == false ? receivedAt : (date ?? receivedAt) }
+    var applePayTimeSource: String { useTransactionDate == false || date == nil ? "received" : "supplied" }
     var marker: String { "delivery:" + id }
     func validate() throws {
         guard UUID(uuidString: id) != nil, ["notification", "applePay"].contains(kind),
               body.count <= 8000, title.count <= 500, merchant.count <= 200,
               description.count <= 2000, currency.count <= 10, (eventID?.count ?? 0) <= 500,
-              receivedAt.timeIntervalSince1970.isFinite, amount?.isFinite ?? true,
+              (sourceApp == nil || sourceApp!.isEmpty || validFinancialSource(sourceApp!)),
+              !(kind == "applePay" && useTransactionDate == true && date == nil),
+              receivedAt.timeIntervalSince1970 >= 0, receivedAt.timeIntervalSince1970 < 4_102_444_800, amount?.isFinite ?? true,
               date?.timeIntervalSince1970.isFinite ?? true else {
             throw LedgerError.invalid("自动记账输入无效或过长，请检查快捷指令。")
         }
     }
+}
+
+enum AutomationNotificationSound: String {
+    case incoming, outgoing, neutral
 }
 
 struct AutomationResult {
@@ -35,9 +45,22 @@ struct AutomationResult {
     var expenseID: String? = nil
     var noticeID: String? = nil
     var shouldNotify = true
+    var sound: AutomationNotificationSound = .neutral
 }
 
 extension Ledger {
+    // Direction comes from the saved transaction, never from notification prose.
+    // Ambiguous and duplicate outcomes must not sound like a fresh money movement.
+    func notificationSound(expenseID: String?, noticeID: String?) -> AutomationNotificationSound {
+        if let expenseID, expenses.contains(where: { $0.id == expenseID }) { return .outgoing }
+        guard let noticeID, let notice = tngNotices.first(where: { $0.id == noticeID }),
+              !notice.possibleDuplicate, notice.status != "ignored" else { return .neutral }
+        switch notice.kind {
+        case "incoming": return .incoming
+        case "transfer": return .outgoing
+        default: return .neutral
+        }
+    }
     mutating func applyDelivery(_ delivery: AutomationDelivery) throws -> AutomationResult {
         try delivery.validate()
         if seenEvents.contains(delivery.marker) {
@@ -48,25 +71,31 @@ extension Ledger {
         let result: AutomationResult
         if delivery.kind == "notification" {
             let processed = try copy.processTNGNotification(body: delivery.body, title: delivery.title,
-                                                          date: delivery.date ?? delivery.receivedAt, eventID: delivery.eventID)
-            if delivery.date == nil, parseFinancialNotification(delivery.body, title: delivery.title)?.transactionDate == nil,
+                                                          date: delivery.date ?? delivery.receivedAt, eventID: delivery.eventID, sourceApp: delivery.sourceApp)
+            if delivery.date == nil, parseFinancialNotification(delivery.body, title: delivery.title, sourceApp: delivery.sourceApp)?.transactionDate == nil,
                let id = processed.noticeID, let i = copy.tngNotices.firstIndex(where: { $0.id == id }) {
                 copy.tngNotices[i].usesReceivedDate = true
             }
             result = AutomationResult(title: processed.expenseID == nil ? "月记 · 交易处理结果" : "月记 · 已自动记账",
                                       message: processed.message, expenseID: processed.expenseID, noticeID: processed.noticeID,
-                                      shouldNotify: processed.accepted || shouldReviewFinancialNotification(delivery.body, title: delivery.title))
+                                      shouldNotify: processed.accepted || shouldReviewFinancialNotification(delivery.body, title: delivery.title),
+                                      sound: copy.notificationSound(expenseID: processed.expenseID, noticeID: processed.noticeID))
         } else {
-            guard let amount = delivery.amount, let date = delivery.date else { throw LedgerError.invalid("Apple Pay 缺少金额或交易日期，请检查快捷指令。") }
+            guard let amount = delivery.amount else { throw LedgerError.invalid("Apple Pay 缺少金额，请检查快捷指令。") }
+            let date = delivery.applePayDate
             let before = copy.tngNotices.count
             let saved = try copy.addPayment(amount: amount, merchant: delivery.merchant, currency: delivery.currency,
                                             date: date, eventID: delivery.eventID, description: delivery.description)
+            if saved, let index = copy.expenses.indices.last { copy.expenses[index].timeSource = delivery.applePayTimeSource }
+            if copy.tngNotices.count > before, let index = copy.tngNotices.indices.last {
+                copy.tngNotices[index].usesReceivedDate = delivery.applePayTimeSource == "received"
+            }
             let entry = saved ? copy.expenses.last : nil
             let pending = copy.tngNotices.count > before ? copy.tngNotices.last : nil
-            let detail = entry.map { automaticExpenseDetail($0) } ?? (pending == nil ? "这笔付款已记录，没有重复入账。" : "疑似跨来源重复，已保留待确认，尚未再次计入消费。")
+            let detail = entry.map { automaticExpenseDetail($0) } ?? (pending == nil ? "这笔付款已记录，没有重复入账。" : "疑似重复，已保留待确认，尚未再次计入消费。")
             copy.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : (pending == nil ? "duplicate" : "pending"), detail: detail)
             result = AutomationResult(title: saved ? "月记 · 已自动记账" : (pending == nil ? "月记 · 未重复记账" : "月记 · Apple Pay 待确认"),
-                                      message: detail, expenseID: entry?.id, noticeID: pending?.id)
+                                      message: detail, expenseID: entry?.id, noticeID: pending?.id, sound: saved ? .outgoing : .neutral)
         }
         // The marker and money are committed in the same atomic ledger file replacement.
         copy.seenEvents.insert(delivery.marker)
@@ -143,7 +172,7 @@ actor AutomationRecovery {
         try? inbox.remove(delivery)
         if result.shouldNotify && sendsNotifications {
             await LedgerNotifications.result(title: result.title, body: result.message,
-                                             expenseID: result.expenseID, noticeID: result.noticeID, deliveryID: delivery.id)
+                                             expenseID: result.expenseID, noticeID: result.noticeID, deliveryID: delivery.id, sound: result.sound)
         }
         return result
     }

@@ -82,3 +82,24 @@ with wave.open(str(root / 'YueJi/YueJiMoonDrop.wav')) as wav:
     assert max(abs(v) for v in pcm) == 12000
     assert pcm[0] == 0 and pcm[-1] == 0
 print('PASS: bundled original notification sound, PCM format, duration, peak and silent endpoints.')
+
+# Catch invalid Swift Unicode escapes before launching an expensive Xcode build.
+for source in (root / 'YueJi').glob('*.swift'):
+    assert re.search(r'(?<!\\)\\u(?!\{)', source.read_text()) is None, f'Invalid Swift Unicode escape: {source.name}'
+print('PASS: app Swift Unicode escapes use braces.')
+
+# Direction sounds must be standalone bundle resources, distinct and short PCM.
+direction_audio = []
+for stem in ('YueJiIncoming', 'YueJiOutgoing'):
+    assert stem + '.wav' in resources, f'Missing bundle resource: {stem}'
+    path = root / 'YueJi' / (stem + '.wav')
+    with wave.open(str(path), 'rb') as wav:
+        assert wav.getnchannels() == 1 and wav.getsampwidth() == 2 and wav.getframerate() == 44100
+        assert 0.7 < wav.getnframes() / wav.getframerate() < 1.2
+        raw = wav.readframes(wav.getnframes())
+        pcm = struct.unpack('<' + 'h' * (len(raw) // 2), raw)
+        assert max(map(abs, pcm)) == 11000
+        assert pcm[0] == pcm[-1] == 0
+        direction_audio.append(raw)
+assert direction_audio[0] != direction_audio[1]
+print('PASS: two distinct incoming/outgoing PCM system sounds are in the app resource phase.')

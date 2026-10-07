@@ -798,7 +798,7 @@ struct NotificationSettingsView: View {
                 if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
                 Toggle(tr("自动记账后通知我", "Notify me after automatic recording", "Maklum selepas rekod automatik"), isOn: $results)
                 Toggle(tr("通知里隐藏金额和姓名", "Hide amounts and names in notifications", "Sembunyikan amaun dan nama dalam notifikasi"), isOn: $hideDetails)
-                Text(tr("收到付款资料后，月记会通过 iPhone 通知告诉你处理结果，并使用「月滴」提示音。", "After receiving payment details, YueJi sends the result as an iPhone notification with the MoonDrop sound.", "Selepas menerima butiran bayaran, YueJi menghantar hasil melalui notifikasi iPhone dengan bunyi MoonDrop.")).font(.footnote)
+                Text(tr("系统通知会用不同声音区分收款与扣款：收款是清亮上扬音，扣款是较低的下落音；待确认或失败使用普通提示音。", "System notifications use a bright rising tone for incoming money and a lower falling tone for outgoing money. Unclear results or failures use the regular tone.", "Notifikasi sistem menggunakan nada menaik untuk wang masuk dan nada menurun untuk wang keluar. Hasil tidak jelas atau kegagalan menggunakan nada biasa.")).font(.footnote)
                 Button(tr("保存记账提醒", "Save recording reminders", "Simpan peringatan rekod")) {
                     busy = true
                     Task {
@@ -1014,7 +1014,7 @@ private struct ComparisonRow: View {
             ProgressView(value: Double(current), total: Double(max(1, max(current, previous)))).tint(.teal)
             HStack { Text(tr("上个月", "Previous", "Bulan lalu")); Spacer(); Text(money(previous)) }.foregroundStyle(.secondary)
             ProgressView(value: Double(previous), total: Double(max(1, max(current, previous)))).tint(.gray)
-            Text(change).font(.caption).foregroundStyle(current > previous ? Color.orange : Color.secondary)
+            Text(change).font(.caption).foregroundStyle(current < previous ? Color.red : (current > previous ? Color.orange : Color.secondary))
         }.padding(.vertical, 6)
     }
 }
@@ -1048,7 +1048,7 @@ struct LedgerFilterEditor: View {
                 }
                 Picker(tr("来源", "Source", "Sumber"), selection: $value.source) {
                     Text(tr("全部", "All", "Semua")).tag("")
-                    ForEach(["手动", "Apple Pay", "TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB", "银行 / TNG", "固定消费", "账单补录"], id: \.self) { Text(sourceLabel($0)).tag($0) }
+                    ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
                 }
                 TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
@@ -1236,10 +1236,10 @@ struct TNGNoticeView: View {
                             do {
                                 try LocalStore.shared.change { ledger in
                                     guard let old = ledger.tngNotices.first(where: { $0.id == id }), old.status == "pending", old.expenseID == nil else { return }
-                                    guard parseFinancialNotification(old.body, title: old.title) != nil else { throw LedgerError.invalid("当前仍未识别，请核对原文后手动确认。") }
+                                    guard parseFinancialNotification(old.body, title: old.title, sourceApp: old.sourceBank) != nil else { throw LedgerError.invalid("当前仍未识别，请核对原文后手动确认。") }
                                     ledger.tngNotices.removeAll { $0.id == id }
                                     let countBefore = ledger.tngNotices.count
-                                    _ = try ledger.receiveTNG(body: old.body, title: old.title, date: old.date, eventID: nil)
+                                    _ = try ledger.receiveTNG(body: old.body, title: old.title, date: old.date, eventID: nil, sourceApp: old.sourceBank)
                                     guard ledger.tngNotices.count > countBefore else { throw LedgerError.invalid("此交易已处理，请核对已有记录。原待确认通知已保留。") }
                                     if let i = ledger.tngNotices.indices.last {
                                         ledger.tngNotices[i].id = old.id
@@ -1251,7 +1251,7 @@ struct TNGNoticeView: View {
                         }
                     }
                     Text(dateLabel(notice.date, time: true)).font(.caption)
-                    if notice.usesReceivedDate { Text(tr("时间为接收时间，正文没有交易日期。补录旧通知时请修改账目日期。", "Uses received time; body has no transaction date. Edit the entry date when importing an old notice.", "Menggunakan masa diterima; teks tiada tarikh transaksi. Ubah tarikh rekod bagi notifikasi lama.")).font(.caption) }
+                    if notice.usesReceivedDate { Text(tr("时间来自通知或自动化接收时刻；补录旧通知时请修改账目日期。", "Uses received time; body has no transaction date. Edit the entry date when importing an old notice.", "Menggunakan masa diterima; teks tiada tarikh transaksi. Ubah tarikh rekod bagi notifikasi lama.")).font(.caption) }
                     if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
                 }
                 if ["pending", "transfer"].contains(notice.status), notice.expenseID == nil {
@@ -1308,19 +1308,21 @@ struct TNGNoticeView: View {
 struct TNGSetupView: View {
     var body: some View {
         List {
-            Section(tr("一个快捷指令，多家银行", "One shortcut, multiple banks", "Satu pintasan, pelbagai bank")) {
-                Text(tr("在通知触发器的 App 旁点 ＋，加入 TNG、MAE、HLB、AmOnline、Ryt 和 RHB。", "Tap + beside App in the notification trigger and add TNG, MAE, HLB, AmOnline, Ryt and RHB.", "Ketik + di sebelah App dalam pencetus notifikasi dan tambah TNG, MAE, HLB, AmOnline, Ryt dan RHB."))
-                Text(tr("动作选择「记录银行与 TNG 通知」。旧 TNG 动作保留兼容。", "Use Record bank and TNG notification. Existing TNG actions remain compatible.", "Guna Record bank and TNG notification. Tindakan TNG lama kekal serasi."))
-                Text("Notification body → Body\nNotification title → Title\nNotification date → Date（若提供 / if available）")
-                Text(tr("交易标识没有对应值就留空；不要填固定文字。选择立即运行，并按系统要求授权。", "Leave transaction ID empty if unavailable; do not enter a fixed value. Select Run Immediately and grant requested system permissions.", "Biarkan ID transaksi kosong jika tiada; jangan isi nilai tetap. Pilih Run Immediately dan beri kebenaran sistem."))
+            Section("接入你的银行") {
+                Text("在快捷指令的通知触发器里点 App 旁的 ＋，加入你使用的银行或 TNG。银行名称不限；能否触发取决于系统是否收到并传入通知。")
+                Text("动作选择「记录银行与 TNG 通知」，正文连接 Body，标题连接 Title，时间连接 Date（若有）。不要填写固定交易编号。")
+                Text("可将来源 App 名称传给同名字段。每家银行单独设置时也可填写银行名称；多家共用时不要固定成同一家银行。留空时月记尝试从原文辨认。")
             }
-            Section(tr("目前支持的通知样本", "Supported notification samples", "Sampel notifikasi disokong")) {
-                Text("Maybank / Hong Leong / AmBank / Ryt: 转入与转出 · incoming/outgoing")
-                Text("RHB: 转入 · incoming only")
-                Text(tr("仅适配提供的英文格式。通知不完整或格式改变时会留下未识别日志；这不是银行 API，不同步余额或历史交易。", "Only the supplied English formats are supported. Incomplete or changed notices are logged as unsupported. This is not a bank API and does not sync balances or history.", "Hanya format Inggeris yang diberi disokong. Format tidak lengkap atau berubah dilog. Ini bukan API bank dan tidak menyegerakkan baki atau sejarah."))
+            Section("收到通知后") {
+                Label("明确的马币付款：自动记账与分类", systemImage: "checkmark.circle")
+                Label("收款、转账：先确认用途", systemImage: "arrow.left.arrow.right")
+                Label("退款、返现、外币或信息不完整：待确认", systemImage: "questionmark.circle")
+                Label("广告、验证码、失败通知：忽略", systemImage: "bell.slash")
+                Text("支持通用中、英、马来文交易规则，保留已适配银行的专属格式。尚未用全部银行的真实通知验证，银行改版或陌生格式可能需要确认；不会读取历史流水。")
+                    .font(.footnote).foregroundStyle(.secondary)
             }
             NavigationLink(tr("TNG 详细指南", "Detailed TNG guide", "Panduan TNG terperinci")) { ShortcutSetupGuide(provider: .tng) }
-        }.navigationTitle(tr("银行通知设置", "Bank notification setup", "Tetapan notifikasi bank"))
+        }.navigationTitle("银行通知设置")
     }
 }
 
@@ -2631,7 +2633,7 @@ private struct SavingsGoalDetail: View {
                             Text(dateLabel(entry.date, time: true)).font(.subheadline)
                             Spacer()
                             Text((entry.cents > 0 ? "+ " : "− ") + money(abs(entry.cents)))
-                                .monospacedDigit().foregroundStyle(entry.cents > 0 ? Color.green : .secondary)
+                                .monospacedDigit().foregroundStyle(entry.cents > 0 ? Color.green : Color.red)
                         }
                     }
                 }

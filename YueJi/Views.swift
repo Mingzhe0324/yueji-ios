@@ -507,7 +507,7 @@ struct ExpenseRow: View {
                 .font(.body.weight(.semibold)).foregroundStyle(categoryColor).frame(width: 44, height: 44)
                 .background(categoryColor.opacity(0.1), in: RoundedRectangle(cornerRadius: 14, style: .continuous)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                if ["Apple Pay", "TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"].contains(entry.source) {
+                if !["手动", "固定消费", "账单补录"].contains(entry.source) {
                     Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 }
                 Text(entry.merchant).font(.body.weight(.semibold))
@@ -517,7 +517,7 @@ struct ExpenseRow: View {
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.footnote) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            Text("−" + money(entry.cents)).foregroundStyle(.primary).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            Text("−" + money(entry.cents)).foregroundStyle(.red).accessibilityLabel(tr("支出 ", "Expense ", "Belanja ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
         }.padding(.vertical, 10)
     }
 }
@@ -555,7 +555,7 @@ struct ExpensesView: View {
                     MonthPicker(month: monthBinding)
                     Picker(tr("来源", "Source", "Sumber"), selection: $providerFilter) {
                         Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
-                        ForEach(["TNG", "Maybank", "Hong Leong", "AmBank", "Ryt Bank", "RHB"], id: \.self) { Text($0).tag($0) }
+                        ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
@@ -689,15 +689,18 @@ struct ExpenseDetailView: View {
                 if let entry {
                     Section {
                         VStack(spacing: 12) {
-                            Text(money(entry.cents)).font(.system(.largeTitle, design: .rounded, weight: .bold))
+                            Text("−" + money(entry.cents)).foregroundStyle(.red).font(.system(.largeTitle, design: .rounded, weight: .bold))
                                 .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
                             Text(entry.merchant).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                             Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
-                            Text(dateLabel(entry.date, time: true)).font(.subheadline).foregroundStyle(.secondary)
+                            Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 20)
                     }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
                         LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(entry.source))
+                        if entry.timeSource == "received" {
+                            Text(tr("此时间是月记收到自动化的时刻，可能稍晚于付款。若需精确到银行交易时间，可在编辑中调整。", "This is when YueJi received the automation and may be later than payment. Edit it to match the bank transaction time if needed.", "Masa ini ialah ketika YueJi menerima automasi dan mungkin lewat sedikit. Edit mengikut masa transaksi bank jika perlu.")).font(.footnote).foregroundStyle(.secondary)
+                        }
                         LabeledContent(tr("我的实际消费", "My spending", "Belanja saya"), value: money(entry.personal))
                         if let fx = entry.foreign {
                             LabeledContent(tr("原币金额", "Original amount", "Amaun asal"), value: Currency.display(fx.minor, fx.currency))
@@ -1017,6 +1020,7 @@ struct ExpenseEditor: View {
         do {
             let n = try total(); var entry = original ?? initialDraft ?? Expense(merchant: "", cents: n)
             if entry.cents != n || currency != "MYR" { entry.receiptSummary = nil }
+            if let original, original.date != date { entry.timeSource = "edited" }
             entry.merchant = name.trimmingCharacters(in: .whitespacesAndNewlines); entry.cents = n; entry.date = date; entry.category = category; entry.fuel = fuel
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
@@ -1734,7 +1738,7 @@ private enum GuideCue {
         switch step {
         case 0: return tr("第一步：在快捷指令添加月记动作。", "1. Add YueJi's action in Shortcuts.", "1. Tambah tindakan YueJi dalam Pintasan.")
         case 1: return tng ? tr("第二步：选通知触发器，来源设为 TNG。", "2. Choose a notification trigger from TNG.", "2. Pilih pencetus notifikasi daripada TNG.") : tr("第二步：选交易触发器和付款卡片。", "2. Choose a transaction trigger and your card.", "2. Pilih pencetus transaksi dan kad anda.")
-        case 2: return tr("第三步：把输入变量接到月记参数。", "3. Connect the input variables to YueJi's fields.", "3. Sambungkan pemboleh ubah ke medan YueJi.")
+        case 2: return tng ? tr("第三步：正文接 Body，标题接 Title。", "3. Connect Body and Title.", "3. Sambungkan Body dan Title.") : tr("第三步：连接金额和商户；时间默认取自动化接收时刻。", "3. Connect amount and merchant; time defaults to automation receipt.", "3. Sambung amaun dan peniaga; masa lalai ialah masa automasi diterima.")
         case 3: return tr("第四步：按系统选项允许自动运行。", "4. Enable automatic runs using the system options.", "4. Benarkan jalan automatik mengikut pilihan sistem.")
         default: return tr("最后：回月记核对运行结果。演示不会替你启用。", "Finally, check YueJi's activity log. This demo does not enable it.", "Akhir sekali, semak log YueJi. Demo ini tidak mengaktifkannya.")
         }
@@ -2160,6 +2164,10 @@ private struct GuideDemoScene: View {
                     row(action, icon: "square.stack.3d.up")
                     divider(); row(provider == .applePay ? tr("金额", "Amount", "Amaun") : tr("通知正文", "Notification body", "Teks notifikasi"), tr("输入变量", "Input variable", "Pemboleh ubah"))
                     divider(); row(provider == .applePay ? tr("商户", "Merchant", "Peniaga") : tr("通知时间", "Notification date", "Tarikh notifikasi"), tr("输入变量", "Input variable", "Pemboleh ubah"))
+                    if provider == .applePay {
+                        divider(); row(tr("时间", "Time", "Masa"), tr("自动取接收时刻", "Use received time", "Masa diterima"))
+                        divider(); row(tr("使用指定交易时间", "Use supplied time", "Guna masa diberikan"), tr("关闭 · 仅补录时开启", "Off · enable for imports", "Tutup · buka untuk import"))
+                    }
                 case 3:
                     row(tr("编辑", "Edit", "Edit"), "ⓘ", icon: "slider.horizontal.3")
                     divider(); row(tr("隐私", "Privacy", "Privasi"), tr("锁定时允许运行", "Allow Running When Locked", "Benarkan semasa dikunci"), icon: "lock.shield")

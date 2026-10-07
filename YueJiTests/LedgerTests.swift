@@ -1946,3 +1946,169 @@ final class BookkeepingBuild62Tests: XCTestCase {
         XCTAssertEqual(restored.spending(in: e.date, category: "购物"), 3000)
     }
 }
+
+// Synthetic grammar fixtures exercise universal behavior; they are not claimed
+// to be real notification samples from the named banks.
+final class UniversalBankAndPaymentTimeTests: XCTestCase {
+    private let captured = ISO8601DateFormatter().date(from: "2026-10-07T14:26:50Z")!
+    private let noon = ISO8601DateFormatter().date(from: "2026-10-07T04:00:00Z")!
+
+    func testAnySourceCanSaveCompletedPaymentAndRoundTrip() throws {
+        let sources = ["CIMB", "Public Bank", "HSBC", "OCBC", "UOB", "Standard Chartered", "Affin Bank", "Alliance Bank", "BSN", "Bank Islam", "Bank Rakyat", "GXBank", "Boost Bank", "AEON Bank", "KAF Digital Bank", "A New Bank Not In The Directory"]
+        for source in sources {
+            var ledger = Ledger()
+            var input = AutomationDelivery(kind: "notification", body: "Payment of MYR12.50 at LUNCH CAFE was successful.", title: "Card activity")
+            input.sourceApp = source; input.receivedAt = captured
+            let result = try ledger.applyDelivery(input)
+            XCTAssertNotNil(result.expenseID, source)
+            XCTAssertEqual(ledger.expenses.first?.cents, 1250, source)
+            XCTAssertEqual(ledger.expenses.first?.merchant, "LUNCH CAFE", source)
+            XCTAssertEqual(ledger.expenses.first?.source, source, source)
+            XCTAssertEqual(ledger.expenses.first?.date, captured, source)
+            XCTAssertTrue(ledger.availableSources.contains(source))
+            let restored = try LocalStore.decode(LocalStore.encode(ledger))
+            XCTAssertEqual(restored.expenses, ledger.expenses)
+            XCTAssertEqual(restored.tngNotices, ledger.tngNotices)
+            _ = try ledger.applyDelivery(input)
+            XCTAssertEqual(ledger.expenses.count, 1)
+        }
+    }
+    func testMultilingualAndStructuredPayment() throws {
+        let cases: [(String, String, Int, String)] = [
+            ("Card activity", "You have paid RM5.00 to MHH CUISINE.", 500, "MHH CUISINE"),
+            ("Card activity", "Your debit card ending 1234 was charged MYR12.50 at LUNCH CAFE.", 1250, "LUNCH CAFE"),
+            ("", "Anda telah membayar RM8.50 kepada KEDAI MAKAN.", 850, "KEDAI MAKAN"),
+            ("", "Pembayaran RM8.50 kepada KEDAI MAKAN berjaya.", 850, "KEDAI MAKAN"),
+            ("", "您已支付RM8.50给早餐店。", 850, "早餐店"),
+            ("Payment successful", "Amount: MYR18.20\nMerchant: FRESH MART\nReference: ABC-123", 1820, "FRESH MART")
+        ]
+        for (title, body, cents, merchant) in cases {
+            let parsed = try XCTUnwrap(parseFinancialNotification(body, title: title, sourceApp: "New Bank"), body)
+            XCTAssertEqual(parsed.kind, "payment"); XCTAssertEqual(parsed.cents, cents)
+            XCTAssertEqual(parsed.party, merchant); XCTAssertEqual(parsed.sourceBank, "New Bank")
+        }
+        XCTAssertEqual(parseFinancialNotification("Payment of MYR12.50 at CAFE was successful on 2026-10-07 22:26:50 Ref: ABC123", sourceApp: "CIMB")?.transactionDate, captured)
+        XCTAssertNil(parseFinancialNotification("Payment of MYR12.50 at CAFE was successful on 2026-02-31 22:26:50", sourceApp: "CIMB"))
+    }
+    func testPromotionsAndApprovalsIgnoredButUnclearTransactionsRetained() throws {
+        for body in ["Make 2 QR payments with NETS QR and earn up to RM10 cashback.", "Payment failed RM20.00", "Your OTP for payment RM20.00 is 123456", "Approve this transaction of RM20.00", "Payment due RM20.00", "消费满RM20最高返现RM10"] {
+            var ledger = Ledger()
+            var input = AutomationDelivery(kind: "notification", body: body)
+            input.sourceApp = "CIMB"
+            let result = try ledger.applyDelivery(input)
+            XCTAssertFalse(result.shouldNotify, body)
+            XCTAssertTrue(ledger.expenses.isEmpty); XCTAssertTrue(ledger.tngNotices.isEmpty)
+        }
+        for body in ["Your purchase of USD10.00 was completed.", "Payment of RM10.00 successful. Available balance RM200.00", "Cashback of RM10.00 credited to your account.", "Refund RM10.00 credited.", "Top up RM10.00 successful", "Payment successful", "Purchase successful MYR12.00 at NEW SHOP"] {
+            var ledger = Ledger()
+            _ = try ledger.processTNGNotification(body: body, date: captured, eventID: nil, sourceApp: "New Bank")
+            XCTAssertTrue(ledger.expenses.isEmpty, body)
+            XCTAssertEqual(ledger.tngNotices.count, 1, body)
+            XCTAssertEqual(ledger.tngNotices.first?.status, "pending")
+        }
+        XCTAssertFalse(shouldReviewFinancialNotification("No transaction information", title: ""))
+        XCTAssertNil(parseFinancialNotification("You've sent MYR0.01 to FRIEND.", title: "Funds Received"))
+        XCTAssertNil(parseFinancialNotification("You have paid RM1,23.00 to SHOP.", title: "Card activity", sourceApp: "CIMB"))
+    }
+    func testTransfersAndIncomingNeverBecomeExpense() throws {
+        for (body, kind) in [("You have transferred MYR10.00 to AMY.", "transfer"), ("You have received MYR10.00 from AMY.", "incoming")] {
+            var ledger = Ledger()
+            _ = try ledger.processTNGNotification(body: body, date: captured, eventID: nil, sourceApp: "New Bank")
+            XCTAssertTrue(ledger.expenses.isEmpty)
+            XCTAssertEqual(ledger.tngNotices.first?.kind, kind)
+            _ = try ledger.validated()
+        }
+    }
+    func testLiveApplePayIgnoresNoonInputAndSurvivesRecovery() throws {
+        var input = AutomationDelivery(kind: "applePay", date: noon, amount: 5, merchant: "CAFE")
+        input.receivedAt = captured; input.useTransactionDate = false
+        let recovered = try JSONDecoder().decode(AutomationDelivery.self, from: JSONEncoder().encode(input))
+        var ledger = Ledger()
+        _ = try ledger.applyDelivery(recovered)
+        XCTAssertEqual(ledger.expenses.first?.date, captured)
+        XCTAssertEqual(ledger.expenses.first?.timeSource, "received")
+        _ = try ledger.applyDelivery(recovered)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.date, captured)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.expenses.first?.timeSource, "received")
+    }
+    func testImportPreservesNoonAndLegacyQueueRemainsCompatible() throws {
+        let modes: [Bool?] = [true, nil]
+        for mode in modes {
+            var input = AutomationDelivery(kind: "applePay", date: noon, amount: 5, merchant: "CAFE")
+            input.receivedAt = captured; input.useTransactionDate = mode
+            var ledger = Ledger(); _ = try ledger.applyDelivery(input)
+            XCTAssertEqual(ledger.expenses.first?.date, noon)
+        }
+        var missing = AutomationDelivery(kind: "applePay", amount: 5, merchant: "CAFE")
+        missing.useTransactionDate = true
+        var ledger = Ledger()
+        XCTAssertThrowsError(try ledger.applyDelivery(missing))
+        missing.useTransactionDate = false; missing.receivedAt = captured
+        _ = try ledger.applyDelivery(missing)
+        XCTAssertEqual(ledger.expenses.first?.date, captured)
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(missing)) as? [String: Any])
+        json.removeValue(forKey: "sourceApp"); json.removeValue(forKey: "useTransactionDate")
+        let old = try JSONDecoder().decode(AutomationDelivery.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(old.useTransactionDate)
+    }
+    func testBankAndLiveApplePayDuplicateIsReviewable() throws {
+        var ledger = Ledger()
+        _ = try ledger.processTNGNotification(body: "Payment of MYR5.00 at CAFE was successful.", date: captured, eventID: nil, sourceApp: "CIMB")
+        var input = AutomationDelivery(kind: "applePay", date: noon, amount: 5, merchant: "CAFE")
+        input.receivedAt = captured.addingTimeInterval(10); input.useTransactionDate = false
+        let result = try ledger.applyDelivery(input)
+        XCTAssertNil(result.expenseID); XCTAssertNotNil(result.noticeID)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertTrue(ledger.tngNotices.last?.possibleDuplicate == true)
+    }
+    func testSourceBoundsAndAliases() {
+        XCTAssertEqual(financialProvider("CIMB OCTO"), "CIMB")
+        XCTAssertEqual(parseFinancialNotification("Your transfer of RM10.00 to AMY is SUCCESSFUL.", sourceApp: "CIMB")?.sourceBank, "CIMB")
+        XCTAssertNil(parseFinancialNotification("HSBC: Payment of RM10.00 at CAFE was successful.", sourceApp: "CIMB"))
+        XCTAssertNil(financialProvider("MAESTRO CAFE"))
+        XCTAssertFalse(validFinancialSource("\nCIMB"))
+        XCTAssertFalse(validFinancialSource(String(repeating: "a", count: 121)))
+        XCTAssertTrue(validFinancialSource("Another Bank"))
+    }
+}
+
+final class DirectionNotificationSoundTests: XCTestCase {
+    func testDirectionFromSavedResultAndNeutralForDuplicateOrUnknown() throws {
+        let now = Date()
+        var ledger = Ledger()
+        let incoming = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: "RM 10.00 received from AMY for ME.", title: "Ka-ching! Incoming Money.", date: now))
+        XCTAssertEqual(incoming.sound, .incoming)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        let transfer = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: "RM 20.00 has been successfully transferred to SAM.", title: "Transfer Successful", date: now))
+        XCTAssertEqual(transfer.sound, .outgoing)
+        var apple = AutomationDelivery(kind: "applePay", amount: 8, merchant: "CAFE")
+        apple.useTransactionDate = false
+        let paid = try ledger.applyDelivery(apple)
+        XCTAssertEqual(paid.sound, .outgoing)
+        XCTAssertNotNil(paid.expenseID)
+        let repeatResult = try ledger.applyDelivery(apple)
+        XCTAssertEqual(repeatResult.sound, .neutral)
+        let duplicate = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: "RM 10.00 received from AMY for ME.", title: "Ka-ching! Incoming Money.", date: now.addingTimeInterval(15)))
+        XCTAssertEqual(duplicate.sound, .neutral)
+        let unknown = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: "Refund RM5.00 credited", date: now))
+        XCTAssertEqual(unknown.sound, .neutral)
+        let ad = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: "Make 2 QR payments and earn up to RM10 cashback."))
+        XCTAssertFalse(ad.shouldNotify)
+        XCTAssertEqual(ad.sound, .neutral)
+    }
+    @MainActor func testSystemSoundsAreDistinctBundledDecodableFiles() throws {
+        let incoming = LedgerNotifications.soundName(for: .incoming)
+        let outgoing = LedgerNotifications.soundName(for: .outgoing)
+        XCTAssertNotEqual(incoming, outgoing)
+        XCTAssertEqual(LedgerNotifications.soundName(for: .neutral), LedgerNotifications.automationSoundName)
+        for name in [incoming, outgoing] {
+            let url = try XCTUnwrap(Bundle.main.url(forResource: String(name.dropLast(4)), withExtension: "wav"))
+            let audio = try AVAudioPlayer(contentsOf: url)
+            XCTAssertGreaterThan(audio.duration, 0.7)
+            XCTAssertLessThan(audio.duration, 1.2)
+            XCTAssertEqual(audio.numberOfChannels, 1)
+        }
+    }
+}
