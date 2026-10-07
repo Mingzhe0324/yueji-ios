@@ -288,10 +288,25 @@ struct TNGParsed {
 func tngSignedAmount(_ notice: TNGNotice) -> String {
     (notice.kind == "incoming" ? "+" : "−") + money(notice.cents ?? 0)
 }
+func notificationText(_ value: String) -> String {
+    value.replacingOccurrences(of: "\u200B", with: "")
+        .replacingOccurrences(of: "\uFEFF", with: "")
+        .split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+}
+func notificationTitleKey(_ value: String) -> String {
+    friendKey(notificationText(value)).replacingOccurrences(of: "’", with: "'")
+        .trimmingCharacters(in: .punctuationCharacters)
+}
+let tngNotificationTitles = ["duitnow payment", "payment", "successful toll payment", "transfer successful", "duitnow transfer is successful", "ka-ching! incoming money", "you've received money"]
+let tngAppTitles = ["tng", "tng ewallet", "touch 'n go ewallet", "touch n go ewallet"]
+
 func parseTNG(_ body: String, title: String = "") -> TNGParsed? {
-    let titleKey = friendKey(title.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")).replacingOccurrences(of: "’", with: "'").trimmingCharacters(in: .punctuationCharacters)
-    guard ["", "payment", "duitnow payment", "successful toll payment", "transfer successful", "duitnow transfer is successful", "ka-ching! incoming money", "you've received money"].contains(titleKey) else { return nil }
-    let text = body.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+    let suppliedTitle = notificationTitleKey(title)
+    // A trigger may provide the app name instead of the notification heading.
+    // The body must still match an entire verified transaction template.
+    let titleKey = tngAppTitles.contains(suppliedTitle) ? "" : suppliedTitle
+    guard titleKey.isEmpty || tngNotificationTitles.contains(titleKey) else { return nil }
+    let text = notificationText(body)
     if titleKey.isEmpty || titleKey == "ka-ching! incoming money" {
         let pattern = #"\ARM\s*([0-9]+(?:\.[0-9]{2})?) received from (.{1,200}?) for (.{1,200})\.\z"#
         if let regex = try? NSRegularExpression(pattern: pattern),
@@ -664,8 +679,18 @@ func parseFinancialNotification(_ body: String, title: String = "") -> TNGParsed
     if lines.count == 2 {
         let heading = lines[0].trimmingCharacters(in: .whitespacesAndNewlines)
         if title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || friendKey(title) == friendKey(heading) {
-            return parseBankNotification(lines[1], title: heading) ?? parseTNG(lines[1], title: heading)
+            if let parsed = parseBankNotification(lines[1], title: heading) ?? parseTNG(lines[1], title: heading) { return parsed }
         }
+    }
+    // TNG title and body may also arrive joined by spaces or with an app-name
+    // heading. Strip only a known title at the start; never scan arbitrary prose.
+    let text = notificationText(body)
+    let suppliedTitle = notificationTitleKey(title)
+    for heading in tngNotificationTitles {
+        guard suppliedTitle.isEmpty || suppliedTitle == heading || tngAppTitles.contains(suppliedTitle),
+              text.lowercased().hasPrefix(heading + " ") else { continue }
+        let remainder = String(text.dropFirst(heading.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+        if let parsed = parseTNG(remainder, title: heading) { return parsed }
     }
     return nil
 }
@@ -780,9 +805,13 @@ func financialProvider(_ text: String) -> String? {
     return nil
 }
 func shouldReviewFinancialNotification(_ body: String, title: String) -> Bool {
-    let text = (title + " " + body).lowercased()
+    let text = notificationText(title + " " + body).lowercased()
     let excluded = ["otp", "verification code", "one-time", "promotion", "promo", "offer:", "cashback offer", "reward points", "payment failed", "transaction failed", "unsuccessful", "declined", "pending payment"]
-    guard !excluded.contains(where: { text.contains($0) }),
+    // Reward caps and instructions to make future payments are advertising,
+    // not transaction amounts. Actual cashback credited remains reviewable.
+    let reward = text.range(of: #"\b(?:cash\s?back|rewards?|discounts?|vouchers?|points)\b"#, options: .regularExpression) != nil
+    let invitation = text.range(of: #"\b(?:earn|get|enjoy|win|unlock|up to|stand a chance|when you (?:spend|pay)|make\s+\d+\s+(?:qr\s+)?payments?)\b"#, options: .regularExpression) != nil
+    guard !(reward && invitation), !excluded.contains(where: { text.contains($0) }),
           text.range(of: #"(?:RM|MYR)\s*[0-9]+(?:\.[0-9]{2})?(?![0-9.])"#, options: [.regularExpression, .caseInsensitive]) != nil else { return false }
     return ["paid", "payment", "transfer", "received", "deducted", "credited", "debited", "refund", "reversed", "reload", "top-up", "top up", "purchase", "transaction"].contains(where: { text.contains($0) })
 }
