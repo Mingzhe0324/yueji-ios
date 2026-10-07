@@ -18,7 +18,7 @@ jobs:
           from pathlib import Path
           info=plistlib.loads(Path('YueJi/Info.plist').read_bytes())
           version=info['CFBundleShortVersionString']; build=info['CFBundleVersion']
-          assert (version,build)==('1.51.2','71'), 'Wrong source version; expected 1.51.2 build 71'
+          assert (version,build)==('1.52.1','73'), 'Wrong source version; expected 1.52.1 build 73'
           source=Path('YueJi/FeatureViews.swift').read_text()
           for name in ['DuplicateReviewView','RefundsView','FriendSummaryView','FuelCalculatorView','UpcomingView','AutomationStatusView','FriendSpendingView','MerchantRulesView','FriendStatementView','RestorePreviewView','NotificationSettingsView','CategoriesView','SpendingComparisonView','LedgerFilterEditor','RefundAllocationFields','CSVExportView','TNGInboxView','TNGNoticeView','TNGSetupView','ReceiptScanView','TNGIncomingView','SavingsGoalsView','ExpenseBookkeepingFields','ExpenseTagsView','PendingBookkeepingCard']:
               assert 'struct '+name in source, 'Missing feature: '+name
@@ -54,6 +54,8 @@ jobs:
           for key in ['CFBundleShortVersionString','CFBundleVersion']:
               assert app[key]==source[key], 'Built app version does not match source'
           PYCODE
+          test -f build-device/Build/Products/Release-iphoneos/YueJi.app/YueJiIncoming.wav
+          test -f build-device/Build/Products/Release-iphoneos/YueJi.app/YueJiOutgoing.wav
           test -f build-device/Build/Products/Release-iphoneos/YueJi.app/YueJiIcon@2x.png
           test -f build-device/Build/Products/Release-iphoneos/YueJi.app/YueJiIcon@3x.png
           mkdir -p package/Payload
