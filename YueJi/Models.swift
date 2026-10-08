@@ -23,23 +23,20 @@ func guessCategory(_ name: String, description: String = "") -> String {
         value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
     }
-    // Merchant identity wins over incidental words in bank/payment descriptions.
-    let texts = [name, description].map { " " + normalized($0) + " " }
+    let text = " " + normalized(name + " " + description) + " "
     let rules: [(String, [String])] = [
         ("账单", ["electricity", "water bill", "utility bill", "broadband", "internet bill", "phone bill", "postpaid", "tenaga nasional", "tnb", "air selangor", "indah water", "iwk", "unifi", "maxis", "celcom", "digi", "celcomdigi", "u mobile", "yes telco", "rental", "rent", "房租", "电费", "水费", "网费", "电话费", "账单"]),
-        ("餐饮", ["kung fu soup", "kungfu soup", "soup", "pan mee", "restaurant", "restoran", "kedai makan", "kopitiam", "mamak", "cafe", "coffee", "food", "grabfood", "foodpanda", "kfc", "mcdonald", "mcdonalds", "mcd", "zus", "tealive", "starbucks", "pizza", "bakery", "nasi", "ramen", "sushi", "noodle", "noodles", "dim sum", "hotpot", "steamboat", "roti", "satay", "bistro", "eatery", "功夫汤", "功夫湯", "餐", "饭", "咖啡", "面馆", "麵館", "火锅", "火鍋", "茶室"]),
+        ("餐饮", ["pan mee", "restaurant", "restoran", "kedai makan", "kopitiam", "mamak", "cafe", "coffee", "food", "grabfood", "foodpanda", "kfc", "mcdonald", "mcdonalds", "mcd", "zus", "tealive", "starbucks", "pizza", "bakery", "nasi", "ramen", "sushi", "餐", "饭", "咖啡", "面馆"]),
         ("交通", ["rfid", "toll", "parking", "petrol", "petronas", "petron", "shell", "caltex", "bhp", "grab", "rapidkl", "ktm", "lrt", "mrt", "油", "停车", "过路费"]),
         ("购物", ["shopee", "lazada", "supermarket", "groceries", "grocery", "lotus", "aeon", "mydin", "econsave", "jaya grocer", "99 speedmart", "watsons", "guardian", "uniqlo", "购物", "超市"]),
         ("娱乐", ["netflix", "spotify", "cinema", "gsc", "tgv", "steam", "disney", "youtube premium", "电影", "游戏"])
     ]
-    for text in texts {
-      for (category, words) in rules {
+    for (category, words) in rules {
         for word in words {
             // Latin words use boundaries: "shellfish" must not match "shell".
             let isCJK = word.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
             if text.contains(isCJK ? word : " " + normalized(word) + " ") { return category }
         }
-      }
     }
     return "其他"
 }
@@ -85,7 +82,6 @@ struct Expense: Codable, Identifiable, Equatable {
     var note: String? = nil
     var tags: [String]? = nil
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
-    var aiCategory: AICategoryState? = nil
     var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
     var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
     var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } - personalRefund }
@@ -165,7 +161,6 @@ struct Ledger: Codable {
         for rule in recurring { try rule.validate(allowedCategories: categoryNames) }
         guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for e in expenses {
-            if let ai = e.aiCategory { try ai.validate() }
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   e.merchant.count <= 200, (e.transactionReference?.count ?? 0) <= 500, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
