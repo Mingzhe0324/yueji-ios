@@ -1,4 +1,4 @@
-# Gemini 自动分类配置（1.53.0 / build77）
+# Gemini 自动分类配置（1.53.1 / build78）
 
 这次交付包含 App 和 Supabase Edge Function 源码，尚未部署到你的 Supabase，也没有读取或使用你的 Gemini API Key。
 

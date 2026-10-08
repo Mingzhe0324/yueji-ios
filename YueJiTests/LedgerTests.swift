@@ -1752,9 +1752,14 @@ final class NotificationDuplicateScopeTests: XCTestCase {
 final class AutomaticCategoryNotificationTests: XCTestCase {
     func testGeminiCategoryCommitAndBackupRoundTrip() throws {
         var ledger = Ledger()
-        let entry = Expense(merchant: "Kung Fu Soup", cents: 2000)
+        // Backups use ISO-8601 whole seconds. A Date() fixture includes
+        // subsecond precision that is intentionally absent after decoding.
+        let timestamp = Date(timeIntervalSince1970: 1_791_460_800)
+        let entry = Expense(merchant: "Kung Fu Soup", cents: 2000, date: timestamp)
         ledger.expenses.append(entry)
         ledger.enqueueAICategory(entry.id)
+        ledger.expenses[0].aiCategory?.attempts = 1
+        ledger.expenses[0].aiCategory?.lastAttempt = timestamp
         let snapshot = try XCTUnwrap(ledger.expenses.first)
         try ledger.applyAICategory(GeminiCategoryResponse(category: "餐饮", confidence: 0.95, needsReview: false, reason: "餐饮商户"), original: snapshot)
         XCTAssertEqual(ledger.expenses[0].category, "餐饮")
@@ -1762,6 +1767,8 @@ final class AutomaticCategoryNotificationTests: XCTestCase {
         XCTAssertEqual(ledger.expenses[0].aiCategory?.status, "classified")
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
         XCTAssertEqual(restored.expenses, ledger.expenses)
+        XCTAssertEqual(restored.expenses[0].aiCategory?.lastAttempt, timestamp)
+        XCTAssertEqual(restored.expenses[0].aiCategory?.suggested, "餐饮")
     }
     func testGeminiUncertainKeepsExistingCategoryAndManualEditWins() throws {
         var ledger = Ledger()
