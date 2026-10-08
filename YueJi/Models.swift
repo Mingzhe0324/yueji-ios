@@ -999,6 +999,11 @@ func notificationMatches(_ text: String, _ pattern: String) -> Bool {
 }
 func isNonTransactionNotification(_ body: String, title: String) -> Bool {
     let text = notificationText(title + " " + body)
+    // Points receipts also say "received" and "transaction", but are not money.
+    // Keep notices with currency amounts eligible for payment/cashback review.
+    let pointsReceipt = notificationMatches(text, #"\b[0-9][0-9,]*(?:\.[0-9]+)?\s+(?:reward\s+)?points\b"#)
+    let monetaryAmount = notificationMatches(text, #"(?:RM|MYR|USD|SGD|EUR|GBP|CNY|RMB|JPY|AUD|THB|IDR|INR|HKD)\s*[0-9]|[$€£¥]\s*[0-9]"#)
+    if pointsReceipt && !monetaryAmount { return true }
     if notificationMatches(text, #"\b(?:otp|tac|verification code|one[- ]time (?:password|code)|securetac|approve (?:this |the )?(?:payment|transaction)|payment request|request to pay)\b|验证码|动态密码|请求付款|批准交易|kod pengesahan"#) { return true }
     if notificationMatches(text, #"\b(?:(?:payment|transaction|purchase|transfer) (?:has |was |is )?(?:failed|declined|pending|rejected|cancelled)|unsuccessful|pending payment|not (?:paid|successful)|failed to (?:pay|transfer)|scheduled payment|payment (?:due|reminder))\b|付款失败|交易失败|交易取消|待付款|付款请求|交易待处理|pembayaran gagal|transaksi gagal|bayaran tertunggak"#) { return true }
     if notificationMatches(text, #"\b(?:promotion|promo|cashback offer|reward points)\b|\boffer\s*:|限时优惠|促销|验证码|优惠活动|promosi"#) { return true }

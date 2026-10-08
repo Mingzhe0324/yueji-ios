@@ -120,6 +120,20 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices.count, 2)
     }
 
+    func testPointsFilterPreservesMoneyNotifications() throws {
+        for title in ["", "You've just earned 11 points!", "TNG eWallet"] {
+            let body = "You’ve received 11 points from your transaction!"
+            XCTAssertTrue(isNonTransactionNotification(body, title: title))
+            XCTAssertFalse(shouldReviewFinancialNotification(body, title: title))
+        }
+        for body in ["Cashback of RM10.00 credited to your account.",
+                     "Payment of RM11.00 successful. You've received 11 points.",
+                     "Your purchase of USD10.00 was completed. You received 11 points."] {
+            XCTAssertFalse(isNonTransactionNotification(body, title: ""))
+            XCTAssertTrue(shouldReviewFinancialNotification(body, title: ""))
+        }
+    }
+
     func testCombinedTitleBodyAndCaseVariants() throws {
         let parsed = try XCTUnwrap(parseFinancialNotification("DuitNow Payment\nYou have paid RM11.00 to HOW HAN ENG."))
         XCTAssertEqual(parsed.cents, 1100)
