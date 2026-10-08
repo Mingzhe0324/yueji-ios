@@ -1,4 +1,5 @@
 import Foundation
+import Security
 
 /// Persist the input before attempting the ledger write. This cannot capture an automation that never ran.
 struct AutomationDelivery: Codable, Identifiable {
@@ -160,8 +161,14 @@ actor AutomationRecovery {
     }
     private func process(_ original: AutomationDelivery) async throws -> AutomationResult {
         var delivery = original
-        let result: AutomationResult
-        do { result = try store.change { try $0.applyDelivery(delivery) } }
+        var result: AutomationResult
+        do {
+            result = try store.change { ledger in
+                let result = try ledger.applyDelivery(delivery)
+                if GeminiSettings.enabled, let id = result.expenseID { ledger.enqueueAICategory(id) }
+                return result
+            }
+        }
         catch {
             delivery.attempts += 1; delivery.lastAttempt = Date()
             delivery.lastError = String(error.localizedDescription.prefix(1000))
@@ -170,6 +177,13 @@ actor AutomationRecovery {
         }
         // A cleanup failure never changes a successful commit; its marker makes recovery safe.
         try? inbox.remove(delivery)
+        if let id = result.expenseID {
+            await GeminiClassifier.shared.classify(id, store: store)
+            if let entry = try? store.read().expenses.first(where: { $0.id == id }) {
+                result.message = automaticExpenseDetail(entry)
+                if let ai = entry.aiCategory { result.message += "\n" + ai.label }
+            }
+        }
         if result.shouldNotify && sendsNotifications {
             await LedgerNotifications.result(title: result.title, body: result.message,
                                              expenseID: result.expenseID, noticeID: result.noticeID, deliveryID: delivery.id, sound: result.sound)
@@ -191,6 +205,7 @@ actor AutomationRecovery {
                 }
                 _ = try? await process(delivery)
             }
+            await GeminiClassifier.shared.retry(store: store, manual: manual)
             return nil
         } catch { return "无法读取待重试交易：" + error.localizedDescription }
     }
@@ -262,3 +277,215 @@ final class LocalStore {
         }
     }
 }
+
+struct AICategoryState: Codable, Equatable {
+    var id = UUID().uuidString
+    var status = "pending"
+    var attempts = 0
+    var lastAttempt: Date? = nil
+    var suggested: String? = nil
+    var detail = ""
+    var label: String {
+        switch status {
+        case "classified": return "Gemini 已分类"
+        case "review": return "AI 分类待确认"
+        case "failed": return "AI 暂不可用 · 已保留账目"
+        default: return "等待 AI 分类 · 已保留账目"
+        }
+    }
+    func validate() throws {
+        guard UUID(uuidString: id) != nil, ["pending", "classified", "review", "failed"].contains(status),
+              (0...100).contains(attempts), detail.count <= 200,
+              suggested == nil || categories.contains(suggested!),
+              lastAttempt?.timeIntervalSince1970.isFinite ?? true else {
+            throw LedgerError.invalid("AI 分类状态无效。")
+        }
+    }
+}
+struct GeminiCategoryResponse: Codable {
+    let category: String
+    let confidence: Double
+    let needsReview: Bool
+    let reason: String
+    func validate() throws {
+        guard categories.contains(category), confidence.isFinite, (0...1).contains(confidence), reason.count <= 200 else {
+            throw LedgerError.invalid("AI 返回的分类无效，原账目已保留。")
+        }
+    }
+}
+extension Ledger {
+    mutating func enqueueAICategory(_ id: String) {
+        guard let i = expenses.firstIndex(where: { $0.id == id }),
+              expenses[i].aiCategory == nil, expenses[i].categoryAllocations?.isEmpty ?? true,
+              merchantCategories[friendKey(expenses[i].merchant)] == nil else { return }
+        expenses[i].aiCategory = AICategoryState()
+    }
+    mutating func applyAICategory(_ reply: GeminiCategoryResponse, original: Expense) throws {
+        try reply.validate()
+        guard let i = expenses.firstIndex(where: { $0.id == original.id }),
+              expenses[i].aiCategory?.id == original.aiCategory?.id,
+              expenses[i].aiCategory?.status == "pending" else { return }
+        guard expenses[i].merchant == original.merchant, expenses[i].category == original.category,
+              expenses[i].categoryAllocations?.isEmpty ?? true else {
+            expenses[i].aiCategory = nil
+            return
+        }
+        if let remembered = merchantCategories[friendKey(original.merchant)] {
+            expenses[i].category = remembered
+            expenses[i].aiCategory = nil
+            return
+        }
+        let accepted = !reply.needsReview && reply.confidence >= 0.85 && reply.category != "其他"
+        if accepted { expenses[i].category = reply.category }
+        expenses[i].aiCategory?.status = accepted ? "classified" : "review"
+        expenses[i].aiCategory?.suggested = reply.category
+        expenses[i].aiCategory?.detail = reply.reason
+    }
+}
+
+// The Gemini key exists only on the server. This is a separate, revocable
+// personal access token, stored outside exported ledger files.
+enum GeminiSettings {
+    static var enabled: Bool { UserDefaults.standard.bool(forKey: "gemini.enabled") }
+    static var endpoint: String { UserDefaults.standard.string(forKey: "gemini.endpoint") ?? "" }
+    static func endpointURL(_ value: String) throws -> URL {
+        guard let u = URL(string: value.trimmingCharacters(in: .whitespacesAndNewlines)),
+              u.scheme == "https", let host = u.host, host.hasSuffix(".supabase.co"),
+              u.user == nil, u.password == nil, u.query == nil, u.fragment == nil,
+              u.port == nil, u.path == "/functions/v1/classify-merchant" else {
+            throw LedgerError.invalid("请输入 Supabase 的 classify-merchant HTTPS 函数地址。")
+        }
+        return u
+    }
+    static var keychainQuery: [String: Any] {
+        [kSecClass as String: kSecClassGenericPassword,
+         kSecAttrService as String: "YueJi.GeminiProxy",
+         kSecAttrAccount as String: "personal-access"]
+    }
+    static func token() -> String? {
+        var query = keychainQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess,
+              let data = item as? Data else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+    static func save(endpoint: String, token: String, enabled: Bool) throws {
+        let url = try endpointURL(endpoint)
+        let secret = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard secret.range(of: #"\A[A-Za-z0-9_-]{32,128}\z"#, options: .regularExpression) != nil else {
+            throw LedgerError.invalid("连接码须为 32–128 位字母、数字、下划线或连字符；不要填 Gemini API Key。")
+        }
+        let data = Data(secret.utf8)
+        let update = [kSecValueData as String: data] as [String: Any]
+        var status = SecItemUpdate(keychainQuery as CFDictionary, update as CFDictionary)
+        if status == errSecItemNotFound {
+            var query = keychainQuery
+            query[kSecValueData as String] = data
+            query[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            status = SecItemAdd(query as CFDictionary, nil)
+        }
+        guard status == errSecSuccess else { throw LedgerError.invalid("无法安全保存连接码，请解锁手机后重试。") }
+        UserDefaults.standard.set(url.absoluteString, forKey: "gemini.endpoint")
+        UserDefaults.standard.set(enabled, forKey: "gemini.enabled")
+    }
+    static func disable() { UserDefaults.standard.set(false, forKey: "gemini.enabled") }
+    static func sanitizedMerchant(_ value: String) -> String {
+        var text = value
+        for pattern in [#"https?://\S+"#, #"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}"#,
+                        #"\b(?:account|acct|card|a/c|ref(?:erence)?)\s*[:#]?\s*[A-Z0-9* -]{4,}"#,
+                        #"\b\d(?:[ -]?\d){5,}\b"#] {
+            text = text.replacingOccurrences(of: pattern, with: "[removed]", options: [.regularExpression, .caseInsensitive])
+        }
+        return String(notificationText(text).prefix(200))
+    }
+}
+private final class GeminiNoRedirect: NSObject, URLSessionTaskDelegate {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) { completionHandler(nil) }
+}
+actor GeminiClassifier {
+    static let shared = GeminiClassifier()
+    private var running: Set<String> = []
+    func request(merchant: String) async throws -> GeminiCategoryResponse {
+        let url = try GeminiSettings.endpointURL(GeminiSettings.endpoint)
+        guard let token = GeminiSettings.token() else { throw LedgerError.invalid("请先保存 AI 连接设置。") }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"; req.timeoutInterval = 12
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue(token, forHTTPHeaderField: "X-YueJi-Token")
+        req.httpBody = try JSONEncoder().encode(["merchant": GeminiSettings.sanitizedMerchant(merchant)])
+        let config = URLSessionConfiguration.ephemeral
+        config.timeoutIntervalForRequest = 12; config.timeoutIntervalForResource = 15
+        let session = URLSession(configuration: config, delegate: GeminiNoRedirect(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let (data, response) = try await session.data(for: req)
+        guard let http = response as? HTTPURLResponse else { throw LedgerError.invalid("AI 服务没有有效回应。") }
+        guard http.statusCode == 200 else {
+            switch http.statusCode {
+            case 401, 403: throw LedgerError.invalid("AI 连接码不正确，或后端尚未配置。")
+            case 429: throw LedgerError.invalid("AI 调用额度或频率已达上限，请稍后重试。")
+            default: throw LedgerError.invalid("AI 服务暂不可用，请检查后端密钥和模型设置。")
+            }
+        }
+        guard data.count <= 4096 else { throw LedgerError.invalid("AI 返回内容过长。") }
+        let result = try JSONDecoder().decode(GeminiCategoryResponse.self, from: data)
+        try result.validate()
+        return result
+    }
+    func classify(_ id: String, store: LocalStore) async {
+        let key = store.folder.path + "/" + id
+        guard GeminiSettings.enabled, !running.contains(key) else { return }
+        running.insert(key); defer { running.remove(key) }
+        var snapshot: Expense?
+        do {
+            snapshot = try store.change { ledger in
+                guard let i = ledger.expenses.firstIndex(where: { $0.id == id }),
+                      ledger.expenses[i].aiCategory?.status == "pending" else { return nil }
+                if let remembered = ledger.merchantCategories[friendKey(ledger.expenses[i].merchant)] {
+                    ledger.expenses[i].category = remembered; ledger.expenses[i].aiCategory = nil
+                    return nil
+                }
+                ledger.expenses[i].aiCategory?.attempts += 1
+                ledger.expenses[i].aiCategory?.lastAttempt = Date()
+                return ledger.expenses[i]
+            }
+            guard let snapshot else { return }
+            let reply = try await request(merchant: snapshot.merchant)
+            guard GeminiSettings.enabled else { return }
+            try store.change { try $0.applyAICategory(reply, original: snapshot) }
+        } catch {
+            guard let snapshot else { return }
+            try? store.change { ledger in
+                guard let i = ledger.expenses.firstIndex(where: { $0.id == id }),
+                      ledger.expenses[i].aiCategory?.id == snapshot.aiCategory?.id,
+                      ledger.expenses[i].aiCategory?.status == "pending" else { return }
+                ledger.expenses[i].aiCategory?.detail = "AI 暂不可用，账目和本地分类已保留。"
+                if (ledger.expenses[i].aiCategory?.attempts ?? 0) >= 3 { ledger.expenses[i].aiCategory?.status = "failed" }
+            }
+        }
+    }
+    func retry(store: LocalStore = .shared, manual: Bool = false) async {
+        guard GeminiSettings.enabled, let ledger = try? store.read() else { return }
+        let ids = ledger.expenses.filter {
+            guard let state = $0.aiCategory else { return false }
+            if manual { return ["pending", "failed"].contains(state.status) }
+            return state.status == "pending" && state.attempts < 3 &&
+                (state.lastAttempt.map { Date().timeIntervalSince($0) >= 60 } ?? true)
+        }.prefix(5).map(\.id)
+        for id in ids {
+            if manual {
+                try? store.change { ledger in
+                    guard let i = ledger.expenses.firstIndex(where: { $0.id == id }),
+                          ["pending", "failed"].contains(ledger.expenses[i].aiCategory?.status ?? "") else { return }
+                    ledger.expenses[i].aiCategory?.status = "pending"
+                    ledger.expenses[i].aiCategory?.attempts = 0
+                }
+            }
+            await classify(id, store: store)
+        }
+    }
+}
+

@@ -23,20 +23,23 @@ func guessCategory(_ name: String, description: String = "") -> String {
         value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
     }
-    let text = " " + normalized(name + " " + description) + " "
+    // Merchant identity wins over incidental words in bank/payment descriptions.
+    let texts = [name, description].map { " " + normalized($0) + " " }
     let rules: [(String, [String])] = [
         ("账单", ["electricity", "water bill", "utility bill", "broadband", "internet bill", "phone bill", "postpaid", "tenaga nasional", "tnb", "air selangor", "indah water", "iwk", "unifi", "maxis", "celcom", "digi", "celcomdigi", "u mobile", "yes telco", "rental", "rent", "房租", "电费", "水费", "网费", "电话费", "账单"]),
-        ("餐饮", ["pan mee", "restaurant", "restoran", "kedai makan", "kopitiam", "mamak", "cafe", "coffee", "food", "grabfood", "foodpanda", "kfc", "mcdonald", "mcdonalds", "mcd", "zus", "tealive", "starbucks", "pizza", "bakery", "nasi", "ramen", "sushi", "餐", "饭", "咖啡", "面馆"]),
+        ("餐饮", ["kung fu soup", "kungfu soup", "soup", "pan mee", "restaurant", "restoran", "kedai makan", "kopitiam", "mamak", "cafe", "coffee", "food", "grabfood", "foodpanda", "kfc", "mcdonald", "mcdonalds", "mcd", "zus", "tealive", "starbucks", "pizza", "bakery", "nasi", "ramen", "sushi", "noodle", "noodles", "dim sum", "hotpot", "steamboat", "roti", "satay", "bistro", "eatery", "功夫汤", "功夫湯", "餐", "饭", "咖啡", "面馆", "麵館", "火锅", "火鍋", "茶室"]),
         ("交通", ["rfid", "toll", "parking", "petrol", "petronas", "petron", "shell", "caltex", "bhp", "grab", "rapidkl", "ktm", "lrt", "mrt", "油", "停车", "过路费"]),
         ("购物", ["shopee", "lazada", "supermarket", "groceries", "grocery", "lotus", "aeon", "mydin", "econsave", "jaya grocer", "99 speedmart", "watsons", "guardian", "uniqlo", "购物", "超市"]),
         ("娱乐", ["netflix", "spotify", "cinema", "gsc", "tgv", "steam", "disney", "youtube premium", "电影", "游戏"])
     ]
-    for (category, words) in rules {
+    for text in texts {
+      for (category, words) in rules {
         for word in words {
             // Latin words use boundaries: "shellfish" must not match "shell".
             let isCJK = word.unicodeScalars.contains { $0.value >= 0x4E00 && $0.value <= 0x9FFF }
             if text.contains(isCJK ? word : " " + normalized(word) + " ") { return category }
         }
+      }
     }
     return "其他"
 }
@@ -82,6 +85,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var note: String? = nil
     var tags: [String]? = nil
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
+    var aiCategory: AICategoryState? = nil
     var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
     var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
     var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } - personalRefund }
@@ -161,6 +165,7 @@ struct Ledger: Codable {
         for rule in recurring { try rule.validate(allowedCategories: categoryNames) }
         guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for e in expenses {
+            if let ai = e.aiCategory { try ai.validate() }
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   e.merchant.count <= 200, (e.transactionReference?.count ?? 0) <= 500, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
@@ -981,6 +986,7 @@ func notificationProvider(sourceApp: String?, title: String, body: String) -> St
         return financialProvider(raw) ?? raw
     }
     if let provider = financialProvider(title) { return provider }
+    if let channel = notificationChannel(body), let provider = exactFinancialProvider(channel.name) { return provider }
     // Do not infer the sender bank from a merchant or recipient mentioned later.
     let prefix = String(notificationText(body).prefix(120))
     if let colon = prefix.firstIndex(of: ":"), let provider = financialProvider(String(prefix[..<colon])) { return provider }
@@ -988,6 +994,20 @@ func notificationProvider(sourceApp: String?, title: String, body: String) -> St
         if aliases.contains(where: { prefix.lowercased().hasPrefix($0 + ":") || prefix.lowercased().hasPrefix($0 + " ") }) { return name }
     }
     return "银行 / TNG"
+}
+// A trailing delivery channel is metadata, never part of the merchant name.
+func exactFinancialProvider(_ name: String) -> String? {
+    let key = notificationTitleKey(name)
+    return financialProviderAliases.first { provider, aliases in
+        notificationTitleKey(provider) == key || aliases.contains { notificationTitleKey($0) == key }
+    }?.0
+}
+func notificationChannel(_ body: String) -> (name: String, range: Range<String.Index>)? {
+    let pattern = #"\s+(?:via|through|melalui)\s+([^!?\n]{1,120}?)\.?\z"#
+    guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
+          let match = regex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
+          let name = Range(match.range(at: 1), in: body), let range = Range(match.range, in: body) else { return nil }
+    return (String(body[name]).trimmingCharacters(in: .whitespaces), range)
 }
 extension Ledger {
     var availableSources: [String] {
@@ -1033,8 +1053,18 @@ func financialReviewReason(_ body: String) -> String {
 /// Existing observed templates first; source-independent grammar second.
 func parseFinancialNotification(_ body: String, title: String = "", sourceApp: String? = nil) -> TNGParsed? {
     guard body.count <= 8000, title.count <= 500, !isNonTransactionNotification(body, title: title) else { return nil }
+    // Some automation bridges supply the visible heading and body together.
+    if title.isEmpty, let newline = body.firstIndex(of: "\n") {
+        let heading = String(body[..<newline]).trimmingCharacters(in: .whitespacesAndNewlines)
+        if ["money paid", "payment", "fpx payment", "card payment", "payment successful"].contains(notificationTitleKey(heading)) {
+            return parseFinancialNotification(String(body[body.index(after: newline)...]), title: heading, sourceApp: sourceApp)
+        }
+    }
     if let sourceApp, !sourceApp.isEmpty, !validFinancialSource(sourceApp) { return nil }
     let provider = notificationProvider(sourceApp: sourceApp, title: title, body: body)
+    if notificationChannel(notificationText(body)) != nil {
+        return parseGenericBankNotification(body, title: title, provider: provider)
+    }
     if let parsed = parseKnownFinancialNotification(body, title: title) {
         if parsed.kind == "payment" {
             guard singleNotificationAmount(body) == parsed.cents,
@@ -1067,13 +1097,20 @@ func parseGenericBankNotification(_ body: String, title: String, provider: Strin
     if let colon = text.firstIndex(of: ":"), text.distance(from: text.startIndex, to: colon) <= 80 {
         let prefix = String(text[..<colon])
         if let prefixBank = financialProvider(prefix), provider != "银行 / TNG", prefixBank != provider { return nil }
-        if financialProvider(prefix) != nil || notificationTitleKey(prefix) == notificationTitleKey(provider) {
+        let paymentHeading = notificationMatches(prefix, #"\A(?:(?:FPX|DuitNow QR|QR|Card|Debit Card|Online) )?Payment\z"#)
+        if financialProvider(prefix) != nil || notificationTitleKey(prefix) == notificationTitleKey(provider) || paymentHeading {
             text = String(text[text.index(after: colon)...]).trimmingCharacters(in: .whitespaces)
         }
     }
     let reference = notificationReference(text)
     if reference != nil {
         text = text.replacingOccurrences(of: #"\s+(?:ref(?:erence)?|transaction\s+id)\s*[:#]\s*[A-Z0-9-]{3,100}\.?\z"#, with: "", options: [.regularExpression, .caseInsensitive])
+    }
+    if let channel = notificationChannel(text) {
+        let channelBank = exactFinancialProvider(channel.name)
+        guard channelBank != nil || notificationTitleKey(channel.name) == notificationTitleKey(provider) else { return nil }
+        guard provider == "银行 / TNG" || channelBank == provider || notificationTitleKey(channel.name) == notificationTitleKey(provider) else { return nil }
+        text.removeSubrange(channel.range)
     }
     // Parse only unambiguous numeric date+time suffixes, in Malaysia time.
     var date: Date?

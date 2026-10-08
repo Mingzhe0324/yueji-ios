@@ -1750,6 +1750,72 @@ final class NotificationDuplicateScopeTests: XCTestCase {
 }
 
 final class AutomaticCategoryNotificationTests: XCTestCase {
+    func testGeminiCategoryCommitAndBackupRoundTrip() throws {
+        var ledger = Ledger()
+        let entry = Expense(merchant: "Kung Fu Soup", cents: 2000)
+        ledger.expenses.append(entry)
+        ledger.enqueueAICategory(entry.id)
+        let snapshot = try XCTUnwrap(ledger.expenses.first)
+        try ledger.applyAICategory(GeminiCategoryResponse(category: "餐饮", confidence: 0.95, needsReview: false, reason: "餐饮商户"), original: snapshot)
+        XCTAssertEqual(ledger.expenses[0].category, "餐饮")
+        XCTAssertEqual(ledger.expenses[0].cents, 2000)
+        XCTAssertEqual(ledger.expenses[0].aiCategory?.status, "classified")
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.expenses, ledger.expenses)
+    }
+    func testGeminiUncertainKeepsExistingCategoryAndManualEditWins() throws {
+        var ledger = Ledger()
+        ledger.expenses.append(Expense(merchant: "ABC", cents: 2000, category: "购物"))
+        let id = ledger.expenses[0].id
+        ledger.enqueueAICategory(id)
+        let snapshot = ledger.expenses[0]
+        try ledger.applyAICategory(GeminiCategoryResponse(category: "餐饮", confidence: 0.5, needsReview: true, reason: "不确定"), original: snapshot)
+        XCTAssertEqual(ledger.expenses[0].category, "购物")
+        XCTAssertEqual(ledger.expenses[0].aiCategory?.status, "review")
+        ledger.expenses[0].aiCategory = nil
+        try ledger.applyAICategory(GeminiCategoryResponse(category: "餐饮", confidence: 0.99, needsReview: false, reason: "迟到回应"), original: snapshot)
+        XCTAssertEqual(ledger.expenses[0].category, "购物")
+        XCTAssertNil(ledger.expenses[0].aiCategory)
+    }
+    func testGeminiRememberedRuleAndDeletedEntryWin() throws {
+        var ledger = Ledger()
+        ledger.expenses.append(Expense(merchant: "ABC", cents: 2000))
+        let id = ledger.expenses[0].id
+        ledger.enqueueAICategory(id)
+        let snapshot = ledger.expenses[0]
+        ledger.merchantCategories[friendKey("ABC")] = "交通"
+        let reply = GeminiCategoryResponse(category: "购物", confidence: 0.99, needsReview: false, reason: "商店")
+        try ledger.applyAICategory(reply, original: snapshot)
+        XCTAssertEqual(ledger.expenses[0].category, "交通")
+        XCTAssertNil(ledger.expenses[0].aiCategory)
+        ledger.expenses.removeAll()
+        try ledger.applyAICategory(reply, original: snapshot)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertThrowsError(try GeminiCategoryResponse(category: "invalid", confidence: 0.99, needsReview: false, reason: "").validate())
+        XCTAssertThrowsError(try GeminiSettings.endpointURL("http://example.com"))
+        XCTAssertFalse(GeminiSettings.sanitizedMerchant("SHOP 1234-5678-9012-3456").contains("1234"))
+    }
+    func testKungFuSoupAutomaticSourcesAndRememberedChoice() throws {
+        for name in ["kung fu soup", "KUNG-FU SOUP SDN BHD", "Kungfu Soup (PJ)", "功夫汤"] {
+            XCTAssertEqual(guessCategory(name), "餐饮")
+        }
+        XCTAssertEqual(guessCategory("Kung Fu Soup", description: "Payment via Maxis"), "餐饮")
+        XCTAssertEqual(guessCategory("SOUPER SOFTWARE"), "其他")
+        for (title, body) in [
+            ("DuitNow Payment", "You have paid RM20.00 to KUNG FU SOUP."),
+            ("Money Paid", "FPX Payment: You have paid RM20.00 to KUNG FU SOUP via MyPB.")
+        ] {
+            var ledger = Ledger()
+            _ = try ledger.processTNGNotification(body: body, title: title, date: Date(), eventID: nil)
+            XCTAssertEqual(ledger.expenses.first?.category, "餐饮")
+        }
+        var ledger = Ledger()
+        _ = try ledger.addPayment(amount: 20, merchant: "KUNG FU SOUP", currency: "MYR", date: Date(), eventID: "soup-1")
+        XCTAssertEqual(ledger.expenses.last?.category, "餐饮")
+        ledger.merchantCategories[friendKey("KUNG FU SOUP")] = "其他"
+        _ = try ledger.addPayment(amount: 21, merchant: "KUNG FU SOUP", currency: "MYR", date: Date(), eventID: "soup-2")
+        XCTAssertEqual(ledger.expenses.last?.category, "其他")
+    }
     func testDescriptionClassification() {
         XCTAssertEqual(guessCategory("JENG PAN MEE"), "餐饮")
         XCTAssertEqual(guessCategory("RFID Toll"), "交通")
@@ -1964,6 +2030,46 @@ final class BookkeepingBuild62Tests: XCTestCase {
 // Synthetic grammar fixtures exercise universal behavior; they are not claimed
 // to be real notification samples from the named banks.
 final class UniversalBankAndPaymentTimeTests: XCTestCase {
+    func testObservedMyPBFPXPayment() throws {
+        let body = "FPX Payment: You have paid RM47.08 to SHOPEE MALAYSIA via MyPB."
+        for source in [nil, "MyPB", "Public Bank"] as [String?] {
+            var ledger = Ledger()
+            let date = Date()
+            let result = try ledger.processTNGNotification(body: body, title: "Money Paid", date: date, eventID: "pb-fpx-4708", sourceApp: source)
+            XCTAssertNotNil(result.expenseID)
+            XCTAssertEqual(ledger.expenses.first?.cents, 4708)
+            XCTAssertEqual(ledger.expenses.first?.merchant, "SHOPEE MALAYSIA")
+            XCTAssertEqual(ledger.expenses.first?.source, "Public Bank")
+            _ = try ledger.processTNGNotification(body: body, title: "Money Paid", date: date, eventID: "pb-fpx-4708", sourceApp: source)
+            XCTAssertEqual(ledger.expenses.count, 1)
+        }
+        XCTAssertEqual(parseFinancialNotification("Money Paid\n" + body)?.party, "SHOPEE MALAYSIA")
+        XCTAssertEqual(parseFinancialNotification(body)?.sourceBank, "Public Bank")
+    }
+
+    func testSharedPaymentWrappersAcrossEntireProviderDirectory() throws {
+        // Synthetic fixtures test shared grammar, not real samples from every bank.
+        for (provider, aliases) in financialProviderAliases {
+            for alias in aliases {
+                let body = "FPX Payment: You have paid RM47.08 to SHOPEE MALAYSIA via " + alias + "."
+                let parsed = try XCTUnwrap(parseFinancialNotification(body, title: "Money Paid", sourceApp: provider), alias)
+                XCTAssertEqual(parsed.party, "SHOPEE MALAYSIA", alias)
+                XCTAssertEqual(parsed.sourceBank, provider, alias)
+                XCTAssertEqual(parsed.cents, 4708, alias)
+            }
+        }
+        for prefix in ["FPX Payment", "DuitNow QR Payment", "QR Payment", "Card Payment", "Online Payment"] {
+            XCTAssertEqual(parseFinancialNotification(prefix + ": You have paid RM47.08 to SHOP via New Bank.", sourceApp: "New Bank")?.party, "SHOP")
+        }
+        for body in ["FPX Payment: You have paid RM47.08 to SHOP via MyPB. Payment failed.",
+                     "FPX Payment: Approve this payment of RM47.08 to SHOP via MyPB.",
+                     "FPX Payment: You have paid USD47.08 to SHOP via MyPB.",
+                     "FPX Payment: You have paid RM47.08 to SHOP via MyPB. Available balance RM100.00",
+                     "FPX Payment: You have paid RM47.08 to SHOP via Unknown Channel."] {
+            XCTAssertNil(parseFinancialNotification(body, title: "Money Paid"), body)
+        }
+        XCTAssertNil(parseFinancialNotification("FPX Payment: You have paid RM47.08 to SHOP via MyPB.", sourceApp: "CIMB"))
+    }
     private let captured = ISO8601DateFormatter().date(from: "2026-10-07T14:26:50Z")!
     private let noon = ISO8601DateFormatter().date(from: "2026-10-07T04:00:00Z")!
 

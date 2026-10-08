@@ -1,0 +1,4 @@
+# Personal-use function authenticates X-YueJi-Token in handler.mjs.
+# Never remove that check when deploying without gateway JWT verification.
+[functions.classify-merchant]
+verify_jwt = false

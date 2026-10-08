@@ -3007,3 +3007,96 @@ struct TagSpendingView: View {
         }.navigationTitle("#" + tag)
     }
 }
+
+struct GeminiCategorySettingsView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var enabled = GeminiSettings.enabled
+    @State private var endpoint = GeminiSettings.endpoint
+    @State private var token = ""
+    @State private var message = ""
+    @State private var busy = false
+    private var reviewEntries: [Expense] {
+        model.ledger.expenses.filter { $0.aiCategory != nil && $0.aiCategory?.status != "classified" }
+            .sorted { $0.date > $1.date }
+    }
+    var body: some View {
+        Form {
+            Section {
+                Toggle("用 Gemini 自动分类", isOn: $enabled)
+                    .onChange(of: enabled) { _, value in if !value { GeminiSettings.disable() } }
+                Text("只发送经过遮盖处理的商户名称给你的后端和 Google Gemini，不发送整条银行通知、金额或账目历史。商户名称仍可能包含个人姓名。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Text("你记住的分类优先。AI 有把握时自动更新类别；不确定或断网时，先保留账目及本地分类。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("首次连接") {
+                TextField("后端函数地址（HTTPS）", text: $endpoint)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled().keyboardType(.URL)
+                SecureField("个人连接码（不是 Gemini Key）", text: $token)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                Text("Gemini API Key 只放在后端。连接码留空则保留已保存的连接码。填写说明在源码包的 Gemini-Setup.md。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                Button("保存并检查连接") {
+                    busy = true
+                    Task { @MainActor in
+                        defer { busy = false }
+                        do {
+                            try GeminiSettings.save(endpoint: endpoint,
+                                                    token: token.isEmpty ? (GeminiSettings.token() ?? "") : token,
+                                                    enabled: enabled)
+                            token = ""
+                            let result = try await GeminiClassifier.shared.request(merchant: "Kung Fu Soup")
+                            message = "连接成功：Kung Fu Soup → " + result.category +
+                                (result.needsReview || result.confidence < 0.85 ? "（需确认）" : "")
+                        } catch { message = error.localizedDescription }
+                    }
+                }.disabled(busy)
+                if busy { ProgressView() }
+                if !message.isEmpty { Text(message).font(.footnote) }
+            }
+            Section {
+                Button("重试未完成分类（每次最多 5 笔）") {
+                    busy = true
+                    Task { @MainActor in
+                        await GeminiClassifier.shared.retry(manual: true)
+                        model.reload(); busy = false
+                        message = "已完成本轮重试，请查看下面的状态。"
+                    }
+                }.disabled(busy || !GeminiSettings.enabled)
+                Text("打开 App 时会重试未完成任务；连续失败 3 次后暂停，可在这里重试。关闭开关立即停止新请求。")
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            Section("需要留意的分类") {
+                if reviewEntries.isEmpty { Text("暂时没有待处理分类").foregroundStyle(.secondary) }
+                ForEach(reviewEntries.prefix(30)) { entry in
+                    VStack(alignment: .leading, spacing: 6) {
+                        NavigationLink { ExpenseDetailView(id: entry.id) } label: {
+                            VStack(alignment: .leading) {
+                                Text(entry.merchant)
+                                Text(entry.aiCategory?.label ?? "").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let ai = entry.aiCategory {
+                            if !ai.detail.isEmpty { Text(ai.detail).font(.caption).foregroundStyle(.secondary) }
+                            if ai.status == "review", let suggested = ai.suggested, suggested != "其他" {
+                                Button("采用「" + suggested + "」并记住") {
+                                    model.change { ledger in
+                                        guard let i = ledger.expenses.firstIndex(where: { $0.id == entry.id }),
+                                              ledger.expenses[i].aiCategory?.id == ai.id,
+                                              ledger.categoryNames.contains(suggested) else { return }
+                                        ledger.expenses[i].category = suggested
+                                        ledger.expenses[i].aiCategory = nil
+                                        ledger.merchantCategories[friendKey(entry.merchant)] = suggested
+                                    }
+                                }.buttonStyle(.borderless)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle("AI 自动分类").navigationBarTitleDisplayMode(.inline)
+        .onAppear { model.reload() }
+    }
+}
+

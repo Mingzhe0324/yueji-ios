@@ -693,6 +693,9 @@ struct ExpenseDetailView: View {
                                 .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
                             Text(entry.merchant).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                             Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
+                            if let ai = entry.aiCategory {
+                                Text(ai.label).font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 20)
                     }
@@ -1057,6 +1060,7 @@ struct ExpenseEditor: View {
             try LocalStore.shared.change { ledger in
                 if let original {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid(tr("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")) }
+                    entry.aiCategory = nil // A manual save cancels any in-flight AI classification.
                     ledger.expenses[i] = entry
                     if rememberCategory && !splitCategories && original.category != entry.category {
                         ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
@@ -1465,6 +1469,9 @@ struct AutomationSetupView: View {
             } footer: { Text(tr("跟着说明在「快捷指令」设置一次。之后收到的付款资料会交给月记处理。", "Follow the steps in Shortcuts once. Payment details it receives can then be sent to YueJi.", "Ikut langkah dalam Pintasan sekali. Butiran bayaran yang diterima kemudian boleh dihantar ke YueJi.")) }
             Section {
                 NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }
+                NavigationLink { GeminiCategorySettingsView() } label: {
+                    Label("AI 自动分类 · Gemini", systemImage: "sparkles")
+                }
             }
         }.yuejiListSurface().navigationTitle(tr("自动记账", "Automatic recording", "Rekod automatik")).navigationBarTitleDisplayMode(.inline)
     }
