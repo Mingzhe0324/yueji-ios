@@ -2327,36 +2327,53 @@ private struct OpeningAnimationView: View {
     var sound = true
     var onFinished: () -> Void
     @Environment(\.scenePhase) private var phase
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("playfulAnimations") private var playful = true
     @State private var entered = false
     @State private var settled = false
     @State private var playedSound = false
     private var animates: Bool { playful && !reduceMotion }
+    private var accent: Color { scheme == .dark ? Color(red: 0.48, green: 0.72, blue: 1) : ink }
     var body: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
+            RadialGradient(colors: [accent.opacity(scheme == .dark ? 0.24 : 0.10), .clear],
+                           center: .center, startRadius: 24, endRadius: 170)
+                .frame(width: 340, height: 340).offset(y: -34)
+                .opacity(entered || !animates ? 1 : 0)
             VStack(spacing: 24) {
                 ZStack {
-                    Circle().fill(ink.opacity(0.06)).frame(width: 172, height: 172)
-                    Circle().strokeBorder(ink.opacity(settled ? 0 : 0.16), lineWidth: 2)
-                        .frame(width: 206, height: 206)
-                        .scaleEffect(settled ? 1.2 : 0.8)
-                    MoonBuddy(size: 116, celebrating: false, animated: false)
-                        .rotationEffect(.degrees(animates && !entered ? -12 : 0))
-                        .offset(y: animates && !entered ? 18 : 0)
-                    Image(systemName: "sparkle").font(.title2).foregroundStyle(ink.opacity(0.65))
-                        .offset(x: 76, y: -64)
-                        .scaleEffect(entered ? 1 : 0.3)
-                        .accessibilityHidden(true)
+                    RoundedRectangle(cornerRadius: 38, style: .continuous)
+                        .strokeBorder(accent.opacity(settled ? 0 : (scheme == .dark ? 0.55 : 0.24)), lineWidth: 1.5)
+                        .frame(width: 154, height: 154)
+                        .scaleEffect(settled && animates ? 1.28 : 1)
+                    RoundedRectangle(cornerRadius: 34, style: .continuous)
+                        .fill(.ultraThinMaterial)
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                .fill(LinearGradient(colors: [accent.opacity(scheme == .dark ? 0.22 : 0.08), accent.opacity(0.02)],
+                                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+                        }
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 34, style: .continuous)
+                                .strokeBorder(.white.opacity(scheme == .dark ? 0.30 : 0.75), lineWidth: 1)
+                        }
+                        .frame(width: 144, height: 144)
+                        .shadow(color: accent.opacity(scheme == .dark ? 0.20 : 0.10), radius: 22, y: 8)
+                    MoonBuddy(size: 104, celebrating: false, animated: false)
+                        .shadow(color: .yellow.opacity(scheme == .dark ? 0.22 : 0), radius: 12)
                 }
+                .scaleEffect(entered || !animates ? 1 : 0.92)
+                .offset(y: entered || !animates ? 0 : 12)
                 VStack(spacing: 8) {
-                    Text(tr("月记", "YueJi", "YueJi")).font(.largeTitle.bold()).tracking(3)
-                    Text("YUEJI").font(.caption2.weight(.semibold)).tracking(4).foregroundStyle(.secondary)
+                    Text(tr("月记", "YueJi", "YueJi")).font(.system(.largeTitle, design: .rounded).weight(.semibold)).tracking(0.3)
+                    Text("YUEJI").font(.caption.weight(.medium)).tracking(2.5).foregroundStyle(.secondary)
                 }
+                .opacity(settled || !animates ? 1 : 0)
+                .offset(y: settled || !animates ? 0 : 6)
             }
-            .opacity(entered || reduceMotion || !playful ? 1 : 0)
-            .scaleEffect(entered || !animates ? 1 : 0.88)
+            .opacity(entered || !animates ? 1 : 0)
         }
         .task(id: phase) {
             // Wait for foreground activation so the opening cue is audible on a cold launch.
@@ -2365,9 +2382,9 @@ private struct OpeningAnimationView: View {
                 FeedbackSounds.shared.play(.launch)
                 playedSound = true
             }
-            withAnimation(animates ? .spring(response: 0.65, dampingFraction: 0.7) : nil) { entered = true }
-            withAnimation(animates ? .easeOut(duration: 1.2) : nil) { settled = true }
-            do { try await Task.sleep(for: .milliseconds(animates ? 1450 : 350)) }
+            withAnimation(animates ? .smooth(duration: 0.6) : nil) { entered = true }
+            withAnimation(animates ? .easeOut(duration: 0.7).delay(0.12) : nil) { settled = true }
+            do { try await Task.sleep(for: .milliseconds(animates ? 1100 : 350)) }
             catch { return }
             onFinished()
         }
