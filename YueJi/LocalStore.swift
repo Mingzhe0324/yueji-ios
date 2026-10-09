@@ -64,7 +64,7 @@ extension Ledger {
     mutating func applyDelivery(_ delivery: AutomationDelivery) throws -> AutomationResult {
         try delivery.validate()
         if seenEvents.contains(delivery.marker) {
-            return AutomationResult(title: "月记 · 恢复检查完成", message: "此前已处理这次调用，没有重复入账。请查看账本或待确认记录。",
+            return AutomationResult(title: tr("月记 · 恢复检查完成", "YueJi · Recovery check complete", "YueJi · Semakan pemulihan selesai"), message: tr("此前已处理这次调用，没有重复入账。请查看账本或待确认记录。", "This request was already processed. No duplicate was added. Check the ledger or pending records.", "Permintaan ini telah diproses. Tiada pendua ditambah. Semak lejar atau rekod untuk semakan."),
                                     shouldNotify: delivery.kind == "applePay" || shouldReviewFinancialNotification(delivery.body, title: delivery.title))
         }
         var copy = self
@@ -76,7 +76,7 @@ extension Ledger {
                let id = processed.noticeID, let i = copy.tngNotices.firstIndex(where: { $0.id == id }) {
                 copy.tngNotices[i].usesReceivedDate = true
             }
-            result = AutomationResult(title: processed.expenseID == nil ? "月记 · 交易处理结果" : "月记 · 已自动记账",
+            result = AutomationResult(title: processed.expenseID == nil ? tr("月记 · 交易处理结果", "YueJi · Transaction result", "YueJi · Hasil transaksi") : tr("月记 · 已自动记账", "YueJi · Automatically recorded", "YueJi · Direkod secara automatik"),
                                       message: processed.message, expenseID: processed.expenseID, noticeID: processed.noticeID,
                                       shouldNotify: processed.accepted || shouldReviewFinancialNotification(delivery.body, title: delivery.title),
                                       sound: copy.notificationSound(expenseID: processed.expenseID, noticeID: processed.noticeID))
@@ -92,9 +92,9 @@ extension Ledger {
             }
             let entry = saved ? copy.expenses.last : nil
             let pending = copy.tngNotices.count > before ? copy.tngNotices.last : nil
-            let detail = entry.map { automaticExpenseDetail($0) } ?? (pending == nil ? "这笔付款已记录，没有重复入账。" : "疑似重复，已保留待确认，尚未再次计入消费。")
+            let detail = entry.map { automaticExpenseDetail($0) } ?? (pending == nil ? tr("这笔付款已记录，没有重复入账。", "This payment is already recorded. No duplicate was added.", "Bayaran ini telah direkod. Tiada pendua ditambah.") : tr("疑似重复，已保留待确认，尚未再次计入消费。", "Possible duplicate kept for review; not added to spending again.", "Kemungkinan pendua disimpan untuk semakan; tidak ditambah semula pada belanja."))
             copy.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : (pending == nil ? "duplicate" : "pending"), detail: detail)
-            result = AutomationResult(title: saved ? "月记 · 已自动记账" : (pending == nil ? "月记 · 未重复记账" : "月记 · Apple Pay 待确认"),
+            result = AutomationResult(title: saved ? tr("月记 · 已自动记账", "YueJi · Automatically recorded", "YueJi · Direkod secara automatik") : (pending == nil ? tr("月记 · 未重复记账", "YueJi · Duplicate skipped", "YueJi · Pendua dilangkau") : tr("月记 · Apple Pay 待确认", "YueJi · Apple Pay needs review", "YueJi · Apple Pay perlu semakan")),
                                       message: detail, expenseID: entry?.id, noticeID: pending?.id, sound: saved ? .outgoing : .neutral)
         }
         // The marker and money are committed in the same atomic ledger file replacement.
@@ -192,7 +192,7 @@ actor AutomationRecovery {
                 _ = try? await process(delivery)
             }
             return nil
-        } catch { return "无法读取待重试交易：" + error.localizedDescription }
+        } catch { return tr("无法读取待重试交易：", "Unable to read transactions awaiting retry: ", "Tidak dapat membaca transaksi untuk cuba semula: ") + error.localizedDescription }
     }
 }
 

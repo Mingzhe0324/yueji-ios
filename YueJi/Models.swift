@@ -43,7 +43,7 @@ func guessCategory(_ name: String, description: String = "") -> String {
 
 func automaticExpenseDetail(_ entry: Expense) -> String {
     let amount = entry.foreign.map { Currency.display($0.minor, $0.currency) + " (" + money(entry.cents) + ")" } ?? money(entry.cents)
-    return entry.source + " · " + amount + "\n" + entry.merchant + " · " + entry.categorySummary + "\n" + dateLabel(entry.date, time: true) + entry.timeSourceSuffix
+    return sourceLabel(entry.source) + " · " + amount + "\n" + entry.merchant + " · " + entry.categorySummary + "\n" + dateLabel(entry.date, time: true) + entry.timeSourceSuffix
 }
 
 struct Repayment: Codable, Identifiable, Equatable {
@@ -386,7 +386,7 @@ extension Ledger {
         if tngNotices.count > previousCount, let notice = tngNotices.last, notice.status != "recorded" {
             let amount = notice.cents.map(money) ?? tr("金额待确认", "Amount to review", "Amaun untuk semakan")
             let party = notice.party ?? String(notice.body.prefix(100))
-            message += "\n" + notice.provider + " · " + amount + "\n" + party + "\n" + dateLabel(notice.date, time: true)
+            message += "\n" + sourceLabel(notice.provider) + " · " + amount + "\n" + party + "\n" + dateLabel(notice.date, time: true)
             if notice.kind == "transfer" {
                 let suggested = merchantCategories[friendKey(party)] ?? guessCategory(party, description: notice.body)
                 message += "\n" + tr("建议分类（用途待确认）：", "Suggested category (purpose unconfirmed): ", "Cadangan kategori (tujuan belum disahkan): ") + categoryLabel(suggested)
@@ -419,12 +419,12 @@ extension Ledger {
             let reference = notificationReference(text) ?? (explicitReference.isEmpty ? nil : explicitReference)
             let provider = notificationProvider(sourceApp: sourceApp, title: title, body: text)
             if let reference, tngNotices.contains(where: { $0.provider == provider && $0.bankReference == reference }) {
-                return "此交易编号的通知已保留，未重复添加。"
+                return tr("此交易编号的通知已保留，未重复添加。", "A notice with this transaction ID is already kept. No duplicate was added.", "Notifikasi dengan ID transaksi ini telah disimpan. Tiada pendua ditambah.")
             }
             guard timestamp.timeIntervalSince1970 >= 0, timestamp.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易日期无效。") }
             guard tngNotices.count < 5000 else { throw LedgerError.invalid("通知记录已达上限。") }
             if tngNotices.contains(where: { $0.kind == "unknown" && $0.body == text && $0.title == title && abs($0.date.timeIntervalSince(timestamp)) < 300 }) {
-                return "相同未识别通知已保留，未重复添加。"
+                return tr("相同未识别通知已保留，未重复添加。", "The same unrecognised notification is already kept. No duplicate was added.", "Notifikasi tidak dikenal pasti yang sama telah disimpan. Tiada pendua ditambah.")
             }
             var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: true, kind: "unknown", status: "pending", cents: nil, party: nil)
             notice.reviewReason = financialReviewReason(text)
@@ -432,7 +432,7 @@ extension Ledger {
             notice.cents = singleNotificationAmount(text)
             notice.bankReference = reference
             tngNotices.append(notice)
-            return "交易通知已保留待确认，未计入消费。"
+            return tr("交易通知已保留待确认，未计入消费。", "Transaction notification kept for review; excluded from spending.", "Notifikasi transaksi disimpan untuk semakan; tidak dikira sebagai belanja.")
         }
         let timestamp = verified.transactionDate ?? date ?? now
         guard timestamp.timeIntervalSince1970 >= 0, timestamp.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易金额或日期无效。") }

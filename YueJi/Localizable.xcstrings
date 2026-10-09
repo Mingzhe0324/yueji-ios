@@ -352,6 +352,134 @@
           }
         }
       }
+    },
+    "记录成功付款，默认使用本次自动化运行的时刻。补录旧交易才开启使用指定交易时间；不会读取钱包历史。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Record successful payments using the current automation time by default. Enable the specified transaction time only for older entries. Wallet history is not read."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Rekod bayaran berjaya menggunakan masa automasi semasa secara lalai. Aktifkan masa transaksi ditetapkan hanya untuk rekod lama. Sejarah Wallet tidak dibaca."
+          }
+        }
+      }
+    },
+    "交易描述（可选）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Transaction description (optional)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Penerangan transaksi (pilihan)"
+          }
+        }
+      }
+    },
+    "指定交易时间（补录时使用）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Specified transaction time (for older entries)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Masa transaksi ditetapkan (untuk rekod lama)"
+          }
+        }
+      }
+    },
+    "使用指定交易时间（补录旧交易）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Use specified transaction time (older entries)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gunakan masa transaksi ditetapkan (rekod lama)"
+          }
+        }
+      }
+    },
+    "疑似重复，已保留待确认。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Possible duplicate kept for review."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kemungkinan pendua disimpan untuk semakan."
+          }
+        }
+      }
+    },
+    "这笔付款已处理，没有重复入账。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This payment was already processed. No duplicate was added."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bayaran ini telah diproses. Tiada pendua ditambah."
+          }
+        }
+      }
+    },
+    "接收任意银行与 TNG 通知。明确的马币付款自动记账；转账、收款及无法确认的格式待确认，广告及验证码忽略。来源 App 名称可用于区分银行。": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Receive bank and TNG notifications. Clear MYR payments are recorded automatically. Transfers, receipts and uncertain formats need review; ads and verification codes are ignored. The source app name can identify the bank."
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Terima notifikasi bank dan TNG. Bayaran MYR yang jelas direkod secara automatik. Pindahan, penerimaan dan format tidak pasti perlu semakan; iklan dan kod pengesahan diabaikan. Nama app sumber boleh mengenal pasti bank."
+          }
+        }
+      }
+    },
+    "来源 App 名称（可选）": {
+      "localizations": {
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source app name (optional)"
+          }
+        },
+        "ms": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nama app sumber (pilihan)"
+          }
+        }
+      }
     }
   },
   "version": "1.0"

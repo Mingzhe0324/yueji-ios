@@ -653,7 +653,7 @@ struct TNGTimelineRow: View {
         let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout {
             VStack(alignment: .leading, spacing: 6) {
-                Text(notice.provider + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " +
+                Text(sourceLabel(notice.provider) + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " +
                      (notice.kind == "incoming" ? tr("转入", "Incoming", "Masuk") : tr("转出", "Outgoing", "Keluar")))
                     .font(.headline).fixedSize(horizontal: false, vertical: true)
                 if let party = notice.party, !party.isEmpty {
@@ -1227,7 +1227,7 @@ struct SettingsView: View {
                             .background(LinearGradient(colors: [.blue, .indigo], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
-                            Text("月记 YueJi").font(.title3.weight(.semibold))
+                            Text(tr("月记 YueJi", "YueJi", "YueJi")).font(.title3.weight(.semibold))
                             Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod.")).font(.subheadline).foregroundStyle(.secondary)
                         }
                     }.padding(.vertical, 8)
@@ -2339,7 +2339,7 @@ private struct OpeningAnimationView: View {
                     MoonBuddy(size: 116, celebrating: false, animated: false)
                 }
                 VStack(spacing: 8) {
-                    Text("月记").font(.largeTitle.bold()).tracking(3)
+                    Text(tr("月记", "YueJi", "YueJi")).font(.largeTitle.bold()).tracking(3)
                     Text("YUEJI").font(.caption2.weight(.semibold)).tracking(4).foregroundStyle(.secondary)
                 }
             }
@@ -2351,7 +2351,7 @@ private struct OpeningAnimationView: View {
             withAnimation(reduceMotion || !playful ? nil : YueJiMotion.detail) { entered = true }
         }
         .onDisappear { FeedbackSounds.shared.stop() }
-        .accessibilityElement(children: .ignore).accessibilityLabel("月记 YueJi")
+        .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
     }
 }
 
@@ -2480,7 +2480,7 @@ struct AutomaticRecordDeletionConfirmation: ViewModifier {
             }
             Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
         } message: { selected in
-            Text(selected.provider + " · " + money(selected.cents ?? 0) + "\n" + tr(
+            Text(sourceLabel(selected.provider) + " · " + money(selected.cents ?? 0) + "\n" + tr(
                 "关联消费及分账、退款会一并删除；此收款生成的还款也会撤销。其他银行记录保留，删除后可撤销。",
                 "Linked expenses, splits and refunds are deleted; repayments from this receipt are reversed. Other bank records stay. Deletion can be undone.",
                 "Belanja, bahagian dan pulangan berkaitan dipadam; bayaran daripada penerimaan ini dibatalkan. Rekod bank lain kekal. Pemadaman boleh dibatalkan."))
@@ -2514,8 +2514,8 @@ struct NotificationDestinationView: View {
                             if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
                             else if ["pending", "transfer"].contains(notice.status) { FinancialNoticeReviewView(id: notice.id) }
                             else { TNGNoticeView(id: notice.id) }
-                        } else { Text("这笔记录已删除或清理。") }
-                    }.toolbar { ToolbarItem(placement: .confirmationAction) { Button("完成") { dismiss() } } }
+                        } else { Text(tr("这笔记录已删除或清理。", "This record has been deleted or cleared.", "Rekod ini telah dipadam atau dikosongkan.")) }
+                    }.toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
                 }
             }
         }.ledgerFeedback(modal: true)

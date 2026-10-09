@@ -599,7 +599,7 @@ struct AutomationStatusView: View {
                     }
                     if let recoveryError {
                         DisclosureGroup(tr("查看未完成的原因", "Why it could not finish", "Sebab tidak selesai")) {
-                            Text(recoveryError).font(.footnote).textSelection(.enabled)
+                            Text(localizedError(recoveryError)).font(.footnote).textSelection(.enabled)
                         }
                     }
                     Button(retrying ? tr("正在重试…", "Retrying…", "Sedang mencuba…") : tr("再试一次", "Try again", "Cuba lagi")) {
@@ -611,12 +611,12 @@ struct AutomationStatusView: View {
                         }
                     }.disabled(retrying)
                     ForEach(Array(recoveryInputs.prefix(20))) { input in
-                        DisclosureGroup(input.source + " · " + dateLabel(input.receivedAt, time: true)) {
+                        DisclosureGroup(sourceLabel(input.source) + " · " + dateLabel(input.receivedAt, time: true)) {
                             Text(input.attempts >= 3
                                  ? tr("多次尝试后仍未保存，请查看原因后再试。", "Still unsaved after several attempts. Review the reason before retrying.", "Masih belum disimpan selepas beberapa cubaan. Semak sebab sebelum mencuba lagi.")
                                  : tr("资料已保留，等待保存。", "Details kept, waiting to save.", "Butiran disimpan, menunggu untuk direkod."))
                                 .font(.footnote).foregroundStyle(.secondary)
-                            if let error = input.lastError { Text(error).font(.footnote).textSelection(.enabled) }
+                            if let error = input.lastError { Text(localizedError(error)).font(.footnote).textSelection(.enabled) }
                         }
                     }
                 }
@@ -629,11 +629,11 @@ struct AutomationStatusView: View {
                 }
                 ForEach(model.ledger.automationEvents) { event in
                     VStack(alignment: .leading, spacing: 6) {
-                        Text(event.source + " · " + outcome(event.outcome, source: event.source)).font(.body.weight(.medium))
+                        Text(sourceLabel(event.source) + " · " + outcome(event.outcome, source: event.source)).font(.body.weight(.medium))
                         Text(dateLabel(event.date, time: true)).font(.footnote).foregroundStyle(.secondary)
                         if event.outcome == "failed", !event.detail.isEmpty {
                             DisclosureGroup(tr("查看原因", "View reason", "Lihat sebab")) {
-                                Text(event.detail).font(.footnote).textSelection(.enabled)
+                                Text(localizedError(event.detail)).font(.footnote).textSelection(.enabled)
                             }
                         }
                     }.padding(.vertical, 4)
@@ -1117,9 +1117,9 @@ struct CSVExportView: View {
 }
 
 func tngStatus(_ notice: TNGNotice) -> String {
-    if notice.resolution == "refund" { return "已关联退款" }
-    if notice.resolution == "ownTransfer" { return "账户转账 / 充值 · 不计收支" }
-    if notice.resolution == "duplicate" { return "已合并重复通知" }
+    if notice.resolution == "refund" { return tr("已关联退款", "Refund linked", "Bayaran balik dipautkan") }
+    if notice.resolution == "ownTransfer" { return tr("账户转账 / 充值 · 不计收支", "Account transfer / top-up · excluded", "Pindahan akaun / tambah nilai · dikecualikan") }
+    if notice.resolution == "duplicate" { return tr("已合并重复通知", "Duplicate notices merged", "Notifikasi pendua digabungkan") }
     switch notice.status {
     case "recorded": return tr("已记消费", "Expense recorded", "Belanja direkod")
     case "repayment": return tr("已确认为朋友还款", "Confirmed repayment", "Bayaran balik disahkan")
@@ -1172,20 +1172,20 @@ struct NoticeNoteSection: View {
         return n.note ?? ""
     }
     var body: some View {
-        Section("交易备注") {
-            TextField("例如：午餐、替朋友付款、转入自己的账户", text: $note, axis: .vertical).lineLimit(2...5)
+        Section(tr("交易备注", "Transaction note", "Nota transaksi")) {
+            TextField(tr("例如：午餐、替朋友付款、转入自己的账户", "E.g. lunch, paying for a friend, transfer to your own account", "Cth. makan tengah hari, bayaran untuk rakan, pindahan ke akaun sendiri"), text: $note, axis: .vertical).lineLimit(2...5)
             Text("\(note.count) / 2000").font(.caption).foregroundStyle(.secondary)
-            Button("保存备注") {
+            Button(tr("保存备注", "Save note", "Simpan nota")) {
                 do {
                     try LocalStore.shared.change { try $0.setNoticeNote(id: id, note: note) }
-                    model.reload(); model.showSaved(message: "备注已保存")
+                    model.reload(); model.showSaved(message: tr("备注已保存", "Note saved", "Nota disimpan"))
                 } catch { self.error = error.localizedDescription }
             }.disabled(note == savedNote || note.count > 2000)
-            Text("付款、转账、收款及已排除记录均可备注；保存备注不会改变消费统计。").font(.caption)
+            Text(tr("付款、转账、收款及已排除记录均可备注；保存备注不会改变消费统计。", "Add notes to payments, transfers, receipts and excluded records. Notes do not change spending totals.", "Tambah nota pada bayaran, pindahan, penerimaan dan rekod dikecualikan. Nota tidak mengubah jumlah belanja.")).font(.caption)
         }
         .onAppear { note = savedNote }
         .onChange(of: savedNote) { old, new in if note == old { note = new } }
-        .alert("无法保存备注", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+        .alert(tr("无法保存备注", "Unable to save note", "Tidak dapat menyimpan nota"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK") {}
         } message: { Text(error ?? "") }
     }
@@ -1215,10 +1215,10 @@ struct TNGNoticeView: View {
                     if let reference = notice.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
                     if !notice.title.isEmpty { Text(notice.title) }
                     Text(notice.body).textSelection(.enabled)
-                    if let reason = notice.reviewReason { Text(reason).foregroundStyle(.orange) }
-                    if let suggestion = notice.aiSuggestion { Text("AI 建议（请核对）：" + suggestion).font(.caption) }
+                    if let reason = notice.reviewReason { Text(localizedError(reason)).foregroundStyle(.orange) }
+                    if let suggestion = notice.aiSuggestion { Text(tr("AI 建议（请核对）：", "AI suggestion (please review): ", "Cadangan AI (sila semak): ") + localizedAppText(suggestion)).font(.caption) }
                     if notice.kind == "unknown" {
-                        Button(analyzing ? "AI 分析中…" : "AI 辅助判断") {
+                        Button(analyzing ? tr("AI 分析中…", "AI is analysing…", "AI sedang menganalisis…") : tr("AI 辅助判断", "Review with AI", "Semak dengan AI")) {
                             analyzing = true
                             Task { @MainActor in
                                 let advice = await financialAIAdvice(body: notice.body, title: notice.title)
@@ -1232,7 +1232,7 @@ struct TNGNoticeView: View {
                                 analyzing = false
                             }
                         }.disabled(analyzing)
-                        Button("重新识别通知") {
+                        Button(tr("重新识别通知", "Recognise notification again", "Kenal pasti notifikasi semula")) {
                             do {
                                 try LocalStore.shared.change { ledger in
                                     guard let old = ledger.tngNotices.first(where: { $0.id == id }), old.status == "pending", old.expenseID == nil else { return }
@@ -1255,7 +1255,7 @@ struct TNGNoticeView: View {
                     if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
                 }
                 if ["pending", "transfer"].contains(notice.status), notice.expenseID == nil {
-                    NavigationLink("确认用途 / 收入 / 充值 / 退款") { FinancialNoticeReviewView(id: id) }
+                    NavigationLink(tr("确认用途 / 收入 / 充值 / 退款", "Confirm purpose / income / top-up / refund", "Sahkan tujuan / pendapatan / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) }
                 }
                 if notice.resolution != nil { NoticeResolutionSection(notice: notice) }
                 if let expenseID = notice.expenseID {
@@ -1269,24 +1269,24 @@ struct TNGNoticeView: View {
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date)
                         Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
-                        Toggle("以后此商户使用这个分类", isOn: $rememberCategory)
+                        Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant in future", "Gunakan kategori ini untuk peniaga ini pada masa depan"), isOn: $rememberCategory)
                         Button(tr("计入消费", "Record expense", "Rekod belanja")) { confirming = true }
                     }
                 }
                 if notice.status != "ignored" {
                     Button(tr("不计消费 / 排除此通知", "Exclude from spending", "Kecualikan daripada belanja"), role: .destructive) { excluding = true }
                 } else if notice.resolution == nil {
-                    Section("重新计入消费") {
-                        Text("排除期间不计入消费。重新打开后，请核对金额与分类，再点「计入消费」。不会自动新增或重复记账。")
+                    Section(tr("重新计入消费", "Include in spending again", "Masukkan semula dalam belanja")) {
+                        Text(tr("排除期间不计入消费。重新打开后，请核对金额与分类，再点「计入消费」。不会自动新增或重复记账。", "Excluded records do not count as spending. Reopen, check the amount and category, then tap Include in spending. Reopening does not create a new entry.", "Rekod dikecualikan tidak dikira sebagai belanja. Buka semula, semak amaun dan kategori, kemudian tekan Masukkan dalam belanja. Membuka semula tidak mencipta rekod baharu."))
                             .font(.footnote)
-                        Button("撤销排除 · 重新确认") {
+                        Button(tr("撤销排除 · 重新确认", "Undo exclusion · review again", "Batalkan pengecualian · semak semula")) {
                             do { try LocalStore.shared.change { try $0.reopenExcludedNotice(id: id) }; model.reload() }
                             catch { self.error = error.localizedDescription }
                         }
                     }
                 }
             }
-        }.navigationTitle(notice?.provider ?? "TNG")
+        }.navigationTitle(sourceLabel(notice?.provider ?? "TNG"))
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
@@ -1308,21 +1308,21 @@ struct TNGNoticeView: View {
 struct TNGSetupView: View {
     var body: some View {
         List {
-            Section("接入你的银行") {
-                Text("在快捷指令的通知触发器里点 App 旁的 ＋，加入你使用的银行或 TNG。银行名称不限；能否触发取决于系统是否收到并传入通知。")
-                Text("动作选择「记录银行与 TNG 通知」，正文连接 Body，标题连接 Title，时间连接 Date（若有）。不要填写固定交易编号。")
-                Text("可将来源 App 名称传给同名字段。每家银行单独设置时也可填写银行名称；多家共用时不要固定成同一家银行。留空时月记尝试从原文辨认。")
+            Section(tr("接入你的银行", "Connect your bank", "Sambungkan bank anda")) {
+                Text(tr("在快捷指令的通知触发器里点 App 旁的 ＋，加入你使用的银行或 TNG。银行名称不限；能否触发取决于系统是否收到并传入通知。", "In the Shortcuts notification trigger, tap + next to App and add your bank or TNG. Any bank name is accepted; triggering depends on the system receiving and forwarding the notification.", "Dalam pencetus notifikasi Pintasan, tekan + di sebelah App dan tambah bank anda atau TNG. Sebarang nama bank diterima; pencetus bergantung pada sistem menerima dan menghantar notifikasi."))
+                Text(tr("动作选择「记录银行与 TNG 通知」，正文连接 Body，标题连接 Title，时间连接 Date（若有）。不要填写固定交易编号。", "Choose Record bank and TNG notification. Connect the body to Body, title to Title and time to Date if available. Do not use a fixed transaction ID.", "Pilih Rekod notifikasi bank dan TNG. Sambungkan teks kepada Body, tajuk kepada Title dan masa kepada Date jika ada. Jangan gunakan ID transaksi tetap."))
+                Text(tr("可将来源 App 名称传给同名字段。每家银行单独设置时也可填写银行名称；多家共用时不要固定成同一家银行。留空时月记尝试从原文辨认。", "Pass the source app name into its field. For a separate automation per bank, you can enter its name. Do not fix one bank name for a shared automation. If blank, YueJi tries to identify it from the text.", "Hantar nama app sumber ke medan tersebut. Untuk automasi berasingan bagi setiap bank, anda boleh isi nama bank. Jangan tetapkan satu nama bank untuk automasi bersama. Jika kosong, YueJi cuba mengenal pasti daripada teks."))
             }
-            Section("收到通知后") {
-                Label("明确的马币付款：自动记账与分类", systemImage: "checkmark.circle")
-                Label("收款、转账：先确认用途", systemImage: "arrow.left.arrow.right")
-                Label("退款、返现、外币或信息不完整：待确认", systemImage: "questionmark.circle")
-                Label("广告、验证码、失败通知：忽略", systemImage: "bell.slash")
-                Text("支持通用中、英、马来文交易规则，保留已适配银行的专属格式。尚未用全部银行的真实通知验证，银行改版或陌生格式可能需要确认；不会读取历史流水。")
+            Section(tr("收到通知后", "When a notification arrives", "Apabila notifikasi diterima")) {
+                Label(tr("明确的马币付款：自动记账与分类", "Clear MYR payments: record and categorise automatically", "Bayaran MYR yang jelas: rekod dan kategorikan secara automatik"), systemImage: "checkmark.circle")
+                Label(tr("收款、转账：先确认用途", "Receipts and transfers: confirm the purpose first", "Penerimaan dan pindahan: sahkan tujuan dahulu"), systemImage: "arrow.left.arrow.right")
+                Label(tr("退款、返现、外币或信息不完整：待确认", "Refunds, cashback, foreign currency or incomplete details: review needed", "Bayaran balik, pulangan tunai, mata wang asing atau butiran tidak lengkap: perlu semakan"), systemImage: "questionmark.circle")
+                Label(tr("广告、验证码、失败通知：忽略", "Ads, verification codes and failed transactions: ignored", "Iklan, kod pengesahan dan transaksi gagal: diabaikan"), systemImage: "bell.slash")
+                Text(tr("支持通用中、英、马来文交易规则，保留已适配银行的专属格式。尚未用全部银行的真实通知验证，银行改版或陌生格式可能需要确认；不会读取历史流水。", "Supports general Chinese, English and Malay transaction patterns and recognised bank-specific formats. Real notifications from every bank have not been verified; changed or unfamiliar formats may need review. Account history is not read.", "Menyokong corak transaksi umum bahasa Cina, Inggeris dan Melayu serta format bank yang dikenal pasti. Notifikasi sebenar semua bank belum disahkan; format baharu mungkin perlu semakan. Sejarah akaun tidak dibaca."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
             NavigationLink(tr("TNG 详细指南", "Detailed TNG guide", "Panduan TNG terperinci")) { ShortcutSetupGuide(provider: .tng) }
-        }.navigationTitle("银行通知设置")
+        }.navigationTitle(tr("银行通知设置", "Bank notification setup", "Persediaan notifikasi bank"))
     }
 }
 
@@ -2262,11 +2262,11 @@ struct TNGIncomingView: View {
         Form {
             if let n = notice {
                 NoticeNoteSection(id: id)
-                if n.status == "pending" { NavigationLink("账户转账 / 充值 / 退款关联") { FinancialNoticeReviewView(id: id) } }
+                if n.status == "pending" { NavigationLink(tr("账户转账 / 充值 / 退款关联", "Link account transfer / top-up / refund", "Pautkan pindahan akaun / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) } }
                 if n.resolution != nil { NoticeResolutionSection(notice: n) }
                 Section {
                     Text("+" + money(n.cents ?? 0)).font(.title.bold()).foregroundStyle(.green)
-                    Text(n.provider).font(.headline)
+                    Text(sourceLabel(n.provider)).font(.headline)
                     if let party = n.party, !party.isEmpty { Text(tr("来自：", "From: ", "Daripada: ") + party).fixedSize(horizontal: false, vertical: true) }
                     if let recipient = n.recipient, !recipient.isEmpty { Text(tr("收款人：", "Recipient: ", "Penerima: ") + recipient).fixedSize(horizontal: false, vertical: true) }
                     if let account = n.accountSuffix { LabeledContent(tr("账户尾号", "Account ending", "Akhiran akaun"), value: account) }
@@ -2755,19 +2755,19 @@ struct NoticeResolutionSection: View {
     let notice: TNGNotice
     @State private var confirm = false
     var body: some View {
-        Section("已确认关联") {
+        Section(tr("已确认关联", "Confirmed link", "Pautan disahkan")) {
             Text(tngStatus(notice))
             if let relatedID = notice.relatedRecordID {
                 if let entry = model.ledger.expenses.first(where: { $0.id == relatedID }) {
                     Text(entry.merchant + " · " + money(entry.cents))
-                    NavigationLink("查看关联消费") { ExpenseDetailView(id: relatedID) }
+                    NavigationLink(tr("查看关联消费", "View linked expense", "Lihat belanja dipautkan")) { ExpenseDetailView(id: relatedID) }
                 } else if let other = model.ledger.tngNotices.first(where: { $0.id == relatedID }) {
-                    Text(other.provider + " · " + money(other.cents ?? 0))
-                } else { Text("关联记录已删除或清理。") }
+                    Text(sourceLabel(other.provider) + " · " + money(other.cents ?? 0))
+                } else { Text(tr("关联记录已删除或清理。", "The linked record has been deleted or cleared.", "Rekod dipautkan telah dipadam atau dikosongkan.")) }
             }
-            Button("撤销关联并重新确认") { confirm = true }
-        }.confirmationDialog("撤销关联？关联退款会一并撤销；充值配对会重新待确认。", isPresented: $confirm, titleVisibility: .visible) {
-            Button("确认撤销", role: .destructive) { model.change { try $0.reopenResolvedNotice(id: notice.id) } }
+            Button(tr("撤销关联并重新确认", "Remove link and review again", "Batalkan pautan dan semak semula")) { confirm = true }
+        }.confirmationDialog(tr("撤销关联？关联退款会一并撤销；充值配对会重新待确认。", "Remove this link? Linked refunds will be undone and paired top-ups will need review again.", "Batalkan pautan ini? Bayaran balik dipautkan akan dibatalkan dan pasangan tambah nilai perlu disemak semula."), isPresented: $confirm, titleVisibility: .visible) {
+            Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.change { try $0.reopenResolvedNotice(id: notice.id) } }
         }
     }
 }
@@ -2804,49 +2804,49 @@ struct FinancialNoticeReviewView: View {
             if let notice {
                 Section { Text(notice.title); Text(notice.body).font(.caption).textSelection(.enabled) }
                 NoticeNoteSection(id: id)
-                Section("确认用途") {
-                    Picker("这是什么交易？", selection: $purpose) {
-                        Text("请选择用途").tag("")
-                        if notice.kind != "incoming" { Text("消费支出").tag("expense") }
-                        Text("收入").tag("income")
-                        Text("自己的账户转账 / 充值").tag("ownTransfer")
-                        Text("退款到账").tag("refund")
-                        if notice.possibleDuplicate { Text("同一笔交易，不重复入账").tag("duplicate") }
-                        Text("忽略").tag("ignore")
+                Section(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) {
+                    Picker(tr("这是什么交易？", "What is this transaction?", "Apakah transaksi ini?"), selection: $purpose) {
+                        Text(tr("请选择用途", "Select a purpose", "Pilih tujuan")).tag("")
+                        if notice.kind != "incoming" { Text(tr("消费支出", "Expense", "Perbelanjaan")).tag("expense") }
+                        Text(tr("收入", "Income", "Pendapatan")).tag("income")
+                        Text(tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")).tag("ownTransfer")
+                        Text(tr("退款到账", "Refund received", "Bayaran balik diterima")).tag("refund")
+                        if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
+                        Text(tr("忽略", "Ignore", "Abaikan")).tag("ignore")
                     }
-                    TextField("商户 / 对方 / 用途", text: $party)
+                    TextField(tr("商户 / 对方 / 用途", "Merchant / recipient / purpose", "Peniaga / pihak lain / tujuan"), text: $party)
                     TextField("MYR", text: $amount).keyboardType(.decimalPad)
-                    DatePicker("交易日期", selection: $date, in: ...Date())
+                    DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date, in: ...Date())
                     if purpose == "expense" {
-                        Picker("分类", selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
-                        Toggle("以后此商户使用这个分类", isOn: $remember)
+                        Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant in future", "Gunakan kategori ini untuk peniaga ini pada masa depan"), isOn: $remember)
                     }
                     if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer"].contains(purpose) {
-                        Toggle("已核对，这是另一笔真实交易", isOn: $distinct)
+                        Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                     }
                 }
                 if purpose == "refund" || purpose == "duplicate" {
-                    Section(purpose == "refund" ? "选择原消费" : "选择已有账目") {
-                        Picker("关联账目", selection: $relatedID) {
-                            Text("请选择").tag("")
+                    Section(purpose == "refund" ? tr("选择原消费", "Choose original expense", "Pilih belanja asal") : tr("选择已有账目", "Choose existing entry", "Pilih rekod sedia ada")) {
+                        Picker(tr("关联账目", "Linked entry", "Rekod dipautkan"), selection: $relatedID) {
+                            Text(tr("请选择", "Please select", "Sila pilih")).tag("")
                             ForEach(candidates) { entry in Text(entry.merchant + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
                         }
-                        Text("金额相同不代表同一笔，请核对商户和日期。退款会减少原消费，不作为收入。").font(.caption)
+                        Text(tr("金额相同不代表同一笔，请核对商户和日期。退款会减少原消费，不作为收入。", "Matching amounts do not prove a duplicate. Check the merchant and date. Refunds reduce the original expense and are not income.", "Amaun sama tidak semestinya pendua. Semak peniaga dan tarikh. Bayaran balik mengurangkan belanja asal dan bukan pendapatan.")).font(.caption)
                     }
                 }
                 if purpose == "ownTransfer" {
-                    Section("配对另一侧通知（可选）") {
-                        Picker("转入 / 转出通知", selection: $relatedID) {
-                            Text("没有另一侧通知").tag("")
-                            ForEach(transferCandidates) { other in Text(other.provider + " · " + (other.party ?? "") + " · " + dateLabel(other.date, time: true)).tag(other.id) }
+                    Section(tr("配对另一侧通知（可选）", "Pair the other notification (optional)", "Padankan notifikasi sebelah lagi (pilihan)")) {
+                        Picker(tr("转入 / 转出通知", "Incoming / outgoing notice", "Notifikasi masuk / keluar"), selection: $relatedID) {
+                            Text(tr("没有另一侧通知", "No matching notification", "Tiada notifikasi pasangan")).tag("")
+                            ForEach(transferCandidates) { other in Text(sourceLabel(other.provider) + " · " + (other.party ?? "") + " · " + dateLabel(other.date, time: true)).tag(other.id) }
                         }
-                        Text("确认后，两侧通知均不计入消费或收入。").font(.caption)
+                        Text(tr("确认后，两侧通知均不计入消费或收入。", "Once confirmed, neither notification counts as spending or income.", "Selepas disahkan, kedua-dua notifikasi tidak dikira sebagai belanja atau pendapatan.")).font(.caption)
                     }
                 }
-                Button("确认处理") { confirm = true }
+                Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { confirm = true }
                     .disabled(purpose.isEmpty || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
-            } else { Text("通知已删除或清理。") }
-        }.navigationTitle("确认通知")
+            } else { Text(tr("通知已删除或清理。", "The notification has been deleted or cleared.", "Notifikasi telah dipadam atau dikosongkan.")) }
+        }.navigationTitle(tr("确认通知", "Review notification", "Semak notifikasi"))
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 party = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = min(n.date, Date())
@@ -2859,8 +2859,8 @@ struct FinancialNoticeReviewView: View {
                 if n.possibleDuplicate { purpose = "duplicate" }
             }
             .onChange(of: purpose) { _, _ in relatedID = "" }
-            .confirmationDialog("确认按所选用途处理？", isPresented: $confirm, titleVisibility: .visible) {
-                Button("确认") {
+            .confirmationDialog(tr("确认按所选用途处理？", "Process with the selected purpose?", "Proses mengikut tujuan yang dipilih?"), isPresented: $confirm, titleVisibility: .visible) {
+                Button(tr("确认", "Confirm", "Sahkan")) {
                     do {
                         try LocalStore.shared.change { ledger in
                             if purpose == "ignore" { try ledger.excludeTNG(id: id) }
@@ -2871,7 +2871,7 @@ struct FinancialNoticeReviewView: View {
                     } catch { self.error = error.localizedDescription }
                 }
             }
-            .alert("无法处理", isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+            .alert(tr("无法处理", "Unable to process", "Tidak dapat diproses"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
 }
 
@@ -2910,22 +2910,22 @@ struct ExpenseBookkeepingFields: View {
                 LabeledContent(tr("标签", "Tags", "Tag"), value: tagsText.isEmpty ? tr("选填", "Optional", "Pilihan") : tagsText)
             }
         }
-        Section("一笔消费，多种用途") {
-            Toggle("拆分这笔消费的分类", isOn: $splitCategories.animation(reduceMotion ? nil : YueJiMotion.standard))
+        Section(tr("一笔消费，多种用途", "One expense, multiple categories", "Satu belanja, pelbagai kategori")) {
+            Toggle(tr("拆分这笔消费的分类", "Split this expense into categories", "Pecahkan belanja ini mengikut kategori"), isOn: $splitCategories.animation(reduceMotion ? nil : YueJiMotion.standard))
             if splitCategories {
                 ForEach($allocations) { $part in
                     HStack {
-                        Picker("分类", selection: $part.category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Picker(tr("分类", "Category", "Kategori"), selection: $part.category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
                         TextField("MYR", text: $part.amount).keyboardType(.decimalPad).frame(maxWidth: 120)
                     }
                 }.onDelete { allocations.remove(atOffsets: $0) }
-                Button("增加分类") {
+                Button(tr("增加分类", "Add category", "Tambah kategori")) {
                     let used = Set(allocations.map(\.category))
                     if let next = model.ledger.categoryNames.first(where: { !used.contains($0) }) { allocations.append(CategoryAllocationDraft(category: next)) }
                 }.disabled(allocations.count >= min(20, model.ledger.categoryNames.count))
-                LabeledContent("分类合计 / 付款总额", value: money(allocated) + " / " + money(totalCents))
+                LabeledContent(tr("分类合计 / 付款总额", "Category total / payment total", "Jumlah kategori / jumlah bayaran"), value: money(allocated) + " / " + money(totalCents))
                     .foregroundStyle(allocated == totalCents ? Color.secondary : Color.orange)
-                Text("至少两类，MYR 合计须等于付款总额。个人净消费按分类比例统计。").font(.footnote).foregroundStyle(.secondary)
+                Text(tr("至少两类，MYR 合计须等于付款总额。个人净消费按分类比例统计。", "Use at least two categories. The MYR sum must equal the payment total. Personal net spending is allocated proportionally.", "Gunakan sekurang-kurangnya dua kategori. Jumlah MYR mesti sama dengan jumlah bayaran. Belanja bersih peribadi diagihkan mengikut nisbah.")).font(.footnote).foregroundStyle(.secondary)
             }
         }.onChange(of: splitCategories) { _, enabled in
             if enabled && allocations.isEmpty {
@@ -2939,12 +2939,12 @@ struct ExpenseBookkeepingDetails: View {
     @EnvironmentObject var model: LedgerModel
     let entry: Expense
     var body: some View {
-        Section("分类与备注") {
+        Section(tr("分类与备注", "Categories and notes", "Kategori dan nota")) {
             if entry.allocatedCategories.count > 1 {
                 ForEach(entry.allocatedCategories) { part in
                     LabeledContent(categoryLabel(part.category), value: money(part.cents))
                 }
-                Text("以上为付款总額分配；个人净消费按比例统计。").font(.footnote).foregroundStyle(.secondary)
+                Text(tr("以上为付款总額分配；个人净消费按比例统计。", "The amounts allocate the total payment; personal net spending is calculated proportionally.", "Amaun di atas mengagihkan jumlah bayaran; belanja bersih peribadi dikira mengikut nisbah.")).font(.footnote).foregroundStyle(.secondary)
             } else {
                 LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
             }
@@ -2965,8 +2965,8 @@ struct PendingBookkeepingCard: View {
         if pending > 0 {
             GlassPanel {
                 VStack(alignment: .leading, spacing: 12) {
-                    Label("待处理", systemImage: "tray.full.fill").font(.headline)
-                    NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? "\(pending) 笔待确认 · \(duplicates) 笔疑似重复" : "\(pending) 笔通知待确认") }
+                    Label(tr("待处理", "Needs attention", "Perlu tindakan"), systemImage: "tray.full.fill").font(.headline)
+                    NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan")) }
                     NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -2982,10 +2982,10 @@ struct ExpenseTagsView: View {
     }
     var body: some View {
         List {
-            Text("在新增或编辑账目里填写标签，可跨餐饮、交通等分类汇总同一个项目。").font(.caption)
+            Text(tr("在新增或编辑账目里填写标签，可跨餐饮、交通等分类汇总同一个项目。", "Add tags when creating or editing entries to group a project across categories such as food and transport.", "Tambah tag ketika mencipta atau mengedit rekod untuk mengumpulkan projek merentas kategori seperti makanan dan pengangkutan.")).font(.caption)
             ForEach(tags, id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
-            if tags.isEmpty { Text("还没有标签。") }
-        }.navigationTitle("标签与项目")
+            if tags.isEmpty { Text(tr("还没有标签。", "No tags yet.", "Belum ada tag.")) }
+        }.navigationTitle(tr("标签与项目", "Tags and projects", "Tag dan projek"))
     }
 }
 struct TagSpendingView: View {
@@ -2998,11 +2998,11 @@ struct TagSpendingView: View {
     }
     var body: some View {
         List {
-            Toggle("全部月份", isOn: $allMonths)
+            Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $allMonths)
             if !allMonths { MonthPicker(month: $month) }
-            LabeledContent("实际付款总额", value: money(entries.reduce(0) { $0 + $1.cents }))
-            LabeledContent("我的净消费", value: money(entries.reduce(0) { $0 + $1.personal }))
-            Text("同一账目可有多个标签，各标签合计不能再相加作为总消费。").font(.caption)
+            LabeledContent(tr("实际付款总额", "Total paid", "Jumlah dibayar"), value: money(entries.reduce(0) { $0 + $1.cents }))
+            LabeledContent(tr("我的净消费", "My net spending", "Belanja bersih saya"), value: money(entries.reduce(0) { $0 + $1.personal }))
+            Text(tr("同一账目可有多个标签，各标签合计不能再相加作为总消费。", "An entry can have several tags. Do not add tag totals together as total spending.", "Satu rekod boleh mempunyai beberapa tag. Jangan jumlahkan jumlah setiap tag sebagai jumlah belanja.")).font(.caption)
             ForEach(entries) { entry in NavigationLink { ExpenseDetailView(id: entry.id) } label: { ExpenseRow(entry: entry) } }
         }.navigationTitle("#" + tag)
     }

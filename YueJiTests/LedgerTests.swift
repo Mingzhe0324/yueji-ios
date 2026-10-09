@@ -4,6 +4,30 @@ import AVFoundation
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    func testLanguageSwitchTranslatesLegacyLabelsWithoutChangingSourceIdentity() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "appLanguage")
+        defer {
+            if let previous { defaults.set(previous, forKey: "appLanguage") }
+            else { defaults.removeObject(forKey: "appLanguage") }
+        }
+        let legacyReason = "与已有账目的金额、商户和时间相近，请核对是否同一笔。"
+        let source = notificationProvider(sourceApp: nil, title: "", body: "")
+        for code in ["en", "ms"] {
+            defaults.set(code, forKey: "appLanguage")
+            XCTAssertEqual(sourceLabel(source), "Bank / TNG")
+            XCTAssertEqual(source, "银行 / TNG")
+            XCTAssertNil(localizedError(legacyReason).range(of: "[\\p{Han}]", options: .regularExpression))
+            XCTAssertNil(localizedError("收款不能记为支出。").range(of: "[\\p{Han}]", options: .regularExpression))
+            XCTAssertEqual(sourceLabel("Public Bank"), "Public Bank")
+            XCTAssertEqual(categoryLabel("自定义分类"), "自定义分类")
+            XCTAssertEqual(localizedAppText("用户自己的备注"), "用户自己的备注")
+        }
+        defaults.set("zh", forKey: "appLanguage")
+        XCTAssertEqual(sourceLabel(source), "银行 / TNG")
+        XCTAssertEqual(localizedError(legacyReason), legacyReason)
+    }
+
     @MainActor func testSystemNotificationSoundIsInMainBundleAndDecodes() throws {
         let url = try XCTUnwrap(Bundle.main.url(forResource: "YueJiMoonDrop", withExtension: "wav"))
         let player = try AVAudioPlayer(contentsOf: url)

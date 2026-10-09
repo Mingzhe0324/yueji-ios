@@ -462,13 +462,13 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     static func result(title: String, body: String, expenseID: String? = nil, noticeID: String? = nil, deliveryID: String? = nil, sound: AutomationNotificationSound = .neutral) async {
         UserDefaults.standard.register(defaults: ["automationNotifications": true])
         guard UserDefaults.standard.bool(forKey: "automationNotifications") else {
-            saveResultDelivery("自动记账结果通知开关已关闭。")
+            saveResultDelivery(tr("自动记账结果通知开关已关闭。", "Automatic recording notifications are turned off.", "Notifikasi hasil rekod automatik dimatikan."))
             return
         }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
-            saveResultDelivery("系统通知未获允许，请在 iPhone 设置 → 通知 → 月记开启。")
+            saveResultDelivery(tr("系统通知未获允许，请在 iPhone 设置 → 通知 → 月记开启。", "Notifications are not allowed. Enable them in iPhone Settings → Notifications → YueJi.", "Notifikasi tidak dibenarkan. Aktifkan dalam Tetapan iPhone → Notifikasi → YueJi."))
             return
         }
         let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = systemSound(for: sound)
@@ -487,9 +487,9 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             do { try await center.add(request) }
             catch { try await center.add(request) }
             saveResultDelivery(settings.authorizationStatus == .provisional
-                ? "已交给 iOS（临时授权，可能静默送达）；请开启横幅与声音。"
-                : "已交给 iOS；实际横幅、声音和锁屏显示受系统通知设置及专注模式控制。")
-        } catch { saveResultDelivery("系统通知提交失败：" + error.localizedDescription) }
+                ? tr("已交给 iOS（临时授权，可能静默送达）；请开启横幅与声音。", "Sent to iOS with provisional permission; delivery may be silent. Enable banners and sounds.", "Dihantar ke iOS dengan kebenaran sementara; mungkin dihantar tanpa bunyi. Aktifkan sepanduk dan bunyi.")
+                : tr("已交给 iOS；实际横幅、声音和锁屏显示受系统通知设置及专注模式控制。", "Sent to iOS. Banners, sounds and lock-screen display depend on notification and Focus settings.", "Dihantar ke iOS. Sepanduk, bunyi dan paparan skrin kunci bergantung pada tetapan notifikasi dan Fokus."))
+        } catch { saveResultDelivery(tr("系统通知提交失败：", "Unable to submit notification: ", "Tidak dapat menghantar notifikasi: ") + error.localizedDescription) }
     }
     private static func saveResultDelivery(_ message: String) {
         UserDefaults.standard.set(message, forKey: "lastAutomaticNotificationStatus")
