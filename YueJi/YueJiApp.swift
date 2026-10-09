@@ -128,7 +128,7 @@ struct YueJiApp: App {
             try session.setCategory(.ambient, mode: .default)
             try session.setActive(true)
             let audio = try AVAudioPlayer(data: asset.data)
-            audio.volume = cue == .launch ? 0.40 : 0.55
+            audio.volume = cue == .launch ? 0.85 : 0.55
             audio.prepareToPlay()
             player = audio
             guard audio.play() else { stop(); return }

@@ -4,8 +4,8 @@ from pathlib import Path
 root = Path(__file__).resolve().parents[1] / 'YueJi/Assets.xcassets'
 rate = 44100
 cues = {
-    # A short original two-note cue with a soft attack and restrained harmonics.
-    'LaunchChime': [(0, 783.99, .42), (.14, 1046.50, .54)],
+    # An original ascending bell cue, synchronized with the moon's entrance.
+    'LaunchChime': [(0, 659.25, .48), (.15, 880, .54), (.32, 1318.51, .66)],
     'DeleteCue': [(0, 600, .24)],
     'RestoreCue': [(0, 659.25, .18), (.1, 1046.5, .3)],
     'DepositCue': [(0, 1396.91, .35), (.13, 987.77, .36)],
@@ -26,15 +26,16 @@ for name, notes in cues.items():
         for start, hz, duration in notes:
             elapsed = t - start
             if 0 <= elapsed < duration:
-                attack = .025 if name == 'LaunchChime' else .012
-                harmonic = .06 if name == 'LaunchChime' else .18
-                envelope = min(elapsed / attack, 1) * math.exp(-6 * elapsed / duration) * min((duration-elapsed)/.035, 1)
+                attack = .016 if name == 'LaunchChime' else .012
+                harmonic = .12 if name == 'LaunchChime' else .18
+                decay = 4.4 if name == 'LaunchChime' else 6
+                envelope = min(elapsed / attack, 1) * math.exp(-decay * elapsed / duration) * min((duration-elapsed)/.035, 1)
                 tone_phase = 2*math.pi*(hz*elapsed - 900*elapsed*elapsed) if name == 'DeleteCue' else 2*math.pi*hz*elapsed
                 value += envelope * (math.sin(tone_phase) + harmonic*math.sin(2*math.pi*hz*2*elapsed)) * .19
         samples.append(int(max(-1, min(1, value))*32767))
     peak = max(abs(value) for value in samples) or 1
-    limit = 7000 if name == 'LaunchChime' else 14000
-    if peak > limit:
+    limit = 14000
+    if name == 'LaunchChime' or peak > limit:
         samples = [round(value * limit / peak) for value in samples]
     with wave.open(str(folder/'cue.wav'), 'wb') as f:
         f.setnchannels(1); f.setsampwidth(2); f.setframerate(rate)
