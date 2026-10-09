@@ -1,6 +1,6 @@
 # 月记 YueJi
 
-**版本 / Version：1.52.4 · Build 76**  
+**版本 / Version：1.52.5 · Build 77**  
 iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English 和 Bahasa Melayu。
 
 ## 中文
@@ -14,7 +14,7 @@ iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English
 - **固定消费与外币**：定期项目、到期补记、待记预览，以及汇率换算。
 - **备份与体验**：JSON 备份恢复、CSV 导出、深浅色外观、动画、提示音及提醒设置。
 
-本版补齐英文／马来文页面与提示，非中文界面的来源名称显示为 **Bank / TNG**。
+已补齐英文／马来文页面与提示，非中文界面的来源名称显示为 **Bank / TNG**。本版修复恢复测试对中文提示的依赖。
 
 自动记账需要先配置快捷指令并传入交易资料；App 不会直接读取银行账户或钱包历史。未知通知格式仍可能需要手动确认。
 
@@ -31,7 +31,7 @@ Current features:
 - **Recurring and foreign-currency expenses:** scheduled entries, overdue posting, upcoming previews and exchange-rate conversion.
 - **Backup and appearance:** JSON backup/restore, CSV export, light/dark appearance, animations, sounds and reminders.
 
-This release fills missing English/Malay labels and messages and displays **Bank / TNG** in non-Chinese interfaces.
+English/Malay labels and messages are included, with **Bank / TNG** in non-Chinese interfaces. This release fixes a recovery test that depended on Chinese error text.
 
 Automatic recording requires configured Shortcuts that pass transaction details to YueJi. The app does not directly read bank accounts or Wallet history. Unfamiliar notification formats may still need manual review.
 

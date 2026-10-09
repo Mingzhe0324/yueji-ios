@@ -68,7 +68,14 @@ final class LedgerTests: XCTestCase {
         let recovery = AutomationRecovery(store: store, inbox: inbox, sendsNotifications: false)
         let delivery = AutomationDelivery(kind: "notification", body: "You have paid RM11.00 for Cafe.", title: "Payment")
         do { _ = try await recovery.submit(delivery); XCTFail("Expected a storage error") }
-        catch { XCTAssertTrue(error.localizedDescription.contains("暂存")) }
+        catch {
+            // Check the stable recovery error, not text translated for the current UI language.
+            guard case LedgerError.invalid(let message) = error else {
+                XCTFail("Expected a retained-input recovery error, got: \(error)")
+                return
+            }
+            XCTAssertTrue(message.hasPrefix("交易输入已暂存，等待重试，尚未确认入账："))
+        }
         let pending = try XCTUnwrap(inbox.pending().first)
         XCTAssertEqual(pending.id, delivery.id)
         XCTAssertEqual(pending.attempts, 1)
