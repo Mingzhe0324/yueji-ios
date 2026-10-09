@@ -65,7 +65,6 @@ struct MainView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("completedUsageGuide") private var completedGuide = false
     @AppStorage("openingAnimationEnabled") private var openingEnabled = true
-    @AppStorage("playfulAnimations") private var playful = true
     @State private var showingGuide = false
     @State private var selectedTab = 0
     @State private var showingNewTNG = false
@@ -87,21 +86,21 @@ struct MainView: View {
         }.tint(ink)
             .overlay {
                 if !model.didFinishLaunch && openingEnabled {
-                    OpeningAnimationView(sound: !model.isPreview)
+                    OpeningAnimationView(sound: !model.isPreview) {
+                        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
+                    }
                         .transition(.opacity)
                 }
             }
             .task {
                 model.reload(postRecurring: false)
-                if !model.didFinishLaunch {
-                    if openingEnabled && playful && !reduceMotion { do { try await Task.sleep(for: .milliseconds(850)) } catch { return } }
-                    withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
-                }
+                if !openingEnabled { model.didFinishLaunch = true }
                 openPendingNotification()
                 await AutomaticRates.shared.refreshSaved(); model.reload(); openPendingNotification()
             }
             .onChange(of: model.didFinishLaunch) { _, finished in
                 if finished && !completedGuide && UserDefaults.standard.object(forKey: "pendingNotificationDestination") == nil { showingGuide = true }
+                if finished { openPendingNotification() }
             }
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification() }) {
                 UsageGuideView()
@@ -2326,17 +2325,30 @@ struct SavedFeedback: View {
 
 private struct OpeningAnimationView: View {
     var sound = true
+    var onFinished: () -> Void
+    @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("playfulAnimations") private var playful = true
     @State private var entered = false
+    @State private var settled = false
+    @State private var playedSound = false
+    private var animates: Bool { playful && !reduceMotion }
     var body: some View {
         ZStack {
             Color(uiColor: .systemGroupedBackground).ignoresSafeArea()
             VStack(spacing: 24) {
                 ZStack {
                     Circle().fill(ink.opacity(0.06)).frame(width: 172, height: 172)
-                    Circle().strokeBorder(ink.opacity(0.08), lineWidth: 1).frame(width: 206, height: 206)
+                    Circle().strokeBorder(ink.opacity(settled ? 0 : 0.16), lineWidth: 2)
+                        .frame(width: 206, height: 206)
+                        .scaleEffect(settled ? 1.2 : 0.8)
                     MoonBuddy(size: 116, celebrating: false, animated: false)
+                        .rotationEffect(.degrees(animates && !entered ? -12 : 0))
+                        .offset(y: animates && !entered ? 18 : 0)
+                    Image(systemName: "sparkle").font(.title2).foregroundStyle(ink.opacity(0.65))
+                        .offset(x: 76, y: -64)
+                        .scaleEffect(entered ? 1 : 0.3)
+                        .accessibilityHidden(true)
                 }
                 VStack(spacing: 8) {
                     Text(tr("月记", "YueJi", "YueJi")).font(.largeTitle.bold()).tracking(3)
@@ -2344,13 +2356,21 @@ private struct OpeningAnimationView: View {
                 }
             }
             .opacity(entered || reduceMotion || !playful ? 1 : 0)
-            .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.97)
+            .scaleEffect(entered || !animates ? 1 : 0.88)
         }
-        .task {
-            if sound && playful && !reduceMotion { FeedbackSounds.shared.play(.saved) }
-            withAnimation(reduceMotion || !playful ? nil : YueJiMotion.detail) { entered = true }
+        .task(id: phase) {
+            // Wait for foreground activation so the opening cue is audible on a cold launch.
+            guard phase == .active else { return }
+            if sound && !playedSound {
+                FeedbackSounds.shared.play(.launch)
+                playedSound = true
+            }
+            withAnimation(animates ? .spring(response: 0.65, dampingFraction: 0.7) : nil) { entered = true }
+            withAnimation(animates ? .easeOut(duration: 1.2) : nil) { settled = true }
+            do { try await Task.sleep(for: .milliseconds(animates ? 1450 : 350)) }
+            catch { return }
+            onFinished()
         }
-        .onDisappear { FeedbackSounds.shared.stop() }
         .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
     }
 }
