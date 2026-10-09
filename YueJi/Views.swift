@@ -403,14 +403,60 @@ struct DashboardView: View {
                 ForEach(model.ledger.categoryNames, id: \.self) { category in
                     let value = entries.reduce(0) { $0 + $1.personalAmount(category: category) }
                     if value > 0 {
-                        VStack(spacing: 9) {
-                            HStack { CategoryBadge(name: category); Spacer(); AnimatedMoney(cents: value).fontWeight(.medium) }.font(.subheadline)
-                            SpendingMeter(value: value, total: max(personal, 1), color: ink)
-                        }
+                        NavigationLink { CategoryPaymentsView(category: category, month: month) } label: {
+                            VStack(spacing: 9) {
+                                HStack {
+                                    CategoryBadge(name: category)
+                                    Spacer()
+                                    AnimatedMoney(cents: value).fontWeight(.medium)
+                                    Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
+                                }.font(.subheadline)
+                                SpendingMeter(value: value, total: max(personal, 1), color: ink)
+                            }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
+                        }.buttonStyle(YueJiCardButtonStyle())
                     }
                 }
             }
         }
+    }
+}
+struct CategoryPaymentsView: View {
+    @EnvironmentObject var model: LedgerModel
+    let category: String
+    let month: Date
+    private var entries: [Expense] {
+        model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) && $0.hasCategory(category) }
+            .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+    }
+    var body: some View {
+        List {
+            Section {
+                Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
+                    .font(.headline)
+                LabeledContent(tr("我的分类消费", "My category spending", "Belanja kategori saya"),
+                               value: money(entries.reduce(0) { $0 + $1.personalAmount(category: category) }))
+                Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
+            } footer: {
+                Text(tr("分类合计是扣除退款后的个人份额；付款记录显示整笔金额。", "The category total is your share after refunds; payment records show the full payment amount.", "Jumlah kategori ialah bahagian anda selepas pulangan; rekod bayaran menunjukkan amaun penuh."))
+            }
+            Section(tr("付款记录", "Payments", "Bayaran")) {
+                if entries.isEmpty {
+                    ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
+                }
+                ForEach(entries) { entry in
+                    NavigationLink { ExpenseDetailView(id: entry.id) } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ExpenseRow(entry: entry)
+                            LabeledContent(tr("此分类 · 我的份额", "This category · my share", "Kategori ini · bahagian saya"),
+                                           value: money(entry.personalAmount(category: category)))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }.yuejiListSurface()
+            .navigationTitle(categoryLabel(category)).navigationBarTitleDisplayMode(.inline)
+            .refreshable { model.reload(postRecurring: false) }
     }
 }
 struct OverviewToolsView: View {
