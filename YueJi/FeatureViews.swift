@@ -845,6 +845,8 @@ struct NotificationSettingsView: View {
 
 struct CategoryBadge: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.colorSchemeContrast) private var contrast
     let name: String
     var body: some View {
         Label { Text(categoryLabel(name)) } icon: {
@@ -852,7 +854,8 @@ struct CategoryBadge: View {
                 .font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(model.ledger.categoryTint(name))
                 .frame(width: 30, height: 30)
-                .background(model.ledger.categoryTint(name).opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .background(model.ledger.categoryTint(name).opacity(colorScheme == .dark ? 0.24 : 0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(model.ledger.categoryTint(name).opacity(contrast == .increased ? 0.45 : (colorScheme == .dark ? 0.25 : 0.10)), lineWidth: 0.5) }
                 .accessibilityHidden(true)
         }
     }
@@ -1239,7 +1242,7 @@ struct TNGNoticeView: View {
                 if let expenseID = notice.expenseID {
                     if let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
                         ExpenseRow(entry: entry)
-                        NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id) }
+                        NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
                         Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) { editing = entry }
                     } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
                 } else if ["pending", "transfer"].contains(notice.status) {
@@ -2740,7 +2743,7 @@ struct NoticeResolutionSection: View {
             if let relatedID = notice.relatedRecordID {
                 if let entry = model.ledger.expenses.first(where: { $0.id == relatedID }) {
                     Text(entry.merchant + " · " + money(entry.cents))
-                    NavigationLink(tr("查看关联消费", "View linked expense", "Lihat belanja dipautkan")) { ExpenseDetailView(id: relatedID) }
+                    NavigationLink(tr("查看关联消费", "View linked expense", "Lihat belanja dipautkan")) { ExpenseDetailView(id: relatedID, embeddedInNavigation: true) }
                 } else if let other = model.ledger.tngNotices.first(where: { $0.id == relatedID }) {
                     Text(sourceLabel(other.provider) + " · " + money(other.cents ?? 0))
                 } else { Text(tr("关联记录已删除或清理。", "The linked record has been deleted or cleared.", "Rekod dipautkan telah dipadam atau dikosongkan.")) }
@@ -2873,6 +2876,8 @@ struct ExpenseItemsFields: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
+    private enum ItemField: Hashable { case name(String), amount(String) }
+    @FocusState private var focusedItem: ItemField?
     @Binding var items: [ExpenseItemDraft]
     let totalCents: Int
     let defaultCategory: String
@@ -2885,19 +2890,30 @@ struct ExpenseItemsFields: View {
                 ForEach($items) { $item in
                     VStack(alignment: .leading, spacing: 10) {
                         TextField(tr("物品名称", "Item name", "Nama item"), text: $item.name)
+                            .focused($focusedItem, equals: .name(item.id)).submitLabel(.next)
+                            .onSubmit { focusedItem = .amount(item.id) }
                         LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
                             TextField("0.00", text: $item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                                .focused($focusedItem, equals: .amount(item.id))
                         }
                         Picker(tr("分类", "Category", "Kategori"), selection: $item.category) {
                             ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
                         }.pickerStyle(.navigationLink)
-                        Button(role: .destructive) { items.removeAll { $0.id == item.id } } label: {
+                        Button(role: .destructive) {
+                            let id = item.id
+                            if focusedItem == .name(id) || focusedItem == .amount(id) { focusedItem = nil }
+                            withAnimation(reduceMotion ? nil : YueJiMotion.standard) { items.removeAll { $0.id == id } }
+                            FeedbackHaptics.selection()
+                        } label: {
                             Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
                         }
                     }.padding(.vertical, 6)
+                        .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 4)))
                 }
                 Button {
-                    items.append(ExpenseItemDraft(category: defaultCategory))
+                    let draft = ExpenseItemDraft(category: defaultCategory)
+                    withAnimation(reduceMotion ? nil : YueJiMotion.standard) { items.append(draft) }
+                    FeedbackHaptics.selection()
                 } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
                     .disabled(items.count >= 100)
                 if !items.isEmpty {
@@ -2917,6 +2933,7 @@ struct ExpenseItemsFields: View {
                 LabeledContent(tr("物品", "Items", "Item"), value: items.isEmpty ? tr("选填", "Optional", "Pilihan") : String(items.count))
             }
         }.onAppear { if initiallyExpanded { expanded = true } }
+            .onChange(of: expanded) { _, isExpanded in if !isExpanded { focusedItem = nil } }
     }
 }
 struct ExpenseItemsBreakdown: View {
@@ -3049,6 +3066,7 @@ struct ExpenseTagsView: View {
     }
 }
 struct TagSpendingView: View {
+    @Namespace private var expenseTransition
     @EnvironmentObject var model: LedgerModel
     let tag: String
     @State private var allMonths = true
@@ -3063,7 +3081,12 @@ struct TagSpendingView: View {
             LabeledContent(tr("实际付款总额", "Total paid", "Jumlah dibayar"), value: money(entries.reduce(0) { $0 + $1.cents }))
             LabeledContent(tr("我的净消费", "My net spending", "Belanja bersih saya"), value: money(entries.reduce(0) { $0 + $1.personal }))
             Text(tr("同一账目可有多个标签，各标签合计不能再相加作为总消费。", "An entry can have several tags. Do not add tag totals together as total spending.", "Satu rekod boleh mempunyai beberapa tag. Jangan jumlahkan jumlah setiap tag sebagai jumlah belanja.")).font(.caption)
-            ForEach(entries) { entry in NavigationLink { ExpenseDetailView(id: entry.id) } label: { ExpenseRow(entry: entry) } }
+            ForEach(entries) { entry in
+                NavigationLink {
+                    ExpenseDetailView(id: entry.id, embeddedInNavigation: true).yuejiZoom(id: entry.id, namespace: expenseTransition)
+                } label: { ExpenseRow(entry: entry) }
+                    .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
+            }
         }.navigationTitle("#" + tag)
     }
 }

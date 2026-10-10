@@ -96,22 +96,26 @@ func settlementDirection(_ cents: Int, name: String) -> String {
 
 struct FriendDetailView: View {
     @EnvironmentObject var model: LedgerModel
+    @Namespace private var expenseTransition
     let key: String
     private var items: [FriendDebtItem] { model.ledger.friendDebtItems.filter { friendKey($0.friend) == key } }
     var body: some View {
         List {
             if let friend = model.ledger.friendBalances.first(where: { $0.id == key }) {
                 Section(friend.name) {
-                    LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(friend.owed))
-                    LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka"), value: money(friend.payable))
-                    LabeledContent(settlementDirection(friend.owed - friend.payable, name: friend.name), value: money(abs(friend.owed - friend.payable)))
+                    LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya")) { AnimatedMoney(cents: friend.owed) }
+                    LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka")) { AnimatedMoney(cents: friend.payable) }
+                    LabeledContent(settlementDirection(friend.owed - friend.payable, name: friend.name)) { AnimatedMoney(cents: abs(friend.owed - friend.payable)) }
                     NavigationLink { SettlementSelectionView(friend: key) } label: {
                         Label(tr("结算", "Settle", "Selesaikan"), systemImage: "arrow.left.arrow.right")
                     }.disabled(friend.owed == 0 && friend.payable == 0).guideTarget("friend.repay")
                 }
                 Section(tr("原始账目", "Original expenses", "Belanja asal")) {
                     ForEach(items) { item in
-                        NavigationLink { ExpenseDetailView(id: item.expense.id) } label: { FriendDebtRow(item: item) }
+                        NavigationLink {
+                            ExpenseDetailView(id: item.expense.id, embeddedInNavigation: true).yuejiZoom(id: item.id, namespace: expenseTransition)
+                        } label: { FriendDebtRow(item: item) }
+                            .yuejiZoomSource(id: item.id, namespace: expenseTransition)
                     }
                 }
                 Section(tr("结算记录", "Settlements", "Penyelesaian")) {
@@ -150,6 +154,7 @@ struct FriendDebtRow: View {
 
 struct SplitHistoryView: View {
     @EnvironmentObject var model: LedgerModel
+    @Namespace private var expenseTransition
     @State private var settled = false
     @State private var target: RepayTarget?
     @State private var undo: (String, String, String, Bool)?
@@ -161,7 +166,10 @@ struct SplitHistoryView: View {
             }.pickerStyle(.segmented)
             ForEach(model.ledger.friendDebtItems.filter { ($0.balance == 0) == settled }) { item in
                 Section {
-                    NavigationLink { ExpenseDetailView(id: item.expense.id) } label: { FriendDebtRow(item: item) }
+                    NavigationLink {
+                        ExpenseDetailView(id: item.expense.id, embeddedInNavigation: true).yuejiZoom(id: item.id, namespace: expenseTransition)
+                    } label: { FriendDebtRow(item: item) }
+                        .yuejiZoomSource(id: item.id, namespace: expenseTransition)
                     NavigationLink(tr("朋友余额 / 净额结算", "Friend balance / net settlement", "Baki rakan / penyelesaian bersih")) { FriendDetailView(key: friendKey(item.friend)) }
                     if let share = item.expense.shares.first(where: { $0.id == item.shareID }), item.expense.paidByFriend == nil {
                         if item.balance != 0 {
@@ -275,13 +283,15 @@ struct SettlementSelectionView: View {
 
 struct SettlementReviewView: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let plan: SettlementPlan
     @State private var commitID = UUID().uuidString
     @State private var savedID: String?
     @State private var error: String?
+    @State private var saving = false
     var body: some View {
         Group {
-            if let savedID { SettlementDetailView(id: savedID) }
+            if let savedID { SettlementDetailView(id: savedID, celebrateConfirmation: true).transition(.opacity) }
             else {
                 Form {
                     Section(plan.name) {
@@ -306,29 +316,56 @@ struct SettlementReviewView: View {
                     }
                     Section {
                         Text(tr("确认实际付款已完成，或双方已同意本次抵扣。消费金额不会改变；银行记录可稍后手动关联，请勿再次记为收入、消费或还款。", "Confirm the actual payment is complete, or both people agree to this offset. Spending stays unchanged. Link its bank record later rather than recording the payment again as income, spending or another repayment.", "Sahkan bayaran sebenar selesai atau kedua-dua pihak bersetuju dengan tolakan ini. Belanja kekal. Pautkan rekod bank kemudian tanpa merekod bayaran sekali lagi sebagai pendapatan, belanja atau bayaran balik lain."))
-                        Button(plan.transfer == 0 ? tr("确认抵扣，无需转账", "Confirm offset · no transfer", "Sahkan tolakan · tiada pindahan") : tr("确认已付款", "Confirm payment completed", "Sahkan bayaran selesai")) {
-                            do {
-                                try LocalStore.shared.change { try $0.confirmSettlement(plan, id: commitID) }
-                                model.reload(postRecurring: false); savedID = commitID
-                                model.showSaved(message: tr("结算已保存", "Settlement saved", "Penyelesaian disimpan"))
-                            } catch { self.error = error.localizedDescription }
-                        }
+                        Button { confirm() } label: {
+                            HStack {
+                                if saving { ProgressView().controlSize(.small) }
+                                Text(saving ? tr("正在保存", "Saving", "Menyimpan") : (plan.transfer == 0 ? tr("确认抵扣，无需转账", "Confirm offset · no transfer", "Sahkan tolakan · tiada pindahan") : tr("确认已付款", "Confirm payment completed", "Sahkan bayaran selesai")))
+                            }.frame(maxWidth: .infinity, minHeight: 44)
+                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(saving)
                     }
-                }.yuejiListSurface().navigationTitle(tr("预览结算", "Review settlement", "Semak penyelesaian")).navigationBarTitleDisplayMode(.inline)
+                }.disabled(saving).interactiveDismissDisabled(saving)
+                    .yuejiListSurface().navigationTitle(tr("预览结算", "Review settlement", "Semak penyelesaian")).navigationBarTitleDisplayMode(.inline)
+                    .transition(.opacity)
             }
-        }.alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+        }.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: savedID)
+            .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+    }
+    private func confirm() {
+        guard !saving, savedID == nil else { return }
+        saving = true
+        Task { @MainActor in
+            defer { saving = false }
+            do {
+                let id = try await LedgerRefreshWorker.shared.confirmSettlement(plan, id: commitID)
+                await model.refresh(postRecurring: false)
+                savedID = id
+                model.showSaved(message: plan.transfer == 0 ? tr("抵扣已确认", "Offset confirmed", "Tolakan disahkan") : tr("付款已确认", "Payment confirmed", "Bayaran disahkan"))
+            } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
+        }
     }
 }
 
 struct SettlementDetailView: View {
     @EnvironmentObject var model: LedgerModel
     let id: String
+    var celebrateConfirmation = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var expenseTransition
+    @State private var confirmationAppeared = false
     @State private var undo = false
     private var record: FriendSettlement? { model.ledger.settlements.first { $0.id == id } }
     var body: some View {
         Form {
             if let record {
                 Section(record.name) {
+                    if record.active {
+                        Label {
+                            Text(tr("已确认", "Confirmed", "Disahkan"))
+                        } icon: {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                                .symbolEffect(.bounce, value: confirmationAppeared)
+                        }.font(.subheadline.weight(.medium))
+                    }
                     Text(settlementDirection(record.transfer, name: record.name)).font(.headline)
                     TransactionAmount(cents: abs(record.transfer), direction: record.accountDirection).font(.largeTitle.bold())
                     if record.transfer == 0 { Text(tr("仅抵扣欠款，我的账户无收支", "Debts offset only · no account movement", "Hanya tolakan hutang · tiada aliran akaun")).font(.caption).foregroundStyle(.secondary) }
@@ -352,7 +389,10 @@ struct SettlementDetailView: View {
                                 LabeledContent(settledDebtLabel(line.applied), value: money(abs(line.applied)))
                                 LabeledContent(tr("本次结算后尚欠", "Outstanding after this settlement", "Baki selepas penyelesaian ini"), value: money(abs(line.before - line.applied)))
                                 if model.ledger.expenses.contains(where: { $0.id == line.expense.id }) {
-                                    NavigationLink(tr("查看原账目", "View original expense", "Lihat belanja asal")) { ExpenseDetailView(id: line.expense.id) }
+                                    NavigationLink(tr("查看原账目", "View original expense", "Lihat belanja asal")) {
+                                        ExpenseDetailView(id: line.expense.id, embeddedInNavigation: true)
+                                            .yuejiZoom(id: line.id, namespace: expenseTransition)
+                                    }.yuejiZoomSource(id: line.id, namespace: expenseTransition)
                                 }
                             }.font(.subheadline).padding(.vertical, 6)
                         }
@@ -383,6 +423,7 @@ struct SettlementDetailView: View {
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
         }.yuejiListSurface().navigationTitle(tr("结算详情", "Settlement details", "Butiran penyelesaian")).navigationBarTitleDisplayMode(.inline)
+            .onAppear { if celebrateConfirmation && !reduceMotion { confirmationAppeared = true } }
             .confirmationDialog(tr("恢复欠款？原消费不变，银行付款保留并恢复待确认，不会重复记账。", "Restore debts? Spending stays unchanged. The bank payment remains for review and is never duplicated.", "Pulihkan hutang? Belanja kekal. Bayaran bank kekal untuk semakan dan tidak digandakan."), isPresented: $undo, titleVisibility: .visible) {
                 Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.change { try $0.undoSettlement(id: id) } }
             }

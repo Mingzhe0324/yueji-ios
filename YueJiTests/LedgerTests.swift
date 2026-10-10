@@ -758,6 +758,85 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(model.overview(in: next).personal, 1500)
     }
 
+    func testBackgroundExpenseSavePreservesAutomaticLinksAndRejectsStaleEdits() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let worker = LedgerRefreshWorker(store: store)
+        try store.change { ledger in
+            _ = try ledger.receiveTNG(body: "You have paid RM35.00 for Shop.", date: settlementDate, eventID: "async-items")
+            ledger.merchantCategories[friendKey(ledger.expenses[0].merchant)] = "其他"
+        }
+        let before = try await worker.snapshot(postRecurring: false)
+        let original = try XCTUnwrap(before.ledger.expenses.first)
+        var edited = original
+        edited.items = [ExpenseItem(name: "Lunch", cents: 1500, category: "餐饮"), ExpenseItem(name: "Supplies", cents: 2000, category: "购物")]
+        edited.category = "餐饮"
+        try await worker.saveExpense(edited, replacing: original, rememberCategory: true)
+        let after = try await worker.snapshot(postRecurring: false)
+        XCTAssertEqual(after.ledger.expenses, [edited])
+        XCTAssertEqual(after.ledger.tngNotices, before.ledger.tngNotices)
+        XCTAssertEqual(after.ledger.seenEvents, before.ledger.seenEvents)
+        XCTAssertEqual(after.ledger.merchantCategories[friendKey(original.merchant)], "其他", "Item categories must not replace the merchant's default")
+        XCTAssertEqual(after.ledger.spending(in: settlementDate), 3500)
+        try store.change { $0.expenses[0].note = "Concurrent update" }
+        do {
+            try await worker.saveExpense(original, replacing: edited, rememberCategory: false)
+            XCTFail("A background save must not overwrite a newer edit")
+        } catch {
+            XCTAssertEqual(try store.read().expenses[0].note, "Concurrent update")
+            XCTAssertEqual(try store.read().expenses[0].items, edited.items)
+        }
+    }
+
+    func testBackgroundExpenseSaveIsAtomicAndRejectsRepeatedIDs() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let worker = LedgerRefreshWorker(store: store)
+        var expense = Expense(id: "async-entry", merchant: "Shop", cents: 500, date: settlementDate)
+        expense.items = [ExpenseItem(name: "Invalid sum", cents: 400, category: "购物")]
+        do { try await worker.saveExpense(expense, replacing: nil, rememberCategory: false); XCTFail("Invalid items must not be committed") }
+        catch { XCTAssertTrue(try store.read().expenses.isEmpty) }
+        expense.items = [ExpenseItem(name: "Supplies", cents: 500, category: "购物")]
+        try await worker.saveExpense(expense, replacing: nil, rememberCategory: false)
+        do { try await worker.saveExpense(expense, replacing: nil, rememberCategory: false); XCTFail("Do not save the same entry twice") }
+        catch { XCTAssertEqual(try store.read().expenses, [expense]) }
+        var invalidEdit = expense; invalidEdit.cents = 600; invalidEdit.category = "购物"
+        do { try await worker.saveExpense(invalidEdit, replacing: expense, rememberCategory: true); XCTFail("Invalid edit must not alter the saved purchase") }
+        catch { XCTAssertEqual(try store.read().expenses, [expense]); XCTAssertTrue(try store.read().merchantCategories.isEmpty) }
+    }
+
+    func testBackgroundSettlementConfirmationRejectsDuplicateAndPreservesSpendingOnUndo() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let worker = LedgerRefreshWorker(store: store)
+        try store.change { $0 = settlementExample() }
+        let before = try await worker.snapshot(postRecurring: false)
+        let plan = try before.ledger.settlementPlan(friend: "amy", selected: Set(before.ledger.friendDebtItems.map(\.id)), payment: 200, date: settlementDate)
+        let id = try await worker.confirmSettlement(plan, id: "async-settlement")
+        XCTAssertEqual(id, "async-settlement")
+        let after = try await worker.snapshot(postRecurring: false)
+        XCTAssertEqual(after.ledger.settlements.count, 1)
+        XCTAssertEqual(after.ledger.friendBalances[0].owed, 300)
+        XCTAssertEqual(after.ledger.friendBalances[0].payable, 0)
+        XCTAssertEqual(after.ledger.expenses, before.ledger.expenses)
+        XCTAssertEqual(after.ledger.spending(in: settlementDate), 5500)
+        do { _ = try await worker.confirmSettlement(plan, id: id); XCTFail("A repeated confirmation must not apply twice") }
+        catch { XCTAssertEqual(try store.read().settlements.count, 1) }
+        let remaining = Set(after.ledger.friendDebtItems.filter { $0.balance != 0 }.map(\.id))
+        let next = try after.ledger.settlementPlan(friend: "amy", selected: remaining, payment: 300, date: settlementDate)
+        do { _ = try await worker.confirmSettlement(next, id: id); XCTFail("A new plan must not reuse a committed ID") }
+        catch { XCTAssertEqual(try store.read().friendBalances[0].owed, 300) }
+        try store.change { try $0.undoSettlement(id) }
+        let undone = try await worker.snapshot(postRecurring: false)
+        XCTAssertEqual(undone.ledger.expenses, before.ledger.expenses)
+        XCTAssertEqual(undone.ledger.friendBalances[0].owed, 3000)
+        XCTAssertEqual(undone.ledger.friendBalances[0].payable, 2500)
+        XCTAssertEqual(undone.ledger.spending(in: settlementDate), 5500)
+    }
+
     func testBackgroundSnapshotsDetectChangesAndPreserveUnreadableLedger() async throws {
         let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: folder) }

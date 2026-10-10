@@ -196,7 +196,7 @@ actor AutomationRecovery {
     }
 }
 
-/// Keep startup file coordination, validation and recurring writes off the UI actor.
+/// Keep coordinated reads and entry/settlement writes off the UI actor.
 actor LedgerRefreshWorker {
     static let shared = LedgerRefreshWorker()
     private let store: LocalStore
@@ -206,6 +206,31 @@ actor LedgerRefreshWorker {
         if postRecurring { try store.change { try $0.postDue() } }
         try Task.checkCancellation()
         return try store.readSnapshot()
+    }
+    func saveExpense(_ entry: Expense, replacing original: Expense?, rememberCategory: Bool) throws {
+        try Task.checkCancellation()
+        try store.change { ledger in
+            if let original {
+                guard entry.id == original.id,
+                      let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else {
+                    throw reviewError("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")
+                }
+                ledger.expenses[i] = entry
+            } else {
+                guard !ledger.expenses.contains(where: { $0.id == entry.id }) else {
+                    throw reviewError("账目已存在，不能重复保存。", "Entry already exists. Cannot save it twice.", "Rekod sudah wujud. Tidak boleh disimpan dua kali.")
+                }
+                ledger.expenses.append(entry)
+            }
+            if rememberCategory && (entry.categoryAllocations ?? []).isEmpty && (entry.items ?? []).isEmpty,
+               original == nil || original?.category != entry.category {
+                ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
+            }
+        }
+    }
+    func confirmSettlement(_ plan: SettlementPlan, id: String) throws -> String {
+        try Task.checkCancellation()
+        return try store.change { try $0.confirmSettlement(plan, id: id) }
     }
 }
 
