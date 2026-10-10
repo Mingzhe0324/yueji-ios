@@ -15,7 +15,12 @@ func toCents(_ value: String) throws -> Int {
     }
     return NSDecimalNumber(decimal: number * 100).intValue
 }
-func monthKey(_ date: Date) -> String { let f = DateFormatter(); f.calendar = Calendar(identifier: .gregorian); f.locale = Locale(identifier: "en_US_POSIX"); f.dateFormat = "yyyy-MM"; return f.string(from: date) }
+func monthKey(_ date: Date, timeZone: TimeZone = .current) -> String {
+    var calendar = Calendar(identifier: .gregorian)
+    calendar.timeZone = timeZone
+    let parts = calendar.dateComponents([.year, .month], from: date)
+    return String(format: "%04d-%02d", locale: Locale(identifier: "en_US_POSIX"), parts.year ?? 0, parts.month ?? 0)
+}
 /// Offline description classifier shared by every automatic payment source.
 /// User merchant rules are applied by the caller before this fallback.
 func guessCategory(_ name: String, description: String = "") -> String {

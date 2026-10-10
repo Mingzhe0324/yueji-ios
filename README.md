@@ -1,6 +1,6 @@
 # 月记 YueJi
 
-**版本 / Version：1.52.6 · Build 78**
+**版本 / Version：1.52.7 · Build 79**
 
 iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English 和 Bahasa Melayu。
 
@@ -15,7 +15,7 @@ iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English
 - **固定消费与外币**：定期项目、到期补记、待记预览，以及汇率换算。
 - **备份与体验**：JSON 备份恢复、CSV 导出、深浅色外观、动画、提示音及提醒设置。
 
-已补齐英文／马来文页面与提示，非中文界面的来源名称显示为 **Bank / TNG**。本版统一系统列表、大标题、玻璃控件、付款缩放过渡与简洁开场，保留预算阶段和分类颜色。
+已补齐英文／马来文页面与提示，非中文界面的来源名称显示为 **Bank / TNG**。本版修复开场 Logo 资源，先显示短暂弹簧动画再载入主界面；账本启动读取移至后台，复用月份统计并减少重复刷新。保留系统列表、大标题、玻璃控件、付款缩放过渡、预算阶段和分类颜色。
 
 自动记账需要先配置快捷指令并传入交易资料；App 不会直接读取银行账户或钱包历史。未知通知格式仍可能需要手动确认。
 
@@ -32,7 +32,7 @@ Current features:
 - **Recurring and foreign-currency expenses:** scheduled entries, overdue posting, upcoming previews and exchange-rate conversion.
 - **Backup and appearance:** JSON backup/restore, CSV export, light/dark appearance, animations, sounds and reminders.
 
-English/Malay labels and messages are included, with **Bank / TNG** in non-Chinese interfaces. This release uses native grouped sections, large navigation titles, glass controls, payment zoom transitions and a shorter branded opening. Budget stages and category colours are retained.
+English/Malay labels and messages are included, with **Bank / TNG** in non-Chinese interfaces. This release bundles a dedicated opening logo and shows its short spring animation before constructing the main screens. Startup ledger reads run off the UI actor, monthly summaries are reused, and unchanged refreshes avoid republishing the ledger. Native grouped sections, large titles, glass controls, payment zoom transitions, budget stages and category colours are retained.
 
 Automatic recording requires configured Shortcuts that pass transaction details to YueJi. The app does not directly read bank accounts or Wallet history. Unfamiliar notification formats may still need manual review.
 
@@ -44,4 +44,4 @@ The main screens use system grouped sections and large navigation titles, includ
 
 For an iOS 27 SDK build, connect this repository to a personal Codemagic account, select branch `main`, and start **YueJi IPA (unsigned)**. The YAML workflow selects Xcode 27.1 on Mac mini M2, requires an iOS 27 SDK and runs the ledger tests on an iOS 27 iPhone simulator before packaging the unsigned IPA. Download it from that build's artifacts; `BuildInfo.txt` identifies the source commit, SDK and simulator. No build starts automatically.
 
-Visual review on an iPhone is still required: check payment zoom and swipe dismissal, add/edit/delete actions, filter sheet resizing and keyboard behavior, month controls, scrolling tabs, dark appearance, larger text, Reduced Motion and Reduced Transparency. Also check Overview's category links retain the selected month and that the shorter icon opening respects the sound/animation settings. System controls follow the installed OS; financial content, category colours and the app icon retain YueJi's identity.
+Visual review on an iPhone is still required: check payment zoom and swipe dismissal, add/edit/delete actions, filter sheet resizing and keyboard behavior, month controls, scrolling tabs, dark appearance, larger text, Reduced Motion and Reduced Transparency. Fully close and reopen the app to check the logo spring, light/dark visibility, sound settings, and opening with a large ledger. Returning from another app should retain the current screen. Also check Overview's category links retain the selected month and show updated totals after editing or restoring records. Local structural checks do not measure frame times; Xcode tests and phone performance checks remain required. System controls follow the installed OS; financial content, category colours and the app icon retain YueJi's identity.

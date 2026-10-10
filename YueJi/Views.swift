@@ -67,6 +67,13 @@ struct MainView: View {
     @State private var selectedTab = 0
     @State private var showingNewTNG = false
     @State private var notificationDestination: NotificationDestination?
+    @State private var logoFinished = false
+    @State private var initialLoadFinished = false
+    private func finishLaunchIfReady() {
+        guard !model.didFinishLaunch, phase == .active, initialLoadFinished,
+              logoFinished || !openingEnabled else { return }
+        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.22)) { model.didFinishLaunch = true }
+    }
     private func openPendingNotification() {
         guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil,
               let value = UserDefaults.standard.dictionary(forKey: "pendingNotificationDestination"),
@@ -74,7 +81,7 @@ struct MainView: View {
         notificationDestination = NotificationDestination(recordID: recordID, kind: kind, action: value["action"] as? String ?? "view")
         UserDefaults.standard.removeObject(forKey: "pendingNotificationDestination")
     }
-    var body: some View {
+    private var tabs: some View {
         TabView(selection: $selectedTab) {
             DashboardView().ledgerFeedback().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
             ExpensesView().ledgerFeedback().tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
@@ -82,19 +89,41 @@ struct MainView: View {
             FriendsView().ledgerFeedback().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
         }.tint(ink).modifier(YueJiTabBarMotion())
-            .overlay {
-                if !model.didFinishLaunch && openingEnabled {
-                    OpeningAnimationView(sound: !model.isPreview) {
-                        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.3)) { model.didFinishLaunch = true }
-                    }
-                        .transition(.opacity)
+    }
+    var body: some View {
+        ZStack {
+            Color(uiColor: .systemBackground).ignoresSafeArea()
+            // Present the logo before constructing the lists and their navigation stacks.
+            if model.didFinishLaunch { tabs.transition(.opacity) }
+            if !model.didFinishLaunch && openingEnabled {
+                OpeningAnimationView(sound: !model.isPreview) {
+                    logoFinished = true
+                    finishLaunchIfReady()
                 }
+                .transition(.opacity).zIndex(1)
             }
-            .task {
-                model.reload(postRecurring: false)
-                if !openingEnabled { model.didFinishLaunch = true }
+        }
+            .task(id: phase) {
+                guard phase == .active else { FeedbackSounds.shared.stop(); return }
+                await model.refresh()
+                guard !Task.isCancelled else { return }
+                initialLoadFinished = true
+                finishLaunchIfReady()
                 openPendingNotification()
-                await AutomaticRates.shared.refreshSaved(); model.reload(); openPendingNotification()
+            }
+            .task(id: model.didFinishLaunch && phase == .active) {
+                guard model.didFinishLaunch, phase == .active, !model.isPreview else { return }
+                // Defer permission prompts, recovery and network updates until the opening ends.
+                await LedgerNotifications.prepareAutomaticResultsAuthorization()
+                guard !Task.isCancelled else { return }
+                if let error = await AutomationRecovery.shared.retryPending() { model.error = error }
+                guard !Task.isCancelled else { return }
+                await model.refresh(postRecurring: false)
+                openPendingNotification()
+                await AutomaticRates.shared.refreshSaved()
+                guard !Task.isCancelled else { return }
+                await model.refresh(postRecurring: false)
+                openPendingNotification()
             }
             .onChange(of: model.didFinishLaunch) { _, finished in
                 if finished && !completedGuide && UserDefaults.standard.object(forKey: "pendingNotificationDestination") == nil { showingGuide = true }
@@ -123,7 +152,9 @@ struct MainView: View {
                         .padding(.horizontal, 20).padding(.vertical, 6)
                 }
             }
-            .onReceive(NotificationCenter.default.publisher(for: .init("YueJiNotificationDestination"))) { _ in model.reload(postRecurring: false); openPendingNotification() }
+            .onReceive(NotificationCenter.default.publisher(for: .init("YueJiNotificationDestination"))) { _ in
+                Task { await model.refresh(postRecurring: false); openPendingNotification() }
+            }
             .sheet(item: $notificationDestination, onDismiss: { openPendingNotification() }) { target in
                 NotificationDestinationView(target: target).environmentObject(model)
             }
@@ -137,7 +168,6 @@ struct MainView: View {
                 do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 6 : 3)) } catch { return }
                 if model.savedNotice == token { model.savedNotice = nil }
             }
-            .onChange(of: phase) { _, value in if value == .active { model.reload(postRecurring: false); openPendingNotification(); Task { if let error = await AutomationRecovery.shared.retryPending() { model.error = error }; await AutomaticRates.shared.refreshSaved(); model.reload() } } else { FeedbackSounds.shared.stop() } }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }
@@ -203,8 +233,9 @@ struct DashboardView: View {
     @State private var budgeting = false
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
     private var monthBinding: Binding<Date> { Binding(get: { month }, set: { monthTimestamp = $0.timeIntervalSince1970 }) }
-    private var entries: [Expense] { model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) } }
-    private var personal: Int { entries.reduce(0) { $0 + $1.personal } }
+    private var summary: OverviewSnapshot { model.overview(in: month) }
+    private var entries: [Expense] { summary.entries }
+    private var personal: Int { summary.personal }
     private var budget: Int { model.ledger.budgets[monthKey(month)] ?? 0 }
     private var budgetTint: Color {
         guard budget > 0 else { return ink }
@@ -223,7 +254,7 @@ struct DashboardView: View {
     private var budgetUsageText: String {
         String(budget > 0 ? personal * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
     }
-    private var owed: Int { model.ledger.expenses.flatMap(\.shares).reduce(0) { $0 + max(0, $1.owed) } }
+    private var owed: Int { summary.owed }
     var body: some View {
         NavigationStack {
             ScrollViewReader { guideScroll in
@@ -305,13 +336,7 @@ struct DashboardView: View {
             }
         }
     }
-    private var recentEntries: [Expense] {
-        let sorted: [Expense] = entries.sorted { (first: Expense, second: Expense) -> Bool in
-            if first.date == second.date { return first.id < second.id }
-            return first.date > second.date
-        }
-        return Array(sorted.prefix(3))
-    }
+    private var recentEntries: [Expense] { summary.recent }
     private var recentCard: some View {
         Section {
             if recentEntries.isEmpty {
@@ -396,13 +421,11 @@ struct DashboardView: View {
     }
     private var balancesCard: some View {
         Section(tr("收支明细", "Payment details", "Butiran bayaran")) {
-            LabeledContent(tr("本月实际付款", "Paid this month", "Dibayar bulan ini"), value: money(entries.reduce(0) { $0 + $1.cents }))
-            if entries.contains(where: { $0.refunded > 0 }) {
-                LabeledContent(tr("这些付款已退金额", "Refunded on these payments", "Bayaran ini dipulangkan"), value: money(entries.reduce(0) { $0 + $1.refunded }))
+            LabeledContent(tr("本月实际付款", "Paid this month", "Dibayar bulan ini"), value: money(summary.paid))
+            if summary.refunded > 0 {
+                LabeledContent(tr("这些付款已退金额", "Refunded on these payments", "Bayaran ini dipulangkan"), value: money(summary.refunded))
             }
-            let incoming = model.ledger.tngNotices.filter {
-                $0.kind == "incoming" && $0.status != "ignored" && (!$0.possibleDuplicate || $0.status != "pending") && monthKey($0.date) == monthKey(month)
-            }.reduce(0) { $0 + ($1.cents ?? 0) }
+            let incoming = summary.incoming
             if incoming > 0 {
                 NavigationLink { TNGInboxView() } label: {
                     LabeledContent(tr("银行 / TNG 本月收到", "Bank / TNG received this month", "Bank / TNG diterima bulan ini"), value: "+" + money(incoming))
@@ -430,7 +453,7 @@ struct DashboardView: View {
                     .font(.subheadline).foregroundStyle(.secondary)
             }
             ForEach(model.ledger.categoryNames, id: \.self) { category in
-                let value = entries.reduce(0) { $0 + $1.personalAmount(category: category) }
+                let value = summary.categoryTotals[category] ?? 0
                 if value > 0 {
                     NavigationLink {
                         CategoryPaymentsView(category: category, month: month)
@@ -461,17 +484,17 @@ struct CategoryPaymentsView: View {
     let month: Date
     private var tint: Color { model.ledger.categoryTint(category) }
     private var entries: [Expense] {
-        model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) && $0.hasCategory(category) }
-            .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        model.overview(in: month).entries.filter { $0.hasCategory(category) }
     }
     var body: some View {
+        let entries = self.entries
         List {
             Section {
                 VStack(alignment: .leading, spacing: 12) {
                     CategoryBadge(name: category).font(.headline)
                     Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
                         .font(.subheadline).foregroundStyle(.secondary)
-                    AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personalAmount(category: category) })
+                    AnimatedMoney(cents: model.overview(in: month).categoryTotals[category] ?? 0)
                         .font(.largeTitle.bold()).foregroundStyle(tint)
                         .lineLimit(1).minimumScaleFactor(0.5)
                     Text(tr("我的分类消费", "My category spending", "Belanja kategori saya"))
@@ -500,7 +523,7 @@ struct CategoryPaymentsView: View {
         }.yuejiListSurface()
             .tint(tint)
             .navigationTitle(categoryLabel(category)).navigationBarTitleDisplayMode(.inline)
-            .refreshable { model.reload(postRecurring: false) }
+            .refreshable { await model.refresh(postRecurring: false) }
             .sheet(item: $reviewing) { entry in
                 ExpenseDetailView(id: entry.id).tint(tint).ledgerFeedback(modal: true)
                     .yuejiZoom(id: entry.id, namespace: paymentTransition)
@@ -613,10 +636,10 @@ struct ExpensesView: View {
     @State private var deleting: Expense?
     private var entries: [Expense] { ((try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []).filter { providerFilter == "all" || $0.source == providerFilter } }
     private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search).filter { providerFilter == "all" || $0.provider == providerFilter } }
-    private var days: [LedgerDayGroup] {
-        LedgerTimelineItem.grouped(expenses: entries, transfers: transfers)
-    }
     var body: some View {
+        let entries = self.entries
+        let transfers = self.transfers
+        let days = LedgerTimelineItem.grouped(expenses: entries, transfers: transfers)
         NavigationStack {
             List {
                 Section {
@@ -682,7 +705,7 @@ struct ExpensesView: View {
                     } header: { Text(dateLabel(day.date)) }
                 }
             }.listStyle(.insetGrouped).animation(reduceMotion ? nil : YueJiMotion.standard, value: filter)
-                .refreshable { model.reload(postRecurring: false) }
+                .refreshable { await model.refresh(postRecurring: false) }
                 .sheet(isPresented: $filtering) {
                     LedgerFilterEditor(value: filter) { filter = $0 }
                         .presentationDetents([.medium, .large])
@@ -2429,8 +2452,9 @@ private struct OpeningAnimationView: View {
         ZStack {
             Color(uiColor: .systemBackground).ignoresSafeArea()
             VStack(spacing: 20) {
-                Image("YueJiIcon").resizable().scaledToFit().frame(width: 96, height: 96)
-                    .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+                Image("YueJiLogo").resizable().scaledToFit().frame(width: 112, height: 112)
+                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+                    .shadow(color: .black.opacity(0.12), radius: 14, y: 8)
                     .accessibilityHidden(true)
                 VStack(spacing: 6) {
                     Text(tr("月记", "YueJi", "YueJi")).font(.largeTitle.bold())
@@ -2438,19 +2462,20 @@ private struct OpeningAnimationView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }.padding(24)
-            .scaleEffect(entered || !animates ? 1 : 0.96)
-            .offset(y: entered || !animates ? 0 : 8)
-            .opacity(entered || !animates ? 1 : 0)
+            .scaleEffect(entered || !animates ? 1 : 0.84)
+            .offset(y: entered || !animates ? 0 : 12)
         }
         .task(id: phase) {
             // Wait for foreground activation so the opening cue is audible on a cold launch.
             guard phase == .active else { return }
+            // Let the initial logo frame reach the screen before starting its spring.
+            do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
             if sound && !playedSound {
                 FeedbackSounds.shared.play(.launch)
                 playedSound = true
             }
-            withAnimation(animates ? YueJiMotion.standard : nil) { entered = true }
-            do { try await Task.sleep(for: .milliseconds(animates ? 800 : 150)) }
+            withAnimation(animates ? .spring(duration: 0.42, bounce: 0.18) : nil) { entered = true }
+            do { try await Task.sleep(for: .milliseconds(animates ? 650 : 100)) }
             catch { return }
             onFinished()
         }

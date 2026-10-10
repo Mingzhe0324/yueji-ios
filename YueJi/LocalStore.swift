@@ -196,6 +196,19 @@ actor AutomationRecovery {
     }
 }
 
+/// Keep startup file coordination, validation and recurring writes off the UI actor.
+actor LedgerRefreshWorker {
+    static let shared = LedgerRefreshWorker()
+    private let store: LocalStore
+    init(store: LocalStore = .shared) { self.store = store }
+    func snapshot(postRecurring: Bool) throws -> (ledger: Ledger, signature: Data) {
+        try Task.checkCancellation()
+        if postRecurring { try store.change { try $0.postDue() } }
+        try Task.checkCancellation()
+        return try store.readSnapshot()
+    }
+}
+
 /// App UI and App Intent use the same sandbox file. File coordination serializes read-modify-write.
 /// No App Group or paid iCloud entitlement is required. Explicit exports use the Files document picker.
 final class LocalStore {
@@ -218,11 +231,20 @@ final class LocalStore {
         return try Self.decode(Data(contentsOf: file)) // Corrupt data is never silently replaced with an empty ledger.
     }
     func read() throws -> Ledger {
+        try readSnapshot().ledger
+    }
+    // Compare the actual stored bytes; re-encoding Set values need not preserve their order.
+    func readSnapshot() throws -> (ledger: Ledger, signature: Data) {
         try prepare()
-        if !FileManager.default.fileExists(atPath: file.path) { return Ledger() }
-        var output: Result<Ledger, Error> = .failure(LedgerError.invalid("无法读取账本。"))
+        if !FileManager.default.fileExists(atPath: file.path) { return (Ledger(), Data()) }
+        var output: Result<(ledger: Ledger, signature: Data), Error> = .failure(LedgerError.invalid("无法读取账本。"))
         var error: NSError?
-        NSFileCoordinator().coordinate(readingItemAt: file, options: [], error: &error) { _ in output = Result { try self.readUnlocked() } }
+        NSFileCoordinator().coordinate(readingItemAt: file, options: [], error: &error) { _ in
+            output = Result {
+                let data = try Data(contentsOf: self.file)
+                return (try Self.decode(data), data)
+            }
+        }
         if let error { throw error }
         return try output.get()
     }

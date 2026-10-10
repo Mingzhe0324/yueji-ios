@@ -56,6 +56,11 @@ header = icon.read_bytes()[:33]
 assert header[:8] == b'\x89PNG\r\n\x1a\n'
 assert struct.unpack('>II', header[16:24]) == (1024, 1024)
 assert header[25] == 2, 'App icon must be opaque RGB'
+logo_asset = root / 'YueJi/Assets.xcassets/YueJiLogo.imageset'
+logo_metadata = json.loads((logo_asset / 'Contents.json').read_text())
+logo = logo_asset / logo_metadata['images'][0]['filename']
+assert logo_metadata['images'][0]['idiom'] == 'universal'
+assert logo.read_bytes() == icon.read_bytes(), 'Opening logo must use the app brand image'
 for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'DeleteCue', 'RestoreCue', 'DepositCue'):
     asset = root / 'YueJi/Assets.xcassets' / (name + '.dataset')
     metadata = json.loads((asset / 'Contents.json').read_text())
@@ -66,7 +71,7 @@ for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'DeleteCue', 'RestoreCue'
         samples = struct.unpack('<' + 'h' * wav.getnframes(), wav.readframes(wav.getnframes()))
         peak = max(abs(x) for x in samples)
         assert 1000 < peak < 16000, 'Missing sound or excessive peak'
-print('PASS: 1024px opaque icon and six decodable PCM sound assets.')
+print('PASS: 1024px opaque icon, dedicated opening logo and six decodable PCM sound assets.')
 
 # Regression from build 53: overview still referenced removed deletion state.
 for source in (root / 'YueJi').glob('*.swift'):

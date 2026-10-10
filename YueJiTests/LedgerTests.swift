@@ -4,6 +4,98 @@ import AVFoundation
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    func testMonthKeyPreservesGregorianMonthAcrossTimeZonesAndBoundaries() throws {
+        let parser = ISO8601DateFormatter()
+        for zoneID in ["UTC", "Asia/Kuala_Lumpur", "America/New_York", "Pacific/Kiritimati"] {
+            let zone = try XCTUnwrap(TimeZone(identifier: zoneID))
+            let legacy = DateFormatter()
+            legacy.locale = Locale(identifier: "en_US_POSIX")
+            legacy.dateFormat = "yyyy-MM"
+            legacy.timeZone = zone
+            for instant in ["2025-12-31T16:00:00Z", "2026-01-01T00:00:00Z",
+                            "2026-02-28T23:59:59Z", "2026-03-01T00:00:00Z",
+                            "2026-03-08T07:00:00Z", "2026-11-01T06:00:00Z",
+                            "2028-02-29T23:59:59Z"] {
+                let date = try XCTUnwrap(parser.date(from: instant))
+                XCTAssertEqual(monthKey(date, timeZone: zone), legacy.string(from: date), "\(zoneID): \(instant)")
+            }
+        }
+    }
+
+    func testOverviewSnapshotPreservesSplitsRefundsAndLocalMonthBoundaries() throws {
+        let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Kuala_Lumpur"))
+        let start = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-30T16:00:00Z"))
+        let end = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-10-31T16:00:00Z"))
+        var split = Expense(merchant: "Groceries", cents: 10000, date: start, category: "餐饮",
+                            shares: [Share(name: "A", cents: 2500, repayments: [Repayment(cents: 500)], refundCents: 500)],
+                            refunds: [RefundRecord(cents: 1500, date: start, personalCents: 1000, shares: [:])],
+                            categoryAllocations: [CategoryAllocation(category: "餐饮", cents: 7000), CategoryAllocation(category: "购物", cents: 3000)])
+        split.id = "split"
+        split.refunds?[0].shares = [split.shares[0].id: 500]
+        let later = Expense(merchant: "Dinner", cents: 2000, date: start.addingTimeInterval(3600), category: "餐饮")
+        let previous = Expense(merchant: "Previous month", cents: 500, date: start.addingTimeInterval(-1), shares: [Share(name: "B", cents: 200)])
+        let next = Expense(merchant: "Next month", cents: 700, date: end)
+        var ledger = Ledger(expenses: [previous, split, next, later])
+        let received = TNGNotice(body: "Incoming", title: "Bank", date: start, usesReceivedDate: false,
+                                 kind: "incoming", status: "income", cents: 1000, party: nil, expenseID: nil)
+        var ignored = received; ignored.id = "ignored"; ignored.status = "ignored"
+        var duplicate = received; duplicate.id = "duplicate"; duplicate.status = "pending"; duplicate.possibleDuplicate = true
+        var nextNotice = received; nextNotice.id = "next"; nextNotice.date = end
+        ledger.tngNotices = [received, ignored, duplicate, nextNotice]
+        let snapshot = OverviewSnapshot(ledger: ledger, month: start, timeZone: zone)
+        XCTAssertEqual(snapshot.entries.map(\.id), [later.id, split.id])
+        XCTAssertEqual(snapshot.recent, snapshot.entries)
+        XCTAssertEqual(snapshot.personal, 8500)
+        XCTAssertEqual(snapshot.paid, 12000)
+        XCTAssertEqual(snapshot.refunded, 1500)
+        XCTAssertEqual(snapshot.owed, 1700, "Outstanding friends' shares still include other months")
+        XCTAssertEqual(snapshot.incoming, 1000)
+        for category in ["餐饮", "购物"] {
+            XCTAssertEqual(snapshot.categoryTotals[category], [split, later].reduce(0) { $0 + $1.personalAmount(category: category) })
+        }
+        XCTAssertEqual(snapshot.categoryTotals.values.reduce(0, +), snapshot.personal)
+    }
+
+    @MainActor func testOverviewCacheUpdatesAfterEditAndSwitchingMonths() async {
+        let now = Date()
+        let next = shiftedMonth(now, by: 1)
+        let model = LedgerModel(previewLedger: Ledger(expenses: [Expense(merchant: "Lunch", cents: 1000, date: now)]))
+        XCTAssertEqual(model.overview(in: now).personal, 1000)
+        XCTAssertEqual(model.overview(in: next).personal, 0)
+        model.ledger.expenses[0].cents = 1500
+        XCTAssertEqual(model.overview(in: now).personal, 1500)
+        model.ledger.expenses[0].date = next
+        XCTAssertEqual(model.overview(in: now).personal, 0)
+        XCTAssertEqual(model.overview(in: next).personal, 1500)
+        await model.refresh() // Guide previews must never replace their sample with the real ledger.
+        XCTAssertEqual(model.overview(in: next).personal, 1500)
+    }
+
+    func testBackgroundSnapshotsDetectChangesAndPreserveUnreadableLedger() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let worker = LedgerRefreshWorker(store: store)
+        try store.change { $0.expenses = [Expense(merchant: "Lunch", cents: 1000)] }
+        let first = try await worker.snapshot(postRecurring: false)
+        let same = try await worker.snapshot(postRecurring: false)
+        XCTAssertEqual(first.signature, same.signature)
+        XCTAssertEqual(first.ledger.expenses, same.ledger.expenses)
+        try store.change { $0.expenses[0].cents = 1500 }
+        let edited = try await worker.snapshot(postRecurring: false)
+        XCTAssertNotEqual(first.signature, edited.signature)
+        XCTAssertEqual(edited.ledger.expenses[0].cents, 1500)
+        let file = folder.appendingPathComponent("ledger.json")
+        let corrupt = Data("unreadable ledger".utf8)
+        try corrupt.write(to: file)
+        do { _ = try await worker.snapshot(postRecurring: true); XCTFail("Must report unreadable data") }
+        catch { XCTAssertEqual(try Data(contentsOf: file), corrupt) }
+    }
+
+    @MainActor func testOpeningLogoResolvesFromCompiledAssetCatalog() {
+        XCTAssertNotNil(UIImage(named: "YueJiLogo"))
+    }
+
     func testLanguageSwitchTranslatesLegacyLabelsWithoutChangingSourceIdentity() {
         let defaults = UserDefaults.standard
         let previous = defaults.object(forKey: "appLanguage")

@@ -11,15 +11,33 @@ struct YueJiApp: App {
     @AppStorage("appAppearance") private var appearance = "system"
     private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
     init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
-    var body: some Scene { WindowGroup { MainView().task { await LedgerNotifications.prepareAutomaticResultsAuthorization(); if let error = await AutomationRecovery.shared.retryPending() { model.error = error }; model.reload(postRecurring: false) }.font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
+    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, Locale(identifier: AppLanguage.localeID)).id(language).preferredColorScheme(colorScheme) } }
 }
 @MainActor final class LedgerModel: ObservableObject {
     let isPreview: Bool
     init(previewLedger: Ledger? = nil) {
         isPreview = previewLedger != nil
-        if let previewLedger { ledger = previewLedger; loaded = true }
+        if let previewLedger { ledger = previewLedger; loaded = true; didFinishLaunch = true }
     }
-    @Published var ledger = Ledger()
+    @Published var ledger = Ledger() {
+        didSet {
+            ledgerRevision += 1
+            overviewCache.removeAll(keepingCapacity: true)
+            refreshSignature = nil
+        }
+    }
+    private var ledgerRevision = 0
+    private var refreshSignature: Data?
+    private var refreshRequest = UUID()
+    private var overviewCache: [String: OverviewSnapshot] = [:]
+    func overview(in month: Date) -> OverviewSnapshot {
+        let key = TimeZone.current.identifier + "|" + monthKey(month)
+        if let cached = overviewCache[key] { return cached }
+        let snapshot = OverviewSnapshot(ledger: ledger, month: month)
+        if overviewCache.count >= 6 { overviewCache.removeAll(keepingCapacity: true) }
+        overviewCache[key] = snapshot
+        return snapshot
+    }
     @Published var error: String?
     @Published var didFinishLaunch = false
     @Published var loaded = false
@@ -85,18 +103,40 @@ struct YueJiApp: App {
         guard !isPreview else { return }
         do {
             if postRecurring { try LocalStore.shared.change { try $0.postDue() } }
-            let fresh = try LocalStore.shared.read()
-            let ids = Set(fresh.tngNotices.map(\.id))
-            var tracker = TNGReviewTracker(
-                observed: UserDefaults.standard.stringArray(forKey: "viewedTNGNoticeIDs").map { Set($0) },
-                pending: Set(UserDefaults.standard.stringArray(forKey: "pendingTNGNoticeIDs") ?? []))
-            tracker.observe(ids)
-            newTNGCount = tracker.pending.count
-            UserDefaults.standard.set(Array(ids), forKey: "viewedTNGNoticeIDs")
-            UserDefaults.standard.set(Array(tracker.pending), forKey: "pendingTNGNoticeIDs")
-            ledger = fresh; loaded = true
-            Task { await BudgetAlertService.shared.check() }
+            publish(try LocalStore.shared.readSnapshot())
         } catch { self.error = error.localizedDescription }
+    }
+    func refresh(postRecurring: Bool = true, using worker: LedgerRefreshWorker = .shared) async {
+        guard !isPreview, !Task.isCancelled else { return }
+        let revision = ledgerRevision
+        let request = UUID()
+        refreshRequest = request
+        do {
+            let snapshot = try await worker.snapshot(postRecurring: postRecurring)
+            // An edit, restore or newer refresh must win over an older background read.
+            guard !Task.isCancelled, revision == ledgerRevision, request == refreshRequest else { return }
+            publish(snapshot)
+        } catch is CancellationError { return }
+        catch {
+            guard !Task.isCancelled, revision == ledgerRevision, request == refreshRequest else { return }
+            self.error = error.localizedDescription
+        }
+    }
+    private func publish(_ snapshot: (ledger: Ledger, signature: Data)) {
+        guard !loaded || refreshSignature != snapshot.signature else { return }
+        let fresh = snapshot.ledger
+        let ids = Set(fresh.tngNotices.map(\.id))
+        let observed = UserDefaults.standard.stringArray(forKey: "viewedTNGNoticeIDs").map { Set($0) }
+        let pending = Set(UserDefaults.standard.stringArray(forKey: "pendingTNGNoticeIDs") ?? [])
+        var tracker = TNGReviewTracker(observed: observed, pending: pending)
+        tracker.observe(ids)
+        if newTNGCount != tracker.pending.count { newTNGCount = tracker.pending.count }
+        if observed != ids { UserDefaults.standard.set(Array(ids), forKey: "viewedTNGNoticeIDs") }
+        if pending != tracker.pending { UserDefaults.standard.set(Array(tracker.pending), forKey: "pendingTNGNoticeIDs") }
+        ledger = fresh
+        refreshSignature = snapshot.signature
+        if !loaded { loaded = true }
+        Task { await BudgetAlertService.shared.check() }
     }
     func dismissNewTNG() {
         newTNGCount = 0

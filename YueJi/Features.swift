@@ -628,6 +628,41 @@ extension Ledger {
     }
 }
 
+/// Compute each expense's split/refund allocation once per overview snapshot.
+struct OverviewSnapshot {
+    var entries: [Expense] = []
+    var personal = 0
+    var paid = 0
+    var refunded = 0
+    var incoming = 0
+    var owed = 0
+    var categoryTotals: [String: Int] = [:]
+    var recent: [Expense] { Array(entries.prefix(3)) }
+
+    init(ledger: Ledger, month: Date, timeZone: TimeZone = .current) {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = timeZone
+        guard let interval = calendar.dateInterval(of: .month, for: month) else { return }
+        for entry in ledger.expenses {
+            owed += entry.shares.reduce(0) { $0 + max(0, $1.owed) }
+            guard entry.date >= interval.start && entry.date < interval.end else { continue }
+            entries.append(entry)
+            personal += entry.personal
+            paid += entry.cents
+            refunded += entry.refunded
+            for (category, amount) in entry.categoryDistribution(total: entry.personal) {
+                categoryTotals[category, default: 0] += amount
+            }
+        }
+        entries.sort { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        for notice in ledger.tngNotices where notice.kind == "incoming" && notice.status != "ignored"
+            && (!notice.possibleDuplicate || notice.status != "pending")
+            && notice.date >= interval.start && notice.date < interval.end {
+            incoming += notice.cents ?? 0
+        }
+    }
+}
+
 
 // Current-month, net personal spending only. No alert for historical backfills.
 struct BudgetAlertCandidate {
