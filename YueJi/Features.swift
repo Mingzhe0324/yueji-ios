@@ -152,6 +152,7 @@ struct RefundRecord: Codable, Identifiable, Equatable {
     var date: Date
     var personalCents: Int
     var shares: [String: Int]
+    var receivedByMe: Bool? = nil // Legacy/nil: refund returned to the original payer.
 }
 struct AutomationEvent: Codable, Identifiable {
     var id = UUID().uuidString
@@ -189,6 +190,7 @@ func validateRefunds(_ e: Expense) throws {
     let refunds = e.refunds ?? []
     guard refunds.count <= 10_000, Set(refunds.map(\.id)).count == refunds.count else { throw LedgerError.invalid("账本格式或版本无效。") }
     for r in refunds {
+        guard r.receivedByMe != false || e.paidByFriend != nil else { throw settlementError("请核对退款收款人。", "Check who received the refund.", "Semak penerima bayaran balik.") }
         guard r.cents > 0, r.cents <= e.cents, r.personalCents >= 0, r.personalCents <= r.cents,
               r.shares.count <= e.shares.count, r.shares.allSatisfy({ key, value in value >= 0 && value <= r.cents && e.shares.contains(where: { $0.id == key }) }),
               r.personalCents + r.shares.values.reduce(0, +) == r.cents,
@@ -200,7 +202,8 @@ func validateRefunds(_ e: Expense) throws {
     }
 }
 extension Ledger {
-    mutating func addRefund(expenseID: String, cents: Int, date: Date, custom: [String: Int]? = nil) throws {
+    mutating func addRefund(expenseID: String, cents: Int, date: Date, custom: [String: Int]? = nil, receivedByMe: Bool? = nil) throws {
+        try requireUnsettledExpense(expenseID)
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), date <= Date(), date >= Calendar.current.startOfDay(for: expenses[i].date) else { throw LedgerError.invalid("交易金额或日期无效。") }
         let e = expenses[i]
         let allocation: [Int]
@@ -218,11 +221,12 @@ extension Ledger {
         }
         var amounts: [String: Int] = [:]
         for j in e.shares.indices { amounts[e.shares[j].id] = allocation[j + 1] }
-        let record = RefundRecord(cents: cents, date: date, personalCents: allocation[0], shares: amounts)
+        let record = RefundRecord(cents: cents, date: date, personalCents: allocation[0], shares: amounts, receivedByMe: receivedByMe)
         expenses[i].refunds = (e.refunds ?? []) + [record]
         for j in e.shares.indices { expenses[i].shares[j].refundCents = e.shares[j].refunded + allocation[j + 1] }
     }
     mutating func removeRefund(expenseID: String, refundID: String) throws {
+        try requireUnsettledExpense(expenseID)
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), let r = expenses[i].refunds?.first(where: { $0.id == refundID }) else { return }
         var next = self
         next.expenses[i].refunds?.removeAll { $0.id == refundID }
@@ -231,17 +235,17 @@ extension Ledger {
     }
     mutating func returnToFriend(expenseID: String, shareID: String, cents: Int, date: Date) throws {
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), let j = expenses[i].shares.firstIndex(where: { $0.id == shareID }),
-              cents > 0, cents <= -expenses[i].shares[j].owed, date <= Date(),
+              expenses[i].paidByFriend == nil, cents > 0, cents <= -outstanding(expense: expenses[i], share: expenses[i].shares[j]), date <= Date(),
               date >= ((expenses[i].refunds ?? []).map(\.date).max() ?? expenses[i].date) else { throw LedgerError.invalid("请检查还款金额和日期。") }
         expenses[i].shares[j].returns = (expenses[i].shares[j].returns ?? []) + [Repayment(cents: cents, date: date)]
     }
     var friendBalances: [FriendBalance] {
         var result: [String: FriendBalance] = [:]
-        for e in expenses { for s in e.shares {
-            let key = friendKey(s.name)
-            var b = result[key] ?? FriendBalance(id: key, name: s.name)
-            b.owed += max(0, s.owed); b.payable += max(0, -s.owed); b.count += 1; result[key] = b
-        } }
+        for item in friendDebtItems {
+            let key = friendKey(item.friend)
+            var b = result[key] ?? FriendBalance(id: key, name: item.friend)
+            b.owed += max(0, item.balance); b.payable += max(0, -item.balance); b.count += 1; result[key] = b
+        }
         return result.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
     mutating func batchRepay(friend: String, cents: Int, date: Date) throws {
@@ -250,15 +254,15 @@ extension Ledger {
         guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         let indices = expenses.indices.sorted { expenses[$0].date == expenses[$1].date ? expenses[$0].id < expenses[$1].id : expenses[$0].date < expenses[$1].date }
         let eligible = indices.flatMap { i in expenses[i].shares.indices.compactMap { j -> (Int, Int)? in
-            friendKey(expenses[i].shares[j].name) == key && expenses[i].shares[j].owed > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
+            expenses[i].paidByFriend == nil && friendKey(expenses[i].shares[j].name) == key && outstanding(expense: expenses[i], share: expenses[i].shares[j]) > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
         } }
-        let available = eligible.reduce(0, { $0 + expenses[$1.0].shares[$1.1].owed })
+        let available = eligible.reduce(0, { $0 + outstanding(expense: expenses[$1.0], share: expenses[$1.0].shares[$1.1]) })
         guard cents <= available else {
             throw reviewError("此收款日期可偿还的欠款只有 " + money(available) + "。请检查消费日期；还款不能早于消费。可在下方编辑原账目。", "Only " + money(available) + " is repayable on this date. Check expense dates; repayment cannot precede spending. Edit the original entry below.", "Hanya " + money(available) + " boleh dibayar pada tarikh ini. Semak tarikh belanja; bayaran balik tidak boleh mendahului belanja. Edit rekod asal di bawah.")
         }
         var remaining = cents; let batch = UUID().uuidString
         for (i, j) in eligible where remaining > 0 {
-            let part = min(remaining, expenses[i].shares[j].owed)
+            let part = min(remaining, outstanding(expense: expenses[i], share: expenses[i].shares[j]))
             expenses[i].shares[j].repayments.append(Repayment(cents: part, date: date, batchID: batch)); remaining -= part
         }
     }
@@ -335,9 +339,15 @@ extension Ledger {
             for s in e.shares where friendKey(s.name) == key {
                 let net = s.cents - s.refunded
                 result.net += net; result.refunds += s.refunded
-                result.owed += max(0, s.owed); result.payable += max(0, -s.owed)
+                if e.paidByFriend == nil {
+                    let balance = outstanding(expense: e, share: s)
+                    result.owed += max(0, balance); result.payable += max(0, -balance)
+                }
                 for (category, amount) in e.categoryDistribution(total: net) { result.categories[category, default: 0] += amount }
             }
+        }
+        for item in friendDebtItems where item.shareID == nil && friendKey(item.friend) == key && (month == nil || monthKey(item.expense.date) == monthKey(month!)) {
+            result.owed += max(0, item.balance); result.payable += max(0, -item.balance)
         }
         return result
     }
@@ -353,26 +363,37 @@ struct RestorePreview: Identifiable {
 extension Ledger {
     func friendStatement(key: String, month: Date?) -> String {
         let name = friendBalances.first { $0.id == key }?.name ?? key
-        let period = month.map(monthKey) ?? tr("全部月份", "All months", "Semua bulan")
+        let period = month.map { monthKey($0) } ?? tr("全部月份", "All months", "Semua bulan")
         var lines = [tr("月记 · 朋友账单", "YueJi · Friend statement", "YueJi · Penyata rakan"), name, period, "MYR"]
         var net = 0, paid = 0, returned = 0, owed = 0, payable = 0
         let entries = expenses.filter { month == nil || monthKey($0.date) == monthKey(month!) }.sorted { $0.date < $1.date }
         for e in entries {
             for s in e.shares where friendKey(s.name) == key {
                 net += s.cents - s.refunded; paid += s.repaid; returned += s.returned
-                owed += max(0, s.owed); payable += max(0, -s.owed)
+                let balance = outstanding(expense: e, share: s)
+                owed += max(0, balance); payable += max(0, -balance)
                 lines.append("\n\(dateLabel(e.date)) · \(e.merchant) · \(e.categorySummary)")
+                lines.append(tr("付款人：", "Paid by: ", "Dibayar oleh: ") + e.payerLabel)
                 lines.append(tr("份额 / 退款：", "Share / refund: ", "Bahagian / pulangan: ") + money(s.cents) + " / " + money(s.refunded))
                 lines.append(tr("已还 / 已退回：", "Repaid / returned: ", "Dibayar / dipulangkan: ") + money(s.repaid) + " / " + money(s.returned))
                 for r in s.repayments { lines.append("  \(dateLabel(r.date)) · " + tr("还款 ", "Repayment ", "Bayaran ") + money(r.cents)) }
                 for r in s.returns ?? [] { lines.append("  \(dateLabel(r.date)) · " + tr("返款 ", "Returned ", "Dipulangkan ") + money(r.cents)) }
             }
+            if e.paidByFriend.map(friendKey) == key,
+               let item = friendDebtItems.first(where: { $0.expense.id == e.id && $0.shareID == nil }) {
+                owed += max(0, item.balance); payable += max(0, -item.balance)
+                lines.append(tr("我的份额 / 尚欠付款人：", "My share / still owed to payer: ", "Bahagian saya / baki hutang kepada pembayar: ") + money(e.personal) + " / " + money(max(0, -item.balance)))
+            }
+        }
+        for record in settlements where record.friend == key && record.lines.contains(where: { month == nil || monthKey($0.expense.date) == monthKey(month!) }) {
+            lines.append("\n" + tr("结算：", "Settlement: ", "Penyelesaian: ") + dateLabel(record.date) + " · " + money(abs(record.transfer)) + (record.active ? "" : tr(" · 已撤销", " · Undone", " · Dibatalkan")))
+            for line in record.lines where month == nil || monthKey(line.expense.date) == monthKey(month!) { lines.append(line.expense.merchant + " · " + money(line.applied)) }
         }
         lines.append("\n" + tr("净消费：", "Net spending: ", "Belanja bersih: ") + money(net))
         lines.append(tr("已还：", "Repaid: ", "Dibayar: ") + money(paid))
         lines.append(tr("已退回：", "Returned: ", "Dipulangkan: ") + money(returned))
         lines.append(tr("朋友待还：", "Still owed by friend: ", "Baki hutang rakan: ") + money(owed))
-        lines.append(tr("我需退给朋友：", "I need to return: ", "Saya perlu pulangkan: ") + money(payable))
+        lines.append(tr("我欠朋友：", "I owe them: ", "Saya berhutang: ") + money(payable))
         lines.append(tr("按消费月份筛选，包含这些消费截至目前的所有还款和返款。", "Filtered by spending month; includes all repayments and returns for these entries to date.", "Ditapis mengikut bulan belanja; termasuk semua bayaran dan pulangan rekod ini setakat kini."))
         return lines.joined(separator: "\n")
     }
@@ -593,17 +614,26 @@ extension Ledger {
         let formatter = ISO8601DateFormatter()
         var rows: [[String]]
         if splits {
-            rows = [["expense_id", "date", "merchant", "category", "friend", "share_MYR", "refund_MYR", "repaid_MYR", "returned_MYR", "owed_MYR", "payable_back_MYR"]]
-            for e in entries { for s in e.shares {
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, s.name, Currency.input(s.cents, "MYR"), Currency.input(s.refunded, "MYR"), Currency.input(s.repaid, "MYR"), Currency.input(s.returned, "MYR"), Currency.input(max(0, s.owed), "MYR"), Currency.input(max(0, -s.owed), "MYR")])
-            } }
+            rows = [["expense_id", "date", "merchant", "category", "friend", "share_MYR", "refund_MYR", "repaid_MYR", "returned_MYR", "owed_MYR", "payable_back_MYR", "payer", "share_owner", "settled_MYR"]]
+            let balances = Dictionary(friendDebtItems.map { ($0.id, $0.balance) }, uniquingKeysWith: { first, _ in first })
+            for e in entries {
+                for s in e.shares {
+                    let balance = balances[FriendDebtItem.key(e.id, s.id)] ?? 0
+                    let settled = e.paidByFriend == nil ? abs(s.owed - balance) : 0
+                    rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, s.name, Currency.input(s.cents, "MYR"), Currency.input(s.refunded, "MYR"), Currency.input(s.repaid, "MYR"), Currency.input(s.returned, "MYR"), Currency.input(max(0, balance), "MYR"), Currency.input(max(0, -balance), "MYR"), e.payerLabel, s.name, Currency.input(settled, "MYR")])
+                }
+                if let payer = e.paidByFriend {
+                    let balance = balances[FriendDebtItem.key(e.id, nil)] ?? 0
+                    rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, payer, Currency.input(e.personal + e.personalRefund, "MYR"), Currency.input(e.personalRefund, "MYR"), "0.00", "0.00", Currency.input(max(0, balance), "MYR"), Currency.input(max(0, -balance), "MYR"), payer, "me", Currency.input(abs(-e.owingToPayer - balance), "MYR")])
+                }
+            }
         } else {
-            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags"]]
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR"]]
             for e in entries {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
                 let allocationText = e.allocatedCategories.map { $0.category + ":" + Currency.input($0.cents, "MYR") }.joined(separator: "; ")
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; ")])
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR")])
             }
         }
         return csvData(rows)
@@ -644,17 +674,17 @@ struct OverviewSnapshot {
         calendar.timeZone = timeZone
         guard let interval = calendar.dateInterval(of: .month, for: month) else { return }
         for entry in ledger.expenses {
-            owed += entry.shares.reduce(0) { $0 + max(0, $1.owed) }
             guard entry.date >= interval.start && entry.date < interval.end else { continue }
             entries.append(entry)
             personal += entry.personal
-            paid += entry.cents
+            paid += entry.paidFromMyAccount
             refunded += entry.refunded
             for (category, amount) in entry.categoryDistribution(total: entry.personal) {
                 categoryTotals[category, default: 0] += amount
             }
         }
         entries.sort { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        owed = ledger.friendBalances.reduce(0) { $0 + $1.owed }
         for notice in ledger.tngNotices where notice.kind == "incoming" && notice.status != "ignored"
             && (!notice.possibleDuplicate || notice.status != "pending")
             && notice.date >= interval.start && notice.date < interval.end {

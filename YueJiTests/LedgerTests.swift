@@ -4,6 +4,327 @@ import AVFoundation
 @testable import YueJi
 
 final class LedgerTests: XCTestCase {
+    private var settlementDate: Date { Date(timeIntervalSince1970: 1_700_000_100) }
+    private func settlementExample() -> Ledger {
+        let date = Date(timeIntervalSince1970: 1_700_000_000)
+        return Ledger(expenses: [
+            Expense(id: "lunch", merchant: "Lunch", cents: 6000, date: date, category: "餐饮", shares: [Share(id: "amy-lunch", name: "Amy", cents: 3000)]),
+            Expense(id: "drinks", merchant: "Drinks", cents: 2000, date: date, category: "餐饮", shares: [Share(id: "amy-drinks", name: "Amy", cents: 1000)], paidByFriend: "Amy"),
+            Expense(id: "mine", merchant: "Personal purchase", cents: 1500, date: date, category: "购物", shares: [Share(id: "amy-mine", name: "Amy", cents: 0)], paidByFriend: "Amy")
+        ])
+    }
+    private func settlementNotice(id: String = "receipt", cents: Int = 500, kind: String = "incoming", reference: String = "BANK-123") -> TNGNotice {
+        TNGNotice(id: id, body: "Bank transfer", title: "Transfer", date: settlementDate, usesReceivedDate: false,
+                  kind: kind, status: "pending", cents: cents, party: "Amy", expenseID: nil, sourceBank: "TNG", bankReference: reference)
+    }
+    private func fullSettlement(_ ledger: inout Ledger, payment: Int = 500) throws -> String {
+        let selected = Set(ledger.friendDebtItems.map(\.id))
+        let plan = try ledger.settlementPlan(friend: "AMY", selected: selected, payment: payment, date: settlementDate)
+        return try ledger.confirmSettlement(plan)
+    }
+
+    func testNetSettlementExampleKeepsRM55SpendingAndAllOriginalItems() throws {
+        var ledger = try settlementExample().validated()
+        let original = ledger.expenses
+        XCTAssertEqual(ledger.friendBalances[0].owed, 3000)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 2500)
+        let snapshot = OverviewSnapshot(ledger: ledger, month: settlementDate)
+        XCTAssertEqual(snapshot.personal, 5500)
+        XCTAssertEqual(snapshot.paid, 6000)
+        let id = try fullSettlement(&ledger)
+        XCTAssertEqual(ledger.settlements[0].id, id)
+        XCTAssertEqual(ledger.settlements[0].transfer, 500)
+        XCTAssertEqual(ledger.settlements[0].lines.count, 3)
+        XCTAssertEqual(Set(ledger.settlements[0].lines.map { $0.expense.id }), Set(original.map(\.id)))
+        XCTAssertEqual(ledger.friendBalances[0].owed, 0)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+        XCTAssertEqual(ledger.expenses, original)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        XCTAssertTrue(ledger.tngNotices.isEmpty, "Manual settlement must not invent a bank receipt or income")
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).settlements, ledger.settlements)
+    }
+
+    func testPartialNetPaymentLeavesRemainderAndUnselectedItemsOutstanding() throws {
+        var ledger = settlementExample()
+        let selected = Set(ledger.friendDebtItems.map(\.id))
+        ledger.expenses.append(Expense(id: "unselected", merchant: "Other lunch", cents: 1000, date: settlementDate,
+                                       shares: [Share(name: "Amy", cents: 1000)]))
+        let plan = try ledger.settlementPlan(friend: "amy", selected: selected, payment: 200, date: settlementDate)
+        XCTAssertEqual(plan.offset, 2500)
+        XCTAssertEqual(plan.fullNet, 500)
+        try ledger.confirmSettlement(plan)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.expense.id == "lunch" }?.balance, 300)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.expense.id == "unselected" }?.balance, 1000)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 1300)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        let lunch = ledger.expenses[0]
+        XCTAssertThrowsError(try ledger.repay(expenseID: lunch.id, shareID: lunch.shares[0].id, cents: 301, date: settlementDate))
+        try ledger.repay(expenseID: lunch.id, shareID: lunch.shares[0].id, cents: 300, date: settlementDate)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 1000)
+        _ = try ledger.validated()
+    }
+
+    func testExactOffsetNeedsNoTransferAndKeepsOriginalSpending() throws {
+        var ledger = settlementExample()
+        ledger.expenses[2].cents = 2000 // Friend-paid personal cost now totals RM30 against RM30 receivable.
+        let before = ledger.spending(in: settlementDate)
+        let id = try fullSettlement(&ledger, payment: 0)
+        XCTAssertEqual(ledger.settlements.first { $0.id == id }?.transfer, 0)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 0)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+        XCTAssertEqual(ledger.spending(in: settlementDate), before)
+        ledger.tngNotices.append(settlementNotice())
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt"))
+    }
+
+    func testOffsetsOnlyAndInvalidOrStaleSettlementPreviews() throws {
+        var ledger = settlementExample()
+        let selected = Set(ledger.friendDebtItems.map(\.id))
+        XCTAssertThrowsError(try ledger.settlementPlan(friend: "Amy", selected: selected, payment: 501, date: settlementDate))
+        XCTAssertThrowsError(try ledger.settlementPlan(friend: "Amy", selected: selected, payment: 500, date: Date(timeIntervalSince1970: 100)))
+        let plan = try ledger.settlementPlan(friend: "Amy", selected: selected, payment: 500, date: settlementDate)
+        ledger.expenses[0].merchant = "Edited lunch"
+        XCTAssertThrowsError(try ledger.confirmSettlement(plan))
+        XCTAssertTrue(ledger.settlements.isEmpty)
+        try fullSettlement(&ledger, payment: 0)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 500)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+    }
+
+    func testSettlementPaymentRequiresConfirmationAndCannotBeAppliedTwice() throws {
+        var ledger = settlementExample()
+        let id = try fullSettlement(&ledger)
+        ledger.tngNotices = [settlementNotice()]
+        XCTAssertNil(ledger.settlements[0].paymentNoticeID, "Matching amount must not auto-link")
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt")
+        XCTAssertEqual(ledger.tngNotices[0].status, "settlement")
+        XCTAssertFalse(ledger.tngNotices.contains { $0.status == "income" })
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt"))
+        ledger.expenses.append(Expense(id: "next", merchant: "Next expense", cents: 500, date: settlementDate, shares: [Share(name: "Amy", cents: 500)]))
+        let nextItem = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "next" })
+        let nextPlan = try ledger.settlementPlan(friend: "amy", selected: [nextItem.id], payment: 500, date: settlementDate)
+        let nextID = try ledger.confirmSettlement(nextPlan)
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: nextID, noticeID: "receipt"))
+        ledger.tngNotices.append(settlementNotice(id: "duplicate-reference"))
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: nextID, noticeID: "duplicate-reference", distinctConfirmed: true))
+        ledger.tngNotices.append(settlementNotice(id: "independent", reference: "BANK-456"))
+        try ledger.linkSettlementPayment(settlementID: nextID, noticeID: "independent")
+        _ = try ledger.validated()
+    }
+
+    func testUndoSettlementRestoresDebtsAndKeepsOneBankPayment() throws {
+        var ledger = settlementExample()
+        let original = ledger.expenses
+        let id = try fullSettlement(&ledger)
+        ledger.tngNotices = [settlementNotice()]
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt")
+        XCTAssertThrowsError(try ledger.deleteAutomaticRecord(ledger.tngNotices[0]))
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.expenses, original)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 3000)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 2500)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.tngNotices[0].id, "receipt")
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+        XCTAssertNil(ledger.tngNotices[0].settlementID)
+        XCTAssertFalse(ledger.settlements[0].active)
+        XCTAssertThrowsError(try ledger.undoSettlement(id: id))
+        let replacement = try fullSettlement(&ledger)
+        try ledger.linkSettlementPayment(settlementID: replacement, noticeID: "receipt")
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        _ = try ledger.validated()
+    }
+
+    func testOutgoingSettlementConvertsAutomaticExpenseAndUndoNeverRecreatesIt() throws {
+        var ledger = settlementExample()
+        ledger.expenses = [ledger.expenses[2]]
+        let item = ledger.friendDebtItems[0]
+        let plan = try ledger.settlementPlan(friend: "amy", selected: [item.id], payment: 1500, date: settlementDate)
+        let id = try ledger.confirmSettlement(plan)
+        let automatic = Expense(id: "automatic-transfer", merchant: "Amy transfer", cents: 1500, date: settlementDate, source: "TNG")
+        ledger.expenses.append(automatic)
+        var notice = settlementNotice(cents: 1500, kind: "payment")
+        notice.status = "recorded"; notice.expenseID = automatic.id
+        ledger.tngNotices = [notice]
+        XCTAssertEqual(ledger.spending(in: settlementDate), 3000)
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: notice.id)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 1500)
+        XCTAssertEqual(ledger.settlements[0].convertedPayment, automatic)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 1500)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 1500)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.tngNotices[0].status, "transfer")
+        XCTAssertNil(ledger.tngNotices[0].expenseID)
+        _ = try ledger.validated()
+    }
+
+    func testSettledExpenseEditsAndRefundsRequireExplicitUndo() throws {
+        var ledger = settlementExample()
+        let id = try fullSettlement(&ledger)
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: "lunch", cents: 1000, date: settlementDate))
+        XCTAssertThrowsError(try ledger.deleteLedgerExpense(ledger.expenses[0]))
+        var changed = ledger
+        changed.expenses[0].cents += 100
+        XCTAssertThrowsError(try changed.validated())
+        changed = ledger; changed.expenses[0].paidByFriend = "Amy"
+        XCTAssertThrowsError(try changed.validated())
+        changed = ledger; changed.expenses[0].category = "交通"
+        XCTAssertThrowsError(try changed.validated())
+        changed = ledger; changed.expenses[0].note = "A note is safe to edit"
+        XCTAssertNoThrow(try changed.validated())
+        try ledger.undoSettlement(id: id)
+        try ledger.addRefund(expenseID: "lunch", cents: 1000, date: settlementDate)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5000)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 2500)
+        _ = try ledger.validated()
+    }
+
+    func testRepaymentsAndRefundsAreIncludedInOutstandingNetBalance() throws {
+        var ledger = settlementExample()
+        try ledger.repay(expenseID: "lunch", shareID: "amy-lunch", cents: 1000, date: settlementDate)
+        try ledger.addRefund(expenseID: "lunch", cents: 1000, date: settlementDate)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 1500)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 2500)
+        let id = try fullSettlement(&ledger, payment: 1000)
+        XCTAssertEqual(ledger.settlements.first { $0.id == id }?.transfer, -1000)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 0)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5000)
+    }
+
+    func testLegacyPayerAndV5SettlementBackupRoundTrip() throws {
+        var legacy = settlementExample()
+        legacy.expenses = [legacy.expenses[0]]
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(legacy)) as? [String: Any])
+        object["version"] = 4; object.removeValue(forKey: "settlements")
+        let migrated = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(migrated.version, 5)
+        XCTAssertNil(migrated.expenses[0].paidByFriend)
+        XCTAssertEqual(migrated.friendBalances[0].owed, 3000)
+        XCTAssertTrue(migrated.settlements.isEmpty)
+        var ledger = settlementExample()
+        let id = try fullSettlement(&ledger)
+        ledger.tngNotices = [settlementNotice()]
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt")
+        let restored = try LocalStore.decode(LocalStore.exportData(ledger))
+        XCTAssertEqual(restored.expenses, ledger.expenses)
+        XCTAssertEqual(restored.settlements, ledger.settlements)
+        XCTAssertEqual(restored.friendBalances[0].owed, 0)
+        XCTAssertEqual(restored.tngNotices[0].settlementID, id)
+    }
+
+    func testFriendPaidOwnershipModesKeepSpendingSeparateFromMyAccount() throws {
+        for friendShare in [0, 500, 700, 1000] {
+            let expense = Expense(merchant: "Purchase", cents: 1000, date: settlementDate,
+                                  shares: [Share(name: "Amy", cents: friendShare)], paidByFriend: "Amy")
+            let ledger = try Ledger(expenses: [expense]).validated()
+            XCTAssertEqual(ledger.spending(in: settlementDate), 1000 - friendShare)
+            XCTAssertEqual(ledger.friendBalances[0].payable, 1000 - friendShare)
+            XCTAssertEqual(ledger.friendBalances[0].owed, 0)
+            XCTAssertEqual(OverviewSnapshot(ledger: ledger, month: settlementDate).paid, 0)
+        }
+        XCTAssertEqual(try nonnegativeCents("0.00"), 0)
+        XCTAssertThrowsError(try nonnegativeCents("-1"))
+    }
+
+    func testSettlementCannotReuseClassifiedReceiptAndLegacyFlowCannotReuseSettlement() throws {
+        var ledger = settlementExample()
+        let id = try fullSettlement(&ledger)
+        var used = settlementNotice(id: "already-income")
+        used.status = "income"
+        ledger.tngNotices = [used, settlementNotice()]
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt", distinctConfirmed: true))
+        ledger.tngNotices.removeAll { $0.id == used.id }
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt")
+        ledger.tngNotices.append(settlementNotice(id: "second-notification"))
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: "second-notification", purpose: "income", date: settlementDate, distinctConfirmed: true))
+        XCTAssertEqual(ledger.tngNotices[1].status, "pending")
+    }
+
+    func testAutomaticSettlementPaymentNeverReplaysAfterLinkOrUndo() throws {
+        var ledger = settlementExample()
+        ledger.expenses = [ledger.expenses[2]]
+        let item = ledger.friendDebtItems[0]
+        let plan = try ledger.settlementPlan(friend: "amy", selected: [item.id], payment: 1500, date: settlementDate)
+        let id = try ledger.confirmSettlement(plan)
+        let body = "You have paid RM15.00 to AMY."
+        let date = settlementDate.addingTimeInterval(86400)
+        let result = try ledger.processTNGNotification(body: body, title: "DuitNow Payment", date: date, eventID: "settlement-bank-payment")
+        let noticeID = try XCTUnwrap(result.noticeID)
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: noticeID, distinctConfirmed: true)
+        _ = try ledger.processTNGNotification(body: body, title: "DuitNow Payment", date: date, eventID: "settlement-bank-payment")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        try ledger.undoSettlement(id: id)
+        _ = try ledger.processTNGNotification(body: body, title: "DuitNow Payment", date: date, eventID: "settlement-bank-payment")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 1500)
+    }
+
+    func testSettlementEditFailureLeavesStoredLedgerUntouched() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        try store.change { $0 = settlementExample() }
+        let loaded = try store.read()
+        let plan = try loaded.settlementPlan(friend: "amy", selected: Set(loaded.friendDebtItems.map(\.id)), payment: 500, date: settlementDate)
+        try store.change { try $0.confirmSettlement(plan, id: "stored-settlement") }
+        let committed = try store.readSnapshot()
+        XCTAssertThrowsError(try store.change { $0.expenses[0].cents += 100 })
+        XCTAssertEqual(try store.readSnapshot().signature, committed.signature)
+        XCTAssertEqual(try store.read().settlements.count, 1)
+        XCTAssertEqual(try store.read().friendBalances[0].owed, 0)
+        XCTAssertEqual(try store.read().spending(in: settlementDate), 5500)
+    }
+
+    func testSettlementBackupRejectsInvalidPaymentLinkAndIntegerOverflow() throws {
+        var ledger = settlementExample()
+        _ = try fullSettlement(&ledger)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        var records = try XCTUnwrap(object["settlements"] as? [[String: Any]])
+        records[0]["transfer"] = Int.min
+        object["settlements"] = records
+        XCTAssertThrowsError(try LocalStore.decode(JSONSerialization.data(withJSONObject: object)))
+        ledger.settlements[0].paymentNoticeID = "missing-bank-record"
+        XCTAssertThrowsError(try ledger.validated())
+    }
+
+    func testSettlementCannotUseBalancesFromLaterRepaymentsOrRefunds() throws {
+        var ledger = settlementExample()
+        let repaymentDate = settlementDate.addingTimeInterval(86400)
+        try ledger.repay(expenseID: "lunch", shareID: "amy-lunch", cents: 1000, date: repaymentDate)
+        let selected = Set(ledger.friendDebtItems.map(\.id))
+        XCTAssertThrowsError(try ledger.settlementPlan(friend: "amy", selected: selected, payment: 500, date: settlementDate))
+        let plan = try ledger.settlementPlan(friend: "amy", selected: selected, payment: 500, date: repaymentDate)
+        let id = try ledger.confirmSettlement(plan)
+        ledger.tngNotices = [settlementNotice(cents: 500, kind: "transfer")]
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt"))
+    }
+
+    func testFriendPaidRefundTracksWhoReceivedCashWithoutChangingSpendingTwice() throws {
+        for receivedByMe in [false, true] {
+            var ledger = settlementExample()
+            ledger.expenses = [ledger.expenses[1]] // RM20 drinks: my original share is RM10.
+            try ledger.addRefund(expenseID: "drinks", cents: 400, date: settlementDate, receivedByMe: receivedByMe)
+            XCTAssertEqual(ledger.spending(in: settlementDate), 800)
+            // If I received the full RM4, I forward the friend's part as well as settling my own cost.
+            XCTAssertEqual(ledger.friendBalances[0].payable, receivedByMe ? 1200 : 800)
+            let item = ledger.friendDebtItems[0]
+            let plan = try ledger.settlementPlan(friend: "amy", selected: [item.id], payment: abs(item.balance), date: settlementDate)
+            try ledger.confirmSettlement(plan)
+            XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+            XCTAssertEqual(ledger.spending(in: settlementDate), 800)
+        }
+    }
+
     func testMonthKeyPreservesGregorianMonthAcrossTimeZonesAndBoundaries() throws {
         let parser = ISO8601DateFormatter()
         for zoneID in ["UTC", "Asia/Kuala_Lumpur", "America/New_York", "Pacific/Kiritimati"] {
@@ -573,7 +894,7 @@ final class FeatureTests: XCTestCase {
     func testV1MigrationAndV2RoundTrip() throws {
         let old = Data(#"{"version":1,"expenses":[],"budgets":{"2026-09":10000},"seenEvents":["old"]}"#.utf8)
         var ledger = try LocalStore.decode(old)
-        XCTAssertEqual(ledger.version, 4); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
+        XCTAssertEqual(ledger.version, 5); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
         ledger.recurring = [RecurringExpense(name: "Phone", minor: 3000, start: Date())]
         ledger.rates["SGD"] = RateQuote(value: Decimal(string: "3.2")!, date: date(2026, 1, 1), source: "Manual")
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
@@ -1425,7 +1746,7 @@ final class SavingsGoalTests: XCTestCase {
     func testOldLedgerMigratesWithoutInventingGoals() throws {
         let data = Data(#"{"version":3,"expenses":[],"budgets":{},"seenEvents":[]}"#.utf8)
         let ledger = try LocalStore.decode(data)
-        XCTAssertEqual(ledger.version, 4)
+        XCTAssertEqual(ledger.version, 5)
         XCTAssertTrue(ledger.savingsGoals.isEmpty)
     }
     func testSavingsBoundsAndCompletion() throws {

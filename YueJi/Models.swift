@@ -87,12 +87,16 @@ struct Expense: Codable, Identifiable, Equatable {
     var note: String? = nil
     var tags: [String]? = nil
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
+    var paidByFriend: String? = nil // Missing in legacy records: paid by me.
+    var paidFromMyAccount: Int { paidByFriend == nil ? cents : 0 }
     var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
     var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
     var personal: Int { cents - shares.reduce(0) { $0 + $1.cents } - personalRefund }
+    // A refund paid into my account must still be forwarded to the friend who funded it.
+    var owingToPayer: Int { personal + (paidByFriend == nil ? 0 : (refunds ?? []).filter { $0.receivedByMe == true }.reduce(0) { $0 + $1.cents }) }
 }
 struct Ledger: Codable {
-    var version = 4
+    var version = 5
     var expenses: [Expense] = []
     var budgets: [String: Int] = [:]
     var seenEvents: Set<String> = []
@@ -107,16 +111,17 @@ struct Ledger: Codable {
     var tripDefaults: TripDefaults? = nil
     var savingsGoals: [SavingsGoal] = []
     var tngNotices: [TNGNotice] = []
-    init(version: Int = 4, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
+    var settlements: [FriendSettlement] = []
+    init(version: Int = 5, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
-        guard (1...4).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
-        version = 4
+        guard (1...5).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
+        version = 5
         expenses = try c.decode([Expense].self, forKey: .expenses)
         budgets = try c.decode([String: Int].self, forKey: .budgets)
         seenEvents = try c.decode(Set<String>.self, forKey: .seenEvents)
@@ -131,6 +136,7 @@ struct Ledger: Codable {
         tripDefaults = try c.decodeIfPresent(TripDefaults.self, forKey: .tripDefaults)
         savingsGoals = try c.decodeIfPresent([SavingsGoal].self, forKey: .savingsGoals) ?? []
         tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
+        settlements = try c.decodeIfPresent([FriendSettlement].self, forKey: .settlements) ?? []
     }
     func validated() throws -> Ledger {
         try validateBookkeeping()
@@ -142,12 +148,12 @@ struct Ledger: Codable {
                   (n.accountSuffix?.count ?? 0) <= 4, (n.bankReference?.count ?? 0) <= 500 else { throw LedgerError.invalid("Invalid notification source") }
             guard (n.recipient?.count ?? 0) <= 200, (n.resolvedFriend?.count ?? 0) <= 200,
                   (n.repaymentIDs?.count ?? 0) <= 50_000,
-                  n.kind != "incoming" || (n.cents != nil && n.party != nil && n.expenseID == nil && ["pending", "ignored", "repayment", "income", "ownTransfer"].contains(n.status)),
+                  n.kind != "incoming" || (n.cents != nil && n.party != nil && n.expenseID == nil && ["pending", "ignored", "repayment", "income", "ownTransfer", "settlement"].contains(n.status)),
                   !["repayment", "income", "ownTransfer"].contains(n.status) || n.kind == "incoming" else { throw LedgerError.invalid("Invalid incoming record") }
 
             guard !n.id.isEmpty, !n.body.isEmpty, n.body.count <= 8000, n.title.count <= 500, (n.note?.count ?? 0) <= 2000,
                   n.date.timeIntervalSince1970 >= 0, n.date.timeIntervalSince1970 < 4_102_444_800,
-                  ["payment", "transfer", "incoming", "unknown"].contains(n.kind), ["recorded", "transfer", "pending", "ignored", "repayment", "income", "ownTransfer"].contains(n.status),
+                  ["payment", "transfer", "incoming", "unknown"].contains(n.kind), ["recorded", "transfer", "pending", "ignored", "repayment", "income", "ownTransfer", "settlement"].contains(n.status),
                   n.cents == nil || (n.cents! > 0 && n.cents! <= 10_000_000_000), (n.party?.count ?? 0) <= 200 else { throw LedgerError.invalid("账本格式或版本无效。") }
         }
         guard customCategories.count <= 100,
@@ -159,13 +165,18 @@ struct Ledger: Codable {
               merchantCategories.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 200 && categoryNames.contains($0.value) }) else {
             throw LedgerError.invalid("付款或分账数据无效。")
         }
-        guard version == 4, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
+        guard version == 5, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
         for rule in recurring { try rule.validate(allowedCategories: categoryNames) }
         guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for e in expenses {
+            if let payer = e.paidByFriend {
+                guard !friendKey(payer).isEmpty, payer.count <= 200, e.shares.count == 1,
+                      friendKey(e.shares[0].name) == friendKey(payer), e.shares[0].repayments.isEmpty,
+                      (e.shares[0].returns ?? []).isEmpty else { throw settlementError("朋友付款请在你和付款人之间分摊，已有还款须先撤销。", "Split friend-paid purchases between you and the payer. Undo existing repayments before changing payer.", "Bahagikan belanja dibayar rakan antara anda dan pembayar. Batalkan bayaran sedia ada sebelum menukar pembayar.") }
+            }
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   e.merchant.count <= 200, (e.transactionReference?.count ?? 0) <= 500, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
@@ -182,6 +193,7 @@ struct Ledger: Codable {
             try validateRefunds(e)
             guard e.personal >= 0 else { throw LedgerError.invalid("朋友份额超过实际付款。") }
         }
+        try validateSettlements()
         return self
     }
     mutating func restoreDeletedExpenses(_ entries: [Expense]) throws {
@@ -196,6 +208,7 @@ struct Ledger: Codable {
 
     /// Keep automation and recurring deduplication markers so deletion stays deleted.
     mutating func deleteExpense(_ expected: Expense) throws {
+        try requireUnsettledExpense(expected.id)
         guard let index = expenses.firstIndex(where: { $0.id == expected.id }),
               expenses[index] == expected else {
             throw LedgerError.invalid(tr("账目已改变或已删除，请重新打开后再试。", "Entry changed or was deleted. Reopen it and try again.", "Rekod berubah atau dipadam. Buka semula dan cuba lagi."))
@@ -242,7 +255,7 @@ struct Ledger: Codable {
     }
     mutating func repay(expenseID: String, shareID: String, cents: Int, date: Date) throws {
         guard let ei = expenses.firstIndex(where: { $0.id == expenseID }), let si = expenses[ei].shares.firstIndex(where: { $0.id == shareID }) else { throw LedgerError.invalid("找不到这笔分账，请重新打开。") }
-        guard cents > 0, cents <= expenses[ei].shares[si].owed else { throw reviewError("还款须大于零且不能超过尚欠金额。", "Repayment must be positive and no more than the balance.", "Bayaran balik mesti positif dan tidak melebihi baki.") }
+        guard expenses[ei].paidByFriend == nil, cents > 0, cents <= outstanding(expense: expenses[ei], share: expenses[ei].shares[si]) else { throw reviewError("还款须大于零且不能超过尚欠金额。", "Repayment must be positive and no more than the balance.", "Bayaran balik mesti positif dan tidak melebihi baki.") }
         guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         guard date >= Calendar.current.startOfDay(for: expenses[ei].date) else { throw reviewError("还款日期早于消费日期，请检查并编辑原账目的日期。", "Repayment precedes the expense. Check and edit the original expense date.", "Bayaran balik mendahului belanja. Semak dan edit tarikh belanja asal.") }
         expenses[ei].shares[si].repayments.append(Repayment(cents: cents, date: date))
@@ -278,6 +291,7 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var accountSuffix: String? = nil
     var bankReference: String? = nil
     var note: String? = nil
+    var settlementID: String? = nil
     var provider: String { sourceBank ?? "TNG" }
 }
 struct TNGParsed {
@@ -377,7 +391,7 @@ extension Ledger {
     func ledgerTNGTransfers(in month: Date, search: String = "") -> [TNGNotice] {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return tngNotices.filter { notice in
-            (notice.kind == "incoming" || notice.kind == "transfer") &&
+            (notice.kind == "incoming" || notice.kind == "transfer" || notice.settlementID != nil || notice.status == "transfer") &&
             notice.status != "ignored" && notice.expenseID == nil &&
             Calendar.current.isDate(notice.date, equalTo: month, toGranularity: .month) &&
             (query.isEmpty || ((notice.party ?? "") + " " + (notice.recipient ?? "") + " " + notice.provider + " " + tngSignedAmount(notice)).localizedCaseInsensitiveContains(query))
@@ -503,6 +517,7 @@ extension Ledger {
     }
     mutating func excludeTNG(id: String) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }) else { return }
+        guard tngNotices[i].settlementID == nil else { throw settlementError("请先在结算详情撤销结算。", "Undo the settlement from its details first.", "Batalkan penyelesaian daripada butirannya dahulu.") }
         guard tngNotices[i].resolution == nil else { throw LedgerError.invalid("请先撤销已有退款或转账关联。") }
         if tngNotices[i].kind == "incoming" {
             guard tngNotices[i].status == "pending" else { throw LedgerError.invalid("Reopen incoming review before excluding") }
@@ -549,6 +564,7 @@ extension Ledger {
               !tngNotices[i].possibleDuplicate || distinctConfirmed || purpose == "ignored" else {
             throw reviewError("请核对收款日期、用途及是否重复。", "Check receipt date, purpose and duplicate status.", "Semak tarikh, tujuan dan status pendua.")
         }
+        if purpose != "ignored" { try requireUnusedPaymentReference(tngNotices[i]) }
         var copy = self
         if purpose == "repayment" {
             let key = friendKey(friend)
@@ -563,6 +579,7 @@ extension Ledger {
         self = try copy.validated()
     }
     mutating func reopenTNGIncoming(id: String) throws {
+        guard tngNotices.first(where: { $0.id == id })?.settlementID == nil else { throw settlementError("请先在结算详情撤销结算。", "Undo the settlement from its details first.", "Batalkan penyelesaian daripada butirannya dahulu.") }
         if tngNotices.first(where: { $0.id == id })?.resolution != nil {
             try reopenResolvedNotice(id: id); return
         }
@@ -763,10 +780,12 @@ struct DeletedLedgerRecord {
 extension Ledger {
     mutating func deleteAutomaticRecord(_ expected: TNGNotice) throws -> DeletedLedgerRecord {
         guard tngNotices.contains(expected) else { throw LedgerError.invalid("Record changed; reopen and try again.") }
+        guard expected.settlementID == nil else { throw settlementError("请先撤销此付款关联的结算，再删除银行记录。", "Undo the linked settlement before deleting this bank payment.", "Batalkan penyelesaian dipautkan sebelum memadam bayaran bank ini.") }
         guard expected.resolution != "refund", expected.resolution != "ownTransfer" else { throw LedgerError.invalid("请先在通知详情撤销关联，再删除通知。") }
         return try deleteLedgerRecord(noticeIDs: [expected.id], expenseID: expected.expenseID)
     }
     mutating func deleteLedgerExpense(_ expected: Expense) throws -> DeletedLedgerRecord {
+        try requireUnsettledExpense(expected.id)
         guard expenses.contains(expected) else { throw LedgerError.invalid("Record changed; reopen and try again.") }
         return try deleteLedgerRecord(noticeIDs: Set(tngNotices.filter { $0.expenseID == expected.id }.map(\.id)), expenseID: expected.id)
     }
@@ -864,7 +883,7 @@ extension Ledger {
             }
         case "refund":
             guard let relatedID else { throw LedgerError.invalid("请选择原消费。") }
-            try copy.addRefund(expenseID: relatedID, cents: cents, date: date)
+            try copy.addRefund(expenseID: relatedID, cents: cents, date: date, receivedByMe: true)
             guard let entry = copy.expenses.first(where: { $0.id == relatedID }), let refund = entry.refunds?.last else { throw LedgerError.invalid("退款保存失败。") }
             copy.tngNotices[i].status = "ignored"
             copy.tngNotices[i].resolution = "refund"
