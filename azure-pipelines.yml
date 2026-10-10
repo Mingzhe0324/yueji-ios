@@ -1,0 +1,107 @@
+# Manual-only build on the standard Microsoft-hosted macOS pool.
+# This uses Xcode 26.6, not Azure's separately billed Xcode 27 pool.
+trigger: none
+pr: none
+
+name: YueJi-$(Date:yyyyMMdd).$(Rev:r)
+
+jobs:
+  - job: BuildUnsignedIPA
+    displayName: YueJi IPA (unsigned, Xcode 26.6)
+    timeoutInMinutes: 60
+    pool:
+      vmImage: macOS-26
+    variables:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - checkout: self
+        persistCredentials: false
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$BUILD_ARTIFACTSTAGINGDIRECTORY"
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            printf 'Xcode 26.6 is not installed on this build image: %s\n' "$DEVELOPER_DIR" >&2
+            exit 1
+          fi
+          python3 scripts/check_project.py
+          xcodebuild -version
+          python3 - <<'PY'
+          import os, plistlib, subprocess
+          from pathlib import Path
+          info = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+          toolchain = subprocess.check_output(['xcodebuild', '-version'], text=True).strip()
+          if not toolchain.splitlines()[0].startswith('Xcode 26.6'):
+              raise SystemExit(f'This free Azure workflow requires Xcode 26.6; found {toolchain}')
+          sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip()
+          if int(sdk.split('.')[0]) != 26:
+              raise SystemExit(f'This workflow requires an iOS 26 SDK; found {sdk}')
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          label = f"{info['CFBundleShortVersionString']}-build{info['CFBundleVersion']}-{commit[:7]}"
+          print(f'##vso[task.setvariable variable=IPA_LABEL]{label}')
+          output = Path(os.environ['BUILD_ARTIFACTSTAGINGDIRECTORY']) / 'BuildInfo.txt'
+          output.write_text(f'YueJi {label}\nSource commit: {commit}\n{toolchain}\niPhone SDK: {sdk}\nUnsigned IPA for personal signing.\nBuilt with the iOS 26 SDK, not the iOS 27 SDK.\n', encoding='utf-8')
+          PY
+        displayName: Verify project and record source version
+      - bash: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json, os, subprocess
+          from pathlib import Path
+          devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json'], text=True))['devices']
+          phones = [(runtime, phone) for runtime, phones in devices.items() if 'iOS-26-' in runtime
+                    for phone in phones if phone.get('isAvailable') and 'iPhone' in phone['name']]
+          if not phones:
+              raise SystemExit('No available iOS 26 iPhone simulator on this build machine')
+          phones.sort(key=lambda item: (item[1]['name'] != 'iPhone 17', item[0], item[1]['name']))
+          runtime, phone = phones[0]
+          print(f"Testing {phone['name']} on {runtime}")
+          print(f"##vso[task.setvariable variable=SIMULATOR_ID]{phone['udid']}")
+          with (Path(os.environ['BUILD_ARTIFACTSTAGINGDIRECTORY']) / 'BuildInfo.txt').open('a', encoding='utf-8') as info:
+              info.write(f"Test simulator: {phone['name']} ({runtime})\n")
+          PY
+        displayName: Choose an iOS 26 iPhone simulator
+      - bash: |
+          set -euo pipefail
+          xcodebuild test -project YueJi.xcodeproj -scheme YueJi \
+            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+            -derivedDataPath build-simulator \
+            -resultBundlePath "$BUILD_ARTIFACTSTAGINGDIRECTORY/TestResults.xcresult" \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee "$BUILD_ARTIFACTSTAGINGDIRECTORY/build-test.log"
+        displayName: Build and test on iPhone simulator
+        env:
+          SIMULATOR_ID: $(SIMULATOR_ID)
+      - bash: |
+          set -euo pipefail
+          xcodebuild build -project YueJi.xcodeproj -scheme YueJi \
+            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+            -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+            2>&1 | tee "$BUILD_ARTIFACTSTAGINGDIRECTORY/build-device.log"
+        displayName: Build unsigned iPhone app
+      - bash: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import plistlib
+          from pathlib import Path
+          app = Path('build-device/Build/Products/Release-iphoneos/YueJi.app')
+          source = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+          built = plistlib.loads((app / 'Info.plist').read_bytes())
+          for key in ['CFBundleShortVersionString', 'CFBundleVersion']:
+              assert built[key] == source[key], f'Built app does not match source: {key}'
+          for resource in ['YueJi', 'Assets.car', 'YueJiIncoming.wav', 'YueJiOutgoing.wav', 'YueJiIcon@2x.png', 'YueJiIcon@3x.png']:
+              assert (app / resource).is_file(), f'Missing app resource: {resource}'
+          PY
+          mkdir -p package/Payload
+          cp -R build-device/Build/Products/Release-iphoneos/YueJi.app package/Payload/
+          cd package
+          zip -qr "$BUILD_ARTIFACTSTAGINGDIRECTORY/YueJi-${IPA_LABEL}-unsigned.ipa" Payload
+        displayName: Verify and package IPA for personal signing
+        env:
+          IPA_LABEL: $(IPA_LABEL)
+      - task: PublishPipelineArtifact@1
+        displayName: Publish IPA and build diagnostics
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)
+          artifact: YueJi-build$(Build.BuildId)
+          publishLocation: pipeline
