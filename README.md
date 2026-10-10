@@ -36,3 +36,11 @@ English/Malay labels and messages are included, with **Bank / TNG** in non-Chine
 Automatic recording requires configured Shortcuts that pass transaction details to YueJi. The app does not directly read bank accounts or Wallet history. Unfamiliar notification formats may still need manual review.
 
 **Build and install:** copy this folder's contents, including `.github`, to the repository root. Run **Build YueJi iPhone App** in GitHub Actions, download the IPA and install it with AltStore. See the [installation guide (Chinese)](Windows安装与ApplePay设置.md).
+
+## Native interface and Codemagic
+
+The interface uses system tabs, menus, bottom toolbars and sheets. On iOS 26 and later, month controls use native glass buttons, sheets retain system curvature/material, and the tab bar can minimize while scrolling. Payment details and the add/filter sheets use Apple's zoom transitions on iOS 18 and later. Reduced Motion disables the custom zooms, symbol bounce and tab minimization; Reduced Transparency uses opaque month buttons. iOS 17 remains supported with standard controls and navigation.
+
+For an iOS 27 SDK build, connect this repository to a personal Codemagic account, select branch `main`, and start **YueJi IPA (unsigned)**. The YAML workflow selects Xcode 27.1 on Mac mini M2, requires an iOS 27 SDK and runs the ledger tests on an iOS 27 iPhone simulator before packaging the unsigned IPA. Download it from that build's artifacts; `BuildInfo.txt` identifies the source commit, SDK and simulator. No build starts automatically.
+
+Visual review on an iPhone is still required: check payment zoom and swipe dismissal, add/edit/delete actions, filter sheet resizing and keyboard behavior, month controls, scrolling tabs, dark appearance, larger text, Reduced Motion and Reduced Transparency. System controls follow the installed OS; the dashboard and branded opening animation remain app-specific.

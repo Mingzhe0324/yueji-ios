@@ -72,9 +72,27 @@ private struct YueJiListSurface: ViewModifier {
 extension View {
     func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
     func yuejiSheetSurface() -> some View {
-        self.presentationDragIndicator(.visible)
-            .presentationCornerRadius(28)
-            .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        modifier(YueJiSheetSurface())
+    }
+}
+private struct YueJiSheetSurface: ViewModifier {
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            // Let the system choose the sheet's curvature and material.
+            content.presentationDragIndicator(.visible)
+        } else {
+            content.presentationDragIndicator(.visible)
+                .presentationCornerRadius(28)
+                .presentationBackground(Color(uiColor: .systemGroupedBackground))
+        }
+    }
+}
+private struct YueJiTabBarMotion: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.tabBarMinimizeBehavior(reduceMotion ? .never : .onScrollDown)
+        } else { content }
     }
 }
 
@@ -102,7 +120,7 @@ struct MainView: View {
             RecurringView().ledgerFeedback().tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
             FriendsView().ledgerFeedback().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
-        }.tint(ink)
+        }.tint(ink).modifier(YueJiTabBarMotion())
             .overlay {
                 if !model.didFinishLaunch && openingEnabled {
                     OpeningAnimationView(sound: !model.isPreview) {
@@ -165,6 +183,7 @@ struct MainView: View {
 }
 struct MonthPicker: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Binding var month: Date
     @State private var direction = 1
     private var monthLabel: String { month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))) }
@@ -173,10 +192,19 @@ struct MonthPicker: View {
             insertion: .opacity.combined(with: .offset(x: CGFloat(direction) * 16)),
             removal: .opacity.combined(with: .offset(x: CGFloat(direction) * -16)))
     }
-    var body: some View {
+    @ViewBuilder var body: some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            GlassEffectContainer(spacing: 12) { controls }
+        } else {
+            controls.padding(3)
+                .background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
+    }
+    private var controls: some View {
         HStack(spacing: 0) {
-            Button { shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Rectangle()) }
-                .buttonStyle(.borderless)
+            Button { shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 20, height: 20) }
+                .yuejiSecondaryButton().buttonBorderShape(.circle)
+                .frame(minWidth: 44, minHeight: 44)
                 .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
             ZStack {
                 Text(monthLabel).font(.subheadline.weight(.semibold))
@@ -189,10 +217,11 @@ struct MonthPicker: View {
                     shift(dx < 0 ? 1 : -1)
                 })
                 .accessibilityHint(tr("左右滑动切换月份", "Swipe left or right to change month", "Leret kiri atau kanan untuk menukar bulan"))
-            Button { shift(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44).contentShape(Rectangle()) }
-                .buttonStyle(.borderless)
+            Button { shift(1) } label: { Image(systemName: "chevron.right").frame(width: 20, height: 20) }
+                .yuejiSecondaryButton().buttonBorderShape(.circle)
+                .frame(minWidth: 44, minHeight: 44)
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
-        }.padding(3).background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        }
     }
     private func shift(_ n: Int) {
         direction = n
@@ -289,21 +318,25 @@ struct DashboardView: View {
                         .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
                 }
             }
-            .safeAreaInset(edge: .bottom) {
-                Button { adding = true } label: {
-                    Label(tr("记一笔", "Add expense", "Tambah belanja"), systemImage: "plus")
-                        .font(.headline).frame(maxWidth: .infinity, minHeight: 52)
-                        .contentShape(Rectangle())
+            .toolbar {
+                ToolbarItem(placement: .bottomBar) {
+                    Button { adding = true } label: {
+                        Label(tr("记一笔", "Add expense", "Tambah belanja"), systemImage: "plus")
+                            .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .yuejiPrimaryButton().buttonBorderShape(.capsule)
+                    .guideTarget("dashboard.add")
+                    .yuejiZoomSource(id: "new-expense", namespace: navigationMotion)
                 }
-                .yuejiPrimaryButton().buttonBorderShape(.capsule)
-                .guideTarget("dashboard.add")
-                .padding(.horizontal, 24).padding(.vertical, 10)
-                .background(.bar)
             }
             .sheet(item: $reviewing) { entry in
                 ExpenseDetailView(id: entry.id).ledgerFeedback(modal: true)
+                    .yuejiZoom(id: entry.id, namespace: navigationMotion)
             }
-            .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
+            .sheet(isPresented: $adding) {
+                ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
+                    .yuejiZoom(id: "new-expense", namespace: navigationMotion)
+            }
             .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
                 TextField("1500.00", text: $budgetText).keyboardType(.decimalPad)
                 Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); model.change { $0.budgets[monthKey(month)] = n } } catch { model.error = error.localizedDescription } }
@@ -494,6 +527,9 @@ struct DashboardView: View {
 }
 struct CategoryPaymentsView: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var paymentTransition
+    @State private var reviewing: Expense?
     let category: String
     let month: Date
     private var tint: Color { model.ledger.categoryTint(category) }
@@ -526,20 +562,26 @@ struct CategoryPaymentsView: View {
                     ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                 }
                 ForEach(entries) { entry in
-                    NavigationLink { ExpenseDetailView(id: entry.id) } label: {
+                    Button { reviewing = entry } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             ExpenseRow(entry: entry)
                             LabeledContent(tr("此分类 · 我的份额", "This category · my share", "Kategori ini · bahagian saya"),
                                            value: money(entry.personalAmount(category: category)))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                    }.buttonStyle(YueJiCategoryButtonStyle(tint: model.ledger.categoryTint(category)))
+                    }.buttonStyle(.automatic).foregroundStyle(.primary)
+                        .yuejiZoomSource(id: entry.id, namespace: paymentTransition)
                 }
             }
         }.yuejiListSurface()
             .tint(tint)
             .navigationTitle(categoryLabel(category)).navigationBarTitleDisplayMode(.inline)
             .refreshable { model.reload(postRecurring: false) }
+            .sheet(item: $reviewing) { entry in
+                ExpenseDetailView(id: entry.id).tint(tint).ledgerFeedback(modal: true)
+                    .yuejiZoom(id: entry.id, namespace: paymentTransition)
+            }
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: entries.map(\.id))
     }
 }
 struct OverviewToolsView: View {
@@ -689,6 +731,7 @@ struct ExpensesView: View {
                             Spacer()
                             Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                                 .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
+                                .yuejiZoomSource(id: "ledger-filter", namespace: expenseTransition)
                         }
                     }.padding(.vertical, 6)
                 }
@@ -718,7 +761,7 @@ struct ExpensesView: View {
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
                             Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
-                                .buttonStyle(.plain)
+                                .buttonStyle(.automatic)
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -736,7 +779,11 @@ struct ExpensesView: View {
                 }
             }.listStyle(.insetGrouped).animation(reduceMotion ? nil : YueJiMotion.standard, value: filter)
                 .refreshable { model.reload(postRecurring: false) }
-                .sheet(isPresented: $filtering) { LedgerFilterEditor(value: filter) { filter = $0 } }
+                .sheet(isPresented: $filtering) {
+                    LedgerFilterEditor(value: filter) { filter = $0 }
+                        .presentationDetents([.medium, .large])
+                        .yuejiZoom(id: "ledger-filter", namespace: expenseTransition)
+                }
                 .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.inline).searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
@@ -749,11 +796,16 @@ struct ExpensesView: View {
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { adding = true } label: { Image(systemName: "plus") }
                             .accessibilityLabel(tr("记一笔", "Add expense", "Tambah belanja"))
+                            .yuejiZoomSource(id: "new-expense", namespace: expenseTransition)
                     }
                 }
-                .sheet(isPresented: $adding) { ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month)) }
+                .sheet(isPresented: $adding) {
+                    ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
+                        .yuejiZoom(id: "new-expense", namespace: expenseTransition)
+                }
                 .sheet(item: $reviewing) { entry in
                     ExpenseDetailView(id: entry.id).ledgerFeedback(modal: true)
+                        .yuejiZoom(id: entry.id, namespace: expenseTransition)
                 }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
@@ -864,18 +916,19 @@ struct ExpenseDetailView: View {
                     Button(tr("关闭", "Close", "Tutup")) { dismiss() }
                 }
             }
-            .safeAreaInset(edge: .bottom) {
+            .toolbar {
                 if let entry {
-                    HStack(spacing: 16) {
+                    ToolbarItemGroup(placement: .bottomBar) {
                         Button { editing = entry } label: {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
-                                .frame(maxWidth: .infinity, minHeight: 48)
-                        }.yuejiPrimaryButton().buttonBorderShape(.capsule)
+                                .frame(minHeight: 44)
+                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveEntry == nil)
+                        Spacer()
                         Button(role: .destructive) { deleting = entry } label: {
                             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
-                                .frame(minWidth: 72, minHeight: 48)
-                        }.buttonStyle(.bordered).tint(.red).buttonBorderShape(.capsule)
-                    }.disabled(liveEntry == nil).padding(.horizontal, 24).padding(.vertical, 10).background(.bar)
+                                .frame(minHeight: 44)
+                        }.tint(.red).disabled(liveEntry == nil)
+                    }
                 }
             }
             .sheet(item: $editing) { ExpenseEditor(original: $0) }
@@ -1599,8 +1652,17 @@ private struct YueJiPrimaryButton: ViewModifier {
         } else { content.buttonStyle(.borderedProminent) }
     }
 }
+private struct YueJiSecondaryButton: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            content.buttonStyle(.glass)
+        } else { content.buttonStyle(.bordered) }
+    }
+}
 extension View {
     func yuejiPrimaryButton() -> some View { modifier(YueJiPrimaryButton()) }
+    func yuejiSecondaryButton() -> some View { modifier(YueJiSecondaryButton()) }
 }
 
 
@@ -2431,18 +2493,26 @@ struct MoonBuddy: View {
 }
 
 struct SavedFeedback: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
     let token: UUID
     let message: String
     var mascot = false
     var body: some View {
         HStack(spacing: 10) {
             if mascot { MoonBuddy(size: 42, celebrating: true, reaction: token) }
-            Label(message, systemImage: "checkmark.circle.fill")
+            Label {
+                Text(message)
+            } icon: {
+                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                    .symbolEffect(.bounce, value: appeared)
+            }
                 .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
         }.padding(.horizontal, 18).padding(.vertical, 12).ledgerGlass()
             .allowsHitTesting(false)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(message)
+            .onAppear { if !reduceMotion { appeared = true } }
     }
 }
 
