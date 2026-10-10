@@ -216,6 +216,23 @@ struct DashboardView: View {
     private var entries: [Expense] { model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) } }
     private var personal: Int { entries.reduce(0) { $0 + $1.personal } }
     private var budget: Int { model.ledger.budgets[monthKey(month)] ?? 0 }
+    private var budgetTint: Color {
+        guard budget > 0 else { return ink }
+        if personal >= budget { return .red }
+        return Double(personal) / Double(budget) >= 0.8 ? .orange : ink
+    }
+    private var budgetStatus: String {
+        if personal > budget { return tr("超出预算", "Over budget", "Melebihi bajet") }
+        if personal == budget { return tr("已达预算", "Budget reached", "Bajet dicapai") }
+        if Double(personal) / Double(max(budget, 1)) >= 0.8 { return tr("接近预算", "Approaching limit", "Menghampiri had") }
+        return tr("预算充足", "On track", "Dalam bajet")
+    }
+    private var budgetSymbol: String {
+        personal >= budget ? "exclamationmark.circle.fill" : (Double(personal) / Double(max(budget, 1)) >= 0.8 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+    }
+    private var budgetUsageText: String {
+        String(budget > 0 ? personal * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
+    }
     private var owed: Int { model.ledger.expenses.flatMap(\.shares).reduce(0) { $0 + max(0, $1.owed) } }
     var body: some View {
         NavigationStack {
@@ -374,8 +391,9 @@ struct DashboardView: View {
                         Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
                         AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
                     }
-                }.font(.subheadline).foregroundStyle(personal > budget ? Color.orange : Color.primary)
-                SpendingMeter(value: personal, total: budget, color: personal > budget ? .orange : ink)
+                }.font(.subheadline).foregroundStyle(budgetTint)
+                SpendingMeter(value: personal, total: budget, color: budgetTint)
+                budgetStatusBadge
             }
             HStack {
                 Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja")).font(.footnote).foregroundStyle(.secondary)
@@ -390,7 +408,23 @@ struct DashboardView: View {
                 RoundedRectangle(cornerRadius: 28, style: .continuous)
                     .fill(Color(uiColor: .secondarySystemGroupedBackground))
             }
-            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(ink.opacity(0.09)))
+            .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).strokeBorder(budgetTint.opacity(budget > 0 ? 0.22 : 0.09)))
+            .animation(reduceMotion ? nil : YueJiMotion.month, value: budgetTint)
+    }
+    private var budgetStatusBadge: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack {
+                Label(budgetStatus, systemImage: budgetSymbol)
+                Spacer(minLength: 12)
+                Text(budgetUsageText).monospacedDigit()
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Label(budgetStatus, systemImage: budgetSymbol)
+                Text(budgetUsageText).monospacedDigit()
+            }
+        }.font(.caption.weight(.medium)).foregroundStyle(.primary)
+            .padding(.horizontal, 12).padding(.vertical, 9)
+            .background(budgetTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
     }
     private var balancesCard: some View {
         GlassPanel {
@@ -436,7 +470,10 @@ struct DashboardView: View {
                 ForEach(model.ledger.categoryNames, id: \.self) { category in
                     let value = entries.reduce(0) { $0 + $1.personalAmount(category: category) }
                     if value > 0 {
-                        NavigationLink { CategoryPaymentsView(category: category, month: month) } label: {
+                        NavigationLink {
+                            CategoryPaymentsView(category: category, month: month)
+                                .yuejiZoom(id: "category-\(monthKey(month))-\(category)", namespace: navigationMotion)
+                        } label: {
                             VStack(spacing: 9) {
                                 HStack {
                                     CategoryBadge(name: category)
@@ -447,6 +484,7 @@ struct DashboardView: View {
                                 SpendingMeter(value: value, total: max(personal, 1), color: model.ledger.categoryTint(category))
                             }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
                         }.buttonStyle(YueJiCategoryButtonStyle(tint: model.ledger.categoryTint(category)))
+                            .yuejiZoomSource(id: "category-\(monthKey(month))-\(category)", namespace: navigationMotion)
                             .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 6)))
                     }
                 }
@@ -458,6 +496,7 @@ struct CategoryPaymentsView: View {
     @EnvironmentObject var model: LedgerModel
     let category: String
     let month: Date
+    private var tint: Color { model.ledger.categoryTint(category) }
     private var entries: [Expense] {
         model.ledger.expenses.filter { monthKey($0.date) == monthKey(month) && $0.hasCategory(category) }
             .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
@@ -465,14 +504,20 @@ struct CategoryPaymentsView: View {
     var body: some View {
         List {
             Section {
-                Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
-                    .font(.headline)
-                CategoryBadge(name: category)
-                LabeledContent(tr("我的分类消费", "My category spending", "Belanja kategori saya")) {
-                    AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personalAmount(category: category) })
-                        .fontWeight(.semibold).foregroundStyle(model.ledger.categoryTint(category))
-                }
-                Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
+                GlassPanel {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CategoryBadge(name: category).font(.headline)
+                        Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personalAmount(category: category) })
+                            .font(.system(.largeTitle, design: .rounded, weight: .bold)).foregroundStyle(tint)
+                            .lineLimit(1).minimumScaleFactor(0.5)
+                        Text(tr("我的分类消费", "My category spending", "Belanja kategori saya"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }.overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(tint.opacity(0.22)))
+                    .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0)).listRowBackground(Color.clear)
             } footer: {
                 Text(tr("分类合计是扣除退款后的个人份额；付款记录显示整笔金额。", "The category total is your share after refunds; payment records show the full payment amount.", "Jumlah kategori ialah bahagian anda selepas pulangan; rekod bayaran menunjukkan amaun penuh."))
             }
@@ -492,6 +537,7 @@ struct CategoryPaymentsView: View {
                 }
             }
         }.yuejiListSurface()
+            .tint(tint)
             .navigationTitle(categoryLabel(category)).navigationBarTitleDisplayMode(.inline)
             .refreshable { model.reload(postRecurring: false) }
     }
