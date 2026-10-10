@@ -139,7 +139,7 @@ final class TransactionItemsTests: XCTestCase {
         XCTAssertEqual(ledger.settlements[0].lines[0].expense.items, items)
         var changed = ledger; changed.expenses[0].items?[0].name = "Different purchase"
         XCTAssertThrowsError(try changed.validated(), "Settled audit details cannot silently change")
-        try ledger.undoSettlement(id)
+        try ledger.undoSettlement(id: id)
         XCTAssertEqual(ledger.payableToPayer(expense), 2100)
         ledger.expenses[0].items?[0].name = "Lunch updated"
         _ = try ledger.validated()
@@ -178,7 +178,7 @@ final class TransactionItemsTests: XCTestCase {
         XCTAssertEqual(overview.personal, 3500)
         XCTAssertEqual(overview.categoryTotals, ["餐饮": 1500, "购物": 2000])
         XCTAssertTrue(ledger.tngNotices.isEmpty)
-        try ledger.undoSettlement(id)
+        try ledger.undoSettlement(id: id)
         XCTAssertEqual(ledger.friendBalances[0].owed, 1750)
         XCTAssertEqual(ledger.friendBalances[0].payable, 1750)
         XCTAssertEqual(ledger.spending(in: date), 3500)
@@ -829,7 +829,7 @@ final class LedgerTests: XCTestCase {
         let next = try after.ledger.settlementPlan(friend: "amy", selected: remaining, payment: 300, date: settlementDate)
         do { _ = try await worker.confirmSettlement(next, id: id); XCTFail("A new plan must not reuse a committed ID") }
         catch { XCTAssertEqual(try store.read().friendBalances[0].owed, 300) }
-        try store.change { try $0.undoSettlement(id) }
+        try store.change { try $0.undoSettlement(id: id) }
         let undone = try await worker.snapshot(postRecurring: false)
         XCTAssertEqual(undone.ledger.expenses, before.ledger.expenses)
         XCTAssertEqual(undone.ledger.friendBalances[0].owed, 3000)
