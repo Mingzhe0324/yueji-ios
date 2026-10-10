@@ -1,0 +1,107 @@
+version: 2.1
+
+# Enable this parameter in CircleCI's Trigger Pipeline dialog to build an IPA.
+# Ordinary pushes do not start a paid-by-the-minute macOS job.
+parameters:
+  run-ipa:
+    type: boolean
+    default: false
+
+jobs:
+  build-unsigned-ipa:
+    macos:
+      xcode: "27.1"
+    resource_class: m4pro.medium
+    working_directory: ~/project
+    steps:
+      - checkout
+      - run:
+          name: Verify project and record source version
+          command: |
+            set -euo pipefail
+            mkdir -p artifacts
+            python3 scripts/check_project.py
+            xcodebuild -version
+            python3 - <<'PY'
+            import os, plistlib, shlex, subprocess
+            from pathlib import Path
+            info = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+            sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip()
+            if int(sdk.split('.')[0]) < 27:
+                raise SystemExit(f'The native iOS 27 build requires an iOS 27 SDK; found {sdk}')
+            toolchain = subprocess.check_output(['xcodebuild', '-version'], text=True).strip()
+            commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+            label = f"{info['CFBundleShortVersionString']}-build{info['CFBundleVersion']}-{commit[:7]}"
+            with open(os.environ['BASH_ENV'], 'a') as env:
+                env.write(f'export IPA_LABEL={shlex.quote(label)}\n')
+            Path('artifacts/BuildInfo.txt').write_text(f'YueJi {label}\nSource commit: {commit}\n{toolchain}\niPhone SDK: {sdk}\nUnsigned IPA for personal signing.\n')
+            PY
+      - run:
+          name: Choose an iOS 27 iPhone simulator
+          command: |
+            set -euo pipefail
+            python3 - <<'PY'
+            import json, os, shlex, subprocess
+            devices = json.loads(subprocess.check_output(['xcrun', 'simctl', 'list', 'devices', 'available', '--json'], text=True))['devices']
+            phones = [(runtime, phone) for runtime, phones in devices.items() if 'iOS-27-' in runtime
+                      for phone in phones if phone.get('isAvailable') and 'iPhone' in phone['name']]
+            if not phones:
+                raise SystemExit('No available iOS 27 iPhone simulator on this build machine')
+            phones.sort(key=lambda item: (not item[0].endswith('iOS-27-0'), item[1]['name'] != 'iPhone 17', item[1]['name']))
+            runtime, phone = phones[0]
+            print(f"Testing {phone['name']} on {runtime}")
+            with open(os.environ['BASH_ENV'], 'a') as env:
+                env.write(f"export SIMULATOR_ID={shlex.quote(phone['udid'])}\n")
+            with open('artifacts/BuildInfo.txt', 'a') as info:
+                info.write(f"Test simulator: {phone['name']} ({runtime})\n")
+            PY
+      - run:
+          name: Build and test on iPhone simulator
+          no_output_timeout: 15m
+          command: |
+            set -euo pipefail
+            xcodebuild test -project YueJi.xcodeproj -scheme YueJi \
+              -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
+              -derivedDataPath build-simulator -resultBundlePath artifacts/TestResults.xcresult \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee artifacts/build-test.log
+      - run:
+          name: Build unsigned iPhone app
+          no_output_timeout: 15m
+          command: |
+            set -euo pipefail
+            xcodebuild build -project YueJi.xcodeproj -scheme YueJi \
+              -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
+              -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
+              2>&1 | tee artifacts/build-device.log
+      - run:
+          name: Verify and package IPA for personal signing
+          command: |
+            set -euo pipefail
+            python3 - <<'PY'
+            import plistlib
+            from pathlib import Path
+            app = Path('build-device/Build/Products/Release-iphoneos/YueJi.app')
+            source = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+            built = plistlib.loads((app / 'Info.plist').read_bytes())
+            for key in ['CFBundleShortVersionString', 'CFBundleVersion']:
+                assert built[key] == source[key], f'Built app does not match source: {key}'
+            for resource in ['YueJi', 'Assets.car', 'YueJiIncoming.wav', 'YueJiOutgoing.wav', 'YueJiIcon@2x.png', 'YueJiIcon@3x.png']:
+                assert (app / resource).is_file(), f'Missing app resource: {resource}'
+            PY
+            mkdir -p package/Payload
+            cp -R build-device/Build/Products/Release-iphoneos/YueJi.app package/Payload/
+            cd package
+            zip -qr "../artifacts/YueJi-${IPA_LABEL}-unsigned.ipa" Payload
+      # CircleCI uploads artifacts even when a preceding build/test step fails.
+      - store_artifacts:
+          path: artifacts
+          destination: YueJi
+
+workflows:
+  yueji-unsigned-ipa:
+    when: << pipeline.parameters.run-ipa >>
+    jobs:
+      - build-unsigned-ipa:
+          filters:
+            branches:
+              only: main
