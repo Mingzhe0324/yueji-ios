@@ -74,9 +74,6 @@ struct RecurringView: View {
     var body: some View {
         NavigationStack {
             List {
-                Section { PageIntroduction(title: tr("让日常有条理", "A little more organized", "Harian lebih teratur"), subtitle: tr("固定消费，提前安排。", "Keep recurring expenses in view.", "Rancang belanja berulang.")) }
-                    .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-
                 Section {
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
                         SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: .teal)
@@ -102,7 +99,7 @@ struct RecurringView: View {
                         RecurringScheduleRow(rule: rule, edit: { editing = rule }, delete: { deleting = rule })
                     }
                 }
-            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.92), value: paused).yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.inline)
+            }.animation(reduceMotion ? nil : YueJiMotion.standard, value: paused).yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
                 .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(isPresented: $adding) { RecurringEditor(original: nil) }
                 .sheet(item: $editing) { RecurringEditor(original: $0) }
@@ -2624,9 +2621,9 @@ private struct SavingsGoalDetail: View {
                         }
                         HStack {
                             Button(tr("存入", "Add savings", "Tambah simpanan")) { withdrawing = false; amount = ""; recording = true }
-                                .buttonStyle(.borderedProminent)
+                                .yuejiPrimaryButton().buttonBorderShape(.capsule)
                             Button(tr("取出", "Withdraw", "Keluarkan")) { withdrawing = true; amount = ""; recording = true }
-                                .buttonStyle(.bordered).disabled(goal.balance == 0)
+                                .yuejiSecondaryButton().buttonBorderShape(.capsule).disabled(goal.balance == 0)
                         }
                     }.frame(maxWidth: .infinity).padding(.vertical, 10)
                 }
@@ -2980,12 +2977,11 @@ struct PendingBookkeepingCard: View {
     private var duplicates: Int { model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count }
     var body: some View {
         if pending > 0 {
-            GlassPanel {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label(tr("待处理", "Needs attention", "Perlu tindakan"), systemImage: "tray.full.fill").font(.headline)
-                    NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan")) }
-                    NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
-                }.frame(maxWidth: .infinity, alignment: .leading)
+            Section {
+                NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan")) }
+                NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
+            } header: {
+                Label(tr("待处理", "Needs attention", "Perlu tindakan"), systemImage: "tray.full.fill")
             }
         }
     }

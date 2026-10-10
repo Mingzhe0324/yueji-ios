@@ -1,6 +1,7 @@
 # 月记 YueJi
 
-**版本 / Version：1.52.5 · Build 77**  
+**版本 / Version：1.52.6 · Build 78**
+
 iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English 和 Bahasa Melayu。
 
 ## 中文
@@ -14,7 +15,7 @@ iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English
 - **固定消费与外币**：定期项目、到期补记、待记预览，以及汇率换算。
 - **备份与体验**：JSON 备份恢复、CSV 导出、深浅色外观、动画、提示音及提醒设置。
 
-已补齐英文／马来文页面与提示，非中文界面的来源名称显示为 **Bank / TNG**。本版修复恢复测试对中文提示的依赖。
+已补齐英文／马来文页面与提示，非中文界面的来源名称显示为 **Bank / TNG**。本版统一系统列表、大标题、玻璃控件、付款缩放过渡与简洁开场，保留预算阶段和分类颜色。
 
 自动记账需要先配置快捷指令并传入交易资料；App 不会直接读取银行账户或钱包历史。未知通知格式仍可能需要手动确认。
 
@@ -31,7 +32,7 @@ Current features:
 - **Recurring and foreign-currency expenses:** scheduled entries, overdue posting, upcoming previews and exchange-rate conversion.
 - **Backup and appearance:** JSON backup/restore, CSV export, light/dark appearance, animations, sounds and reminders.
 
-English/Malay labels and messages are included, with **Bank / TNG** in non-Chinese interfaces. This release fixes a recovery test that depended on Chinese error text.
+English/Malay labels and messages are included, with **Bank / TNG** in non-Chinese interfaces. This release uses native grouped sections, large navigation titles, glass controls, payment zoom transitions and a shorter branded opening. Budget stages and category colours are retained.
 
 Automatic recording requires configured Shortcuts that pass transaction details to YueJi. The app does not directly read bank accounts or Wallet history. Unfamiliar notification formats may still need manual review.
 
@@ -39,8 +40,8 @@ Automatic recording requires configured Shortcuts that pass transaction details 
 
 ## Native interface and Codemagic
 
-The interface uses system tabs, menus, bottom toolbars and sheets. On iOS 26 and later, month controls use native glass buttons, sheets retain system curvature/material, and the tab bar can minimize while scrolling. Payment details and the add/filter sheets use Apple's zoom transitions on iOS 18 and later. Reduced Motion disables the custom zooms, symbol bounce and tab minimization; Reduced Transparency uses opaque month buttons. iOS 17 remains supported with standard controls and navigation.
+The main screens use system grouped sections and large navigation titles, including Overview. Category summaries are visible directly, and payment details use the same system surfaces. Tabs, menus, bottom toolbars and sheets follow the system design. On iOS 26 and later, month controls use native glass buttons, sheets retain system curvature/material, and the tab bar can minimize while scrolling. Payment details and the add/filter sheets use Apple's zoom transitions on iOS 18 and later. Reduced Motion disables the custom zooms, symbol bounce and tab minimization; Reduced Transparency uses opaque month buttons. iOS 17 remains supported with standard controls and navigation.
 
 For an iOS 27 SDK build, connect this repository to a personal Codemagic account, select branch `main`, and start **YueJi IPA (unsigned)**. The YAML workflow selects Xcode 27.1 on Mac mini M2, requires an iOS 27 SDK and runs the ledger tests on an iOS 27 iPhone simulator before packaging the unsigned IPA. Download it from that build's artifacts; `BuildInfo.txt` identifies the source commit, SDK and simulator. No build starts automatically.
 
-Visual review on an iPhone is still required: check payment zoom and swipe dismissal, add/edit/delete actions, filter sheet resizing and keyboard behavior, month controls, scrolling tabs, dark appearance, larger text, Reduced Motion and Reduced Transparency. System controls follow the installed OS; the dashboard and branded opening animation remain app-specific.
+Visual review on an iPhone is still required: check payment zoom and swipe dismissal, add/edit/delete actions, filter sheet resizing and keyboard behavior, month controls, scrolling tabs, dark appearance, larger text, Reduced Motion and Reduced Transparency. Also check Overview's category links retain the selected month and that the shorter icon opening respects the sound/animation settings. System controls follow the installed OS; financial content, category colours and the app icon retain YueJi's identity.
