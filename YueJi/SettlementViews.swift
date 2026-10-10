@@ -128,13 +128,15 @@ struct SettlementSelectionView: View {
     var body: some View {
         let items = self.items
         Form {
-            Section(tr("选择未结清账目", "Select outstanding items", "Pilih rekod belum selesai")) {
+            Section {
                 ForEach(items) { item in
                     Toggle(isOn: Binding(get: { selected.contains(item.id) }, set: { value in
                         if value { selected.insert(item.id) } else { selected.remove(item.id) }
                     })) { FriendDebtRow(item: item) }
                 }
                 if items.isEmpty { Text(tr("没有未结清账目", "No outstanding items", "Tiada rekod belum selesai")) }
+            } header: {
+                Text(tr("选择未结清账目", "Select outstanding items", "Pilih rekod belum selesai"))
             } footer: { Text(tr("只结算选中的账目。未选中的余额保持不变。", "Only selected items are settled. Unselected balances stay outstanding.", "Hanya rekod dipilih diselesaikan. Baki tidak dipilih kekal tertunggak.")) }
             Section(tr("转账", "Transfer", "Pindahan")) {
                 LabeledContent(tr("所选净额", "Selected net balance", "Baki bersih dipilih"), value: money(abs(net)))

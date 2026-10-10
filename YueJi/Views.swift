@@ -1058,7 +1058,7 @@ struct ExpenseEditor: View {
         }.disabled((original?.refunded ?? 0) > 0)
     }
     private var payerSection: some View {
-        Section(tr("谁付款", "Who paid", "Siapa membayar")) {
+        Section {
             Picker(tr("付款人", "Payer", "Pembayar"), selection: $friendPays) {
                 Text(tr("我付款", "Paid by me", "Dibayar oleh saya")).tag(false)
                 Text(tr("朋友付款", "Paid by a friend", "Dibayar oleh rakan")).tag(true)
@@ -1071,6 +1071,8 @@ struct ExpenseEditor: View {
                     }
                 }
             }
+        } header: {
+            Text(tr("谁付款", "Who paid", "Siapa membayar"))
         } footer: { Text(tr("消费按个人份额计算；朋友代付不会计入我账户的付款。", "Spending uses your personal share. A friend's payment does not count as money leaving your account.", "Belanja menggunakan bahagian anda. Bayaran rakan tidak dikira sebagai wang keluar daripada akaun anda.")) }
             .disabled((original?.refunded ?? 0) > 0 || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
     }

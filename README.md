@@ -1,6 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.53.0 · Build 80**
+**版本 / Version：1.53.1 · Build 81**
+
+Build 81 corrects the SwiftUI section initializers in the payer editor and settlement item selection so their localized headers and explanatory footers use the supported content/header/footer form. Native compilation and XCTest still run in Codemagic/Xcode.
 
 iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English 和 Bahasa Melayu。
 
