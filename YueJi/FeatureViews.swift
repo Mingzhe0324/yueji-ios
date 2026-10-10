@@ -2240,7 +2240,7 @@ struct TNGIncomingView: View {
                 if n.status == "pending" { NavigationLink(tr("账户转账 / 充值 / 退款关联", "Link account transfer / top-up / refund", "Pautkan pindahan akaun / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) } }
                 if n.resolution != nil { NoticeResolutionSection(notice: n) }
                 Section {
-                    Text("+" + money(n.cents ?? 0)).font(.title.bold()).foregroundStyle(.green)
+                    TransactionAmount(cents: n.cents ?? 0, direction: n.accountDirection).font(.title.bold())
                     Text(sourceLabel(n.provider)).font(.headline)
                     if let party = n.party, !party.isEmpty { Text(tr("来自：", "From: ", "Daripada: ") + party).fixedSize(horizontal: false, vertical: true) }
                     if let recipient = n.recipient, !recipient.isEmpty { Text(tr("收款人：", "Recipient: ", "Penerima: ") + recipient).fixedSize(horizontal: false, vertical: true) }

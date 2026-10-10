@@ -1,8 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.53.1 · Build 81**
+**版本 / Version：1.54.0 · Build 82**
 
-Build 81 corrects the SwiftUI section initializers in the payer editor and settlement item selection so their localized headers and explanatory footers use the supported content/header/footer form. Native compilation and XCTest still run in Codemagic/Xcode.
+Build 82 adds manual **Repayment / Settlement** entry: choose money received from a friend, money paid to a friend, or a net offset; select the friend and original debts, enter the actual amount and date, then review and confirm. Partial repayments use the existing settlement audit and balances without adding spending or income. The ledger shows unlinked settlements, and uses the existing bank row once a payment is explicitly linked so it appears once. Incoming amounts use **+ / teal**, outgoing amounts **− / red**, and friend-paid purchases and zero-transfer offsets use neutral amounts. Settings uses the bundled app-brand image with rounded corners. All new labels support Chinese, English and Malay; no new storage schema is required. Seven focused regression tests cover directional repayment, partial amounts, duplicate confirmation/linking, ledger visibility, filters, backup round-trip and amount signs. The existing compiled-logo test covers the same asset now used in Settings. Native compilation, XCTest and light/dark device verification still run in Codemagic/Xcode.
 
 iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English 和 Bahasa Melayu。
 

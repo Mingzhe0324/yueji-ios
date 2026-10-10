@@ -1,5 +1,93 @@
 import SwiftUI
 
+struct ManualEntryTypeSection: View {
+    @Binding var selection: String
+    var body: some View {
+        Section {
+            Picker(tr("记录类型", "Entry type", "Jenis rekod"), selection: $selection) {
+                Text(tr("消费", "Expense", "Belanja")).tag("expense")
+                Text(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).tag("settlement")
+            }
+        }
+    }
+}
+
+private enum ManualSettlementMode: String, CaseIterable {
+    case received, paid, net
+    var direction: AccountDirection { self == .received ? .incoming : (self == .paid ? .outgoing : .neutral) }
+    var label: String {
+        switch self {
+        case .received: return tr("朋友还给我", "A friend repaid me", "Rakan membayar balik kepada saya")
+        case .paid: return tr("我还给朋友", "I repaid a friend", "Saya membayar balik kepada rakan")
+        case .net: return tr("双方抵扣 / 净额结算", "Offset / net settlement", "Tolakan / penyelesaian bersih")
+        }
+    }
+}
+
+struct ManualSettlementEntryView: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @Binding var entryType: String
+    let initialDate: Date
+    @State private var mode: ManualSettlementMode = .received
+    @State private var friend = ""
+    private var friends: [FriendBalance] {
+        model.ledger.friendBalances.filter {
+            mode == .received ? $0.owed > 0 : (mode == .paid ? $0.payable > 0 : $0.owed > 0 || $0.payable > 0)
+        }
+    }
+    var body: some View {
+        Form {
+            ManualEntryTypeSection(selection: $entryType)
+            Section {
+                Picker(tr("付款方向", "Payment direction", "Arah bayaran"), selection: $mode) {
+                    ForEach(ManualSettlementMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                }
+                Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
+                    Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
+                    ForEach(friends) { Text($0.name).tag($0.id) }
+                }
+                if friends.isEmpty {
+                    Text(tr("此方向没有未结欠款。请先记录原消费及分账。", "No outstanding debts in this direction. Record the original purchase and shares first.", "Tiada hutang belum selesai dalam arah ini. Rekod pembelian asal dan bahagian dahulu.")).foregroundStyle(.secondary)
+                }
+            } footer: {
+                Text(tr("还款只减少欠款，不增加收入或消费。下一步选择原账目、金额和日期，再核对并确认。", "Repayments reduce debt without adding income or spending. Next, select original items, amount and date, then review and confirm.", "Bayaran balik mengurangkan hutang tanpa menambah pendapatan atau belanja. Seterusnya pilih rekod asal, amaun dan tarikh, kemudian semak dan sahkan."))
+            }
+            Section {
+                NavigationLink(tr("选择欠款", "Select debts", "Pilih hutang")) {
+                    SettlementSelectionView(friend: friend, repaymentDirection: mode.direction, initialDate: initialDate)
+                }.disabled(!friends.contains(where: { $0.id == friend }))
+            }
+        }.yuejiListSurface().navigationTitle(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).navigationBarTitleDisplayMode(.inline)
+            .onChange(of: mode) { _, _ in friend = "" }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+    }
+}
+
+struct SettlementPaymentRow: View {
+    let record: FriendSettlement
+    @Environment(\.dynamicTypeSize) private var textSize
+    var body: some View {
+        let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
+        layout {
+            VStack(alignment: .leading, spacing: 5) {
+                Text(record.paymentTitle + " · " + record.name).font(.headline)
+                Text(dateLabel(record.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                Text(record.transfer == 0 ? tr("债务抵扣 · 我的账户无收支", "Debt offset · no account movement", "Tolakan hutang · tiada aliran akaun") : tr("手动结算 · 不计消费或收入", "Manual settlement · no spending or income", "Penyelesaian manual · bukan belanja atau pendapatan"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            if !textSize.isAccessibilitySize { Spacer(minLength: 8) }
+            TransactionAmount(cents: abs(record.transfer), direction: record.accountDirection).font(.headline).layoutPriority(1)
+        }.padding(.vertical, 8)
+    }
+}
+
+private func settledDebtLabel(_ cents: Int) -> String {
+    if cents > 0 { return tr("已结清朋友欠我的款项", "Settled debt owed to me", "Hutang kepada saya diselesaikan") }
+    if cents < 0 { return tr("已结清我欠朋友的款项", "Settled debt I owed", "Hutang saya diselesaikan") }
+    return tr("本笔暂未结算", "No amount settled for this item", "Tiada amaun diselesaikan untuk rekod ini")
+}
+
 func settlementDirection(_ cents: Int, name: String) -> String {
     if cents > 0 { return tr("\(name) 付给我", "\(name) pays me", "\(name) membayar saya") }
     if cents < 0 { return tr("我付给 \(name)", "I pay \(name)", "Saya membayar \(name)") }
@@ -30,7 +118,8 @@ struct FriendDetailView: View {
                     ForEach(model.ledger.settlements.filter { $0.friend == key }.sorted { $0.date > $1.date }) { record in
                         NavigationLink { SettlementDetailView(id: record.id) } label: {
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(settlementDirection(record.transfer, name: record.name) + " · " + money(abs(record.transfer)))
+                                Text(settlementDirection(record.transfer, name: record.name))
+                                TransactionAmount(cents: abs(record.transfer), direction: record.accountDirection)
                                 Text(dateLabel(record.date) + (record.active ? "" : tr(" · 已撤销", " · Undone", " · Dibatalkan"))).font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -80,14 +169,16 @@ struct SplitHistoryView: View {
                         }
                         ForEach(share.repayments) { payment in
                             HStack {
-                                Text(dateLabel(payment.date) + " · " + money(payment.cents))
+                                Text(dateLabel(payment.date))
+                                TransactionAmount(cents: payment.cents, direction: .incoming)
                                 Spacer()
                                 Button(tr("撤销", "Undo", "Batal")) { undo = (item.expense.id, share.id, payment.id, false) }
                             }.font(.caption)
                         }
                         ForEach(share.returns ?? []) { payment in
                             HStack {
-                                Text(tr("已退回：", "Returned: ", "Dipulangkan: ") + money(payment.cents))
+                                Text(tr("已退回：", "Returned: ", "Dipulangkan: "))
+                                TransactionAmount(cents: payment.cents, direction: .outgoing)
                                 Spacer()
                                 Button(tr("撤销", "Undo", "Batal")) { undo = (item.expense.id, share.id, payment.id, true) }
                             }.font(.caption)
@@ -116,6 +207,8 @@ struct SplitHistoryView: View {
 struct SettlementSelectionView: View {
     @EnvironmentObject var model: LedgerModel
     let friend: String
+    var repaymentDirection: AccountDirection = .neutral
+    var initialDate: Date = Date()
     @State private var selected = Set<String>()
     @State private var date = Date()
     @State private var partial = false
@@ -123,7 +216,13 @@ struct SettlementSelectionView: View {
     @State private var plan: SettlementPlan?
     @State private var reviewing = false
     @State private var error: String?
-    private var items: [FriendDebtItem] { model.ledger.friendDebtItems.filter { friendKey($0.friend) == friend && $0.balance != 0 } }
+    @State private var initialized = false
+    private var items: [FriendDebtItem] {
+        model.ledger.friendDebtItems.filter {
+            friendKey($0.friend) == friend && $0.balance != 0 &&
+            (repaymentDirection == .neutral || (repaymentDirection == .incoming ? $0.balance > 0 : $0.balance < 0))
+        }
+    }
     private var net: Int { items.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.balance } }
     var body: some View {
         let items = self.items
@@ -142,8 +241,8 @@ struct SettlementSelectionView: View {
                 LabeledContent(tr("所选净额", "Selected net balance", "Baki bersih dipilih"), value: money(abs(net)))
                 if let name = items.first?.friend { Text(settlementDirection(net, name: name)) }
                 if net != 0 {
-                    Toggle(tr("部分付款", "Partial payment", "Bayaran separa"), isOn: $partial)
-                    if partial { TextField(tr("实际转账 · MYR", "Actual transfer · MYR", "Pindahan sebenar · MYR"), text: $amount).keyboardType(.decimalPad) }
+                    if repaymentDirection == .neutral { Toggle(tr("部分付款", "Partial payment", "Bayaran separa"), isOn: $partial) }
+                    if partial || repaymentDirection != .neutral { TextField(tr("实际转账 · MYR", "Actual transfer · MYR", "Pindahan sebenar · MYR"), text: $amount).keyboardType(.decimalPad) }
                 }
                 DatePicker(tr("结算日期", "Settlement date", "Tarikh penyelesaian"), selection: $date, in: ...Date(), displayedComponents: .date)
             }
@@ -152,15 +251,22 @@ struct SettlementSelectionView: View {
                     do {
                         let payment: Int
                         if net == 0 { payment = 0 }
-                        else if partial { payment = try nonnegativeCents(amount) }
+                        else if partial || repaymentDirection != .neutral { payment = try nonnegativeCents(amount) }
                         else { payment = abs(net) }
-                        plan = try model.ledger.settlementPlan(friend: friend, selected: selected, payment: payment, date: date)
+                        if repaymentDirection == .neutral {
+                            plan = try model.ledger.settlementPlan(friend: friend, selected: selected, payment: payment, date: date)
+                        } else {
+                            plan = try model.ledger.repaymentPlan(friend: friend, selected: selected, payment: payment, date: date, direction: repaymentDirection)
+                        }
                         reviewing = true
                     } catch { self.error = error.localizedDescription }
                 }.disabled(selected.isEmpty)
             }
-        }.yuejiListSurface().navigationTitle(tr("结算", "Settle", "Selesaikan")).navigationBarTitleDisplayMode(.inline)
-            .onAppear { selected.formIntersection(Set(items.map(\.id))) }
+        }.yuejiListSurface().scrollDismissesKeyboard(.interactively).navigationTitle(tr("结算", "Settle", "Selesaikan")).navigationBarTitleDisplayMode(.inline)
+            .onAppear {
+                selected.formIntersection(Set(items.map(\.id)))
+                if !initialized { date = initialDate; initialized = true }
+            }
             .onChange(of: net) { _, value in amount = Currency.input(abs(value), "MYR") }
             .navigationDestination(isPresented: $reviewing) { if let plan { SettlementReviewView(plan: plan) } }
             .alert(tr("请核对", "Please review", "Sila semak"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -182,7 +288,9 @@ struct SettlementReviewView: View {
                         LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
                         LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
                         LabeledContent(tr("相互抵扣", "Offset", "Tolakan"), value: money(plan.offset))
-                        LabeledContent(settlementDirection(plan.transfer, name: plan.name), value: money(abs(plan.transfer)))
+                        LabeledContent {
+                            TransactionAmount(cents: abs(plan.transfer), direction: plan.transfer > 0 ? .incoming : (plan.transfer < 0 ? .outgoing : .neutral))
+                        } label: { Text(settlementDirection(plan.transfer, name: plan.name)) }
                         LabeledContent(tr("付款后所选余额", "Selected balance after payment", "Baki dipilih selepas bayaran"), value: money(abs(plan.fullNet - plan.transfer)))
                         Text(dateLabel(plan.date))
                     }
@@ -191,13 +299,13 @@ struct SettlementReviewView: View {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(line.expense.merchant).font(.headline)
                                 Text(dateLabel(line.expense.date) + " · " + line.expense.categorySummary).font(.caption)
-                                Text((line.applied == 0 ? tr("本笔暂未结算", "No amount settled for this item", "Tiada amaun diselesaikan untuk rekod ini") : settlementDirection(line.applied, name: plan.name)) + " · " + money(abs(line.applied)))
+                                Text(settledDebtLabel(line.applied) + " · " + money(abs(line.applied)))
                                 LabeledContent(tr("保留未结余额", "Left outstanding", "Baki belum selesai"), value: money(abs(line.before - line.applied))).font(.caption)
                             }
                         }
                     }
                     Section {
-                        Text(tr("确认实际付款已完成，或双方已同意完全抵扣。消费金额不会改变；银行记录可稍后手动关联。", "Confirm the actual payment is complete, or both people agree to offset without a transfer. Spending stays unchanged. You can link the bank record later.", "Sahkan bayaran sebenar selesai atau kedua-dua pihak bersetuju menolak tanpa pindahan. Belanja kekal. Rekod bank boleh dipautkan kemudian."))
+                        Text(tr("确认实际付款已完成，或双方已同意本次抵扣。消费金额不会改变；银行记录可稍后手动关联，请勿再次记为收入、消费或还款。", "Confirm the actual payment is complete, or both people agree to this offset. Spending stays unchanged. Link its bank record later rather than recording the payment again as income, spending or another repayment.", "Sahkan bayaran sebenar selesai atau kedua-dua pihak bersetuju dengan tolakan ini. Belanja kekal. Pautkan rekod bank kemudian tanpa merekod bayaran sekali lagi sebagai pendapatan, belanja atau bayaran balik lain."))
                         Button(plan.transfer == 0 ? tr("确认抵扣，无需转账", "Confirm offset · no transfer", "Sahkan tolakan · tiada pindahan") : tr("确认已付款", "Confirm payment completed", "Sahkan bayaran selesai")) {
                             do {
                                 try LocalStore.shared.change { try $0.confirmSettlement(plan, id: commitID) }
@@ -222,7 +330,8 @@ struct SettlementDetailView: View {
             if let record {
                 Section(record.name) {
                     Text(settlementDirection(record.transfer, name: record.name)).font(.headline)
-                    Text(money(abs(record.transfer))).font(.largeTitle.bold())
+                    TransactionAmount(cents: abs(record.transfer), direction: record.accountDirection).font(.largeTitle.bold())
+                    if record.transfer == 0 { Text(tr("仅抵扣欠款，我的账户无收支", "Debts offset only · no account movement", "Hanya tolakan hutang · tiada aliran akaun")).font(.caption).foregroundStyle(.secondary) }
                     Text(dateLabel(record.date))
                     if !record.active { Label(tr("已撤销，欠款已恢复", "Undone · debts restored", "Dibatalkan · hutang dipulihkan"), systemImage: "arrow.uturn.backward") }
                     Text(tr("结算不是消费或收入。原始消费保留。", "A settlement is neither spending nor income. Original expenses stay.", "Penyelesaian bukan belanja atau pendapatan. Belanja asal kekal.")).font(.footnote).foregroundStyle(.secondary)
@@ -237,7 +346,7 @@ struct SettlementDetailView: View {
                                 LabeledContent(tr("我的消费", "My spending", "Belanja saya"), value: money(line.expense.personal))
                                 ForEach(line.expense.shares) { share in LabeledContent(share.name, value: money(share.cents)) }
                                 LabeledContent(tr("结算前", "Before settlement", "Sebelum penyelesaian"), value: money(abs(line.before)))
-                                LabeledContent(line.applied == 0 ? tr("本笔暂未结算", "No amount settled for this item", "Tiada amaun diselesaikan untuk rekod ini") : settlementDirection(line.applied, name: record.name), value: money(abs(line.applied)))
+                                LabeledContent(settledDebtLabel(line.applied), value: money(abs(line.applied)))
                                 LabeledContent(tr("本次结算后尚欠", "Outstanding after this settlement", "Baki selepas penyelesaian ini"), value: money(abs(line.before - line.applied)))
                                 if model.ledger.expenses.contains(where: { $0.id == line.expense.id }) {
                                     NavigationLink(tr("查看原账目", "View original expense", "Lihat belanja asal")) { ExpenseDetailView(id: line.expense.id) }
@@ -249,7 +358,9 @@ struct SettlementDetailView: View {
                 if record.active {
                     Section(tr("银行 / TNG 付款", "Bank / TNG payment", "Bayaran bank / TNG")) {
                         if let noticeID = record.paymentNoticeID, let notice = model.ledger.tngNotices.first(where: { $0.id == noticeID }) {
-                            Text(tr("已关联：", "Linked: ", "Dipautkan: ") + notice.provider + " · " + money(notice.cents ?? 0))
+                            LabeledContent {
+                                TransactionAmount(cents: notice.cents ?? 0, direction: notice.accountDirection)
+                            } label: { Text(tr("已关联：", "Linked: ", "Dipautkan: ") + notice.provider) }
                             DisclosureGroup(tr("付款原文", "Payment notification", "Notifikasi bayaran")) { Text(notice.body).textSelection(.enabled) }
                         } else if record.transfer != 0 {
                             NavigationLink(tr("手动关联付款", "Link payment manually", "Pautkan bayaran secara manual")) { SettlementPaymentLinkView(settlementID: id) }
@@ -300,7 +411,10 @@ struct SettlementPaymentLinkView: View {
                     Button { selectedID = notice.id; distinct = false } label: {
                         HStack {
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(notice.provider + " · " + money(notice.cents ?? 0))
+                                HStack {
+                                    Text(notice.provider)
+                                    TransactionAmount(cents: notice.cents ?? 0, direction: notice.accountDirection)
+                                }
                                 Text(dateLabel(notice.date) + " · " + (notice.party ?? "")).font(.caption)
                                 if let reference = notice.bankReference { Text(reference).font(.caption) }
                             }

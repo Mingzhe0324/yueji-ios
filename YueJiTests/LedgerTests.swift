@@ -325,6 +325,145 @@ final class LedgerTests: XCTestCase {
         }
     }
 
+    func testManualIncomingRepaymentSettlesSelectedDebtWithoutOffsetOrIncome() throws {
+        var ledger = try settlementExample().validated()
+        let original = ledger.expenses
+        let lunch = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "lunch" })
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 2000, date: settlementDate, direction: .incoming)
+        XCTAssertEqual(plan.offset, 0)
+        XCTAssertEqual(plan.transfer, 2000)
+        let id = try ledger.confirmSettlement(plan)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 1000)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 2500, "Receiving a repayment must not offset unselected debts I owe")
+        XCTAssertEqual(ledger.settlements[0].lines.map { $0.expense.id }, ["lunch"])
+        XCTAssertEqual(ledger.expenses, original)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        XCTAssertEqual(try ledger.ledgerSettlements(in: settlementDate).map(\.id), [id])
+        XCTAssertTrue(ledger.tngNotices.isEmpty, "Manual entry must not fabricate income or a bank notification")
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.settlements, ledger.settlements)
+        XCTAssertEqual(restored.friendBalances[0].owed, 1000)
+    }
+
+    func testManualOutgoingPartialRepaymentLeavesOtherDebtsAndSpendingUnchanged() throws {
+        var ledger = settlementExample()
+        let original = ledger.expenses
+        let drinks = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "drinks" })
+        let plan = try ledger.repaymentPlan(friend: "AMY", selected: [drinks.id], payment: 400, date: settlementDate, direction: .outgoing)
+        XCTAssertEqual(plan.offset, 0)
+        XCTAssertEqual(plan.transfer, -400)
+        let id = try ledger.confirmSettlement(plan)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.expense.id == "drinks" }?.balance, -600)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.expense.id == "mine" }?.balance, -1500)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 3000)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 2100)
+        XCTAssertEqual(ledger.expenses, original)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+        XCTAssertEqual(ledger.settlements[0].accountDirection, .outgoing)
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 2500)
+        XCTAssertTrue(try ledger.ledgerSettlements(in: settlementDate).isEmpty)
+        XCTAssertEqual(ledger.expenses, original)
+    }
+
+    func testManualRepaymentRejectsWrongDirectionMixedDebtsOverpaymentAndInvalidDate() throws {
+        let ledger = settlementExample()
+        let lunch = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "lunch" })
+        let drinks = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "drinks" })
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 100, date: settlementDate, direction: .outgoing))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [drinks.id], payment: 100, date: settlementDate, direction: .incoming))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [lunch.id, drinks.id], payment: 100, date: settlementDate, direction: .incoming))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [drinks.id], payment: 1001, date: settlementDate, direction: .outgoing))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 0, date: settlementDate, direction: .incoming))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [], payment: 100, date: settlementDate, direction: .incoming))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "other friend", selected: [lunch.id], payment: 100, date: settlementDate, direction: .incoming))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 100, date: Date(timeIntervalSince1970: 100), direction: .incoming))
+        XCTAssertThrowsError(try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 100, date: settlementDate, direction: .neutral))
+    }
+
+    func testManualRepaymentCannotConfirmSamePreviewOrPaymentIDTwice() throws {
+        var ledger = settlementExample()
+        let lunch = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "lunch" })
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 1000, date: settlementDate, direction: .incoming)
+        try ledger.confirmSettlement(plan, id: "manual-repayment")
+        XCTAssertThrowsError(try ledger.confirmSettlement(plan))
+        let next = try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 1000, date: settlementDate, direction: .incoming)
+        XCTAssertThrowsError(try ledger.confirmSettlement(next, id: "manual-repayment"))
+        XCTAssertEqual(ledger.settlements.count, 1)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 2000)
+    }
+
+    func testLinkedManualRepaymentAppearsOnceInLedgerAndCannotReusePayment() throws {
+        var ledger = settlementExample()
+        let lunch = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "lunch" })
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 500, date: settlementDate, direction: .incoming)
+        let id = try ledger.confirmSettlement(plan)
+        var rows = LedgerTimelineItem.grouped(expenses: ledger.expenses, transfers: [], settlements: ledger.settlements).flatMap(\.entries)
+        XCTAssertEqual(rows.filter { $0.id == "settlement:" + id }.count, 1)
+        ledger.tngNotices = [settlementNotice()]
+        try ledger.linkSettlementPayment(settlementID: id, noticeID: "receipt")
+        XCTAssertTrue(try ledger.ledgerSettlements(in: settlementDate).isEmpty)
+        rows = LedgerTimelineItem.grouped(expenses: ledger.expenses, transfers: ledger.ledgerTNGTransfers(in: settlementDate), settlements: ledger.settlements).flatMap(\.entries)
+        XCTAssertEqual(rows.count, 4, "Three original purchases plus one payment, with no duplicate manual row")
+        XCTAssertFalse(rows.contains { $0.id == "settlement:" + id })
+        XCTAssertEqual(rows.filter { $0.id == "tng:receipt" }.count, 1)
+        let next = try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 500, date: settlementDate, direction: .incoming)
+        let nextID = try ledger.confirmSettlement(next)
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: nextID, noticeID: "receipt"))
+        try ledger.undoSettlement(id: nextID)
+        try ledger.undoSettlement(id: id)
+        rows = LedgerTimelineItem.grouped(expenses: ledger.expenses, transfers: ledger.ledgerTNGTransfers(in: settlementDate), settlements: ledger.settlements).flatMap(\.entries)
+        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 3000)
+        XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
+    }
+
+    func testAccountAmountDirectionUsesCashMovementRegardlessOfManualOrAutomaticSource() throws {
+        for source in ["手动", "Apple Pay", "TNG", "Maybank"] {
+            var expense = Expense(merchant: "Lunch", cents: 6000, source: source)
+            XCTAssertEqual(expense.accountDirection, .outgoing)
+            XCTAssertEqual(expense.accountDirection.formattedAmount(expense.cents), "−RM 60.00")
+            expense.paidByFriend = "Amy"
+            XCTAssertEqual(expense.accountDirection, .neutral)
+            XCTAssertEqual(expense.accountDirection.formattedAmount(expense.cents), "RM 60.00")
+        }
+        for source in ["TNG", "Maybank", "手动"] {
+            var notice = settlementNotice()
+            notice.sourceBank = source
+            XCTAssertEqual(notice.accountDirection, .incoming)
+            XCTAssertEqual(tngSignedAmount(notice), "+RM 5.00")
+            notice.kind = "transfer"
+            XCTAssertEqual(notice.accountDirection, .outgoing)
+            XCTAssertEqual(tngSignedAmount(notice), "−RM 5.00")
+            notice.kind = "unknown"
+            XCTAssertEqual(notice.accountDirection, .neutral)
+            XCTAssertEqual(tngSignedAmount(notice), "RM 5.00")
+        }
+        var ledger = settlementExample()
+        ledger.expenses[2].cents = 2000
+        _ = try fullSettlement(&ledger, payment: 0)
+        XCTAssertEqual(ledger.settlements[0].accountDirection, .neutral)
+        XCTAssertEqual(ledger.settlements[0].accountDirection.formattedAmount(0), "RM 0.00")
+        let rows = LedgerTimelineItem.grouped(expenses: [], transfers: [], settlements: ledger.settlements).flatMap(\.entries)
+        XCTAssertEqual(rows.count, 1, "Offset is auditable in the ledger without pretending there was cash movement")
+    }
+
+    func testManualSettlementLedgerFiltersUsePaymentMonthAndOriginalDetails() throws {
+        var ledger = settlementExample()
+        let lunch = try XCTUnwrap(ledger.friendDebtItems.first { $0.expense.id == "lunch" })
+        let date = settlementDate.addingTimeInterval(40 * 86400)
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: [lunch.id], payment: 500, date: date, direction: .incoming)
+        let id = try ledger.confirmSettlement(plan)
+        XCTAssertTrue(try ledger.ledgerSettlements(in: settlementDate).isEmpty)
+        XCTAssertEqual(try ledger.ledgerSettlements(in: date, search: "Lunch").map(\.id), [id])
+        XCTAssertEqual(try ledger.ledgerSettlements(in: date, search: "aMy", filter: LedgerFilter(category: "餐饮", source: "手动", minimum: "5", maximum: "5")).map(\.id), [id])
+        XCTAssertTrue(try ledger.ledgerSettlements(in: date, filter: LedgerFilter(category: "交通")).isEmpty)
+        XCTAssertTrue(try ledger.ledgerSettlements(in: date, filter: LedgerFilter(source: "TNG")).isEmpty)
+        XCTAssertTrue(try ledger.ledgerSettlements(in: date, filter: LedgerFilter(minimum: "6")).isEmpty)
+        XCTAssertThrowsError(try ledger.ledgerSettlements(in: date, filter: LedgerFilter(minimum: "6", maximum: "5")))
+    }
+
     func testMonthKeyPreservesGregorianMonthAcrossTimeZonesAndBoundaries() throws {
         let parser = ISO8601DateFormatter()
         for zoneID in ["UTC", "Asia/Kuala_Lumpur", "America/New_York", "Pacific/Kiritimati"] {

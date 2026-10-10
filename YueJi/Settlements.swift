@@ -56,6 +56,12 @@ struct FriendSettlement: Codable, Equatable, Identifiable {
     var paymentNoticeID: String? = nil
     var convertedPayment: Expense? = nil // Retain a misclassified automatic payment for audit, not spending.
     var active: Bool { voidedAt == nil }
+    var accountDirection: AccountDirection { transfer > 0 ? .incoming : (transfer < 0 ? .outgoing : .neutral) }
+    var paymentTitle: String {
+        if transfer > 0 { return tr("朋友还款", "Friend repayment", "Bayaran balik daripada rakan") }
+        if transfer < 0 { return tr("还给朋友", "Repayment to friend", "Bayaran balik kepada rakan") }
+        return tr("债务抵扣", "Debt offset", "Tolakan hutang")
+    }
 }
 
 extension Expense {
@@ -104,6 +110,31 @@ extension Ledger {
         guard !hasActiveSettlement(expenseID: id) else {
             throw settlementError("此账目已参与结算。请先在朋友页面撤销相关结算，再修改或退款。", "This expense is in a settlement. Undo its settlements on the friend's page before editing, deleting or refunding it.", "Belanja ini dalam penyelesaian. Batalkan penyelesaian di halaman rakan sebelum mengedit, memadam atau memulangkannya.")
         }
+    }
+    /// Manual repayments settle only debts in the chosen direction, without offsetting other items.
+    func repaymentPlan(friend: String, selected: Set<String>, payment: Int, date: Date, direction: AccountDirection) throws -> SettlementPlan {
+        let items = friendDebtItems.filter { selected.contains($0.id) }
+        guard direction != .neutral, payment > 0,
+              items.allSatisfy({ direction == .incoming ? $0.balance > 0 : $0.balance < 0 }) else {
+            throw settlementError("请选择与还款方向一致的未结欠款，并输入大于零的金额。", "Select outstanding debts in the repayment direction and enter a positive amount.", "Pilih hutang belum selesai mengikut arah bayaran balik dan masukkan amaun positif.")
+        }
+        return try settlementPlan(friend: friend, selected: selected, payment: payment, date: date)
+    }
+    func ledgerSettlements(in month: Date, search: String = "", filter: LedgerFilter = LedgerFilter()) throws -> [FriendSettlement] {
+        try filter.validate()
+        let low = try optionalMoney(filter.minimum), high = try optionalMoney(filter.maximum)
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        let period = monthKey(month)
+        return settlements.filter { record in
+            guard record.active, record.paymentNoticeID == nil, monthKey(record.date) == period,
+                  filter.source.isEmpty || filter.source == "手动",
+                  filter.category.isEmpty || record.lines.contains(where: { $0.expense.hasCategory(filter.category) }) else { return false }
+            let amount = abs(record.transfer)
+            if let low, amount < low { return false }
+            if let high, amount > high { return false }
+            let text = record.name + " " + record.paymentTitle + " " + record.lines.map { $0.expense.merchant + " " + $0.expense.categorySummary }.joined(separator: " ")
+            return query.isEmpty || text.localizedCaseInsensitiveContains(query)
+        }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
     }
     func settlementPlan(friend: String, selected: Set<String>, payment: Int, date: Date) throws -> SettlementPlan {
         let key = friendKey(friend)

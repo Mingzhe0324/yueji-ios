@@ -61,6 +61,15 @@ logo_metadata = json.loads((logo_asset / 'Contents.json').read_text())
 logo = logo_asset / logo_metadata['images'][0]['filename']
 assert logo_metadata['images'][0]['idiom'] == 'universal'
 assert logo.read_bytes() == icon.read_bytes(), 'Opening logo must use the app brand image'
+# Every static in-app image name must resolve to a bundled imageset. AppIcon is not a normal Image asset.
+for source in (root / 'YueJi').glob('*.swift'):
+    for name in re.findall(r'\bImage\("([^"\\]+)"\)', source.read_text()):
+        asset = root / 'YueJi/Assets.xcassets' / (name + '.imageset')
+        assert (asset / 'Contents.json').is_file(), f'Missing image asset: {source.name} / {name}'
+        metadata = json.loads((asset / 'Contents.json').read_text())
+        filenames = [item['filename'] for item in metadata['images'] if 'filename' in item]
+        assert filenames and all((asset / name).is_file() for name in filenames), f'Missing bundled image: {source.name} / {name}'
+print('PASS: static SwiftUI image names resolve to bundled image assets.')
 for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'DeleteCue', 'RestoreCue', 'DepositCue'):
     asset = root / 'YueJi/Assets.xcassets' / (name + '.dataset')
     metadata = json.loads((asset / 'Contents.json').read_text())

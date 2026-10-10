@@ -311,7 +311,7 @@ struct DashboardView: View {
             .toolbar {
                 ToolbarItem(placement: .bottomBar) {
                     Button { adding = true } label: {
-                        Label(tr("记一笔", "Add expense", "Tambah belanja"), systemImage: "plus")
+                        Label(tr("记一笔", "Add entry", "Tambah rekod"), systemImage: "plus")
                             .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .yuejiPrimaryButton().buttonBorderShape(.capsule)
@@ -582,6 +582,17 @@ struct SpendingMeter: View {
             .accessibilityHidden(true)
     }
 }
+extension AccountDirection {
+    var amountColor: Color { self == .incoming ? .teal : (self == .outgoing ? .red : .primary) }
+}
+/// Use the same signs and colors for manual entries, bank notices and settlements.
+struct TransactionAmount: View {
+    let cents: Int
+    let direction: AccountDirection
+    var body: some View {
+        Text(direction.formattedAmount(cents)).foregroundStyle(direction.amountColor).monospacedDigit()
+    }
+}
 struct ExpenseRow: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dynamicTypeSize) private var typeSize
@@ -608,11 +619,11 @@ struct ExpenseRow: View {
                 Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
                 if let note = entry.note, !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
-                if entry.refunded > 0 { Text(tr("已退款：", "Refunded: ", "Dipulangkan: ") + "+" + money(entry.refunded)).font(.footnote).foregroundStyle(.green) }
+                if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
                 if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.footnote) }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            Text((entry.paidByFriend == nil ? "−" : "") + money(entry.cents)).foregroundStyle(entry.paidByFriend == nil ? Color.red : Color.primary).accessibilityLabel(tr("购买总额 ", "Purchase total ", "Jumlah pembelian ") + money(entry.cents)).monospacedDigit().font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            TransactionAmount(cents: entry.cents, direction: entry.accountDirection).accessibilityLabel(tr("购买总额 ", "Purchase total ", "Jumlah pembelian ") + entry.accountDirection.formattedAmount(entry.cents)).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
         }.padding(.vertical, 10)
     }
 }
@@ -637,10 +648,15 @@ struct ExpensesView: View {
     @State private var deleting: Expense?
     private var entries: [Expense] { ((try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []).filter { providerFilter == "all" || $0.source == providerFilter } }
     private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search).filter { providerFilter == "all" || $0.provider == providerFilter } }
+    private var settlements: [FriendSettlement] {
+        guard providerFilter == "all" || providerFilter == "手动" else { return [] }
+        return (try? model.ledger.ledgerSettlements(in: month, search: search, filter: filter)) ?? []
+    }
     var body: some View {
         let entries = self.entries
         let transfers = self.transfers
-        let days = LedgerTimelineItem.grouped(expenses: entries, transfers: transfers)
+        let settlements = self.settlements
+        let days = LedgerTimelineItem.grouped(expenses: entries, transfers: transfers, settlements: settlements)
         NavigationStack {
             List {
                 Section {
@@ -655,7 +671,7 @@ struct ExpensesView: View {
                         AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personal })
                             .font(.system(.title2, design: .default, weight: .semibold)).foregroundStyle(ink)
                         HStack {
-                            Text(String(entries.count + transfers.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
+                            Text(String(entries.count + transfers.count + settlements.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
                             Spacer()
                             Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                                 .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
@@ -663,7 +679,7 @@ struct ExpensesView: View {
                         }
                     }.padding(.vertical, 6)
                 }
-                if entries.isEmpty && transfers.isEmpty {
+                if entries.isEmpty && transfers.isEmpty && settlements.isEmpty {
                     ContentUnavailableView {
                         Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                     } description: {
@@ -674,7 +690,7 @@ struct ExpensesView: View {
                         if filter.active || !search.isEmpty || providerFilter != "all" {
                             Button(tr("清除筛选与搜索", "Clear filters and search", "Kosongkan penapis dan carian")) { filter = LedgerFilter(); search = ""; providerFilter = "all" }
                         } else {
-                            Button(tr("记一笔", "Add expense", "Tambah belanja")) { adding = true }.yuejiPrimaryButton()
+                            Button(tr("记一笔", "Add entry", "Tambah rekod")) { adding = true }.yuejiPrimaryButton()
                         }
                     }.listRowBackground(Color.clear)
                 }
@@ -682,6 +698,10 @@ struct ExpensesView: View {
                     Section {
                         ForEach(day.entries) { item in
                             switch item {
+                            case .settlement(let record):
+                                NavigationLink { SettlementDetailView(id: record.id).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
+                                    SettlementPaymentRow(record: record)
+                                }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
                             case .transfer(let notice):
                                 NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     TNGTimelineRow(notice: notice)
@@ -723,7 +743,7 @@ struct ExpensesView: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Button { adding = true } label: { Image(systemName: "plus") }
-                            .accessibilityLabel(tr("记一笔", "Add expense", "Tambah belanja"))
+                            .accessibilityLabel(tr("记一笔", "Add entry", "Tambah rekod"))
                             .yuejiZoomSource(id: "new-expense", namespace: expenseTransition)
                     }
                 }
@@ -756,10 +776,10 @@ struct TNGTimelineRow: View {
         layout {
             VStack(alignment: .leading, spacing: 6) {
                 Text(sourceLabel(notice.provider) + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " +
-                     (notice.kind == "incoming" ? tr("转入", "Incoming", "Masuk") : tr("转出", "Outgoing", "Keluar")))
+                             (notice.accountDirection == .incoming ? tr("转入", "Incoming", "Masuk") : (notice.accountDirection == .outgoing ? tr("转出", "Outgoing", "Keluar") : tr("方向待确认", "Direction unconfirmed", "Arah belum disahkan"))))
                     .font(.headline).fixedSize(horizontal: false, vertical: true)
                 if let party = notice.party, !party.isEmpty {
-                    Text((notice.kind == "incoming" ? tr("来自：", "From: ", "Daripada: ") : tr("给：", "To: ", "Kepada: ")) + party)
+                    Text((notice.accountDirection == .incoming ? tr("来自：", "From: ", "Daripada: ") : (notice.accountDirection == .outgoing ? tr("给：", "To: ", "Kepada: ") : tr("交易对象：", "Party: ", "Pihak: "))) + party)
                         .font(.subheadline).fixedSize(horizontal: false, vertical: true)
                 }
                 Text(dateLabel(notice.date, time: true) + (notice.usesReceivedDate ? tr(" · 接收时间", " · received time", " · masa diterima") : ""))
@@ -769,8 +789,7 @@ struct TNGTimelineRow: View {
                     .padding(.horizontal, 7).padding(.vertical, 3).background(.quaternary, in: Capsule())
             }
             if !textSize.isAccessibilitySize { Spacer(minLength: 8) }
-            Text(tngSignedAmount(notice)).font(.headline).monospacedDigit()
-                .foregroundStyle(notice.kind == "incoming" ? Color.green : Color.red).layoutPriority(1)
+            TransactionAmount(cents: notice.cents ?? 0, direction: notice.accountDirection).font(.headline).layoutPriority(1)
         }.padding(.vertical, 8)
     }
 }
@@ -791,8 +810,11 @@ struct ExpenseDetailView: View {
                 if let entry {
                     Section {
                         VStack(spacing: 12) {
-                            Text("−" + money(entry.cents)).foregroundStyle(.red).font(.largeTitle.bold())
-                                .monospacedDigit().minimumScaleFactor(0.6).lineLimit(1)
+                            TransactionAmount(cents: entry.cents, direction: entry.accountDirection).font(.largeTitle.bold())
+                                .minimumScaleFactor(0.6).lineLimit(1)
+                            if entry.paidByFriend != nil {
+                                Text(tr("朋友代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya")).font(.caption).foregroundStyle(.secondary)
+                            }
                             Text(entry.merchant).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                             Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
                             Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
@@ -801,7 +823,9 @@ struct ExpenseDetailView: View {
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
                         LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(entry.source))
                         LabeledContent(tr("付款人", "Paid by", "Dibayar oleh"), value: entry.payerLabel)
-                        LabeledContent(tr("我账户的原付款", "Original payment from my account", "Bayaran asal daripada akaun saya"), value: money(entry.paidFromMyAccount))
+                        LabeledContent {
+                            TransactionAmount(cents: entry.paidFromMyAccount, direction: entry.accountDirection)
+                        } label: { Text(tr("我账户的原付款", "Original payment from my account", "Bayaran asal daripada akaun saya")) }
                         if entry.timeSource == "received" {
                             Text(tr("此时间是月记收到自动化的时刻，可能稍晚于付款。若需精确到银行交易时间，可在编辑中调整。", "This is when YueJi received the automation and may be later than payment. Edit it to match the bank transaction time if needed.", "Masa ini ialah ketika YueJi menerima automasi dan mungkin lewat sedikit. Edit mengikut masa transaksi bank jika perlu.")).font(.footnote).foregroundStyle(.secondary)
                         }
@@ -951,6 +975,7 @@ struct ExpenseEditor: View {
     @State private var note = ""
     @State private var tagsText = ""
     @State private var splitting = false
+    @State private var entryType = "expense"
     @State private var friendPays = false
     @State private var payerName = ""
     @State private var friendPaidMode = "equal"
@@ -972,7 +997,11 @@ struct ExpenseEditor: View {
     private func total() throws -> Int { if let fx = try foreign() { return try fx.myrCents() }; return try toCents(amount) }
     var body: some View {
         NavigationStack {
+            if original == nil && initialDraft == nil && entryType == "settlement" {
+                ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
+            } else {
             Form {
+                if original == nil && initialDraft == nil { ManualEntryTypeSection(selection: $entryType) }
                 payerSection
                 paymentSection
                 merchantSection
@@ -1012,7 +1041,7 @@ struct ExpenseEditor: View {
                 .animation(reduceMotion ? nil : YueJiMotion.standard, value: splitting)
                 .animation(reduceMotion ? nil : YueJiMotion.standard, value: people.count)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
-                .navigationTitle(original == nil ? tr("新增账目", "New expense", "Belanja baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
+                .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
                     if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
                     else { Text(tr("保存", "Save", "Simpan")) }
@@ -1039,6 +1068,7 @@ struct ExpenseEditor: View {
                     }
                 }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
+            }
         }
     }
     private var paymentSection: some View {
@@ -1367,8 +1397,9 @@ struct SettingsView: View {
             List {
                 Section {
                     HStack(spacing: 16) {
-                        Image("YueJiIcon").resizable().scaledToFit().frame(width: 56, height: 56)
+                        Image("YueJiLogo").renderingMode(.original).resizable().scaledToFit().frame(width: 56, height: 56)
                             .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
                             .accessibilityHidden(true)
                         VStack(alignment: .leading, spacing: 5) {
                             Text(tr("月记 YueJi", "YueJi", "YueJi")).font(.title3.weight(.semibold))

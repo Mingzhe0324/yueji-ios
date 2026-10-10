@@ -7,6 +7,14 @@ enum LedgerError: LocalizedError {
 }
 let categories = ["餐饮", "交通", "购物", "账单", "娱乐", "其他"]
 func money(_ cents: Int) -> String { String(format: "RM %.2f", Double(cents) / 100) }
+/// Direction of actual money in my account, independent of entry source or debt ownership.
+enum AccountDirection: String {
+    case incoming, outgoing, neutral
+    func formattedAmount(_ cents: Int) -> String {
+        let sign = self == .incoming ? "+" : (self == .outgoing ? "−" : "")
+        return sign + money(cents)
+    }
+}
 func toCents(_ value: String) throws -> Int {
     let text = value.trimmingCharacters(in: .whitespacesAndNewlines)
     guard text.range(of: #"^\d{1,8}(\.\d{1,2})?$"#, options: .regularExpression) != nil,
@@ -88,6 +96,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var tags: [String]? = nil
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
     var paidByFriend: String? = nil // Missing in legacy records: paid by me.
+    var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var paidFromMyAccount: Int { paidByFriend == nil ? cents : 0 }
     var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
     var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
@@ -293,6 +302,9 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var note: String? = nil
     var settlementID: String? = nil
     var provider: String { sourceBank ?? "TNG" }
+    var accountDirection: AccountDirection {
+        switch kind { case "incoming": return .incoming; case "payment", "transfer": return .outgoing; default: return .neutral }
+    }
 }
 struct TNGParsed {
     let kind: String
@@ -307,7 +319,7 @@ struct TNGParsed {
 // A confirmed incoming notification changes the wallet in the positive
 // direction even if its purpose (repayment, income, own transfer) is pending.
 func tngSignedAmount(_ notice: TNGNotice) -> String {
-    (notice.kind == "incoming" ? "+" : "−") + money(notice.cents ?? 0)
+    notice.accountDirection.formattedAmount(notice.cents ?? 0)
 }
 func notificationText(_ value: String) -> String {
     value.replacingOccurrences(of: "\u{200B}", with: "")
@@ -666,9 +678,9 @@ struct TNGReviewTracker {
 }
 
 enum LedgerTimelineItem: Identifiable {
-    case expense(Expense), transfer(TNGNotice)
-    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id } }
-    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date } }
+    case expense(Expense), transfer(TNGNotice), settlement(FriendSettlement)
+    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id; case .settlement(let s): return "settlement:" + s.id } }
+    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date; case .settlement(let s): return s.date } }
 }
 struct LedgerDayGroup: Identifiable {
     let date: Date
@@ -677,8 +689,10 @@ struct LedgerDayGroup: Identifiable {
 }
 
 extension LedgerTimelineItem {
-    static func grouped(expenses: [Expense], transfers: [TNGNotice]) -> [LedgerDayGroup] {
-        let items = expenses.map(Self.expense) + transfers.map(Self.transfer)
+    static func grouped(expenses: [Expense], transfers: [TNGNotice], settlements: [FriendSettlement] = []) -> [LedgerDayGroup] {
+        // A linked bank receipt already represents the payment. Never show a second cash record.
+        let manual = settlements.filter { $0.active && $0.paymentNoticeID == nil }
+        let items = expenses.map(Self.expense) + transfers.map(Self.transfer) + manual.map(Self.settlement)
         return Dictionary(grouping: items, by: { Calendar.current.startOfDay(for: $0.date) })
             .map { LedgerDayGroup(date: $0.key, entries: $0.value.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }) }
             .sorted { $0.date > $1.date }
