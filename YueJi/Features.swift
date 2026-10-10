@@ -560,6 +560,10 @@ extension Ledger {
                     for k in parts.indices where parts[k].category == old { parts[k].category = value.name }
                     expenses[j].categoryAllocations = parts
                 }
+                if var items = expenses[j].items {
+                    for k in items.indices where items[k].category == old { items[k].category = value.name }
+                    expenses[j].items = items
+                }
             }
             for j in recurring.indices where recurring[j].category == old { recurring[j].category = value.name }
             for key in Array(merchantCategories.keys) where merchantCategories[key] == old { merchantCategories[key] = value.name }
@@ -628,12 +632,13 @@ extension Ledger {
                 }
             }
         } else {
-            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR"]]
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR"]]
             for e in entries {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
                 let allocationText = e.allocatedCategories.map { $0.category + ":" + Currency.input($0.cents, "MYR") }.joined(separator: "; ")
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR")])
+                let itemText = (e.items ?? []).map { $0.name + ":" + Currency.input($0.cents, "MYR") + ":" + $0.category }.joined(separator: "; ")
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR"), itemText])
             }
         }
         return csvData(rows)
@@ -653,7 +658,7 @@ extension Ledger {
                   filter.source.isEmpty || filter.source == e.source else { return false }
             if let low, e.cents < low { return false }
             if let high, e.cents > high { return false }
-            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || e.categorySummary.localizedCaseInsensitiveContains(query) || (e.note ?? "").localizedCaseInsensitiveContains(query) || (e.tags ?? []).contains(where: { $0.localizedCaseInsensitiveContains(query) })
+            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || e.categorySummary.localizedCaseInsensitiveContains(query) || (e.items ?? []).contains(where: { $0.name.localizedCaseInsensitiveContains(query) }) || (e.note ?? "").localizedCaseInsensitiveContains(query) || (e.tags ?? []).contains(where: { $0.localizedCaseInsensitiveContains(query) })
         }.sorted { $0.date > $1.date }
     }
 }

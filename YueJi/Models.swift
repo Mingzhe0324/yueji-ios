@@ -96,7 +96,11 @@ struct Expense: Codable, Identifiable, Equatable {
     var tags: [String]? = nil
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
     var paidByFriend: String? = nil // Missing in legacy records: paid by me.
+    var items: [ExpenseItem]? = nil // Optional: automatic entries are saved before itemization.
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
+    // Purchase presentation is distinct from account movement when a friend pays.
+    var purchaseDisplayCents: Int { paidByFriend == nil ? cents : personal }
+    var purchaseDirection: AccountDirection { .outgoing }
     var paidFromMyAccount: Int { paidByFriend == nil ? cents : 0 }
     var refunded: Int { (refunds ?? []).reduce(0) { $0 + $1.cents } }
     var personalRefund: Int { (refunds ?? []).reduce(0) { $0 + $1.personalCents } }
@@ -105,7 +109,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var owingToPayer: Int { personal + (paidByFriend == nil ? 0 : (refunds ?? []).filter { $0.receivedByMe == true }.reduce(0) { $0 + $1.cents }) }
 }
 struct Ledger: Codable {
-    var version = 5
+    var version = 6
     var expenses: [Expense] = []
     var budgets: [String: Int] = [:]
     var seenEvents: Set<String> = []
@@ -121,7 +125,7 @@ struct Ledger: Codable {
     var savingsGoals: [SavingsGoal] = []
     var tngNotices: [TNGNotice] = []
     var settlements: [FriendSettlement] = []
-    init(version: Int = 5, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
+    init(version: Int = 6, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
@@ -129,8 +133,8 @@ struct Ledger: Codable {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
-        guard (1...5).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
-        version = 5
+        guard (1...6).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
+        version = 6
         expenses = try c.decode([Expense].self, forKey: .expenses)
         budgets = try c.decode([String: Int].self, forKey: .budgets)
         seenEvents = try c.decode(Set<String>.self, forKey: .seenEvents)
@@ -174,7 +178,7 @@ struct Ledger: Codable {
               merchantCategories.allSatisfy({ !$0.key.isEmpty && $0.key.count <= 200 && categoryNames.contains($0.value) }) else {
             throw LedgerError.invalid("付款或分账数据无效。")
         }
-        guard version == 5, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
+        guard version == 6, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
@@ -938,12 +942,40 @@ struct CategoryAllocation: Codable, Identifiable, Equatable {
     var category: String
     var cents: Int
 }
+struct ExpenseItem: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var name: String
+    var cents: Int
+    var category: String
+}
 extension Expense {
     var allocatedCategories: [CategoryAllocation] {
+        if let items, !items.isEmpty {
+            return items.map { CategoryAllocation(id: $0.id, category: $0.category, cents: $0.cents) }
+        }
         if let parts = categoryAllocations, !parts.isEmpty { return parts }
         return [CategoryAllocation(id: "single", category: category, cents: cents)]
     }
-    var categorySummary: String { allocatedCategories.map { categoryLabel($0.category) }.joined(separator: " / ") }
+    var categorySummary: String {
+        var seen = Set<String>()
+        return allocatedCategories.filter { seen.insert($0.category).inserted }.map { categoryLabel($0.category) }.joined(separator: " / ")
+    }
+    var personalItemAmounts: [String: Int] {
+        guard let items, !items.isEmpty else { return [:] }
+        let amounts = (try? allocateRefund(personal, capacities: items.map(\.cents))) ?? Array(repeating: 0, count: items.count)
+        return Dictionary(uniqueKeysWithValues: zip(items, amounts).map { ($0.0.id, $0.1) })
+    }
+    func validateItems(allowedCategories: [String]? = nil) throws {
+        guard let items, !items.isEmpty else { return }
+        guard items.count <= 100, Set(items.map(\.id)).count == items.count,
+              (categoryAllocations ?? []).isEmpty,
+              items.allSatisfy({ !$0.id.isEmpty && $0.id.count <= 200 && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 200
+                  && !$0.category.isEmpty && $0.category.count <= 200 && (allowedCategories?.contains($0.category) ?? true)
+                  && $0.cents > 0 && $0.cents <= 10_000_000_000 }),
+              items.reduce(0, { $0 + $1.cents }) == cents else {
+            throw reviewError("请填写每件物品的名称、正数金额和分类；物品合计必须等于交易总额。", "Enter a name, positive amount and category for each item. Item amounts must equal the transaction total.", "Isi nama, amaun positif dan kategori setiap item. Jumlah item mesti sama dengan jumlah transaksi.")
+        }
+    }
     /// Personal spending and refunds are distributed proportionally, with exact integer totals.
     func categoryDistribution(total: Int) -> [String: Int] {
         let parts = allocatedCategories
@@ -959,6 +991,7 @@ extension Expense {
 extension Ledger {
     func validateBookkeeping() throws {
         for e in expenses {
+            try e.validateItems(allowedCategories: categoryNames)
             guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20,
                   (e.tags ?? []).allSatisfy({ !friendKey($0).isEmpty && $0.count <= 40 }),
                   Set((e.tags ?? []).map(friendKey)).count == (e.tags?.count ?? 0) else { throw LedgerError.invalid("备注或标签无效。") }

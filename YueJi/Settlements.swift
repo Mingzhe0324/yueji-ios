@@ -68,7 +68,7 @@ extension Expense {
     var payerLabel: String { paidByFriend ?? tr("我", "Me", "Saya") }
     func sameSettlementTerms(as other: Expense) -> Bool {
         id == other.id && merchant == other.merchant && cents == other.cents && date == other.date
-        && category == other.category && categoryAllocations == other.categoryAllocations
+        && category == other.category && categoryAllocations == other.categoryAllocations && (items ?? []) == (other.items ?? [])
         && paidByFriend == other.paidByFriend && foreign == other.foreign
         && (refunds ?? []) == (other.refunds ?? []) && shares.count == other.shares.count
         && zip(shares, other.shares).allSatisfy { pair in
@@ -102,6 +102,10 @@ extension Ledger {
     func outstanding(expense: Expense, share: Share) -> Int {
         guard expense.paidByFriend == nil else { return 0 }
         return share.owed - (settledAmounts[FriendDebtItem.key(expense.id, share.id)] ?? 0)
+    }
+    func payableToPayer(_ expense: Expense) -> Int {
+        guard expense.paidByFriend != nil else { return 0 }
+        return max(0, expense.owingToPayer + (settledAmounts[FriendDebtItem.key(expense.id, nil)] ?? 0))
     }
     func hasActiveSettlement(expenseID: String) -> Bool {
         settlements.contains { $0.active && $0.lines.contains { $0.expense.id == expenseID && $0.applied != 0 } }
@@ -222,9 +226,10 @@ extension Ledger {
         var copy = self
         if let expenseID = notice.expenseID, let expense = expenses.first(where: { $0.id == expenseID }) {
             guard notice.status == "recorded", expense.paidByFriend == nil, expense.shares.isEmpty,
+                  (expense.items ?? []).isEmpty,
                   expense.refunded == 0, expense.recurringKey == nil, expense.cents == abs(record.transfer), expense.source == notice.provider,
                   !hasActiveSettlement(expenseID: expenseID), tngNotices.filter({ $0.expenseID == expenseID }).count == 1 else {
-                throw settlementError("此自动付款已有分账、退款或其他关联。请先处理原账目。", "This automatic payment has splits, refunds or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai bahagian, pulangan atau pautan lain. Selesaikan rekod asal dahulu.")
+                throw settlementError("此自动付款已有物品、分账、退款或其他关联。请先处理原账目。", "This automatic payment has items, splits, refunds or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai item, bahagian, pulangan atau pautan lain. Selesaikan rekod asal dahulu.")
             }
             copy.settlements[s].convertedPayment = expense
             copy.expenses.removeAll { $0.id == expenseID }
@@ -257,6 +262,7 @@ extension Ledger {
                   record.lines.reduce(0, { $0 + max(0, -$1.applied) }) == min(receivable, payable) + max(0, -record.transfer) else { throw invalidSettlementData() }
             for line in record.lines {
                 let snapshot = line.expense
+                try snapshot.validateItems()
                 guard snapshot.cents > 0, snapshot.cents <= 10_000_000_000, snapshot.shares.count <= 100,
                       snapshot.shares.allSatisfy({ $0.cents >= 0 && $0.cents <= snapshot.cents }),
                       (snapshot.refunds ?? []).count <= 10_000,
@@ -267,7 +273,7 @@ extension Ledger {
                       line.applied == 0 || (line.applied > 0) == (line.before > 0), !line.expense.id.isEmpty else { throw invalidSettlementData() }
                 guard record.active, line.applied != 0 else { continue }
                 guard let expense = byID[line.expense.id], expense.sameSettlementTerms(as: line.expense) else {
-                    throw settlementError("已结算账目的金额、日期、分类、付款人、分账或退款发生改变。请先撤销相关结算。", "A settled expense's amount, date, category, payer, shares or refunds changed. Undo its settlements first.", "Amaun, tarikh, kategori, pembayar, bahagian atau pulangan belanja diselesaikan berubah. Batalkan penyelesaian dahulu.")
+                    throw settlementError("已结算账目的金额、日期、分类、物品、付款人、分账或退款发生改变。请先撤销相关结算。", "A settled expense's amount, date, category, items, payer, shares or refunds changed. Undo its settlements first.", "Amaun, tarikh, kategori, item, pembayar, bahagian atau pulangan belanja diselesaikan berubah. Batalkan penyelesaian dahulu.")
                 }
                 guard record.date >= Calendar.current.startOfDay(for: expense.date) else { throw invalidSettlementData() }
                 let base: Int

@@ -3,6 +3,233 @@ import UIKit
 import AVFoundation
 @testable import YueJi
 
+final class TransactionItemsTests: XCTestCase {
+    private let date = Date(timeIntervalSince1970: 1_700_000_000)
+    private var items: [ExpenseItem] {
+        [ExpenseItem(id: "lunch-item", name: "Lunch", cents: 1500, category: "餐饮"),
+         ExpenseItem(id: "supplies-item", name: "Household supplies", cents: 2000, category: "购物")]
+    }
+    private func purchase(source: String = "手动") -> Expense {
+        Expense(id: "mixed", merchant: "Mixed purchase", cents: 3500, date: date, category: "其他", source: source, items: items)
+    }
+
+    func testRM35ItemsUseTheirCategoriesWithoutCountingParentTwice() throws {
+        for source in ["手动", "TNG", "Apple Pay", "Maybank"] {
+            let expense = purchase(source: source)
+            let ledger = try Ledger(expenses: [expense]).validated()
+            let overview = OverviewSnapshot(ledger: ledger, month: date)
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(overview.personal, 3500)
+            XCTAssertEqual(overview.paid, 3500)
+            XCTAssertEqual(overview.categoryTotals["餐饮"], 1500)
+            XCTAssertEqual(overview.categoryTotals["购物"], 2000)
+            XCTAssertEqual(overview.categoryTotals.values.reduce(0, +), 3500)
+            XCTAssertEqual(ledger.spending(in: date, category: "其他"), 0)
+            XCTAssertEqual(LedgerTimelineItem.grouped(expenses: ledger.expenses, transfers: []).flatMap(\.entries).count, 1)
+            XCTAssertEqual(expense.purchaseDirection.formattedAmount(expense.purchaseDisplayCents), "−RM 35.00")
+            XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).expenses, [expense])
+        }
+    }
+
+    func testItemsAllowRepeatedCategoriesAndPreserveEverySenWithSharesAndRefunds() throws {
+        var expense = purchase()
+        expense.shares = [Share(name: "Amy", cents: 1400)]
+        var ledger = try Ledger(expenses: [expense]).validated()
+        XCTAssertEqual(expense.personalItemAmounts, ["lunch-item": 900, "supplies-item": 1200])
+        try ledger.addRefund(expenseID: expense.id, cents: 700, date: date.addingTimeInterval(60))
+        let refunded = ledger.expenses[0]
+        XCTAssertEqual(refunded.personal, 1680)
+        XCTAssertEqual(refunded.personalItemAmounts, ["lunch-item": 720, "supplies-item": 960])
+        XCTAssertEqual(refunded.categoryDistribution(total: refunded.personal), ["餐饮": 720, "购物": 960])
+        XCTAssertEqual(ledger.friendSpending(friend: "Amy").categories.values.reduce(0, +), 1120)
+        XCTAssertEqual(refunded.items, items, "Refunds do not erase original item prices")
+
+        var small = Expense(merchant: "Rounding", cents: 3, date: date, shares: [Share(name: "Amy", cents: 1)])
+        small.items = [ExpenseItem(id: "a", name: "A", cents: 1, category: "餐饮"),
+                       ExpenseItem(id: "b", name: "B", cents: 1, category: "餐饮"),
+                       ExpenseItem(id: "c", name: "C", cents: 1, category: "购物")]
+        _ = try Ledger(expenses: [small]).validated()
+        XCTAssertEqual(small.personalItemAmounts.values.reduce(0, +), 2)
+        XCTAssertEqual(small.categoryDistribution(total: small.personal).values.reduce(0, +), 2)
+        XCTAssertEqual(small.personalAmount(category: "餐饮"), (small.personalItemAmounts["a"] ?? 0) + (small.personalItemAmounts["b"] ?? 0))
+        XCTAssertEqual(small.categorySummary.components(separatedBy: " / ").count, 2)
+    }
+
+    func testInvalidItemsRejectTotalsNamesCategoriesIDsAmountsAndDualAllocation() throws {
+        func rejects(_ mutate: (inout Expense) -> Void) {
+            var expense = purchase(); mutate(&expense)
+            XCTAssertThrowsError(try Ledger(expenses: [expense]).validated())
+        }
+        rejects { $0.items?[0].cents = 1499 }
+        rejects { $0.items?[0].name = " \n " }
+        rejects { $0.items?[0].category = "Unknown category" }
+        rejects { $0.items?[0].id = "supplies-item" }
+        rejects { $0.items?[0].cents = 0 }
+        rejects { $0.items?[0].cents = -1 }
+        rejects { $0.items?[0].cents = Int.max }
+        rejects { $0.items?[0].name = String(repeating: "x", count: 201) }
+        rejects { $0.items = (0...100).map { ExpenseItem(id: String($0), name: "Item", cents: 1, category: "其他") } }
+        rejects { $0.categoryAllocations = [CategoryAllocation(category: "餐饮", cents: 1500), CategoryAllocation(category: "购物", cents: 2000)] }
+    }
+
+    func testAutomaticPaymentStaysSavedDuringInvalidItemEditAndReplay() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder)
+        let body = "You have paid RM35.00 for Shop."
+        try store.change { ledger in
+            _ = try ledger.receiveTNG(body: body, date: date, eventID: "auto-items")
+        }
+        let before = try store.read()
+        XCTAssertEqual(before.expenses.count, 1)
+        XCTAssertNil(before.expenses[0].items)
+        XCTAssertThrowsError(try store.change { ledger in
+            ledger.expenses[0].items = [ExpenseItem(name: "Incomplete", cents: 1500, category: "餐饮")]
+        })
+        XCTAssertEqual(try store.read().expenses, before.expenses)
+        try store.change { ledger in ledger.expenses[0].items = items }
+        try store.change { ledger in
+            _ = try ledger.receiveTNG(body: body, date: date.addingTimeInterval(300), eventID: "auto-items")
+        }
+        let after = try store.read()
+        XCTAssertEqual(after.expenses.count, 1)
+        XCTAssertEqual(after.expenses[0].id, before.expenses[0].id)
+        XCTAssertEqual(after.expenses[0].items, items)
+        XCTAssertEqual(after.tngNotices.map(\.expenseID), before.tngNotices.map(\.expenseID))
+        XCTAssertEqual(after.spending(in: date), 3500)
+        XCTAssertEqual(after.spending(in: date, category: "购物"), 2000)
+    }
+
+    func testEditingAndRemovingItemsUpdatesReportsAndSearchWithoutExtraEntries() throws {
+        var ledger = try Ledger(expenses: [purchase()]).validated()
+        XCTAssertEqual(try ledger.filteredEntries(in: date, search: "household", filter: LedgerFilter()).map(\.id), ["mixed"])
+        var filter = LedgerFilter(); filter.category = "购物"
+        XCTAssertEqual(try ledger.filteredEntries(in: date, search: "", filter: filter).count, 1)
+        ledger.expenses[0].items?[0].name = "Dinner"
+        ledger.expenses[0].items?[0].cents = 1000
+        ledger.expenses[0].items?[1].cents = 2500
+        ledger = try ledger.validated()
+        XCTAssertEqual(ledger.spending(in: date, category: "餐饮"), 1000)
+        ledger.expenses[0].items?.removeFirst()
+        ledger.expenses[0].items?[0].cents = 3500
+        ledger = try ledger.validated()
+        XCTAssertEqual(ledger.spending(in: date, category: "购物"), 3500)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        ledger.expenses[0].items = nil; ledger.expenses[0].category = "其他"
+        ledger = try ledger.validated()
+        XCTAssertEqual(ledger.spending(in: date, category: "其他"), 3500)
+        XCTAssertEqual(try ledger.filteredEntries(in: date, search: "household", filter: LedgerFilter()).count, 0)
+    }
+
+    func testFriendPaidItemizedPurchaseStaysAnExpenseAfterPartialRepaymentAndUndo() throws {
+        var expense = purchase()
+        expense.paidByFriend = "Amy"; expense.shares = [Share(id: "amy", name: "Amy", cents: 1400)]
+        var ledger = try Ledger(expenses: [expense]).validated()
+        XCTAssertEqual(expense.accountDirection, .neutral)
+        XCTAssertEqual(expense.paidFromMyAccount, 0)
+        XCTAssertEqual(expense.purchaseDirection.formattedAmount(expense.purchaseDisplayCents), "−RM 21.00")
+        XCTAssertEqual(ledger.payableToPayer(expense), 2100)
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 500, date: date.addingTimeInterval(60), direction: .outgoing)
+        let id = try ledger.confirmSettlement(plan)
+        XCTAssertEqual(ledger.payableToPayer(expense), 1600)
+        XCTAssertEqual(ledger.spending(in: date), 2100)
+        XCTAssertEqual(OverviewSnapshot(ledger: ledger, month: date).paid, 0)
+        XCTAssertEqual(ledger.expenses[0].purchaseDisplayCents, 2100)
+        XCTAssertEqual(ledger.expenses[0].items, items)
+        XCTAssertEqual(ledger.settlements[0].lines[0].expense.items, items)
+        var changed = ledger; changed.expenses[0].items?[0].name = "Different purchase"
+        XCTAssertThrowsError(try changed.validated(), "Settled audit details cannot silently change")
+        try ledger.undoSettlement(id)
+        XCTAssertEqual(ledger.payableToPayer(expense), 2100)
+        ledger.expenses[0].items?[0].name = "Lunch updated"
+        _ = try ledger.validated()
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.spending(in: date, category: "餐饮"), 900)
+        let finalPlan = try ledger.repaymentPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 2100, date: date.addingTimeInterval(120), direction: .outgoing)
+        try ledger.confirmSettlement(finalPlan)
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 0)
+        XCTAssertEqual(ledger.expenses[0].purchaseDisplayCents, 2100)
+        XCTAssertEqual(ledger.spending(in: date), 2100)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        // Backups store whole-second ISO dates; undo uses the current instant.
+        let expectedSettlements = ledger.settlements.map { record in
+            var expected = record
+            if let voidedAt = expected.voidedAt {
+                expected.voidedAt = Date(timeIntervalSince1970: voidedAt.timeIntervalSince1970.rounded(.down))
+            }
+            return expected
+        }
+        XCTAssertEqual(restored.settlements, expectedSettlements)
+        XCTAssertEqual(restored.expenses, ledger.expenses)
+    }
+
+    func testItemizedExactOffsetKeepsBothPurchasesAndCategoryTotals() throws {
+        var mine = purchase(); mine.shares = [Share(name: "Amy", cents: 1750)]
+        var friend = purchase(); friend.id = "friend-purchase"
+        friend.paidByFriend = "Amy"; friend.shares = [Share(name: "Amy", cents: 1750)]
+        var ledger = try Ledger(expenses: [mine, friend]).validated()
+        let plan = try ledger.settlementPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 0, date: date.addingTimeInterval(60))
+        let id = try ledger.confirmSettlement(plan)
+        XCTAssertEqual(ledger.settlements[0].transfer, 0)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 0)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 0)
+        XCTAssertEqual(ledger.expenses, [mine, friend])
+        let overview = OverviewSnapshot(ledger: ledger, month: date)
+        XCTAssertEqual(overview.personal, 3500)
+        XCTAssertEqual(overview.categoryTotals, ["餐饮": 1500, "购物": 2000])
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        try ledger.undoSettlement(id)
+        XCTAssertEqual(ledger.friendBalances[0].owed, 1750)
+        XCTAssertEqual(ledger.friendBalances[0].payable, 1750)
+        XCTAssertEqual(ledger.spending(in: date), 3500)
+    }
+
+    func testItemCategoriesRenameDeleteProtectionCSVAndBackupCompatibility() throws {
+        var ledger = Ledger(expenses: [purchase()])
+        let custom = CustomCategory(name: "Household")
+        try ledger.saveCategory(custom)
+        ledger.expenses[0].items?[1].category = custom.name
+        _ = try ledger.validated()
+        XCTAssertThrowsError(try ledger.deleteCategory(custom.id))
+        var renamed = custom; renamed.name = "Home supplies"; try ledger.saveCategory(renamed)
+        XCTAssertEqual(ledger.expenses[0].items?[1].category, "Home supplies")
+        XCTAssertEqual(ledger.spending(in: date, category: "Home supplies"), 2000)
+        let exported = String(decoding: ledger.csv(month: date, splits: false), as: UTF8.self)
+        XCTAssertTrue(exported.contains("items_MYR"))
+        XCTAssertTrue(exported.contains("Household supplies:20.00:Home supplies"))
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.version, 6)
+        XCTAssertEqual(restored.expenses, ledger.expenses)
+
+        var legacy = purchase(); legacy.items = nil; legacy.note = "Keep me"; legacy.tags = ["Trip"]
+        let encoded = try LocalStore.encode(Ledger(expenses: [legacy]))
+        for version in 1...5 {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+            object["version"] = version
+            let migrated = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
+            XCTAssertEqual(migrated.version, 6)
+            XCTAssertEqual(migrated.expenses, [legacy])
+        }
+    }
+
+    func testItemizedAutomaticPurchaseCannotBeConvertedToSettlementPayment() throws {
+        var debt = purchase(); debt.paidByFriend = "Amy"
+        debt.shares = [Share(name: "Amy", cents: 0)]
+        var ledger = Ledger(expenses: [debt])
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 3500, date: date.addingTimeInterval(60), direction: .outgoing)
+        let settlementID = try ledger.confirmSettlement(plan)
+        var automatic = purchase(source: "TNG"); automatic.id = "auto-purchase"
+        ledger.expenses.append(automatic)
+        ledger.tngNotices.append(TNGNotice(id: "bank", body: "Payment RM35.00", title: "Payment", date: date.addingTimeInterval(60), usesReceivedDate: false,
+                                         kind: "payment", status: "recorded", cents: 3500, party: "Shop", expenseID: automatic.id, sourceBank: "TNG"))
+        _ = try ledger.validated()
+        XCTAssertThrowsError(try ledger.linkSettlementPayment(settlementID: settlementID, noticeID: "bank"))
+        XCTAssertEqual(ledger.expenses.count, 2)
+        XCTAssertEqual(ledger.expenses[1].items, items)
+        XCTAssertNil(ledger.settlements[0].paymentNoticeID)
+    }
+}
+
 final class LedgerTests: XCTestCase {
     private var settlementDate: Date { Date(timeIntervalSince1970: 1_700_000_100) }
     private func settlementExample() -> Ledger {
@@ -205,7 +432,7 @@ final class LedgerTests: XCTestCase {
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(legacy)) as? [String: Any])
         object["version"] = 4; object.removeValue(forKey: "settlements")
         let migrated = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
-        XCTAssertEqual(migrated.version, 5)
+        XCTAssertEqual(migrated.version, 6)
         XCTAssertNil(migrated.expenses[0].paidByFriend)
         XCTAssertEqual(migrated.friendBalances[0].owed, 3000)
         XCTAssertTrue(migrated.settlements.isEmpty)
@@ -1033,7 +1260,7 @@ final class FeatureTests: XCTestCase {
     func testV1MigrationAndV2RoundTrip() throws {
         let old = Data(#"{"version":1,"expenses":[],"budgets":{"2026-09":10000},"seenEvents":["old"]}"#.utf8)
         var ledger = try LocalStore.decode(old)
-        XCTAssertEqual(ledger.version, 5); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
+        XCTAssertEqual(ledger.version, 6); XCTAssertTrue(ledger.recurring.isEmpty); XCTAssertEqual(ledger.budgets["2026-09"], 10000)
         ledger.recurring = [RecurringExpense(name: "Phone", minor: 3000, start: Date())]
         ledger.rates["SGD"] = RateQuote(value: Decimal(string: "3.2")!, date: date(2026, 1, 1), source: "Manual")
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
@@ -1885,7 +2112,7 @@ final class SavingsGoalTests: XCTestCase {
     func testOldLedgerMigratesWithoutInventingGoals() throws {
         let data = Data(#"{"version":3,"expenses":[],"budgets":{},"seenEvents":[]}"#.utf8)
         let ledger = try LocalStore.decode(data)
-        XCTAssertEqual(ledger.version, 5)
+        XCTAssertEqual(ledger.version, 6)
         XCTAssertTrue(ledger.savingsGoals.isEmpty)
     }
     func testSavingsBoundsAndCompletion() throws {

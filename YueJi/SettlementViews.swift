@@ -343,7 +343,10 @@ struct SettlementDetailView: View {
                                 Text(line.expense.merchant).font(.headline)
                                 Text(dateLabel(line.expense.date) + " · " + line.expense.categorySummary).font(.caption)
                                 LabeledContent(tr("付款人", "Paid by", "Dibayar oleh"), value: line.expense.payerLabel)
-                                LabeledContent(tr("我的消费", "My spending", "Belanja saya"), value: money(line.expense.personal))
+                                LabeledContent(tr("我的消费", "My spending", "Belanja saya")) { TransactionAmount(cents: line.expense.personal, direction: .outgoing) }
+                                if !(line.expense.items ?? []).isEmpty {
+                                    DisclosureGroup(tr("物品", "Items", "Item")) { ExpenseItemsBreakdown(entry: line.expense) }
+                                }
                                 ForEach(line.expense.shares) { share in LabeledContent(share.name, value: money(share.cents)) }
                                 LabeledContent(tr("结算前", "Before settlement", "Sebelum penyelesaian"), value: money(abs(line.before)))
                                 LabeledContent(settledDebtLabel(line.applied), value: money(abs(line.applied)))

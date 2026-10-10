@@ -512,9 +512,9 @@ struct CategoryPaymentsView: View {
                     Button { reviewing = entry } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             ExpenseRow(entry: entry)
-                            LabeledContent(tr("此分类 · 我的份额", "This category · my share", "Kategori ini · bahagian saya"),
-                                           value: money(entry.personalAmount(category: category)))
-                                .font(.caption).foregroundStyle(.secondary)
+                            LabeledContent(tr("此分类 · 我的份额", "This category · my share", "Kategori ini · bahagian saya")) {
+                                TransactionAmount(cents: entry.personalAmount(category: category), direction: .outgoing)
+                            }.font(.caption)
                         }
                     }.buttonStyle(.automatic).foregroundStyle(.primary)
                         .yuejiZoomSource(id: entry.id, namespace: paymentTransition)
@@ -583,7 +583,7 @@ struct SpendingMeter: View {
     }
 }
 extension AccountDirection {
-    var amountColor: Color { self == .incoming ? .teal : (self == .outgoing ? .red : .primary) }
+    var amountColor: Color { self == .incoming ? .green : (self == .outgoing ? .red : .primary) }
 }
 /// Use the same signs and colors for manual entries, bank notices and settlements.
 struct TransactionAmount: View {
@@ -620,10 +620,15 @@ struct ExpenseRow: View {
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
                 if let note = entry.note, !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
-                if !entry.shares.isEmpty { Text(tr("我的份额：", "My share: ", "Bahagian saya: ") + money(entry.personal)).font(.footnote) }
+                if !entry.shares.isEmpty {
+                    HStack {
+                        Text(tr("我的份额：", "My share: ", "Bahagian saya: "))
+                        TransactionAmount(cents: entry.personal, direction: .outgoing)
+                    }.font(.footnote)
+                }
             }
             if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            TransactionAmount(cents: entry.cents, direction: entry.accountDirection).accessibilityLabel(tr("购买总额 ", "Purchase total ", "Jumlah pembelian ") + entry.accountDirection.formattedAmount(entry.cents)).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection).accessibilityLabel((entry.paidByFriend == nil ? tr("购买总额 ", "Purchase total ", "Jumlah pembelian ") : tr("我的消费 ", "My spending ", "Belanja saya ")) + entry.purchaseDirection.formattedAmount(entry.purchaseDisplayCents)).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
         }.padding(.vertical, 10)
     }
 }
@@ -798,6 +803,7 @@ struct ExpenseDetailView: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     @State private var editing: Expense?
+    @State private var editingItems = false
     @State private var deleting: Expense?
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleEntry: Expense?
@@ -810,7 +816,7 @@ struct ExpenseDetailView: View {
                 if let entry {
                     Section {
                         VStack(spacing: 12) {
-                            TransactionAmount(cents: entry.cents, direction: entry.accountDirection).font(.largeTitle.bold())
+                            TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection).font(.largeTitle.bold())
                                 .minimumScaleFactor(0.6).lineLimit(1)
                             if entry.paidByFriend != nil {
                                 Text(tr("朋友代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya")).font(.caption).foregroundStyle(.secondary)
@@ -829,7 +835,10 @@ struct ExpenseDetailView: View {
                         if entry.timeSource == "received" {
                             Text(tr("此时间是月记收到自动化的时刻，可能稍晚于付款。若需精确到银行交易时间，可在编辑中调整。", "This is when YueJi received the automation and may be later than payment. Edit it to match the bank transaction time if needed.", "Masa ini ialah ketika YueJi menerima automasi dan mungkin lewat sedikit. Edit mengikut masa transaksi bank jika perlu.")).font(.footnote).foregroundStyle(.secondary)
                         }
-                        LabeledContent(tr("我的实际消费", "My spending", "Belanja saya"), value: money(entry.personal))
+                        LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personal, direction: .outgoing) }
+                        if entry.paidByFriend != nil {
+                            LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
+                        }
                         if let fx = entry.foreign {
                             LabeledContent(tr("原币金额", "Original amount", "Amaun asal"), value: Currency.display(fx.minor, fx.currency))
                             LabeledContent(tr("汇率", "Exchange rate", "Kadar pertukaran"), value: "1 \(fx.currency) = \(fx.quote.text) MYR")
@@ -839,11 +848,25 @@ struct ExpenseDetailView: View {
                         }
                         NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: id) }
                     }
+                    Section {
+                        DisclosureGroup(tr("物品", "Items", "Item")) {
+                            if (entry.items ?? []).isEmpty {
+                                Text(tr("交易已保存，尚未填写物品。", "Transaction saved; items have not been added yet.", "Transaksi disimpan; item belum ditambah."))
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            } else {
+                                ExpenseItemsBreakdown(entry: entry)
+                                LabeledContent(tr("物品合计", "Item total", "Jumlah item")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
+                                Text(tr("按物品分类统计；分账及退款按金额比例分配。", "Reports use item categories; shares and refunds are distributed proportionally.", "Laporan menggunakan kategori item; bahagian dan pulangan diagihkan mengikut nisbah."))
+                                    .font(.footnote).foregroundStyle(.secondary)
+                            }
+                            Button(tr("编辑物品", "Edit items", "Edit item")) { editingItems = true; editing = entry }
+                        }
+                    }
                     ExpenseBookkeepingDetails(entry: entry)
                     if !entry.shares.isEmpty {
                         Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
-                            if entry.paidByFriend != nil, let item = model.ledger.friendDebtItems.first(where: { $0.expense.id == entry.id }) {
-                                LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(max(0, -item.balance)))
+                            if entry.paidByFriend != nil {
+                                LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(model.ledger.payableToPayer(entry)))
                             }
                             ForEach(entry.shares) { share in
                                 VStack(alignment: .leading, spacing: 8) {
@@ -884,7 +907,7 @@ struct ExpenseDetailView: View {
             .toolbar {
                 if let entry {
                     ToolbarItemGroup(placement: .bottomBar) {
-                        Button { editing = entry } label: {
+                        Button { editingItems = false; editing = entry } label: {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
                                 .frame(minHeight: 44)
                         }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveEntry == nil)
@@ -896,7 +919,7 @@ struct ExpenseDetailView: View {
                     }
                 }
             }
-            .sheet(item: $editing) { ExpenseEditor(original: $0) }
+            .sheet(item: $editing) { ExpenseEditor(original: $0, startWithItems: editingItems) }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
             .onAppear { if let liveEntry { lastVisibleEntry = liveEntry } }
             .onChange(of: liveEntry) { _, updated in
@@ -955,6 +978,7 @@ struct ExpenseEditor: View {
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
     var startWithSplit = false
+    var startWithItems = false
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var foreignExpanded = false
@@ -972,6 +996,7 @@ struct ExpenseEditor: View {
     @State private var rememberCategory = true
     @State private var splitCategories = false
     @State private var allocations: [CategoryAllocationDraft] = []
+    @State private var itemDrafts: [ExpenseItemDraft] = []
     @State private var note = ""
     @State private var tagsText = ""
     @State private var splitting = false
@@ -1005,13 +1030,14 @@ struct ExpenseEditor: View {
                 payerSection
                 paymentSection
                 merchantSection
-                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0)
+                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, initiallyExpanded: startWithItems)
+                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0, itemized: !itemDrafts.isEmpty)
                 currencySection
                 friendSplitSection
                 if let original {
                     if model.ledger.hasActiveSettlement(expenseID: original.id) {
                         Section {
-                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、分账或退款前，请先撤销相关结算。备注仍可编辑。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, shares or refunds. Notes can still be edited.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, bahagian atau pulangan. Nota masih boleh diedit."))
+                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、物品、分账或退款前，请先撤销相关结算。备注仍可编辑。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, items, shares or refunds. Notes can still be edited.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, item, bahagian atau pulangan. Nota masih boleh diedit."))
                             ForEach(model.ledger.settlements.filter { $0.active && $0.lines.contains { $0.expense.id == original.id && $0.applied != 0 } }) { record in
                                 NavigationLink(tr("查看结算", "View settlement", "Lihat penyelesaian")) { SettlementDetailView(id: record.id) }
                             }
@@ -1111,16 +1137,20 @@ struct ExpenseEditor: View {
             TextField(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), text: $name)
                 .focused($focusedField, equals: .merchant).submitLabel(.done)
                 .onSubmit { finishKeyboard() }
+            if itemDrafts.isEmpty {
             Picker(tr("分类", "Category", "Kategori"), selection: $category) {
                 ForEach(model.ledger.categoryNames, id: \.self) { item in
                     Text(categoryLabel(item)).tag(item)
                 }
             }.pickerStyle(.navigationLink)
+            }
         }.disabled((original?.refunded ?? 0) > 0)
     }
     private var currencySection: some View {
         Section {
-            Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
+            if itemDrafts.isEmpty {
+                Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
+            }
             DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
             DisclosureGroup(isExpanded: $foreignExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
@@ -1189,6 +1219,7 @@ struct ExpenseEditor: View {
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
             splitCategories = !(e.categoryAllocations ?? []).isEmpty
             allocations = (e.categoryAllocations ?? []).map { CategoryAllocationDraft(id: $0.id, category: $0.category, amount: Currency.input($0.cents, "MYR")) }
+            itemDrafts = (e.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
             note = e.note ?? ""; tagsText = (e.tags ?? []).joined(separator: ", ")
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
@@ -1237,7 +1268,12 @@ struct ExpenseEditor: View {
             entry.paidByFriend = friendPays ? payerName.trimmingCharacters(in: .whitespacesAndNewlines) : nil
             entry.note = note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note
             entry.tags = normalizedExpenseTags(tagsText)
-            if splitCategories {
+            if itemDrafts.isEmpty { entry.items = nil }
+            else { entry.items = try itemDrafts.map { try $0.savedItem() } }
+            if let items = entry.items, let first = items.first {
+                entry.categoryAllocations = nil
+                entry.category = first.category
+            } else if splitCategories {
                 entry.categoryAllocations = try allocations.map { CategoryAllocation(id: $0.id, category: $0.category, cents: try toCents($0.amount)) }
                 if let first = entry.categoryAllocations?.first { entry.category = first.category }
             } else { entry.categoryAllocations = nil }
@@ -1269,12 +1305,12 @@ struct ExpenseEditor: View {
                 if let original {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid(tr("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")) }
                     ledger.expenses[i] = entry
-                    if rememberCategory && !splitCategories && original.category != entry.category {
+                    if rememberCategory && !splitCategories && itemDrafts.isEmpty && original.category != entry.category {
                         ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
                     }
                 } else if !ledger.expenses.contains(where: { $0.id == entry.id }) {
                     ledger.expenses.append(entry)
-                    if rememberCategory && !splitCategories { ledger.merchantCategories[friendKey(entry.merchant)] = entry.category }
+                    if rememberCategory && !splitCategories && itemDrafts.isEmpty { ledger.merchantCategories[friendKey(entry.merchant)] = entry.category }
                 }
             }
             model.reload(); model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()

@@ -266,7 +266,7 @@ struct RefundsView: View {
         Form {
             if let e = expense {
                 Section(e.merchant) {
-                    LabeledContent(tr("原付款", "Original payment", "Bayaran asal"), value: money(e.cents))
+                    LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: e.cents, direction: .outgoing) }
                     LabeledContent(tr("已退款", "Refunded", "Dipulangkan"), value: money(e.refunded))
                     LabeledContent(tr("净消费（含朋友）", "Net cost (all shares)", "Kos bersih (semua bahagian)"), value: money(e.cents - e.refunded))
                 }
@@ -301,7 +301,11 @@ struct RefundsView: View {
                 Section(tr("退款历史", "Refund history", "Sejarah bayaran balik")) {
                     ForEach(e.refunds ?? []) { r in
                         VStack(alignment: .leading, spacing: 5) {
-                            HStack { Text(dateLabel(r.date)); Spacer(); Text(money(r.cents)); Button(tr("撤销", "Undo", "Batal")) { undo = r } }
+                            HStack {
+                                Text(dateLabel(r.date)); Spacer()
+                                TransactionAmount(cents: r.cents, direction: e.paidByFriend == nil || r.receivedByMe == true ? .incoming : .neutral)
+                                Button(tr("撤销", "Undo", "Batal")) { undo = r }
+                            }
                             Text(tr("我的退款：", "My refund: ", "Pulangan saya: ") + money(r.personalCents)).font(.caption)
                             Text(tr("退款收款人：", "Refund received by: ", "Bayaran balik diterima oleh: ") + (r.receivedByMe == true ? tr("我", "Me", "Saya") : e.payerLabel)).font(.caption)
                             ForEach(e.shares) { share in
@@ -1235,6 +1239,7 @@ struct TNGNoticeView: View {
                 if let expenseID = notice.expenseID {
                     if let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
                         ExpenseRow(entry: entry)
+                        NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id) }
                         Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) { editing = entry }
                     } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
                 } else if ["pending", "transfer"].contains(notice.status) {
@@ -2855,6 +2860,82 @@ struct CategoryAllocationDraft: Identifiable {
     var category: String
     var amount: String = ""
 }
+struct ExpenseItemDraft: Identifiable {
+    var id = UUID().uuidString
+    var name = ""
+    var amount = ""
+    var category: String
+    func savedItem() throws -> ExpenseItem {
+        ExpenseItem(id: id, name: name.trimmingCharacters(in: .whitespacesAndNewlines), cents: try toCents(amount), category: category)
+    }
+}
+struct ExpenseItemsFields: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var expanded = false
+    @Binding var items: [ExpenseItemDraft]
+    let totalCents: Int
+    let defaultCategory: String
+    let savedTransaction: Bool
+    var initiallyExpanded = false
+    private var itemTotal: Int { items.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
+    var body: some View {
+        Section {
+            DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
+                ForEach($items) { $item in
+                    VStack(alignment: .leading, spacing: 10) {
+                        TextField(tr("物品名称", "Item name", "Nama item"), text: $item.name)
+                        LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
+                            TextField("0.00", text: $item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                        }
+                        Picker(tr("分类", "Category", "Kategori"), selection: $item.category) {
+                            ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                        }.pickerStyle(.navigationLink)
+                        Button(role: .destructive) { items.removeAll { $0.id == item.id } } label: {
+                            Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
+                        }
+                    }.padding(.vertical, 6)
+                }
+                Button {
+                    items.append(ExpenseItemDraft(category: defaultCategory))
+                } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
+                    .disabled(items.count >= 100)
+                if !items.isEmpty {
+                    LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
+                        .foregroundStyle(itemTotal == totalCents ? Color.secondary : Color.orange)
+                    if itemTotal != totalCents {
+                        Text(tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan."))
+                            .font(.footnote).foregroundStyle(.orange)
+                    }
+                } else if savedTransaction {
+                    Text(tr("交易已保存，可稍后补充物品。取消编辑不会删除交易。", "This transaction is saved. Add items later; cancelling edits keeps the transaction.", "Transaksi ini telah disimpan. Tambah item kemudian; membatalkan edit mengekalkan transaksi."))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+                Text(tr("物品使用各自分类，不会重复计入消费。分账和退款按物品金额比例分配。金额使用 MYR。", "Each item uses its own category and is counted once. Shares and refunds are distributed proportionally by item amount. Enter amounts in MYR.", "Setiap item menggunakan kategori sendiri dan dikira sekali. Bahagian dan pulangan diagihkan mengikut nisbah amaun item. Masukkan amaun dalam MYR."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            } label: {
+                LabeledContent(tr("物品", "Items", "Item"), value: items.isEmpty ? tr("选填", "Optional", "Pilihan") : String(items.count))
+            }
+        }.onAppear { if initiallyExpanded { expanded = true } }
+    }
+}
+struct ExpenseItemsBreakdown: View {
+    let entry: Expense
+    var body: some View {
+        let personalAmounts = entry.personalItemAmounts
+        ForEach(entry.items ?? []) { item in
+            VStack(alignment: .leading, spacing: 6) {
+                LabeledContent(item.name) { TransactionAmount(cents: item.cents, direction: .outgoing) }
+                Text(categoryLabel(item.category)).font(.caption).foregroundStyle(.secondary)
+                if !entry.shares.isEmpty || entry.refunded > 0 {
+                    LabeledContent(tr("我的净份额", "My net share", "Bahagian bersih saya")) {
+                        TransactionAmount(cents: personalAmounts[item.id] ?? 0, direction: .outgoing)
+                    }.font(.caption)
+                }
+            }.padding(.vertical, 4)
+        }
+    }
+}
 func normalizedExpenseTags(_ text: String) -> [String] {
     var seen = Set<String>()
     return text.components(separatedBy: CharacterSet(charactersIn: ",，\n")).compactMap { raw in
@@ -2872,6 +2953,7 @@ struct ExpenseBookkeepingFields: View {
     @Binding var note: String
     @Binding var tagsText: String
     let totalCents: Int
+    var itemized = false
     private var allocated: Int { allocations.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
         Section(tr("备注", "Note", "Nota")) {
@@ -2885,6 +2967,7 @@ struct ExpenseBookkeepingFields: View {
                 LabeledContent(tr("标签", "Tags", "Tag"), value: tagsText.isEmpty ? tr("选填", "Optional", "Pilihan") : tagsText)
             }
         }
+        if !itemized {
         Section(tr("一笔消费，多种用途", "One expense, multiple categories", "Satu belanja, pelbagai kategori")) {
             Toggle(tr("拆分这笔消费的分类", "Split this expense into categories", "Pecahkan belanja ini mengikut kategori"), isOn: $splitCategories.animation(reduceMotion ? nil : YueJiMotion.standard))
             if splitCategories {
@@ -2907,6 +2990,7 @@ struct ExpenseBookkeepingFields: View {
                 allocations = Array(model.ledger.categoryNames.prefix(2)).map { CategoryAllocationDraft(category: $0) }
             }
         }
+        }
 
     }
 }
@@ -2915,9 +2999,11 @@ struct ExpenseBookkeepingDetails: View {
     let entry: Expense
     var body: some View {
         Section(tr("分类与备注", "Categories and notes", "Kategori dan nota")) {
-            if entry.allocatedCategories.count > 1 {
+            if !(entry.items ?? []).isEmpty {
+                LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
+            } else if entry.allocatedCategories.count > 1 {
                 ForEach(entry.allocatedCategories) { part in
-                    LabeledContent(categoryLabel(part.category), value: money(part.cents))
+                    LabeledContent(categoryLabel(part.category)) { TransactionAmount(cents: part.cents, direction: .outgoing) }
                 }
                 Text(tr("以上为付款总額分配；个人净消费按比例统计。", "The amounts allocate the total payment; personal net spending is calculated proportionally.", "Amaun di atas mengagihkan jumlah bayaran; belanja bersih peribadi dikira mengikut nisbah.")).font(.footnote).foregroundStyle(.secondary)
             } else {
