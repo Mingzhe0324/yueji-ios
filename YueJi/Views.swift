@@ -7,6 +7,7 @@ enum YueJiMotion {
     static let standard = Animation.smooth(duration: 0.32)
     static let detail = Animation.smooth(duration: 0.4)
     static let press = Animation.smooth(duration: 0.18)
+    static let month = Animation.smooth(duration: 0.45)
 }
 
 struct YueJiCardButtonStyle: ButtonStyle {
@@ -16,6 +17,24 @@ struct YueJiCardButtonStyle: ButtonStyle {
             .opacity(configuration.isPressed ? 0.82 : 1)
             .scaleEffect(configuration.isPressed && !reduceMotion ? 0.985 : 1)
             .animation(reduceMotion ? nil : YueJiMotion.press, value: configuration.isPressed)
+    }
+}
+
+struct YueJiCategoryButtonStyle: ButtonStyle {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.colorScheme) private var scheme
+    let tint: Color
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(tint.opacity(configuration.isPressed ? 0.18 : (scheme == .dark ? 0.08 : 0.04)),
+                        in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
+            .animation(reduceMotion ? nil : YueJiMotion.press, value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, pressed in
+                if pressed && !model.isPreview { FeedbackHaptics.selection() }
+            }
     }
 }
 
@@ -147,13 +166,23 @@ struct MainView: View {
 struct MonthPicker: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Binding var month: Date
+    @State private var direction = 1
+    private var monthLabel: String { month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))) }
+    private var labelTransition: AnyTransition {
+        reduceMotion ? .identity : .asymmetric(
+            insertion: .opacity.combined(with: .offset(x: CGFloat(direction) * 16)),
+            removal: .opacity.combined(with: .offset(x: CGFloat(direction) * -16)))
+    }
     var body: some View {
         HStack(spacing: 0) {
             Button { shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.borderless)
                 .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
-            Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
-                .font(.subheadline.weight(.semibold)).contentTransition(.opacity).frame(maxWidth: .infinity, minHeight: 44).contentShape(Rectangle())
+            ZStack {
+                Text(monthLabel).font(.subheadline.weight(.semibold))
+                    .id(monthKey(month)).transition(labelTransition)
+            }.frame(maxWidth: .infinity, minHeight: 44).clipped().contentShape(Rectangle())
+                .accessibilityElement(children: .ignore).accessibilityLabel(monthLabel)
                 .gesture(DragGesture(minimumDistance: 25).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
                     guard abs(dx) > 45, abs(dx) > abs(dy) * 1.5 else { return }
@@ -165,7 +194,11 @@ struct MonthPicker: View {
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
         }.padding(3).background(Color(uiColor: .tertiarySystemFill), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
-    private func shift(_ n: Int) { FeedbackHaptics.selection(); withAnimation(reduceMotion ? nil : YueJiMotion.standard) { month = shiftedMonth(month, by: n) } }
+    private func shift(_ n: Int) {
+        direction = n
+        FeedbackHaptics.selection()
+        withAnimation(reduceMotion ? nil : YueJiMotion.month) { month = shiftedMonth(month, by: n) }
+    }
 }
 struct DashboardView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -408,15 +441,16 @@ struct DashboardView: View {
                                 HStack {
                                     CategoryBadge(name: category)
                                     Spacer()
-                                    AnimatedMoney(cents: value).fontWeight(.medium)
+                                    AnimatedMoney(cents: value).fontWeight(.semibold)
                                     Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                                 }.font(.subheadline)
-                                SpendingMeter(value: value, total: max(personal, 1), color: ink)
+                                SpendingMeter(value: value, total: max(personal, 1), color: model.ledger.categoryTint(category))
                             }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
-                        }.buttonStyle(YueJiCardButtonStyle())
+                        }.buttonStyle(YueJiCategoryButtonStyle(tint: model.ledger.categoryTint(category)))
+                            .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 6)))
                     }
                 }
-            }
+            }.animation(reduceMotion ? nil : YueJiMotion.month, value: monthKey(month))
         }
     }
 }
@@ -433,8 +467,11 @@ struct CategoryPaymentsView: View {
             Section {
                 Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
                     .font(.headline)
-                LabeledContent(tr("我的分类消费", "My category spending", "Belanja kategori saya"),
-                               value: money(entries.reduce(0) { $0 + $1.personalAmount(category: category) }))
+                CategoryBadge(name: category)
+                LabeledContent(tr("我的分类消费", "My category spending", "Belanja kategori saya")) {
+                    AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personalAmount(category: category) })
+                        .fontWeight(.semibold).foregroundStyle(model.ledger.categoryTint(category))
+                }
                 Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
             } footer: {
                 Text(tr("分类合计是扣除退款后的个人份额；付款记录显示整笔金额。", "The category total is your share after refunds; payment records show the full payment amount.", "Jumlah kategori ialah bahagian anda selepas pulangan; rekod bayaran menunjukkan amaun penuh."))
@@ -451,7 +488,7 @@ struct CategoryPaymentsView: View {
                                            value: money(entry.personalAmount(category: category)))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                    }
+                    }.buttonStyle(YueJiCategoryButtonStyle(tint: model.ledger.categoryTint(category)))
                 }
             }
         }.yuejiListSurface()
@@ -523,27 +560,21 @@ struct SpendingMeter: View {
         }.frame(height: 7)
             .onAppear { appeared = true }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: appeared)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: fraction)
+            .animation(reduceMotion ? nil : YueJiMotion.month, value: fraction)
             .accessibilityHidden(true)
     }
 }
 struct ExpenseRow: View {
+    @EnvironmentObject private var model: LedgerModel
     @Environment(\.dynamicTypeSize) private var typeSize
     let entry: Expense
     private var symbol: String {
         if entry.fuel { return "fuelpump.fill" }
         if entry.recurringKey != nil { return "repeat" }
-        return ["餐饮": "fork.knife", "交通": "tram.fill", "购物": "bag.fill", "账单": "doc.text.fill", "娱乐": "gamecontroller.fill"][entry.category] ?? "tag.fill"
+        return model.ledger.categorySymbol(entry.category)
     }
     private var categoryColor: Color {
-        switch entry.category {
-        case "餐饮": return .orange
-        case "交通": return .blue
-        case "购物": return .purple
-        case "账单": return .teal
-        case "娱乐": return .pink
-        default: return .indigo
-        }
+        model.ledger.categoryTint(entry.category)
     }
     private var rowLayout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .center, spacing: 12)) }
     var body: some View {

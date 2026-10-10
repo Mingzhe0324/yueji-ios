@@ -887,9 +887,20 @@ struct NotificationSettingsView: View {
 struct CategoryBadge: View {
     @EnvironmentObject var model: LedgerModel
     let name: String
-    private var custom: CustomCategory? { model.ledger.customCategories.first { $0.name == name } }
-    private var symbol: String {
-        if let custom { return custom.icon }
+    var body: some View {
+        Label { Text(categoryLabel(name)) } icon: {
+            Image(systemName: model.ledger.categorySymbol(name))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(model.ledger.categoryTint(name))
+                .frame(width: 30, height: 30)
+                .background(model.ledger.categoryTint(name).opacity(0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
+                .accessibilityHidden(true)
+        }
+    }
+}
+extension Ledger {
+    func categorySymbol(_ name: String) -> String {
+        if let custom = customCategories.first(where: { $0.name == name }) { return custom.icon }
         switch name {
         case "餐饮": return "fork.knife"
         case "交通": return "car.fill"
@@ -899,9 +910,15 @@ struct CategoryBadge: View {
         default: return "tag.fill"
         }
     }
-    var body: some View {
-        Label { Text(categoryLabel(name)) } icon: {
-            Image(systemName: symbol).foregroundStyle(categoryColor(custom?.color ?? "teal"))
+    func categoryTint(_ name: String) -> Color {
+        if let custom = customCategories.first(where: { $0.name == name }) { return categoryColor(custom.color) }
+        switch name {
+        case "餐饮": return .orange
+        case "交通": return .blue
+        case "购物": return .purple
+        case "账单": return .teal
+        case "娱乐": return .pink
+        default: return .indigo
         }
     }
 }
@@ -1026,7 +1043,7 @@ struct AnimatedMoney: View {
     var body: some View {
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
-            .animation(reduceMotion ? nil : YueJiMotion.detail, value: cents)
+            .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
             .opacity(!animateOnAppear || appeared || reduceMotion ? 1 : 0)
             .scaleEffect(!animateOnAppear || appeared || reduceMotion ? 1 : 0.99, anchor: .leading)
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: appeared)
