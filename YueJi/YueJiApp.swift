@@ -150,11 +150,15 @@ struct YueJiApp: App {
     @Published var feedbackOwners = FeedbackPresentationOwners()
     @Published var savedNotice: UUID?
     @Published var feedbackMessage = ""
-    @Published var feedbackMascot = false
     @Published var newTNGCount = 0
+    @Published private(set) var newTNGToken = UUID()
+    @Published private(set) var foregroundNotice: ForegroundLedgerNotice?
+    @Published private(set) var bannerInteraction: String?
+    @Published private(set) var undoToken = UUID()
     @Published private(set) var undoEntries: [DeletedLedgerRecord] = []
     @Published private(set) var deletionInFlight = false
     private var undoExpiry: Task<Void, Never>?
+    private var undoExpiryPaused = false
     func deleteExpense(_ entry: Expense) async throws {
         guard !isPreview else { return }
         guard !deletionInFlight else { throw reviewError("请等待当前操作完成。", "Please wait for the current action.", "Tunggu tindakan semasa selesai.") }
@@ -171,13 +175,9 @@ struct YueJiApp: App {
     }
     private func finishDeletion(_ deletion: DeletedLedgerRecord) {
         undoEntries.append(deletion)
+        undoToken = UUID()
         savedNotice = nil
-        undoExpiry?.cancel()
-        undoExpiry = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 30 : 10)) }
-            catch { return }
-            self?.undoEntries = []
-        }
+        scheduleUndoExpiry()
         // The committed snapshot is already published; do not animate the whole navigation tree.
         FeedbackHaptics.success()
         FeedbackSounds.shared.play(.deleted)
@@ -195,7 +195,6 @@ struct YueJiApp: App {
     }
     func showSaved(message: String? = nil, sound: FeedbackSounds.Cue = .saved, firstEntry: Bool = false) {
         feedbackMessage = message ?? tr("已保存", "Saved", "Disimpan")
-        feedbackMascot = sound == .goal || (firstEntry && !UserDefaults.standard.bool(forKey: "celebratedFirstEntry"))
         if firstEntry && !isPreview { UserDefaults.standard.set(true, forKey: "celebratedFirstEntry") }
         savedNotice = UUID()
         if !isPreview {
@@ -234,6 +233,7 @@ struct YueJiApp: App {
         let pending = Set(UserDefaults.standard.stringArray(forKey: "pendingTNGNoticeIDs") ?? [])
         var tracker = TNGReviewTracker(observed: observed, pending: pending)
         tracker.observe(ids)
+        if pending != tracker.pending { newTNGToken = UUID() }
         if newTNGCount != tracker.pending.count { newTNGCount = tracker.pending.count }
         if observed != ids { UserDefaults.standard.set(Array(ids), forKey: "viewedTNGNoticeIDs") }
         if pending != tracker.pending { UserDefaults.standard.set(Array(tracker.pending), forKey: "pendingTNGNoticeIDs") }
@@ -244,8 +244,55 @@ struct YueJiApp: App {
         Task { await BudgetAlertService.shared.check() }
     }
     func dismissNewTNG() {
+        newTNGToken = UUID()
         newTNGCount = 0
         if !isPreview { UserDefaults.standard.set([String](), forKey: "pendingTNGNoticeIDs") }
+    }
+    func receiveForegroundNotice(_ notice: ForegroundLedgerNotice) {
+        foregroundNotice = notice
+        if UIAccessibility.isVoiceOverRunning {
+            UIAccessibility.post(notification: .announcement, argument: notice.title + ". " + notice.message)
+        }
+    }
+    func dismissForegroundNotice(id: UUID) {
+        guard foregroundNotice?.id == id else { return }
+        foregroundNotice = nil
+    }
+    func dismissSavedNotice(id: UUID) {
+        guard savedNotice == id else { return }
+        savedNotice = nil
+    }
+    func dismissNewTNG(id: UUID) {
+        guard newTNGToken == id else { return }
+        dismissNewTNG()
+    }
+    func dismissDeletionFeedback(id: UUID) {
+        guard undoToken == id else { return }
+        // Dismissing the UI does not restore or delete any money records.
+        undoExpiry?.cancel(); undoEntries = []
+    }
+    func setBannerInteraction(id: String, active: Bool) {
+        if active { if bannerInteraction != id { bannerInteraction = id } }
+        else if bannerInteraction == id { bannerInteraction = nil }
+        if id == undoToken.uuidString, !undoEntries.isEmpty {
+            if active { undoExpiry?.cancel() } else { scheduleUndoExpiry() }
+        }
+    }
+    func pauseUndoExpiry(_ paused: Bool) {
+        undoExpiryPaused = paused
+        if paused { undoExpiry?.cancel() }
+        else if !undoEntries.isEmpty, bannerInteraction != undoToken.uuidString { scheduleUndoExpiry() }
+    }
+    private func scheduleUndoExpiry() {
+        undoExpiry?.cancel()
+        guard !undoExpiryPaused, bannerInteraction != undoToken.uuidString else { return }
+        let token = undoToken
+        undoExpiry = Task { [weak self] in
+            do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 30 : 10)) }
+            catch { return }
+            guard self?.undoToken == token else { return }
+            self?.undoEntries = []
+        }
     }
     func change(_ action: @escaping @Sendable (inout Ledger) throws -> Void) {
         perform(key: UUID().uuidString, action: action)

@@ -1,6 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.60.0 · Build 88**
+**版本 / Version：1.61.0 · Build 89**
+
+Build 89 adds left/right swipe dismissal to foreground alerts, new-record notices, saved confirmations and deletion feedback. Banners follow the finger without publishing per-frame ledger updates, reject vertical drags and cancel accidental button activation. A lightweight glass overlay below navigation controls replaces the top inset, keeping page height and scroll position stable. App sheets participate in banner presentation; background/lock-screen notifications and native system screens keep native banners. Reduce Motion, Reduce Transparency and accessible dismissal are supported. Generation checks protect replacement notices and financial records. Recent ledger rows no longer run an insertion animation that can compete with detail navigation. Nine focused notification regressions are added; native compilation, XCTest and repeated navigation on a physical iPhone remain pending. See [Notification and transition verification](docs/notification-banners.md).
 
 Build 88 uses Items as the sole editor for dividing a purchase across categories. The separate category-split toggle, fields and explanatory text are removed. Existing category splits become named items when the ledger is validated or an old backup is loaded; category names supply the names because old splits did not contain purchase names. Amounts and split order stay unchanged, including proportional personal shares/refunds and cent rounding. Live expenses and settlement audit snapshots migrate together, retaining debt applications, payment links and undo. Original files are not overwritten by a read; ordinary saves and exports persist the Items representation. Ledger schema 6 and backup versions 1–6 remain supported. Seven migration regressions are added; native XCTest and the app's flows still require a new CI/device run. See [Items migration verification](docs/items-only-migration.md).
 

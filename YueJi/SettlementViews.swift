@@ -207,7 +207,7 @@ struct SplitHistoryView: View {
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("分账记录", "Split history", "Sejarah pembahagian")).navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $target) { RepaymentView(target: $0) }
+            .sheet(item: $target) { RepaymentView(target: $0).ledgerFeedback(modal: true) }
             .confirmationDialog(tr("撤销还款？", "Undo repayment?", "Batalkan bayaran balik?"), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) {
                     if let (expenseID, shareID, repaymentID, isReturn) = undo {

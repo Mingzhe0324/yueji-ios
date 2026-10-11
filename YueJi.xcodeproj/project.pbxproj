@@ -5,6 +5,8 @@
 	};
 	"objectVersion" = 56;
 	"objects" = {
+        "CB8900000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "NotificationBanners.swift"; "sourceTree" = "<group>"; };
+        "CB8900000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB8900000000000000000001"; };
         "CE8000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "Settlements.swift"; "sourceTree" = "<group>"; };
         "CE8000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CE8000000000000000000001"; };
         "CE8000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "SettlementViews.swift"; "sourceTree" = "<group>"; };
@@ -119,6 +121,7 @@
 		"E17E80AD8E2103CF3FC3FD96" = {
 			"isa" = "PBXGroup";
 			"children" = (
+                "CB8900000000000000000001",
                 "CE8000000000000000000001",
                 "CE8000000000000000000003",
 				"CE6600000000000000000001",
@@ -171,6 +174,7 @@
 			"isa" = "PBXSourcesBuildPhase";
 			"buildActionMask" = 2147483647;
 			"files" = (
+                "CB8900000000000000000002",
                 "CE8000000000000000000002",
                 "CE8000000000000000000004",
 				"18C3C4F160B163CE58D17794",

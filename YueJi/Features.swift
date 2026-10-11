@@ -400,6 +400,8 @@ extension Ledger {
 }
 
 import UserNotifications
+import UIKit
+import PhotosUI
 
 final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     static let shared = LedgerNotifications()
@@ -442,7 +444,29 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .sound, .list])
+        let content = notification.request.content
+        let notice = ForegroundLedgerNotice(title: content.title, message: content.body, userInfo: content.userInfo)
+        DispatchQueue.main.async {
+            // Native pickers, sharing and alerts can cover the SwiftUI overlay.
+            if Self.systemScreenCoversBanners() {
+                completionHandler([.banner, .sound, .list]); return
+            }
+            NotificationCenter.default.post(name: .init("YueJiForegroundNotice"), object: notice)
+            completionHandler([.sound, .list])
+        }
+        // Only foreground presentation is custom. Background/lock-screen alerts stay native.
+    }
+    @MainActor static func requiresSystemBanner(_ controller: UIViewController) -> Bool {
+        if controller is PHPickerViewController || controller is UIDocumentPickerViewController ||
+            controller is UIActivityViewController || controller is UIImagePickerController || controller is UIAlertController { return true }
+        return controller.children.contains { $0.viewIfLoaded?.window != nil && requiresSystemBanner($0) }
+    }
+    @MainActor private static func systemScreenCoversBanners() -> Bool {
+        let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive }
+        guard var current = scenes.flatMap(\.windows).first(where: \.isKeyWindow)?.rootViewController else { return true }
+        while let presented = current.presentedViewController, !presented.isBeingDismissed { current = presented }
+        return requiresSystemBanner(current)
     }
     static func configure(daily: Bool, results: Bool, hour: Int, minute: Int, budgetAlerts: Bool = false) async throws {
         let center = UNUserNotificationCenter.current()

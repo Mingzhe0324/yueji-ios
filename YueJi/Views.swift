@@ -81,6 +81,7 @@ struct MainView: View {
     @State private var showingGuide = false
     @State private var selectedTab = 0
     @State private var showingNewTNG = false
+    @State private var pendingInbox = false
     @State private var notificationDestination: NotificationDestination?
     @State private var logoFinished = false
     @State private var initialLoadFinished = false
@@ -92,10 +93,25 @@ struct MainView: View {
     }
     private func openPendingNotification() {
         guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil,
+              model.feedbackOwners.isVisible(nil),
               let value = UserDefaults.standard.dictionary(forKey: "pendingNotificationDestination"),
               let recordID = value["recordID"] as? String, let kind = value["kind"] as? String else { return }
         notificationDestination = NotificationDestination(recordID: recordID, kind: kind, action: value["action"] as? String ?? "view")
         UserDefaults.standard.removeObject(forKey: "pendingNotificationDestination")
+    }
+    private func openPendingInbox() {
+        guard pendingInbox, model.didFinishLaunch, !showingGuide, !showingNewTNG,
+              notificationDestination == nil, model.feedbackOwners.isVisible(nil) else { return }
+        pendingInbox = false; showingNewTNG = true
+    }
+    private var savedExpiration: BannerExpirationKey {
+        BannerExpirationKey(id: model.savedNotice, paused: phase != .active || !model.didFinishLaunch ||
+            model.error != nil || model.foregroundNotice != nil || model.newTNGCount > 0 || !model.undoEntries.isEmpty ||
+            model.bannerInteraction == model.savedNotice?.uuidString)
+    }
+    private var foregroundExpiration: BannerExpirationKey {
+        BannerExpirationKey(id: model.foregroundNotice?.id, paused: phase != .active || !model.didFinishLaunch || model.error != nil ||
+            model.bannerInteraction == model.foregroundNotice?.id.uuidString)
     }
     private var tabs: some View {
         TabView(selection: $selectedTab) {
@@ -127,6 +143,7 @@ struct MainView: View {
             }
         }
             .task(id: phase) {
+                model.pauseUndoExpiry(phase != .active)
                 guard phase == .active else { FeedbackSounds.shared.stop(); return }
                 await model.refresh()
                 guard !Task.isCancelled else { return }
@@ -152,33 +169,27 @@ struct MainView: View {
                 if finished && !completedGuide && UserDefaults.standard.object(forKey: "pendingNotificationDestination") == nil { showingGuide = true }
                 if finished { openPendingNotification() }
             }
-            .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification() }) {
-                UsageGuideView()
+            .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification(); openPendingInbox() }) {
+                UsageGuideView().ledgerFeedback(modal: true)
             }
             .onChange(of: selectedTab) { _, _ in
                 FeedbackHaptics.selection()
                 model.savedNotice = nil
             }
-            .safeAreaInset(edge: .top) {
-                if model.didFinishLaunch && model.newTNGCount > 0 {
-                    HStack {
-                        Button {
-                            model.dismissNewTNG(); showingNewTNG = true
-                        } label: {
-                            Label(tr("新增 \(model.newTNGCount) 笔银行 / TNG 记录", "\(model.newTNGCount) new bank / TNG records", "\(model.newTNGCount) rekod bank / TNG baharu"), systemImage: "tray.and.arrow.down")
-                                .font(.subheadline.weight(.medium))
-                        }
-                        Spacer()
-                        Button { model.dismissNewTNG() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }
-                            .accessibilityLabel(tr("关闭提示", "Dismiss notice", "Tutup notis"))
-                    }.padding(.horizontal, 16).padding(.vertical, 6).ledgerGlass()
-                        .padding(.horizontal, 20).padding(.vertical, 6)
-                }
+            .onChange(of: model.feedbackOwners.modals.last) { _, _ in openPendingNotification(); openPendingInbox() }
+            .onReceive(NotificationCenter.default.publisher(for: .init("YueJiShowInbox"))) { _ in
+                guard !showingNewTNG, !pendingInbox else { return }
+                pendingInbox = true; openPendingInbox()
+            }
+            .onReceive(NotificationCenter.default.publisher(for: .init("YueJiForegroundNotice"))) { event in
+                guard let notice = event.object as? ForegroundLedgerNotice else { return }
+                model.receiveForegroundNotice(notice)
+                Task { await model.refresh(postRecurring: false) }
             }
             .onReceive(NotificationCenter.default.publisher(for: .init("YueJiNotificationDestination"))) { _ in
                 Task { await model.refresh(postRecurring: false); openPendingNotification() }
             }
-            .sheet(item: $notificationDestination, onDismiss: { openPendingNotification() }) { target in
+            .sheet(item: $notificationDestination, onDismiss: { openPendingNotification(); openPendingInbox() }) { target in
                 NotificationDestinationView(target: target).environmentObject(model)
             }
             .sheet(isPresented: $showingNewTNG, onDismiss: { openPendingNotification() }) {
@@ -186,10 +197,15 @@ struct MainView: View {
                     Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
                 } } }.ledgerFeedback(modal: true)
             }
-            .task(id: model.savedNotice) {
-                guard let token = model.savedNotice else { return }
+            .task(id: savedExpiration) {
+                guard !savedExpiration.paused, let token = savedExpiration.id else { return }
                 do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 6 : 3)) } catch { return }
-                if model.savedNotice == token { model.savedNotice = nil }
+                model.dismissSavedNotice(id: token)
+            }
+            .task(id: foregroundExpiration) {
+                guard !foregroundExpiration.paused, let token = foregroundExpiration.id else { return }
+                do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 12 : 6)) } catch { return }
+                model.dismissForegroundNotice(id: token)
             }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
@@ -397,7 +413,7 @@ struct DashboardView: View {
             Text(tr("最近账目", "Recent entries", "Rekod terkini"))
         } footer: {
             Text(tr("所选月份", "Selected month", "Bulan dipilih"))
-        }.animation(reduceMotion ? nil : YueJiMotion.standard, value: recentEntries.map(\.id))
+        }
     }
     private var quickActions: some View {
         Section {
@@ -830,6 +846,7 @@ struct ExpensesView: View {
                     case .filter:
                         LedgerFilterEditor(value: filter) { filter = $0 }
                             .presentationDetents([.medium, .large])
+                            .ledgerFeedback(modal: true)
                     case .new(let date): ExpenseEditor(original: nil, initialDate: date)
                     case .edit(let expense): ExpenseEditor(original: expense)
                     }
@@ -1660,9 +1677,9 @@ struct SettingsView: View {
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                     do { previewBackup(try result.get()) } catch { model.error = error.localizedDescription }
                 }
-                .sheet(isPresented: $showingUsageGuide) { UsageGuideView() }
+                .sheet(isPresented: $showingUsageGuide) { UsageGuideView().ledgerFeedback(modal: true) }
                 .sheet(item: $restorePreview) { preview in
-                    RestorePreviewView(preview: preview) { loadBackups() }
+                    RestorePreviewView(preview: preview) { loadBackups() }.ledgerFeedback(modal: true)
                 }
             }
         }
@@ -2751,29 +2768,40 @@ struct MoonBuddy: View {
     }
 }
 
-struct SavedFeedback: View {
-    @Environment(\.locale) private var uiLocale
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
-    let token: UUID
-    let message: String
-    var mascot = false
+private struct NotificationBannerCard: View {
+    let title: String
+    var message: String = ""
+    var symbol = "checkmark.circle.fill"
+    var color = Color.green
+    let interaction: BannerInteraction
+    var action: (() -> Void)? = nil
+    private var label: some View {
+        HStack(alignment: .center, spacing: 12) {
+            Image(systemName: symbol).font(.title3.weight(.semibold)).foregroundStyle(color).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(2)
+                if !message.isEmpty { Text(message).font(.subheadline).foregroundStyle(.secondary).lineLimit(3) }
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.foregroundStyle(.primary).frame(minHeight: 44)
+    }
     var body: some View {
-        let _ = uiLocale.identifier
-        HStack(spacing: 10) {
-            if mascot { MoonBuddy(size: 42, celebrating: true, reaction: token) }
-            Label {
-                Text(message)
-            } icon: {
-                Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                    .symbolEffect(.bounce, value: appeared)
-            }
-                .font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
-        }.padding(.horizontal, 18).padding(.vertical, 12).ledgerGlass()
-            .allowsHitTesting(false)
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(message)
-            .onAppear { if !reduceMotion { appeared = true } }
+        HStack(spacing: 4) {
+            if let action {
+                Button { if interaction.canActivate { action() } } label: { label.contentShape(Rectangle()) }
+                    .buttonStyle(.plain).accessibilityLabel(title + (message.isEmpty ? "" : ". " + message))
+                    .accessibilityAction { if !interaction.exiting { action() } }
+            } else { label.accessibilityElement(children: .ignore).accessibilityLabel(title + (message.isEmpty ? "" : ". " + message)) }
+            Button { if interaction.canActivate { interaction.dismiss?() } } label: {
+                Image(systemName: "xmark").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                    .frame(width: 44, height: 44).contentShape(Rectangle())
+            }.buttonStyle(.plain).accessibilityLabel(tr("关闭提示", "Dismiss notice", "Tutup notis"))
+                .accessibilityAction { interaction.dismiss?() }
+        }.padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 8)
+            .modifier(NotificationBannerSurface())
+            .accessibilityElement(children: .contain)
+            .accessibilityHint(tr("向左或向右滑动可关闭提示。", "Swipe left or right to dismiss.", "Leret ke kiri atau kanan untuk menutup."))
+            .accessibilityAction(named: Text(tr("关闭提示", "Dismiss notice", "Tutup notis"))) { interaction.dismiss?() }
+            .accessibilityAction(.escape) { interaction.dismiss?() }
     }
 }
 
@@ -2834,39 +2862,69 @@ private struct LedgerFeedbackHost: ViewModifier {
     @State private var owner = UUID()
     var modal = false
     private var visible: Bool { model.feedbackOwners.isVisible(modal ? owner : nil) }
+    private var topIdentity: String? {
+        guard visible, model.didFinishLaunch else { return nil }
+        if let notice = model.foregroundNotice { return notice.id.uuidString }
+        if model.newTNGCount > 0 { return model.newTNGToken.uuidString }
+        if model.undoEntries.isEmpty { return model.savedNotice?.uuidString }
+        return nil
+    }
     func body(content: Content) -> some View {
         content
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                Group {
-                    if visible && !model.undoEntries.isEmpty {
-                        VStack(spacing: 0) {
-                            if !model.undoEntries.isEmpty {
-                                ViewThatFits(in: .horizontal) {
-                                    HStack(spacing: 16) { deletionStatus; undoButton }
-                                    VStack(spacing: 4) { deletionStatus; undoButton }
-                                }
-                                .padding(.horizontal, 18).padding(.vertical, 6).ledgerGlass()
-                            }
+                if visible && !model.undoEntries.isEmpty {
+                    let token = model.undoToken
+                    SwipeDismissBanner(onDismiss: { model.dismissDeletionFeedback(id: token) },
+                        onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
+                        ViewThatFits(in: .horizontal) {
+                            HStack(spacing: 16) { deletionStatus; undoButton(interaction) }
+                            VStack(spacing: 4) { deletionStatus; undoButton(interaction) }
                         }
-                        .frame(maxWidth: 520).padding(.horizontal, 20).padding(.vertical, 8)
+                        .padding(.horizontal, 18).padding(.vertical, 6).modifier(NotificationBannerSurface())
+                        .accessibilityAction(named: Text(tr("关闭提示", "Dismiss notice", "Tutup notis"))) { interaction.dismiss?() }
+                    }.id(token).frame(maxWidth: 520).padding(.horizontal, 20).padding(.vertical, 8)
                         .frame(maxWidth: .infinity)
-                        .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: 8)))
-                    }
                 }
-                .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.savedNotice)
-                .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.undoEntries.count)
             }
             .overlay(alignment: .top) {
-                if visible, model.undoEntries.isEmpty, let token = model.savedNotice {
-                    SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
-                        .id(token).padding(.horizontal, 20).padding(.top, 8)
-                        .frame(maxWidth: 520)
-                        .allowsHitTesting(false).accessibilityHidden(true)
-                        .transition(.opacity)
-                }
+                // Keep the navigation bar's Back/Close and trailing buttons fully reachable.
+                topBanner.frame(maxWidth: 520).padding(.horizontal, 20).padding(.top, 52)
+                    .animation(.easeOut(duration: reduceMotion ? 0.14 : 0.18), value: topIdentity)
             }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
             .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
+    }
+    @ViewBuilder private var topBanner: some View {
+        if visible, model.didFinishLaunch {
+            if let notice = model.foregroundNotice {
+                SwipeDismissBanner(onDismiss: { model.dismissForegroundNotice(id: notice.id) },
+                    onInteraction: { model.setBannerInteraction(id: notice.id.uuidString, active: $0) }) { interaction in
+                    NotificationBannerCard(title: notice.title, message: notice.message, symbol: "bell.badge.fill", color: .blue,
+                        interaction: interaction, action: notice.destination == nil ? nil : {
+                            guard model.foregroundNotice?.id == notice.id, let destination = notice.destination else { return }
+                            model.dismissForegroundNotice(id: notice.id)
+                            UserDefaults.standard.set(destination, forKey: "pendingNotificationDestination")
+                            NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil)
+                        })
+                }.id(notice.id).transition(.opacity)
+            } else if model.newTNGCount > 0 {
+                let token = model.newTNGToken
+                SwipeDismissBanner(onDismiss: { model.dismissNewTNG(id: token) },
+                    onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
+                    NotificationBannerCard(title: tr("新增 \(model.newTNGCount) 笔银行 / TNG 记录", "\(model.newTNGCount) new bank / TNG records", "\(model.newTNGCount) rekod bank / TNG baharu"),
+                        symbol: "tray.and.arrow.down", color: .blue, interaction: interaction, action: {
+                            guard model.newTNGToken == token, model.newTNGCount > 0 else { return }
+                            model.dismissNewTNG(id: token)
+                            NotificationCenter.default.post(name: .init("YueJiShowInbox"), object: nil)
+                        })
+                }.id(token).transition(.opacity)
+            } else if model.undoEntries.isEmpty, let token = model.savedNotice {
+                SwipeDismissBanner(onDismiss: { model.dismissSavedNotice(id: token) },
+                    onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
+                    NotificationBannerCard(title: model.feedbackMessage, interaction: interaction)
+                }.id(token).transition(.opacity)
+            }
+        }
     }
     private var deletionStatus: some View {
         VStack(alignment: .leading, spacing: 4) {
@@ -2881,10 +2939,15 @@ private struct LedgerFeedbackHost: ViewModifier {
         Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
             .font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
     }
-    private var undoButton: some View {
+    private func undoButton(_ interaction: BannerInteraction) -> some View {
         Button(tr("撤销", "Undo", "Batal padam")) {
+            guard interaction.canActivate else { return }
             Task { await model.undoDeletion() }
         }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44).disabled(model.deletionInFlight)
+            .accessibilityAction {
+                guard !interaction.exiting else { return }
+                Task { await model.undoDeletion() }
+            }
     }
 }
 extension View {
@@ -2991,7 +3054,7 @@ struct NotificationDestinationView: View {
             } else {
                 NavigationStack {
                     Group {
-                        if let notice = model.ledger.tngNotices.first(where: { $0.id == target.recordID }) {
+                        if let notice = model.notice(id: target.recordID) {
                             if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
                             else if ["pending", "transfer"].contains(notice.status) { FinancialNoticeReviewView(id: notice.id) }
                             else { TNGNoticeView(id: notice.id) }

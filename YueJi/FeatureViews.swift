@@ -122,8 +122,8 @@ struct RecurringView: View {
                 .toolbar { Button { if editor == nil { editor = .new } } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(item: $editor) { route in
                     switch route {
-                    case .new: RecurringEditor(original: nil)
-                    case .edit(let rule): RecurringEditor(original: rule)
+                    case .new: RecurringEditor(original: nil).ledgerFeedback(modal: true)
+                    case .edit(let rule): RecurringEditor(original: rule).ledgerFeedback(modal: true)
                     }
                 }
                 .confirmationDialog(tr("删除固定项目？已入账记录会保留。", "Delete schedule? Recorded entries will stay.", "Padam jadual? Rekod sedia ada dikekalkan."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
@@ -1043,7 +1043,7 @@ struct CategoriesView: View {
             }
             Text(tr("改名会同步已有账目、固定消费和商户规则；正在使用的分类不能直接删除。自定义名称保留你输入的语言。", "Renaming updates entries, recurring bills and merchant rules. Categories in use cannot be deleted. Custom names retain the language you enter.", "Penamaan semula mengemas kini rekod, bil berulang dan peraturan peniaga. Kategori yang digunakan tidak boleh dipadam. Nama sendiri kekal dalam bahasa yang diisi.")).font(.footnote)
         }.navigationTitle(tr("管理分类", "Manage categories", "Urus kategori")).navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $editing) { CategoryEditor(initial: $0) }
+            .sheet(item: $editing) { CategoryEditor(initial: $0).ledgerFeedback(modal: true) }
     }
 }
 struct CategoryEditor: View {
@@ -2345,7 +2345,7 @@ struct ReceiptScanView: View {
             }
         }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $comparingItem) { item in
-                if let receiptImage { ReceiptComparisonView(image: receiptImage, item: item) }
+                if let receiptImage { ReceiptComparisonView(image: receiptImage, item: item).ledgerFeedback(modal: true) }
             }
             .onChange(of: reviewKey) { _, _ in reviewed = false }
             .disabled(model.isWorking("receipt-save"))
@@ -2357,7 +2357,7 @@ struct ReceiptScanView: View {
                     case .success(let data): if let data { photo = nil; processedPhoto = nil; Task { await recognize(data) } }
                     case .failure(let failure): error = failure.localizedDescription
                     }
-                }
+                }.ledgerFeedback(modal: true)
             }
             .task(id: photo) {
                 guard !model.isPreview, let item = photo, processedPhoto != item else { return }
@@ -2574,7 +2574,7 @@ struct SavingsGoalsView: View {
         }
         .yuejiListSurface().navigationTitle(tr("储蓄目标", "Savings goals", "Matlamat simpanan"))
         .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("创建目标", "Create goal", "Cipta matlamat")) }
-        .sheet(isPresented: $adding) { SavingsGoalEditor() }
+        .sheet(isPresented: $adding) { SavingsGoalEditor().ledgerFeedback(modal: true) }
     }
 }
 
@@ -2850,7 +2850,7 @@ private struct SavingsGoalDetail: View {
                 Button(tr("删除目标", "Delete goal", "Padam matlamat"), role: .destructive) { deleting = true }
             } label: { Image(systemName: "ellipsis.circle") }
         }
-        .sheet(isPresented: $editing) { if let goal { SavingsGoalEditor(original: goal) } }
+        .sheet(isPresented: $editing) { if let goal { SavingsGoalEditor(original: goal).ledgerFeedback(modal: true) } }
         .alert(withdrawing ? tr("记录取出 · RM", "Record withdrawal · RM", "Rekod pengeluaran · RM") : tr("记录存入 · RM", "Record savings · RM", "Rekod simpanan · RM"), isPresented: $recording) {
             TextField("0.00", text: $amount).keyboardType(.decimalPad)
             Button(tr("确认", "Confirm", "Sahkan")) { record() }

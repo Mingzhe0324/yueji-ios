@@ -1,7 +1,130 @@
 import XCTest
 import UIKit
 import AVFoundation
+import SwiftUI
 @testable import YueJi
+
+final class NotificationBannerTests: XCTestCase {
+    func testHorizontalIntentDoesNotAcceptScrollingOrDiagonalMovement() {
+        for direction in [CGFloat(-1), CGFloat(1)] {
+            XCTAssertTrue(BannerSwipePolicy.accepts(translation: CGPoint(x: direction * 20, y: 3), velocity: .zero))
+            XCTAssertFalse(BannerSwipePolicy.accepts(translation: CGPoint(x: 3, y: direction * 20), velocity: .zero))
+            XCTAssertFalse(BannerSwipePolicy.accepts(translation: CGPoint(x: direction * 20, y: 20), velocity: .zero))
+            XCTAssertTrue(BannerSwipePolicy.accepts(translation: .zero, velocity: CGPoint(x: direction * 800, y: 20)))
+        }
+        XCTAssertFalse(BannerSwipePolicy.accepts(translation: .zero, velocity: .zero))
+    }
+    func testShortSwipesSnapBackAndCancellationNeverDismisses() {
+        for direction in [CGFloat(-1), CGFloat(1)] {
+            XCTAssertNil(BannerSwipePolicy.dismissalDirection(offset: direction * 40, velocity: 0, width: 320))
+            XCTAssertNil(BannerSwipePolicy.dismissalDirection(offset: direction * 8, velocity: direction * 1000, width: 320))
+            XCTAssertNil(BannerSwipePolicy.dismissalDirection(offset: direction * 240, velocity: direction * 1000, width: 320, cancelled: true))
+        }
+    }
+    func testDistanceFlickAndReverseGesturesInBothDirections() {
+        for direction in [CGFloat(-1), CGFloat(1)] {
+            XCTAssertEqual(BannerSwipePolicy.dismissalDirection(offset: direction * 100, velocity: 0, width: 320), direction)
+            XCTAssertEqual(BannerSwipePolicy.dismissalDirection(offset: direction * 20, velocity: direction * 800, width: 320), direction)
+            XCTAssertNil(BannerSwipePolicy.dismissalDirection(offset: direction * 110, velocity: -direction * 700, width: 320))
+            XCTAssertNil(BannerSwipePolicy.dismissalDirection(offset: direction * 200, velocity: -direction * 2500, width: 320))
+            XCTAssertNil(BannerSwipePolicy.dismissalDirection(offset: direction * 100, velocity: 0, width: 520))
+            XCTAssertEqual(BannerSwipePolicy.dismissalDirection(offset: direction * 145, velocity: 0, width: 520), direction)
+        }
+    }
+    func testForegroundDestinationRequiresAnExplicitValidRecordReference() {
+        let valid = ForegroundLedgerNotice(title: "YueJi", message: "RM5", userInfo: ["recordID": "receipt", "recordKind": "notice"])
+        XCTAssertEqual(valid.destination, ["recordID": "receipt", "kind": "notice", "action": "view"])
+        let invalid: [[AnyHashable: Any]] = [[:], ["recordID": "", "recordKind": "notice"], ["recordID": "receipt", "recordKind": "unknown"]]
+        for info in invalid {
+            XCTAssertNil(ForegroundLedgerNotice(title: "YueJi", message: "RM5", userInfo: info).destination)
+        }
+    }
+    @MainActor func testOlderDismissalCannotClearANewerNoticeOrChangeMoneyRecords() throws {
+        let model = LedgerModel(previewLedger: GuideSample.ledger())
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let before = try encoder.encode(model.ledger)
+        let old = ForegroundLedgerNotice(title: "First", message: "RM5", userInfo: [:])
+        let latest = ForegroundLedgerNotice(title: "Second", message: "RM5", userInfo: [:])
+        model.receiveForegroundNotice(old); model.receiveForegroundNotice(latest)
+        model.dismissForegroundNotice(id: old.id)
+        XCTAssertEqual(model.foregroundNotice, latest)
+        model.dismissForegroundNotice(id: latest.id)
+        XCTAssertNil(model.foregroundNotice)
+        model.showSaved(message: "First")
+        let oldSaved = try XCTUnwrap(model.savedNotice)
+        model.showSaved(message: "Second")
+        let latestSaved = try XCTUnwrap(model.savedNotice)
+        model.dismissSavedNotice(id: oldSaved)
+        XCTAssertEqual(model.savedNotice, latestSaved)
+        model.dismissSavedNotice(id: latestSaved)
+        XCTAssertNil(model.savedNotice)
+        XCTAssertEqual(before, try encoder.encode(model.ledger))
+    }
+    @MainActor func testRecordSummaryAndInteractionDismissalsArePresentationOnly() {
+        let model = LedgerModel(previewLedger: GuideSample.ledger())
+        let revision = model.ledgerRevision
+        model.newTNGCount = 3
+        let token = model.newTNGToken
+        model.dismissNewTNG(id: UUID())
+        XCTAssertEqual(model.newTNGCount, 3)
+        model.setBannerInteraction(id: "old", active: true)
+        model.setBannerInteraction(id: "new", active: true)
+        model.setBannerInteraction(id: "old", active: false)
+        XCTAssertEqual(model.bannerInteraction, "new")
+        model.dismissNewTNG(id: token)
+        XCTAssertEqual(model.newTNGCount, 0)
+        XCTAssertNotEqual(model.newTNGToken, token)
+        model.newTNGCount = 1
+        model.dismissNewTNG(id: token)
+        XCTAssertEqual(model.newTNGCount, 1)
+        XCTAssertEqual(model.ledgerRevision, revision)
+    }
+    @MainActor func testNativeHostTracksFingerCancelsTapAndRestoresAfterCancelledSwipe() throws {
+        let gate = BannerInteraction()
+        var dismissals = 0
+        let controller = SwipeBannerController(content: AnyView(Text("Notice").padding()), interaction: gate,
+            reduceMotion: false, onDismiss: { dismissals += 1 }, onInteraction: { _ in })
+        controller.loadViewIfNeeded()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 64)
+        controller.view.layoutIfNeeded()
+        let card = try XCTUnwrap(controller.children.first?.view)
+        controller.beginContact()
+        controller.handlePan(state: .began, translation: CGPoint(x: -14, y: 0), velocity: .zero)
+        controller.handlePan(state: .changed, translation: CGPoint(x: -80, y: 0), velocity: .zero)
+        XCTAssertEqual(card.transform.tx, -80, accuracy: 0.01)
+        XCTAssertFalse(gate.canActivate)
+        controller.handlePan(state: .cancelled, translation: CGPoint(x: -80, y: 0), velocity: CGPoint(x: -800, y: 0))
+        XCTAssertEqual(card.transform, .identity)
+        XCTAssertEqual(dismissals, 0)
+        controller.beginContact() // A new touch may interrupt the return animation.
+        XCTAssertTrue(gate.canActivate)
+        controller.movedContact(translation: CGPoint(x: 0, y: 30))
+        XCTAssertFalse(gate.canActivate) // A vertical swipe over a button cannot activate it either.
+        XCTAssertEqual(dismissals, 0)
+        controller.stop()
+    }
+    @MainActor func testSystemScreensUseNativePresentationInsteadOfAnObscuredBanner() {
+        XCTAssertFalse(LedgerNotifications.requiresSystemBanner(UIViewController()))
+        XCTAssertTrue(LedgerNotifications.requiresSystemBanner(UIAlertController(title: "Review", message: nil, preferredStyle: .alert)))
+        XCTAssertTrue(LedgerNotifications.requiresSystemBanner(UIActivityViewController(activityItems: ["Statement"], applicationActivities: nil)))
+    }
+    @MainActor func testRapidDismissRequestsCompleteOnceWithoutActivatingBanner() async {
+        let gate = BannerInteraction()
+        let done = expectation(description: "Banner finished exiting")
+        done.assertForOverFulfill = true
+        var dismissals = 0
+        let controller = SwipeBannerController(content: AnyView(Text("Notice").padding()), interaction: gate,
+            reduceMotion: true, onDismiss: { dismissals += 1; done.fulfill() }, onInteraction: { _ in })
+        controller.loadViewIfNeeded()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 64)
+        controller.view.layoutIfNeeded()
+        gate.dismiss?(); gate.dismiss?()
+        XCTAssertFalse(gate.canActivate)
+        await fulfillment(of: [done], timeout: 3)
+        XCTAssertEqual(dismissals, 1)
+        controller.stop()
+    }
+}
 
 final class TransactionItemsTests: XCTestCase {
     private let date = Date(timeIntervalSince1970: 1_700_000_000)
