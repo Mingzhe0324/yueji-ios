@@ -735,6 +735,114 @@ final class LedgerTests: XCTestCase {
         }
     }
 
+    func testNavigationIndexPreservesDebtsLinkedDetailsAndUndo() throws {
+        var ledger = try settlementExample().validated()
+        let id = try fullSettlement(&ledger)
+        var index = LedgerNavigationIndex(ledger: ledger)
+        for expense in ledger.expenses {
+            let detail = try XCTUnwrap(index.detail(id: expense.id))
+            XCTAssertEqual(detail.entry, expense)
+            XCTAssertEqual(detail.settlements, ledger.settlements)
+            XCTAssertEqual(detail.payableToPayer, ledger.payableToPayer(expense))
+            for share in expense.shares {
+                XCTAssertEqual(detail.shareBalances[share.id], ledger.outstanding(expense: expense, share: share))
+            }
+        }
+        XCTAssertNil(index.detail(id: "missing"))
+        try ledger.undoSettlement(id: id)
+        index = LedgerNavigationIndex(ledger: ledger)
+        XCTAssertEqual(index.detail(id: "drinks")?.payableToPayer, 1000)
+        XCTAssertEqual(index.detail(id: "mine")?.payableToPayer, 1500)
+        XCTAssertEqual(index.detail(id: "lunch")?.shareBalances["amy-lunch"], 3000)
+        XCTAssertEqual(index.detail(id: "lunch")?.settlements.first?.active, false)
+        ledger.expenses.removeAll { $0.id == "lunch" }
+        XCTAssertNil(LedgerNavigationIndex(ledger: ledger).detail(id: "lunch"))
+    }
+
+    func testTimelineProjectionsReuseRowsAndPreserveFiltersPaymentsAndEdits() async throws {
+        let worker = LedgerProjectionWorker()
+        var ledger = try settlementExample().validated()
+        _ = try fullSettlement(&ledger)
+        ledger.tngNotices = [settlementNotice(id: "unlinked-transfer", cents: 200)]
+        let query = LedgerTimelineQuery(revision: 1, month: settlementDate, search: "", filter: LedgerFilter(), provider: "all")
+        let first = try await worker.timeline(ledger: ledger, month: settlementDate, query: query)
+        XCTAssertEqual(first.personal, 5500)
+        XCTAssertEqual(first.expenses, try ledger.filteredEntries(in: settlementDate, search: "", filter: LedgerFilter()))
+        XCTAssertEqual(first.transfers, ledger.ledgerTNGTransfers(in: settlementDate))
+        XCTAssertEqual(first.settlements, try ledger.ledgerSettlements(in: settlementDate))
+        let ids = first.days.flatMap { $0.entries.map(\.id) }
+        for _ in 0..<30 {
+            let repeated = try await worker.timeline(ledger: ledger, month: settlementDate, query: query)
+            XCTAssertEqual(repeated.days.flatMap { $0.entries.map(\.id) }, ids)
+        }
+        let builds = await worker.timelineBuildCount
+        XCTAssertEqual(builds, 1, "Repeated navigation must not refilter, resort or regroup the ledger")
+        let filtered = LedgerTimelineQuery(revision: 1, month: settlementDate, search: "Personal", filter: LedgerFilter(category: "购物"), provider: "手动")
+        let subset = try await worker.timeline(ledger: ledger, month: settlementDate, query: filtered)
+        XCTAssertEqual(subset.expenses.map(\.id), ["mine"])
+        XCTAssertTrue(subset.transfers.isEmpty)
+        let settlementID = ledger.settlements[0].id
+        try ledger.undoSettlement(id: settlementID)
+        ledger.expenses[2].cents = 1800
+        let updated = LedgerTimelineQuery(revision: 2, month: settlementDate, search: "", filter: LedgerFilter(), provider: "all")
+        let fresh = try await worker.timeline(ledger: ledger, month: settlementDate, query: updated)
+        XCTAssertEqual(fresh.personal, 5800)
+        XCTAssertTrue(fresh.settlements.isEmpty)
+        XCTAssertEqual(fresh.expenses.first { $0.id == "mine" }?.cents, 1800)
+    }
+
+    @MainActor func testNavigationReadModelsInvalidateAfterChangesButIgnoreFeedback() async throws {
+        let model = LedgerModel(previewLedger: try settlementExample().validated())
+        let query = LedgerTimelineQuery(revision: model.ledgerRevision, month: settlementDate, search: "", filter: LedgerFilter(), provider: "all")
+        let first = try await model.timeline(month: settlementDate, query: query)
+        XCTAssertEqual(model.expenseDetail(id: "mine")?.payableToPayer, 1500)
+        model.showSaved(message: "Saved")
+        XCTAssertEqual(model.ledgerRevision, query.revision)
+        let repeated = try await model.timeline(month: settlementDate, query: query)
+        XCTAssertEqual(repeated.personal, first.personal)
+        model.ledger.expenses[2].cents = 1900
+        XCTAssertEqual(model.expenseDetail(id: "mine")?.payableToPayer, 1900)
+        do {
+            _ = try await model.timeline(month: settlementDate, query: query)
+            XCTFail("An old query must not return stale rows after an edit")
+        } catch is CancellationError { }
+        let freshQuery = LedgerTimelineQuery(revision: model.ledgerRevision, month: settlementDate, search: "", filter: LedgerFilter(), provider: "all")
+        let fresh = try await model.timeline(month: settlementDate, query: freshQuery)
+        XCTAssertEqual(fresh.personal, 5900)
+        model.ledger.expenses.removeAll { $0.id == "mine" }
+        XCTAssertNil(model.expenseDetail(id: "mine"))
+    }
+
+    func testCancelledProjectionDoesNotPublishOrPopulateCache() async throws {
+        let worker = LedgerProjectionWorker()
+        let ledger = settlementExample()
+        let query = LedgerTimelineQuery(revision: 1, month: settlementDate, search: "", filter: LedgerFilter(), provider: "all")
+        let task = Task {
+            withUnsafeCurrentTask { $0?.cancel() }
+            return try await worker.timeline(ledger: ledger, month: settlementDate, query: query)
+        }
+        do { _ = try await task.value; XCTFail("Cancelled work must not return a projection") }
+        catch is CancellationError { }
+        let builds = await worker.timelineBuildCount
+        XCTAssertEqual(builds, 0)
+        do {
+            _ = try await worker.timeline(ledger: ledger, month: shiftedMonth(settlementDate, by: 1), query: query)
+            XCTFail("A query for a different month must not populate the cache")
+        } catch is CancellationError { }
+    }
+
+    func testRepeatedIndexedDetailLookupsWithLargeLedgerPerformance() throws {
+        let date = settlementDate
+        let ledger = Ledger(expenses: (0..<20_000).map { Expense(id: "entry-\($0)", merchant: "Purchase", cents: 1000, date: date) })
+        let index = LedgerNavigationIndex(ledger: ledger)
+        measure(metrics: [XCTClockMetric(), XCTCPUMetric(), XCTMemoryMetric()]) {
+            for i in 0..<1_000 {
+                let detail = index.detail(id: "entry-\(i % 2 == 0 ? 19_999 : 0)")
+                XCTAssertEqual(detail?.entry.cents, 1000)
+            }
+        }
+    }
+
     func testOverviewSnapshotPreservesSplitsRefundsAndLocalMonthBoundaries() throws {
         let zone = try XCTUnwrap(TimeZone(identifier: "Asia/Kuala_Lumpur"))
         let start = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-09-30T16:00:00Z"))

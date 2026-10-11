@@ -23,13 +23,28 @@ struct YueJiApp: App {
         didSet {
             ledgerRevision += 1
             overviewCache.removeAll(keepingCapacity: true)
+            navigationIndex = nil
             refreshSignature = nil
         }
     }
-    private var ledgerRevision = 0
+    private(set) var ledgerRevision = 0
     private var refreshSignature: Data?
     private var refreshRequest = UUID()
     private var overviewCache: [String: OverviewSnapshot] = [:]
+    private let projectionWorker = LedgerProjectionWorker()
+    private var navigationIndex: LedgerNavigationIndex?
+    func expenseDetail(id: String) -> ExpenseDetailSnapshot? {
+        // Preview/direct in-memory changes have no storage refresh to prepare an index.
+        if navigationIndex == nil { navigationIndex = LedgerNavigationIndex(ledger: ledger) }
+        return navigationIndex?.detail(id: id)
+    }
+    func timeline(month: Date, query: LedgerTimelineQuery) async throws -> LedgerTimelineSnapshot {
+        guard query.revision == ledgerRevision else { throw CancellationError() }
+        let snapshot = try await projectionWorker.timeline(ledger: ledger, month: month, query: query)
+        try Task.checkCancellation()
+        guard query.revision == ledgerRevision else { throw CancellationError() }
+        return snapshot
+    }
     func overview(in month: Date) -> OverviewSnapshot {
         let key = TimeZone.current.identifier + "|" + monthKey(month)
         if let cached = overviewCache[key] { return cached }
@@ -115,14 +130,17 @@ struct YueJiApp: App {
             let snapshot = try await worker.snapshot(postRecurring: postRecurring)
             // An edit, restore or newer refresh must win over an older background read.
             guard !Task.isCancelled, revision == ledgerRevision, request == refreshRequest else { return }
-            publish(snapshot)
+            guard !loaded || refreshSignature != snapshot.signature else { return }
+            let index = try await projectionWorker.index(ledger: snapshot.ledger, signature: snapshot.signature)
+            guard !Task.isCancelled, revision == ledgerRevision, request == refreshRequest else { return }
+            publish(snapshot, index: index)
         } catch is CancellationError { return }
         catch {
             guard !Task.isCancelled, revision == ledgerRevision, request == refreshRequest else { return }
             self.error = error.localizedDescription
         }
     }
-    private func publish(_ snapshot: (ledger: Ledger, signature: Data)) {
+    private func publish(_ snapshot: (ledger: Ledger, signature: Data), index: LedgerNavigationIndex? = nil) {
         guard !loaded || refreshSignature != snapshot.signature else { return }
         let fresh = snapshot.ledger
         let ids = Set(fresh.tngNotices.map(\.id))
@@ -134,6 +152,7 @@ struct YueJiApp: App {
         if observed != ids { UserDefaults.standard.set(Array(ids), forKey: "viewedTNGNoticeIDs") }
         if pending != tracker.pending { UserDefaults.standard.set(Array(tracker.pending), forKey: "pendingTNGNoticeIDs") }
         ledger = fresh
+        navigationIndex = index
         refreshSignature = snapshot.signature
         if !loaded { loaded = true }
         Task { await BudgetAlertService.shared.check() }

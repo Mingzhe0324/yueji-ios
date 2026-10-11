@@ -49,10 +49,10 @@ private struct YueJiSheetSurface: ViewModifier {
     }
 }
 private struct YueJiTabBarMotion: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ViewBuilder func body(content: Content) -> some View {
         if #available(iOS 26.0, *) {
-            content.tabBarMinimizeBehavior(reduceMotion ? .never : .onScrollDown)
+            // Keep tab navigation in its own safe area, away from transaction actions.
+            content.tabBarMinimizeBehavior(.never)
         } else { content }
     }
 }
@@ -641,7 +641,6 @@ struct ExpenseRow: View {
 }
 struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
     @State private var deletingNotice: TNGNotice?
@@ -657,32 +656,34 @@ struct ExpensesView: View {
     @State private var adding = false
     @State private var editing: Expense?
     @State private var deleting: Expense?
-    private var entries: [Expense] { ((try? model.ledger.filteredEntries(in: month, search: search, filter: filter)) ?? []).filter { providerFilter == "all" || $0.source == providerFilter } }
-    private var transfers: [TNGNotice] { model.ledger.ledgerTNGTransfers(in: month, search: search).filter { providerFilter == "all" || $0.provider == providerFilter } }
-    private var settlements: [FriendSettlement] {
-        guard providerFilter == "all" || providerFilter == "手动" else { return [] }
-        return (try? model.ledger.ledgerSettlements(in: month, search: search, filter: filter)) ?? []
+    @State private var timeline = LedgerTimelineSnapshot()
+    @State private var loadedQuery: LedgerTimelineQuery?
+    private var query: LedgerTimelineQuery {
+        LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: search, filter: filter, provider: providerFilter)
     }
     var body: some View {
-        let entries = self.entries
-        let transfers = self.transfers
-        let settlements = self.settlements
-        let days = LedgerTimelineItem.grouped(expenses: entries, transfers: transfers, settlements: settlements)
+        let requestedMonth = month
+        let query = self.query
+        let days = timeline.days
+        let updating = loadedQuery != query
         NavigationStack {
             List {
                 Section {
                     MonthPicker(month: monthBinding)
                     Picker(tr("来源", "Source", "Sumber"), selection: $providerFilter) {
                         Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
-                        ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
+                        ForEach(timeline.sources, id: \.self) { Text(sourceLabel($0)).tag($0) }
                     }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
                             .font(.caption).foregroundStyle(.secondary)
-                        AnimatedMoney(cents: entries.reduce(0) { $0 + $1.personal })
+                        AnimatedMoney(cents: timeline.personal)
                             .font(.system(.title2, design: .default, weight: .semibold)).foregroundStyle(ink)
                         HStack {
-                            Text(String(entries.count + transfers.count + settlements.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
+                            Text(String(timeline.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
+                            ProgressView().controlSize(.small)
+                                .opacity(updating ? 1 : 0).accessibilityHidden(!updating)
+                                .accessibilityLabel(tr("正在更新账本", "Updating ledger", "Mengemas kini lejar"))
                             Spacer()
                             Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                                 .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
@@ -690,7 +691,7 @@ struct ExpensesView: View {
                         }
                     }.padding(.vertical, 6)
                 }
-                if entries.isEmpty && transfers.isEmpty && settlements.isEmpty {
+                if timeline.count == 0 && !updating {
                     ContentUnavailableView {
                         Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                     } description: {
@@ -710,13 +711,13 @@ struct ExpensesView: View {
                         ForEach(day.entries) { item in
                             switch item {
                             case .settlement(let record):
-                                NavigationLink { SettlementDetailView(id: record.id).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
+                                NavigationLink { SettlementDetailView(id: record.id) } label: {
                                     SettlementPaymentRow(record: record)
-                                }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
+                                }
                             case .transfer(let notice):
-                                NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
+                                NavigationLink { TNGTimelineDetail(notice: notice) } label: {
                                     TNGTimelineRow(notice: notice)
-                                }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
+                                }
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
                             NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
@@ -736,7 +737,21 @@ struct ExpensesView: View {
                         }
                     } header: { Text(dateLabel(day.date)) }
                 }
-            }.listStyle(.insetGrouped).animation(reduceMotion ? nil : YueJiMotion.standard, value: filter)
+            }.listStyle(.insetGrouped)
+                .task(id: query) {
+                    guard loadedQuery != query else { return }
+                    do {
+                        let fresh = try await model.timeline(month: requestedMonth, query: query)
+                        guard !Task.isCancelled, self.query == query else { return }
+                        timeline = fresh
+                        loadedQuery = query
+                    } catch is CancellationError { return }
+                    catch {
+                        guard !Task.isCancelled, self.query == query else { return }
+                        timeline = LedgerTimelineSnapshot(); loadedQuery = query
+                        model.error = error.localizedDescription
+                    }
+                }
                 .refreshable { await model.refresh(postRecurring: false) }
                 .sheet(isPresented: $filtering) {
                     LedgerFilterEditor(value: filter) { filter = $0 }
@@ -765,7 +780,6 @@ struct ExpensesView: View {
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
                 .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
-                .animation(reduceMotion ? nil : YueJiMotion.standard, value: days.flatMap { $0.entries.map(\.id) })
         }
     }
 }
@@ -806,15 +820,14 @@ struct ExpenseDetailView: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Namespace private var detailTransition
     @State private var editing: Expense?
     @State private var editingItems = false
     @State private var itemsExpanded = false
     @State private var deleting: Expense?
     // Hold the last real content until the native dismissal has finished.
-    @State private var lastVisibleEntry: Expense?
-    private var liveEntry: Expense? { model.ledger.expenses.first { $0.id == id } }
-    private var entry: Expense? { liveEntry ?? lastVisibleEntry }
+    @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
     var body: some View {
         Group {
@@ -823,8 +836,11 @@ struct ExpenseDetailView: View {
         }
     }
     private var detailContent: some View {
-            List {
-                if let entry {
+        let liveDetail = model.expenseDetail(id: id)
+        let detail = liveDetail ?? lastVisibleDetail
+        return List {
+                if let detail {
+                    let entry = detail.entry
                     Section {
                         VStack(spacing: 12) {
                             TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection).font(.largeTitle.bold())
@@ -849,7 +865,7 @@ struct ExpenseDetailView: View {
                         LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personal, direction: .outgoing) }
                         if entry.paidByFriend != nil {
                             LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
-                            LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(model.ledger.payableToPayer(entry)))
+                            LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(detail.payableToPayer))
                             if let payer = entry.paidByFriend {
                                 NavigationLink(tr("朋友余额 / 净额结算", "Friend balance / net settlement", "Baki rakan / penyelesaian bersih")) { FriendDetailView(key: friendKey(payer)) }
                             }
@@ -886,7 +902,7 @@ struct ExpenseDetailView: View {
                                     LabeledContent(share.name, value: money(share.cents)).font(.headline)
                                     LabeledContent(tr("已还", "Repaid", "Telah dibayar"), value: money(share.repaid))
                                     if entry.paidByFriend == nil {
-                                        let balance = model.ledger.outstanding(expense: entry, share: share)
+                                        let balance = detail.shareBalances[share.id] ?? 0
                                         LabeledContent(balance < 0 ? tr("需退给朋友", "Return to friend", "Pulangkan kepada rakan") : tr("待还", "Outstanding", "Belum dibayar"), value: money(abs(balance)))
                                     }
                                 }.font(.subheadline).padding(.vertical, 6)
@@ -894,7 +910,7 @@ struct ExpenseDetailView: View {
                         }
                     }
                     Section(tr("关联结算", "Linked settlements", "Penyelesaian dipautkan")) {
-                        ForEach(model.ledger.settlements.filter { $0.lines.contains { $0.expense.id == entry.id } }) { record in
+                        ForEach(detail.settlements) { record in
                             NavigationLink(dateLabel(record.date) + (record.active ? "" : tr(" · 已撤销", " · Undone", " · Dibatalkan"))) { SettlementDetailView(id: record.id) }
                         }
                     }
@@ -919,20 +935,30 @@ struct ExpenseDetailView: View {
                 }
                 }
             }
-            .toolbar {
-                if let entry {
-                    ToolbarItemGroup(placement: .bottomBar) {
+            // Retain tab navigation; reserve a separate row above it for transaction actions.
+            .toolbar(.visible, for: .tabBar)
+            .toolbar(.hidden, for: .bottomBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                if let entry = detail?.entry {
+                    let layout = typeSize.isAccessibilitySize
+                        ? AnyLayout(VStackLayout(spacing: 12))
+                        : AnyLayout(HStackLayout(spacing: 16))
+                    layout {
                         Button { editingItems = false; editing = entry } label: {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
-                                .frame(minHeight: 44)
-                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveEntry == nil)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveDetail == nil)
                             .yuejiZoomSource(id: "expense-edit-" + id, namespace: detailTransition)
-                        Spacer()
                         Button(role: .destructive) { deleting = entry } label: {
                             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
-                                .frame(minHeight: 44)
-                        }.tint(.red).disabled(liveEntry == nil)
+                                .frame(maxWidth: .infinity, minHeight: 44)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }.yuejiSecondaryButton().buttonBorderShape(.capsule).tint(.red).disabled(liveDetail == nil)
                     }
+                    .padding(.horizontal, 20).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(uiColor: .systemGroupedBackground))
                 }
             }
             .sheet(item: $editing) {
@@ -940,12 +966,12 @@ struct ExpenseDetailView: View {
                     .yuejiZoom(id: (editingItems ? "expense-items-" : "expense-edit-") + id, namespace: detailTransition)
             }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
-            .onAppear { if let liveEntry { lastVisibleEntry = liveEntry } }
-            .onChange(of: liveEntry) { _, updated in
-                if let updated { lastVisibleEntry = updated } else { dismiss() }
+            .onAppear { if let liveDetail { lastVisibleDetail = liveDetail } }
+            .onChange(of: model.ledgerRevision) { _, _ in
+                if let liveDetail { lastVisibleDetail = liveDetail } else { dismiss() }
             }
             .transaction { transaction in
-                if liveEntry == nil { transaction.animation = nil }
+                if liveDetail == nil { transaction.animation = nil }
             }
     }
 }

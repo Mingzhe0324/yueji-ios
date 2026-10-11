@@ -32,7 +32,9 @@ func sourceLabel(_ key: String) -> String {
     }
 }
 func dateLabel(_ date: Date, time: Bool = false) -> String {
-    let f = DateFormatter(); f.locale = Locale(identifier: AppLanguage.localeID); f.dateStyle = .medium; f.timeStyle = time ? .short : .none; return f.string(from: date)
+    // Foundation reuses the formatter behind a value-based FormatStyle.
+    date.formatted(Date.FormatStyle(date: .abbreviated, time: time ? .shortened : .omitted)
+        .locale(Locale(identifier: AppLanguage.localeID)))
 }
 func localizedError(_ key: String) -> String {
     let values: [String: (String, String)] = [

@@ -589,7 +589,7 @@ func optionalMoney(_ value: String) throws -> Int? {
     if text == "0" || text == "0.00" { return 0 }
     return try toCents(text)
 }
-struct LedgerFilter: Equatable {
+struct LedgerFilter: Hashable {
     var category = ""
     var source = ""
     var minimum = ""
@@ -660,6 +660,111 @@ extension Ledger {
             if let high, e.cents > high { return false }
             return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || e.categorySummary.localizedCaseInsensitiveContains(query) || (e.items ?? []).contains(where: { $0.name.localizedCaseInsensitiveContains(query) }) || (e.note ?? "").localizedCaseInsensitiveContains(query) || (e.tags ?? []).contains(where: { $0.localizedCaseInsensitiveContains(query) })
         }.sorted { $0.date > $1.date }
+    }
+}
+
+/// Immutable results used by the ledger screen; never filter or sort from a view body.
+struct LedgerTimelineQuery: Hashable {
+    let revision: Int
+    let month: String
+    let search: String
+    let filter: LedgerFilter
+    let provider: String
+    let locale: String
+    let timeZone: String
+
+    init(revision: Int, month: Date, search: String, filter: LedgerFilter, provider: String) {
+        self.revision = revision; self.month = monthKey(month)
+        self.search = search; self.filter = filter; self.provider = provider
+        locale = AppLanguage.localeID; timeZone = TimeZone.current.identifier
+    }
+}
+struct LedgerTimelineSnapshot {
+    var expenses: [Expense] = []
+    var transfers: [TNGNotice] = []
+    var settlements: [FriendSettlement] = []
+    var days: [LedgerDayGroup] = []
+    var personal = 0
+    var sources: [String] = []
+    var count: Int { expenses.count + transfers.count + settlements.count }
+
+    init() {}
+    init(ledger: Ledger, month: Date, query: LedgerTimelineQuery) throws {
+        expenses = try ledger.filteredEntries(in: month, search: query.search, filter: query.filter)
+            .filter { query.provider == "all" || $0.source == query.provider }
+        transfers = ledger.ledgerTNGTransfers(in: month, search: query.search)
+            .filter { query.provider == "all" || $0.provider == query.provider }
+        if query.provider == "all" || query.provider == "手动" {
+            settlements = try ledger.ledgerSettlements(in: month, search: query.search, filter: query.filter)
+        }
+        days = LedgerTimelineItem.grouped(expenses: expenses, transfers: transfers, settlements: settlements)
+        personal = expenses.reduce(0) { $0 + $1.personal }
+        sources = ledger.availableSources
+    }
+}
+
+/// Index the original records and settlement applications once, preserving accounting rules.
+struct ExpenseDetailSnapshot {
+    let entry: Expense
+    let settlements: [FriendSettlement]
+    let payableToPayer: Int
+    let shareBalances: [String: Int]
+}
+struct LedgerNavigationIndex {
+    private var expenses: [String: Expense] = [:]
+    private var linked: [String: [FriendSettlement]] = [:]
+    private var applied: [String: Int] = [:]
+
+    init(ledger: Ledger) {
+        for entry in ledger.expenses { expenses[entry.id] = entry }
+        for record in ledger.settlements {
+            for expenseID in Set(record.lines.map { $0.expense.id }) {
+                linked[expenseID, default: []].append(record)
+            }
+            if record.active {
+                for line in record.lines { applied[line.id, default: 0] += line.applied }
+            }
+        }
+    }
+    func detail(id: String) -> ExpenseDetailSnapshot? {
+        guard let entry = expenses[id] else { return nil }
+        let balances = Dictionary(entry.shares.map { share in
+            (share.id, entry.paidByFriend == nil ? share.owed - (applied[FriendDebtItem.key(id, share.id)] ?? 0) : 0)
+        }, uniquingKeysWith: { first, _ in first })
+        return ExpenseDetailSnapshot(entry: entry, settlements: linked[id] ?? [],
+            payableToPayer: entry.paidByFriend == nil ? 0 : max(0, entry.owingToPayer + (applied[FriendDebtItem.key(id, nil)] ?? 0)),
+            shareBalances: balances)
+    }
+}
+
+/// Pure display work runs independently of the storage actor and the main actor.
+actor LedgerProjectionWorker {
+    private var timelines: [LedgerTimelineQuery: LedgerTimelineSnapshot] = [:]
+    private var indexedSignature: Data?
+    private var navigationIndex: LedgerNavigationIndex?
+    private(set) var timelineBuildCount = 0
+
+    func index(ledger: Ledger, signature: Data) throws -> LedgerNavigationIndex {
+        try Task.checkCancellation()
+        if indexedSignature == signature, let navigationIndex { return navigationIndex }
+        let index = LedgerNavigationIndex(ledger: ledger)
+        try Task.checkCancellation()
+        indexedSignature = signature; navigationIndex = index
+        return index
+    }
+    func timeline(ledger: Ledger, month: Date, query: LedgerTimelineQuery) throws -> LedgerTimelineSnapshot {
+        try Task.checkCancellation()
+        guard query.month == monthKey(month), query.locale == AppLanguage.localeID,
+              query.timeZone == TimeZone.current.identifier else { throw CancellationError() }
+        if let cached = timelines[query] { return cached }
+        let snapshot = try LedgerTimelineSnapshot(ledger: ledger, month: month, query: query)
+        try Task.checkCancellation()
+        // Old ledger revisions must never supply rows after an edit or restore.
+        timelines = timelines.filter { $0.key.revision == query.revision }
+        if timelines.count >= 6 { timelines.removeAll(keepingCapacity: true) }
+        timelines[query] = snapshot
+        timelineBuildCount += 1
+        return snapshot
     }
 }
 
