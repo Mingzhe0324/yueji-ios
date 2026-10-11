@@ -1130,8 +1130,6 @@ struct ExpenseEditor: View {
     @State private var date = Date()
     @State private var category = "其他"
     @State private var rememberCategory = true
-    @State private var splitCategories = false
-    @State private var allocations: [CategoryAllocationDraft] = []
     @State private var itemDrafts: [ExpenseItemDraft] = []
     @State private var note = ""
     @State private var tagsText = ""
@@ -1169,7 +1167,7 @@ struct ExpenseEditor: View {
                 paymentSection
                 merchantSection
                 ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, initiallyExpanded: startWithItems)
-                ExpenseBookkeepingFields(splitCategories: $splitCategories, allocations: $allocations, note: $note, tagsText: $tagsText, totalCents: (try? total()) ?? 0, itemized: !itemDrafts.isEmpty)
+                ExpenseBookkeepingFields(note: $note, tagsText: $tagsText)
                 currencySection
                 friendSplitSection
                 if let original {
@@ -1359,8 +1357,6 @@ struct ExpenseEditor: View {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             friendPays = e.paidByFriend != nil; payerName = e.paidByFriend ?? ""
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
-            splitCategories = !(e.categoryAllocations ?? []).isEmpty
-            allocations = (e.categoryAllocations ?? []).map { CategoryAllocationDraft(id: $0.id, category: $0.category, amount: Currency.input($0.cents, "MYR")) }
             itemDrafts = (e.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
             note = e.note ?? ""; tagsText = (e.tags ?? []).joined(separator: ", ")
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
@@ -1383,7 +1379,7 @@ struct ExpenseEditor: View {
     }
     private func finishKeyboard() {
         focusedField = nil
-        // Includes fields in the reusable note, category-allocation and friend rows.
+        // Includes fields in the reusable note, item and friend rows.
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     private func beginSave() {
@@ -1412,13 +1408,10 @@ struct ExpenseEditor: View {
             entry.tags = normalizedExpenseTags(tagsText)
             if itemDrafts.isEmpty { entry.items = nil }
             else { entry.items = try itemDrafts.map { try $0.savedItem() } }
-            if let items = entry.items, let first = items.first {
-                entry.categoryAllocations = nil
+            entry.categoryAllocations = nil
+            if let items = entry.items, let first = items.first, original?.items != items {
                 entry.category = first.category
-            } else if splitCategories {
-                entry.categoryAllocations = try allocations.map { CategoryAllocation(id: $0.id, category: $0.category, cents: try toCents($0.amount)) }
-                if let first = entry.categoryAllocations?.first { entry.category = first.category }
-            } else { entry.categoryAllocations = nil }
+            }
             if let original, original.refunded > 0 {
                 guard entry.cents == original.cents, entry.date == original.date, entry.foreign == original.foreign, entry.paidByFriend == original.paidByFriend else { throw reviewError("已有退款，请先撤销退款再修改金额或日期。", "Undo refunds before changing amount or date.", "Batalkan bayaran balik sebelum mengubah amaun atau tarikh.") }
             }
@@ -1443,7 +1436,7 @@ struct ExpenseEditor: View {
                     throw reviewError("请填写每位朋友的姓名，且姓名不能重复。", "Enter a distinct name for each friend.", "Isi nama berbeza bagi setiap rakan.")
                 }
             }
-            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && !splitCategories && itemDrafts.isEmpty)
+            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty)
             await model.refresh(postRecurring: false)
             model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }

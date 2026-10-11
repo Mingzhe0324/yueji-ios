@@ -1,6 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.59.0 · Build 87**
+**版本 / Version：1.60.0 · Build 88**
+
+Build 88 uses Items as the sole editor for dividing a purchase across categories. The separate category-split toggle, fields and explanatory text are removed. Existing category splits become named items when the ledger is validated or an old backup is loaded; category names supply the names because old splits did not contain purchase names. Amounts and split order stay unchanged, including proportional personal shares/refunds and cent rounding. Live expenses and settlement audit snapshots migrate together, retaining debt applications, payment links and undo. Original files are not overwritten by a read; ordinary saves and exports persist the Items representation. Ledger schema 6 and backup versions 1–6 remain supported. Seven migration regressions are added; native XCTest and the app's flows still require a new CI/device run. See [Items migration verification](docs/items-only-migration.md).
 
 Build 87 reviews the complete app journey. Overview Add Entry uses a padded safe-area row above the expanded tab bar; detail Edit/Delete have separate 44-point targets. Ledger and recurring add/edit/filter sheets use a single presenter, automatic-record Edit opens the editor directly, and deleting inside the editor closes the sheet before returning from detail. Standard native transitions replace source-linked zoom effects throughout. All display views observe language changes without recreating navigation stacks. Overview, category, comparison, friend, tag, upcoming and statement/export calculations use background projections; cached debt, settlement, expense and inbox indexes avoid repeated whole-ledger scans. Manual/automatic financial writes, deletion/undo, refunds, savings, recurring/category/notes and backup IO run off the main actor. Keyed operations reject repeated payment taps while a write is in flight, and cancelled or superseded reads cannot replace current screen data. Form drafts survive returns from child screens; exchange-rate requests preserve edited fields and discard stale currency responses. Save notices overlay without shifting the list, and receipt scans reject interrupted results. Seven new native regression tests cover cache accounting, indexed read parity, rapid taps, concurrent writes, failure rollback, pre/post-commit cancellation and backup round-trips. Existing ledger/backup version 6 remains unchanged. Local checks cannot establish native compilation or frame smoothness: see [complete UX review and iPhone checklist](docs/ux-review.md).
 
@@ -17,7 +19,7 @@ iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English
 ## 中文
 
 现有功能：
-- **日常记账**：新增、编辑、删除及撤销删除；分类、备注、标签、搜索与筛选，一笔消费可拆分多个分类。
+- **日常记账**：新增、编辑、删除及撤销删除；备注、标签、搜索与筛选，通过「物品」填写每件购买的名称、金额和分类。
 - **自动记账**：通过快捷指令传入 Apple Pay、银行及 TNG 交易资料；明确付款自动入账，疑似重复与不明确交易待确认，并提供结果通知。
 - **分类与交易确认**：商户分类规则与记忆；确认消费、收入、转账、充值及退款，关联原消费或配对通知。
 - **朋友分账与净额结算**：记录我付款或朋友付款，平均、自定、全是我的或全是朋友的份额；分别显示双方欠款。选择账目、预览抵扣与部分转账、确认结算，再手动关联银行 / TNG 付款。
@@ -34,7 +36,7 @@ iPhone 个人记账 App，以 MYR 为主要统计币种，支持中文、English
 ## English
 
 Current features:
-- **Everyday records:** add, edit, delete and undo deletion; named items with individual categories, notes, tags, search, filters and multiple categories per expense.
+- **Everyday records:** add, edit, delete and undo deletion; Items with individual names, amounts and categories, plus notes, tags, search and filters.
 - **Automatic recording:** accept Apple Pay, bank and TNG details through Shortcuts. Record clear payments, review uncertain transactions or possible duplicates, and receive result notifications.
 - **Categories and review:** merchant rules and category memory; confirm expenses, income, transfers, top-ups and refunds, with links to original expenses or paired notices.
 - **Friend balances and net settlement:** choose who paid, split equally or by custom shares, and record entirely personal purchases. See both directions of debt; select items, review offsets/partial payments, confirm settlement and manually link the bank/TNG payment.

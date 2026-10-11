@@ -78,6 +78,29 @@ extension Expense {
 }
 
 extension Ledger {
+    /// Normalize live expenses and audit snapshots together. Amounts, dates, debt
+    /// applications, bank links and settlement identities are never changed.
+    func migratingLegacyCategorySplits() throws -> Ledger {
+        guard expenses.contains(where: { $0.hasLegacyCategorySplits }) || settlements.contains(where: {
+            $0.lines.contains(where: { $0.expense.hasLegacyCategorySplits }) || $0.convertedPayment?.hasLegacyCategorySplits == true
+        }) else { return self }
+        var copy = self
+        copy.expenses = try expenses.map { try $0.migratingLegacyCategorySplits() }
+        copy.settlements = try settlements.map { record in
+            let lines = try record.lines.map { line in
+                SettlementLine(expense: try line.expense.migratingLegacyCategorySplits(),
+                               shareID: line.shareID, before: line.before, applied: line.applied)
+            }
+            return FriendSettlement(id: record.id, friend: record.friend, name: record.name,
+                date: record.date, lines: lines, transfer: record.transfer, voidedAt: record.voidedAt,
+                paymentNoticeID: record.paymentNoticeID,
+                convertedPayment: try record.convertedPayment?.migratingLegacyCategorySplits())
+        }
+        try copy.validateBookkeeping()
+        try copy.validateSettlements()
+        return copy
+    }
+
     private var settledAmounts: [String: Int] {
         var result: [String: Int] = [:]
         for record in settlements where record.active {

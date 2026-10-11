@@ -3070,6 +3070,205 @@ final class AutomationWorkflowTests: XCTestCase {
     }
 }
 
+final class ItemsOnlyMigrationTests: XCTestCase {
+    private let date = Date(timeIntervalSince1970: 1_700_000_000)
+    private func legacyExpense() -> Expense {
+        Expense(id: "old-purchase", merchant: "TNG Store", cents: 3500, date: date,
+            category: "购物", source: "TNG", categoryAllocations: [
+                CategoryAllocation(id: "food-part", category: "餐饮", cents: 1500),
+                CategoryAllocation(id: "shopping-part", category: "购物", cents: 2000)])
+    }
+
+    func testLegacyCategoryMigrationPreservesRefundsRepaymentsAndAutomaticLink() throws {
+        var old = legacyExpense()
+        old.foreign = ForeignAmount(currency: "USD", minor: 1750, quote: RateQuote(value: 2, date: date, source: "Manual"))
+        old.shares = [Share(id: "amy", name: "Amy", cents: 1000,
+            repayments: [Repayment(id: "repayment", cents: 200, date: date.addingTimeInterval(60))], refundCents: 200)]
+        old.refunds = [RefundRecord(id: "refund", cents: 600, date: date.addingTimeInterval(120), personalCents: 400, shares: ["amy": 200])]
+        old.note = "Keep this note"; old.tags = ["Trip"]
+        old.receiptSummary = "Original receipt"; old.transactionReference = "BANK-OLD"
+        var ledger = Ledger(expenses: [old], seenEvents: ["bank-event"], postedRecurring: ["schedule-event"])
+        ledger.tngNotices = [TNGNotice(id: "bank", body: "Paid RM35.00", title: "Payment", date: date,
+            usesReceivedDate: false, kind: "payment", status: "recorded", cents: 3500, party: old.merchant,
+            expenseID: old.id, bankReference: "BANK-OLD")]
+        let migrated = try LocalStore.decode(LocalStore.encode(ledger))
+        var expected = old
+        expected.categoryAllocations = nil
+        expected.items = [ExpenseItem(id: "food-part", name: "餐饮", cents: 1500, category: "餐饮"),
+                          ExpenseItem(id: "shopping-part", name: "购物", cents: 2000, category: "购物")]
+        XCTAssertEqual(migrated.expenses, [expected])
+        XCTAssertEqual(migrated.tngNotices, ledger.tngNotices)
+        XCTAssertEqual(migrated.seenEvents, ledger.seenEvents)
+        XCTAssertEqual(migrated.postedRecurring, ledger.postedRecurring)
+        XCTAssertEqual(migrated.expenses[0].paidFromMyAccount, 3500)
+        XCTAssertEqual(migrated.spending(in: date), 2100)
+        XCTAssertEqual(migrated.spending(in: date, category: "餐饮"), 900)
+        XCTAssertEqual(migrated.spending(in: date, category: "购物"), 1200)
+        XCTAssertEqual(migrated.friendDebtItems.map(\.balance), ledger.friendDebtItems.map(\.balance))
+        XCTAssertEqual(migrated.friendSpending(friend: "Amy").categories, ledger.friendSpending(friend: "Amy").categories)
+        XCTAssertEqual(OverviewSnapshot(ledger: migrated, month: date).categoryTotals,
+                       OverviewSnapshot(ledger: ledger, month: date).categoryTotals)
+    }
+
+    func testMigratedItemsPreserveRoundingForEveryPersonalShare() throws {
+        for share in 0...3 {
+            let old = Expense(id: "tiny", merchant: "Three cents", cents: 3, date: date, category: "餐饮",
+                shares: [Share(id: "amy", name: "Amy", cents: share)], categoryAllocations: [
+                    CategoryAllocation(id: "first", category: "餐饮", cents: 1),
+                    CategoryAllocation(id: "second", category: "购物", cents: 2)])
+            let migrated = try Ledger(expenses: [old]).validated().expenses[0]
+            XCTAssertEqual(migrated.items?.map(\.id), ["first", "second"])
+            for total in 0...3 {
+                XCTAssertEqual(migrated.categoryDistribution(total: total), old.categoryDistribution(total: total))
+                XCTAssertEqual(migrated.categoryDistribution(total: total).values.reduce(0, +), total)
+            }
+            XCTAssertEqual(migrated.personalItemAmounts.values.reduce(0, +), old.personal)
+        }
+    }
+
+    func testMigrationKeepsPartialAndOffsetSettlementsRM55BankLinksAndUndo() throws {
+        var lunch = Expense(id: "lunch", merchant: "Lunch", cents: 6000, date: date, category: "餐饮",
+            shares: [Share(id: "lunch-amy", name: "Amy", cents: 3000)], categoryAllocations: [
+                CategoryAllocation(id: "lunch-food", category: "餐饮", cents: 4000),
+                CategoryAllocation(id: "lunch-shopping", category: "购物", cents: 2000)])
+        lunch.note = "Do not lose lunch"
+        let drinks = Expense(id: "drinks", merchant: "Drinks", cents: 2000, date: date, category: "餐饮",
+            shares: [Share(id: "drinks-amy", name: "Amy", cents: 1000)], categoryAllocations: [
+                CategoryAllocation(id: "drinks-food", category: "餐饮", cents: 1000),
+                CategoryAllocation(id: "drinks-entertainment", category: "娱乐", cents: 1000)], paidByFriend: "Amy")
+        let mine = Expense(id: "mine", merchant: "Mine", cents: 1500, date: date, category: "购物",
+            shares: [Share(id: "mine-amy", name: "Amy", cents: 0)], paidByFriend: "Amy")
+        for payment in [0, 200, 500] {
+            var old = Ledger(expenses: [lunch, drinks, mine])
+            let settlementDate = date.addingTimeInterval(3600)
+            let plan = try old.settlementPlan(friend: "Amy", selected: Set(old.friendDebtItems.map(\.id)), payment: payment, date: settlementDate)
+            // Construct the historical audit before normalization, as an old backup did.
+            old.settlements = [FriendSettlement(id: "net-settlement", friend: plan.friend, name: plan.name,
+                date: plan.date, lines: plan.lines, transfer: plan.transfer, paymentNoticeID: payment == 0 ? nil : "bank")]
+            if payment > 0 {
+                old.tngNotices = [TNGNotice(id: "bank", body: "Payment received", title: "Incoming", date: settlementDate,
+                    usesReceivedDate: false, kind: "incoming", status: "settlement", cents: payment, party: "Amy",
+                    bankReference: "NET-PAYMENT", settlementID: "net-settlement")]
+            }
+            let beforeCategories = OverviewSnapshot(ledger: old, month: date).categoryTotals
+            var migrated = try LocalStore.decode(LocalStore.encode(old))
+            XCTAssertEqual(migrated.spending(in: date), 5500)
+            XCTAssertEqual(OverviewSnapshot(ledger: migrated, month: date).categoryTotals, beforeCategories)
+            XCTAssertEqual(migrated.friendBalances[0].owed, 500 - payment)
+            XCTAssertEqual(migrated.friendBalances[0].payable, 0)
+            XCTAssertEqual(migrated.settlements[0].transfer, payment)
+            XCTAssertEqual(migrated.settlements[0].paymentNoticeID, payment == 0 ? nil : "bank")
+            XCTAssertEqual(migrated.settlements[0].lines.map(\.before), old.settlements[0].lines.map(\.before))
+            XCTAssertEqual(migrated.settlements[0].lines.map(\.applied), old.settlements[0].lines.map(\.applied))
+            for line in migrated.settlements[0].lines {
+                let entry = try XCTUnwrap(migrated.expenses.first { $0.id == line.expense.id })
+                XCTAssertTrue(entry.sameSettlementTerms(as: line.expense))
+                XCTAssertNil(line.expense.categoryAllocations)
+            }
+            let entries = migrated.expenses
+            XCTAssertThrowsError(try migrated.addRefund(expenseID: "lunch", cents: 100, date: settlementDate))
+            try migrated.undoSettlement(id: "net-settlement")
+            XCTAssertEqual(migrated.expenses, entries)
+            XCTAssertEqual(migrated.friendBalances[0].owed, 3000)
+            XCTAssertEqual(migrated.friendBalances[0].payable, 2500)
+            XCTAssertEqual(migrated.tngNotices.count, payment == 0 ? 0 : 1)
+            if payment > 0 { XCTAssertEqual(migrated.tngNotices[0].status, "pending") }
+            XCTAssertEqual(migrated.spending(in: date), 5500)
+            XCTAssertEqual(migrated.expenses[1].purchaseDisplayCents, 1000)
+            XCTAssertEqual(migrated.expenses[1].paidFromMyAccount, 0)
+        }
+    }
+
+    func testVoidedSettlementAndConvertedPaymentAuditsMigrateWithoutExtraSpending() throws {
+        var old = Ledger(expenses: [Expense(id: "live", merchant: "Live", cents: 1000, date: date,
+            shares: [Share(id: "amy", name: "Amy", cents: 1000)])])
+        let plan = try old.settlementPlan(friend: "Amy", selected: Set(old.friendDebtItems.map(\.id)), payment: 1000, date: date)
+        var archived = plan.lines[0].expense
+        archived.categoryAllocations = [CategoryAllocation(id: "a", category: "餐饮", cents: 600),
+                                       CategoryAllocation(id: "b", category: "购物", cents: 400)]
+        let archivedLine = SettlementLine(expense: archived, shareID: plan.lines[0].shareID, before: 1000, applied: 1000)
+        old.settlements = [FriendSettlement(id: "voided", friend: plan.friend, name: plan.name, date: date,
+            lines: [archivedLine], transfer: 1000, voidedAt: date.addingTimeInterval(60), convertedPayment: legacyExpense())]
+        let migrated = try LocalStore.decode(LocalStore.encode(old))
+        XCTAssertEqual(migrated.expenses, old.expenses)
+        XCTAssertEqual(migrated.spending(in: date), old.spending(in: date))
+        XCTAssertFalse(migrated.settlements[0].active)
+        XCTAssertEqual(migrated.settlements[0].voidedAt, old.settlements[0].voidedAt)
+        XCTAssertEqual(migrated.settlements[0].lines[0].expense.items?.map(\.cents), [600, 400])
+        XCTAssertNil(migrated.settlements[0].lines[0].expense.categoryAllocations)
+        XCTAssertEqual(migrated.settlements[0].convertedPayment?.items?.map(\.cents), [1500, 2000])
+        XCTAssertEqual(migrated.settlements[0].convertedPayment?.id, "old-purchase")
+    }
+
+    func testAllBackupVersionsMigrateCustomCategoriesAndRemainIdempotent() throws {
+        var old = legacyExpense()
+        let custom = CustomCategory(name: "Household")
+        old.categoryAllocations?[1].category = custom.name
+        var ledger = Ledger(expenses: [old]); ledger.customCategories = [custom]
+        let data = try LocalStore.encode(ledger)
+        for version in 1...6 {
+            var object = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+            object["version"] = version
+            let restored = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
+            XCTAssertEqual(restored.version, 6)
+            XCTAssertEqual(restored.expenses[0].items?.map(\.category), ["餐饮", "Household"])
+            XCTAssertEqual(restored.spending(in: date, category: "Household"), 2000)
+            let exported = try LocalStore.exportData(restored)
+            let again = try LocalStore.decode(exported)
+            XCTAssertEqual(again.expenses, restored.expenses)
+            XCTAssertEqual(try again.validated().expenses, restored.expenses)
+            let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: exported) as? [String: Any])
+            let entries = try XCTUnwrap(saved["expenses"] as? [[String: Any]])
+            XCTAssertNil(entries[0]["categoryAllocations"])
+            XCTAssertEqual((entries[0]["items"] as? [[String: Any]])?.count, 2)
+        }
+        let existing = Expense(id: "itemized", merchant: "Already items", cents: 3500, date: date,
+            items: [ExpenseItem(id: "real-lunch", name: "Lunch", cents: 1500, category: "餐饮"),
+                    ExpenseItem(id: "real-dinner", name: "Dinner", cents: 2000, category: "餐饮")])
+        XCTAssertEqual(try Ledger(expenses: [existing]).validated().expenses, [existing])
+    }
+
+    func testStorageMigrationPreservesRawFileUntilSaveAndRejectsCorruptRestore() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let file = folder.appendingPathComponent("ledger.json")
+        let old = Ledger(expenses: [legacyExpense()])
+        let raw = try LocalStore.encode(old)
+        try raw.write(to: file)
+        let store = LocalStore(folder: folder)
+        let visible = try store.read()
+        XCTAssertNil(visible.expenses[0].categoryAllocations)
+        XCTAssertEqual(visible.expenses[0].items?.count, 2)
+        XCTAssertEqual(try Data(contentsOf: file), raw, "Reading migration must not overwrite the original file")
+        try store.change { $0.expenses[0].note = "Saved note" }
+        let saved = try store.read()
+        XCTAssertEqual(saved.spending(in: date), 3500)
+        XCTAssertEqual(saved.expenses[0].category, "购物", "Migration must retain the parent category, even when it is not the first split")
+        XCTAssertEqual(saved.expenses[0].note, "Saved note")
+        XCTAssertEqual(saved.expenses[0].items, visible.expenses[0].items)
+        let bytes = try Data(contentsOf: file)
+        var corrupt = old; corrupt.expenses[0].categoryAllocations?[0].cents += 1
+        XCTAssertThrowsError(try store.restore(LocalStore.encode(corrupt)))
+        XCTAssertEqual(try Data(contentsOf: file), bytes)
+        let backups = try store.backups()
+        XCTAssertFalse(backups.isEmpty)
+        XCTAssertEqual(try LocalStore.decode(Data(contentsOf: XCTUnwrap(backups.first))).spending(in: date), 3500)
+    }
+
+    func testOversizedLegacyAllocationIDsBecomeStableValidItemIDs() throws {
+        var old = legacyExpense()
+        old.categoryAllocations?[0].id = String(repeating: "old-id", count: 100)
+        let data = try LocalStore.encode(Ledger(expenses: [old]))
+        let first = try LocalStore.decode(data).expenses[0]
+        let second = try LocalStore.decode(data).expenses[0]
+        XCTAssertEqual(first.items, second.items)
+        XCTAssertTrue(first.items?.allSatisfy { $0.id.count <= 200 } == true)
+        XCTAssertEqual(first.items?[1].id, "shopping-part")
+        XCTAssertEqual(first.categoryDistribution(total: first.personal), old.categoryDistribution(total: old.personal))
+    }
+}
+
 final class BookkeepingBuild62Tests: XCTestCase {
     private func splitExpense() -> Expense {
         Expense(merchant: "Supermarket", cents: 10000, category: "餐饮", categoryAllocations: [CategoryAllocation(category: "餐饮", cents: 7000), CategoryAllocation(category: "购物", cents: 3000)])
@@ -3121,9 +3320,12 @@ final class BookkeepingBuild62Tests: XCTestCase {
         let copy = try LocalStore.decode(LocalStore.encode(ledger))
         var expected = e
         expected.date = Date(timeIntervalSince1970: 1_759_680_000)
+        expected.items = (e.categoryAllocations ?? []).map { ExpenseItem(id: $0.id, name: $0.category, cents: $0.cents, category: $0.category) }
+        expected.categoryAllocations = nil
         XCTAssertEqual(copy.expenses[0], expected)
         XCTAssertEqual(copy.expenses[0].date.timeIntervalSince1970, 1_759_680_000)
-        XCTAssertEqual(try LocalStore.encode(copy), try LocalStore.encode(ledger))
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(copy)).expenses, copy.expenses)
+        XCTAssertEqual(copy.spending(in: e.date), ledger.spending(in: e.date))
         let exported = String(decoding: ledger.csv(month: nil, splits: false), as: UTF8.self)
         XCTAssertTrue(exported.contains("category_allocations_MYR")); XCTAssertTrue(exported.contains("槟城旅行"))
     }
@@ -3140,7 +3342,10 @@ final class BookkeepingBuild62Tests: XCTestCase {
         var entries = try XCTUnwrap(object["expenses"] as? [[String: Any]])
         entries[0]["paymentAccountID"] = "legacy"; object["expenses"] = entries
         let restored = try LocalStore.decode(JSONSerialization.data(withJSONObject: object))
-        XCTAssertEqual(restored.expenses, [e])
+        var expected = e
+        expected.items = (e.categoryAllocations ?? []).map { ExpenseItem(id: $0.id, name: $0.category, cents: $0.cents, category: $0.category) }
+        expected.categoryAllocations = nil
+        XCTAssertEqual(restored.expenses, [expected])
         let saved = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(restored)) as? [String: Any])
         for key in ["paymentAccounts", "sourceAccountDefaults", "expenseHistory", "statementLines"] { XCTAssertNil(saved[key]) }
         XCTAssertEqual(restored.spending(in: e.date, category: "购物"), 3000)

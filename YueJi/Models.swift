@@ -91,7 +91,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var refunds: [RefundRecord]? = nil
     var receiptSummary: String? = nil
     var transactionReference: String? = nil
-    var categoryAllocations: [CategoryAllocation]? = nil
+    var categoryAllocations: [CategoryAllocation]? = nil // Legacy backup input only; validated ledgers migrate it to items.
     var note: String? = nil
     var tags: [String]? = nil
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
@@ -207,7 +207,7 @@ struct Ledger: Codable {
             guard e.personal >= 0 else { throw LedgerError.invalid("朋友份额超过实际付款。") }
         }
         try validateSettlements()
-        return self
+        return try migratingLegacyCategorySplits()
     }
     mutating func restoreDeletedExpenses(_ entries: [Expense]) throws {
         guard Set(entries.map(\.id)).count == entries.count,
@@ -949,6 +949,47 @@ struct ExpenseItem: Codable, Identifiable, Equatable {
     var category: String
 }
 extension Expense {
+    var hasLegacyCategorySplits: Bool { !(categoryAllocations ?? []).isEmpty }
+
+    /// Preserve order and capacities so proportional shares/refunds keep every cent.
+    /// Legacy splits did not store purchase names; retain each category as its name.
+    func migratingLegacyCategorySplits() throws -> Expense {
+        guard hasLegacyCategorySplits else { return self }
+        try validateLegacyCategorySplits()
+        guard (items ?? []).isEmpty else {
+            throw reviewError("旧分类拆分与物品明细不能同时存在。", "Legacy category splits and items cannot coexist.", "Pecahan kategori lama dan item tidak boleh wujud serentak.")
+        }
+        let parts = categoryAllocations ?? []
+        var reservedIDs = Set(parts.filter { $0.id.count <= 200 }.map(\.id))
+        var copy = self
+        copy.items = parts.enumerated().map { index, part in
+            var itemID = part.id
+            // Older allocation IDs had no length cap. Preserve ordinary IDs and
+            // derive stable, collision-free item IDs for oversized legacy inputs.
+            if itemID.count > 200 {
+                let digest = SHA256.hash(data: Data(itemID.utf8)).map { String(format: "%02x", $0) }.joined()
+                itemID = "legacy-\(index)-" + digest
+                while reservedIDs.contains(itemID) { itemID += "_" }
+                reservedIDs.insert(itemID)
+            }
+            return ExpenseItem(id: itemID, name: part.category, cents: part.cents, category: part.category)
+        }
+        copy.categoryAllocations = nil
+        try copy.validateItems()
+        return copy
+    }
+
+    func validateLegacyCategorySplits(allowedCategories: [String]? = nil) throws {
+        guard let parts = categoryAllocations, !parts.isEmpty else { return }
+        guard (2...20).contains(parts.count), Set(parts.map(\.id)).count == parts.count,
+              Set(parts.map(\.category)).count == parts.count,
+              parts.allSatisfy({ !$0.id.isEmpty && !$0.category.isEmpty && $0.category.count <= 200
+                  && (allowedCategories?.contains($0.category) ?? true) && $0.cents > 0 && $0.cents <= 10_000_000_000 }),
+              parts.reduce(0, { $0 + $1.cents }) == cents else {
+            throw LedgerError.invalid("分类金额合计必须等于付款 MYR 总额，分类不能重复。")
+        }
+    }
+
     var allocatedCategories: [CategoryAllocation] {
         if let items, !items.isEmpty {
             return items.map { CategoryAllocation(id: $0.id, category: $0.category, cents: $0.cents) }
@@ -995,12 +1036,7 @@ extension Ledger {
             guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20,
                   (e.tags ?? []).allSatisfy({ !friendKey($0).isEmpty && $0.count <= 40 }),
                   Set((e.tags ?? []).map(friendKey)).count == (e.tags?.count ?? 0) else { throw LedgerError.invalid("备注或标签无效。") }
-            if let parts = e.categoryAllocations, !parts.isEmpty {
-                guard (2...20).contains(parts.count), Set(parts.map(\.id)).count == parts.count,
-                      Set(parts.map(\.category)).count == parts.count,
-                      parts.allSatisfy({ !$0.id.isEmpty && categoryNames.contains($0.category) && $0.cents > 0 && $0.cents <= 10_000_000_000 }),
-                      parts.reduce(0, { $0 + $1.cents }) == e.cents else { throw LedgerError.invalid("分类金额合计必须等于付款 MYR 总额，分类不能重复。") }
-            }
+            try e.validateLegacyCategorySplits(allowedCategories: categoryNames)
         }
     }
 }

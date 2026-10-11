@@ -241,7 +241,7 @@ actor LedgerRefreshWorker {
                 }
                 ledger.expenses.append(entry)
             }
-            if rememberCategory && (entry.categoryAllocations ?? []).isEmpty && (entry.items ?? []).isEmpty,
+            if rememberCategory && (entry.items ?? []).isEmpty,
                original == nil || original?.category != entry.category {
                 ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
             }
@@ -265,7 +265,7 @@ final class LocalStore {
     private var backupFolder: URL { folder.appendingPathComponent("Backups", isDirectory: true) }
     static func encode(_ ledger: Ledger) throws -> Data { let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]; encoder.dateEncodingStrategy = .iso8601; return try encoder.encode(ledger) }
     static func exportData(_ ledger: Ledger) throws -> Data {
-        var copy = ledger; copy.backupCreatedAt = Date(); return try encode(copy)
+        var copy = try ledger.validated(); copy.backupCreatedAt = Date(); return try encode(copy)
     }
     var recoveryFile: URL { folder.appendingPathComponent("before-last-restore.json") }
     static func decode(_ data: Data) throws -> Ledger { guard data.count <= 20_000_000 else { throw LedgerError.invalid("备份不能超过 20 MB。") }; let decoder = JSONDecoder(); decoder.dateDecodingStrategy = .iso8601; return try decoder.decode(Ledger.self, from: data).validated() }

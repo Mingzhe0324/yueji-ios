@@ -3087,11 +3087,6 @@ struct FinancialNoticeReviewView: View {
     }
 }
 
-struct CategoryAllocationDraft: Identifiable {
-    var id = UUID().uuidString
-    var category: String
-    var amount: String = ""
-}
 struct ExpenseItemDraft: Identifiable {
     var id = UUID().uuidString
     var name = ""
@@ -3206,16 +3201,10 @@ func normalizedExpenseTags(_ text: String) -> [String] {
 }
 struct ExpenseBookkeepingFields: View {
     @Environment(\.locale) private var uiLocale
-    @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tagsExpanded = false
-    @Binding var splitCategories: Bool
-    @Binding var allocations: [CategoryAllocationDraft]
     @Binding var note: String
     @Binding var tagsText: String
-    let totalCents: Int
-    var itemized = false
-    private var allocated: Int { allocations.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
         let _ = uiLocale.identifier
         Section(tr("备注", "Note", "Nota")) {
@@ -3229,31 +3218,6 @@ struct ExpenseBookkeepingFields: View {
                 LabeledContent(tr("标签", "Tags", "Tag"), value: tagsText.isEmpty ? tr("选填", "Optional", "Pilihan") : tagsText)
             }
         }
-        if !itemized {
-        Section(tr("一笔消费，多种用途", "One expense, multiple categories", "Satu belanja, pelbagai kategori")) {
-            Toggle(tr("拆分这笔消费的分类", "Split this expense into categories", "Pecahkan belanja ini mengikut kategori"), isOn: $splitCategories.animation(reduceMotion ? nil : YueJiMotion.standard))
-            if splitCategories {
-                ForEach($allocations) { $part in
-                    HStack {
-                        Picker(tr("分类", "Category", "Kategori"), selection: $part.category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
-                        TextField("MYR", text: $part.amount).keyboardType(.decimalPad).frame(maxWidth: 120)
-                    }
-                }.onDelete { allocations.remove(atOffsets: $0) }
-                Button(tr("增加分类", "Add category", "Tambah kategori")) {
-                    let used = Set(allocations.map(\.category))
-                    if let next = model.ledger.categoryNames.first(where: { !used.contains($0) }) { allocations.append(CategoryAllocationDraft(category: next)) }
-                }.disabled(allocations.count >= min(20, model.ledger.categoryNames.count))
-                LabeledContent(tr("分类合计 / 付款总额", "Category total / payment total", "Jumlah kategori / jumlah bayaran"), value: money(allocated) + " / " + money(totalCents))
-                    .foregroundStyle(allocated == totalCents ? Color.secondary : Color.orange)
-                Text(tr("至少两类，MYR 合计须等于付款总额。个人净消费按分类比例统计。", "Use at least two categories. The MYR sum must equal the payment total. Personal net spending is allocated proportionally.", "Gunakan sekurang-kurangnya dua kategori. Jumlah MYR mesti sama dengan jumlah bayaran. Belanja bersih peribadi diagihkan mengikut nisbah.")).font(.footnote).foregroundStyle(.secondary)
-            }
-        }.onChange(of: splitCategories) { _, enabled in
-            if enabled && allocations.isEmpty {
-                allocations = Array(model.ledger.categoryNames.prefix(2)).map { CategoryAllocationDraft(category: $0) }
-            }
-        }
-        }
-
     }
 }
 struct ExpenseBookkeepingDetails: View {
@@ -3263,16 +3227,7 @@ struct ExpenseBookkeepingDetails: View {
     var body: some View {
         let _ = uiLocale.identifier
         Section(tr("分类与备注", "Categories and notes", "Kategori dan nota")) {
-            if !(entry.items ?? []).isEmpty {
-                LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
-            } else if entry.allocatedCategories.count > 1 {
-                ForEach(entry.allocatedCategories) { part in
-                    LabeledContent(categoryLabel(part.category)) { TransactionAmount(cents: part.cents, direction: .outgoing) }
-                }
-                Text(tr("以上为付款总額分配；个人净消费按比例统计。", "The amounts allocate the total payment; personal net spending is calculated proportionally.", "Amaun di atas mengagihkan jumlah bayaran; belanja bersih peribadi dikira mengikut nisbah.")).font(.footnote).foregroundStyle(.secondary)
-            } else {
-                LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
-            }
+            LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
             if let note = entry.note, !note.isEmpty {
                 Text(note).textSelection(.enabled)
             } else {
