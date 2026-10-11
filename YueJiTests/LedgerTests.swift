@@ -858,12 +858,15 @@ final class LedgerTests: XCTestCase {
 
     func testPreparedFriendAndInboxIndexMatchesLedgerBeforeAndAfterSettlement() throws {
         var ledger = settlementExample()
-        let date = Date()
+        let date = settlementDate
         ledger.tngNotices = [
             TNGNotice(id: "income", body: "RM 3.00 received", title: "Received", date: date,
-                      usesReceivedDate: true, kind: "incoming", status: "pending", cents: 300),
+                      usesReceivedDate: true, kind: "incoming", status: "pending", cents: 300, party: "Employer"),
             TNGNotice(id: "pending", body: "RM 5.00 received", title: "Received", date: date,
-                      usesReceivedDate: true, kind: "incoming", status: "pending", cents: 500)]
+                      usesReceivedDate: true, kind: "incoming", status: "pending", cents: 500, party: "Amy")]
+        // Incoming notices must contain a sender before any accounting operation.
+        // Validate the fixture so this test reaches the index/settlement assertions.
+        ledger = try ledger.validated()
         try ledger.resolveTNGIncoming(id: "income", purpose: "income", friend: "", date: date, distinctConfirmed: false)
         func check(_ ledger: Ledger) {
             let index = LedgerNavigationIndex(ledger: ledger)

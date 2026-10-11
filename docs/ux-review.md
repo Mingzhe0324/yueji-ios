@@ -2,6 +2,8 @@
 
 This is a source review and implementation record. Native compilation, XCTest execution, touch geometry, animation frame timing and physical-device navigation have not been verified on this Windows workstation. A fresh CI run from the new `main` commit is required; rerunning an old failed job uses its old sources.
 
+The user-supplied Azure test summary for build 87 shows native compilation completed and 207 tests executed, with one unexpected failure in `testPreparedFriendAndInboxIndexMatchesLedgerBeforeAndAfterSettlement`. Its two incoming-notice fixtures omitted the required sender (`party`), causing accounting validation to reject the fixture before index assertions. Both senders are now supplied, the fixture is validated explicitly, and its date uses the fixed settlement example date. App code and validation remain unchanged. A new CI run is required to confirm this correction; no successful rerun or physical-device performance verification is claimed.
+
 ## Findings and changes
 
 | Journey | Finding | Implementation |
