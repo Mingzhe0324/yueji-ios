@@ -1,8 +1,10 @@
 import SwiftUI
 
 struct ManualEntryTypeSection: View {
+    @Environment(\.locale) private var uiLocale
     @Binding var selection: String
     var body: some View {
+        let _ = uiLocale.identifier
         Section {
             Picker(tr("记录类型", "Entry type", "Jenis rekod"), selection: $selection) {
                 Text(tr("消费", "Expense", "Belanja")).tag("expense")
@@ -25,6 +27,7 @@ private enum ManualSettlementMode: String, CaseIterable {
 }
 
 struct ManualSettlementEntryView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     @Binding var entryType: String
@@ -32,11 +35,12 @@ struct ManualSettlementEntryView: View {
     @State private var mode: ManualSettlementMode = .received
     @State private var friend = ""
     private var friends: [FriendBalance] {
-        model.ledger.friendBalances.filter {
+        model.friends.filter {
             mode == .received ? $0.owed > 0 : (mode == .paid ? $0.payable > 0 : $0.owed > 0 || $0.payable > 0)
         }
     }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             ManualEntryTypeSection(selection: $entryType)
             Section {
@@ -65,9 +69,11 @@ struct ManualSettlementEntryView: View {
 }
 
 struct SettlementPaymentRow: View {
+    @Environment(\.locale) private var uiLocale
     let record: FriendSettlement
     @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
+        let _ = uiLocale.identifier
         let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout {
             VStack(alignment: .leading, spacing: 5) {
@@ -95,13 +101,15 @@ func settlementDirection(_ cents: Int, name: String) -> String {
 }
 
 struct FriendDetailView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Namespace private var expenseTransition
     let key: String
-    private var items: [FriendDebtItem] { model.ledger.friendDebtItems.filter { friendKey($0.friend) == key } }
+    private var items: [FriendDebtItem] { model.debts(friend: key) }
     var body: some View {
+        let _ = uiLocale.identifier
         List {
-            if let friend = model.ledger.friendBalances.first(where: { $0.id == key }) {
+            if let friend = model.friends.first(where: { $0.id == key }) {
                 Section(friend.name) {
                     LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya")) { AnimatedMoney(cents: friend.owed) }
                     LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka")) { AnimatedMoney(cents: friend.payable) }
@@ -119,7 +127,7 @@ struct FriendDetailView: View {
                     }
                 }
                 Section(tr("结算记录", "Settlements", "Penyelesaian")) {
-                    ForEach(model.ledger.settlements.filter { $0.friend == key }.sorted { $0.date > $1.date }) { record in
+                    ForEach(model.settlements(friend: key)) { record in
                         NavigationLink { SettlementDetailView(id: record.id) } label: {
                             VStack(alignment: .leading, spacing: 5) {
                                 Text(settlementDirection(record.transfer, name: record.name))
@@ -139,8 +147,10 @@ struct FriendDetailView: View {
 }
 
 struct FriendDebtRow: View {
+    @Environment(\.locale) private var uiLocale
     let item: FriendDebtItem
     var body: some View {
+        let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 5) {
             Text(item.expense.merchant).font(.headline)
             Text(dateLabel(item.expense.date) + " · " + item.expense.categorySummary).font(.caption).foregroundStyle(.secondary)
@@ -153,18 +163,20 @@ struct FriendDebtRow: View {
 }
 
 struct SplitHistoryView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Namespace private var expenseTransition
     @State private var settled = false
     @State private var target: RepayTarget?
     @State private var undo: (String, String, String, Bool)?
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Picker(tr("显示", "Show", "Papar"), selection: $settled) {
                 Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
                 Text(tr("已结清", "Settled", "Selesai")).tag(true)
             }.pickerStyle(.segmented)
-            ForEach(model.ledger.friendDebtItems.filter { ($0.balance == 0) == settled }) { item in
+            ForEach(model.debts.filter { ($0.balance == 0) == settled }) { item in
                 Section {
                     NavigationLink {
                         ExpenseDetailView(id: item.expense.id, embeddedInNavigation: true).yuejiZoom(id: item.id, namespace: expenseTransition)
@@ -213,6 +225,7 @@ struct SplitHistoryView: View {
 }
 
 struct SettlementSelectionView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let friend: String
     var repaymentDirection: AccountDirection = .neutral
@@ -226,13 +239,14 @@ struct SettlementSelectionView: View {
     @State private var error: String?
     @State private var initialized = false
     private var items: [FriendDebtItem] {
-        model.ledger.friendDebtItems.filter {
+        model.debts.filter {
             friendKey($0.friend) == friend && $0.balance != 0 &&
             (repaymentDirection == .neutral || (repaymentDirection == .incoming ? $0.balance > 0 : $0.balance < 0))
         }
     }
     private var net: Int { items.filter { selected.contains($0.id) }.reduce(0) { $0 + $1.balance } }
     var body: some View {
+        let _ = uiLocale.identifier
         let items = self.items
         Form {
             Section {
@@ -282,6 +296,7 @@ struct SettlementSelectionView: View {
 }
 
 struct SettlementReviewView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let plan: SettlementPlan
@@ -290,6 +305,7 @@ struct SettlementReviewView: View {
     @State private var error: String?
     @State private var saving = false
     var body: some View {
+        let _ = uiLocale.identifier
         Group {
             if let savedID { SettlementDetailView(id: savedID, celebrateConfirmation: true).transition(.opacity) }
             else {
@@ -346,6 +362,7 @@ struct SettlementReviewView: View {
 }
 
 struct SettlementDetailView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let id: String
     var celebrateConfirmation = false
@@ -353,8 +370,9 @@ struct SettlementDetailView: View {
     @Namespace private var expenseTransition
     @State private var confirmationAppeared = false
     @State private var undo = false
-    private var record: FriendSettlement? { model.ledger.settlements.first { $0.id == id } }
+    private var record: FriendSettlement? { model.settlement(id: id) }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             if let record {
                 Section(record.name) {
@@ -425,20 +443,22 @@ struct SettlementDetailView: View {
         }.yuejiListSurface().navigationTitle(tr("结算详情", "Settlement details", "Butiran penyelesaian")).navigationBarTitleDisplayMode(.inline)
             .onAppear { if celebrateConfirmation && !reduceMotion { confirmationAppeared = true } }
             .confirmationDialog(tr("恢复欠款？原消费不变，银行付款保留并恢复待确认，不会重复记账。", "Restore debts? Spending stays unchanged. The bank payment remains for review and is never duplicated.", "Pulihkan hutang? Belanja kekal. Bayaran bank kekal untuk semakan dan tidak digandakan."), isPresented: $undo, titleVisibility: .visible) {
-                Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.change { try $0.undoSettlement(id: id) } }
+                Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.perform(key: "settlement-" + id, action: { [id] in try $0.undoSettlement(id: id) }, completion: { _ in model.showSaved() }) }
             }
     }
 }
 
 struct SettlementPaymentLinkView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let settlementID: String
     var initialNoticeID: String? = nil
     @State private var selectedID: String?
     @State private var distinct = false
+    @State private var saving = false
     @State private var error: String?
-    private var record: FriendSettlement? { model.ledger.settlements.first { $0.id == settlementID } }
+    private var record: FriendSettlement? { model.settlement(id: settlementID) }
     private var candidates: [TNGNotice] {
         guard let record else { return [] }
         return model.ledger.tngNotices.filter {
@@ -448,6 +468,7 @@ struct SettlementPaymentLinkView: View {
         }.sorted { $0.date > $1.date }
     }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             Section {
                 Text(tr("相同金额不代表同一笔付款。请核对日期、方向、银行参考编号和交易对象后确认。", "An identical amount does not identify a payment. Check the date, direction, bank reference and counterparty before confirming.", "Amaun sama tidak mengenal pasti bayaran. Semak tarikh, arah, rujukan bank dan pihak transaksi sebelum mengesahkan."))
@@ -477,23 +498,32 @@ struct SettlementPaymentLinkView: View {
                     }
                     if notice.possibleDuplicate { Toggle(tr("已核对，确认为独立付款", "Checked: this is a distinct payment", "Disemak: ini bayaran berasingan"), isOn: $distinct) }
                     Button(tr("确认关联", "Confirm link", "Sahkan pautan")) {
-                        do {
-                            try LocalStore.shared.change { try $0.linkSettlementPayment(settlementID: settlementID, noticeID: notice.id, distinctConfirmed: distinct) }
-                            model.reload(postRecurring: false); dismiss()
-                        } catch { self.error = error.localizedDescription }
-                    }.disabled(notice.possibleDuplicate && !distinct)
+                        guard !saving else { return }
+                        let recordID = settlementID, noticeID = notice.id, checked = distinct
+                        saving = true
+                        Task {
+                            defer { saving = false }
+                            do {
+                                try await model.mutate { try $0.linkSettlementPayment(settlementID: recordID, noticeID: noticeID, distinctConfirmed: checked) }
+                                model.showSaved(); dismiss()
+                            } catch { self.error = error.localizedDescription }
+                        }
+                    }.disabled(saving || (notice.possibleDuplicate && !distinct))
+                    if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
                 }
             }
-        }.yuejiListSurface().navigationTitle(tr("关联结算付款", "Link settlement payment", "Pautkan bayaran penyelesaian")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().disabled(saving).interactiveDismissDisabled(saving).navigationTitle(tr("关联结算付款", "Link settlement payment", "Pautkan bayaran penyelesaian")).navigationBarTitleDisplayMode(.inline)
             .onAppear { if selectedID == nil { selectedID = initialNoticeID } }
             .alert(tr("无法关联", "Unable to link", "Tidak dapat memautkan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
 }
 
 struct SettlementNoticeSection: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let notice: TNGNotice
     var body: some View {
+        let _ = uiLocale.identifier
         if let id = notice.settlementID {
             Section { NavigationLink(tr("查看结算与原账目", "View settlement and expenses", "Lihat penyelesaian dan belanja")) { SettlementDetailView(id: id) } }
         } else if ["pending", "transfer", "recorded"].contains(notice.status), notice.resolution == nil {

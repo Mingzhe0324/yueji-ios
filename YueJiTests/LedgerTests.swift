@@ -831,6 +831,166 @@ final class LedgerTests: XCTestCase {
         } catch is CancellationError { }
     }
 
+    func testOverviewProjectionCachesAndInvalidatesItemCategoryTotals() async throws {
+        let now = Date()
+        let entry = Expense(merchant: "TNG purchase", cents: 3500, date: now, category: "其他", items: [
+            ExpenseItem(name: "Lunch", cents: 1500, category: "餐饮"),
+            ExpenseItem(name: "Supplies", cents: 2000, category: "购物")])
+        var ledger = Ledger(expenses: [entry])
+        let worker = LedgerProjectionWorker()
+        let query = LedgerTimelineQuery(revision: 1, month: now, search: "", filter: LedgerFilter(), provider: "all")
+        for _ in 0..<20 {
+            let summary = try await worker.overview(ledger: ledger, month: now, query: query)
+            XCTAssertEqual(summary.personal, 3500)
+            XCTAssertEqual(summary.categoryTotals, ["餐饮": 1500, "购物": 2000])
+            XCTAssertEqual(summary.entries.map(\.id), [entry.id])
+        }
+        let builds = await worker.overviewBuildCount
+        XCTAssertEqual(builds, 1)
+        ledger.expenses[0].items?[1].category = "账单"
+        let changedQuery = LedgerTimelineQuery(revision: 2, month: now, search: "", filter: LedgerFilter(), provider: "all")
+        let changed = try await worker.overview(ledger: ledger, month: now, query: changedQuery)
+        XCTAssertEqual(changed.categoryTotals, ["餐饮": 1500, "账单": 2000])
+        XCTAssertEqual(changed.personal, 3500)
+        let changedBuilds = await worker.overviewBuildCount
+        XCTAssertEqual(changedBuilds, 2)
+    }
+
+    func testPreparedFriendAndInboxIndexMatchesLedgerBeforeAndAfterSettlement() throws {
+        var ledger = settlementExample()
+        let date = Date()
+        ledger.tngNotices = [
+            TNGNotice(id: "income", body: "RM 3.00 received", title: "Received", date: date,
+                      usesReceivedDate: true, kind: "incoming", status: "pending", cents: 300),
+            TNGNotice(id: "pending", body: "RM 5.00 received", title: "Received", date: date,
+                      usesReceivedDate: true, kind: "incoming", status: "pending", cents: 500)]
+        try ledger.resolveTNGIncoming(id: "income", purpose: "income", friend: "", date: date, distinctConfirmed: false)
+        func check(_ ledger: Ledger) {
+            let index = LedgerNavigationIndex(ledger: ledger)
+            XCTAssertEqual(index.debts.map(\.id), ledger.friendDebtItems.map(\.id))
+            XCTAssertEqual(index.debts.map(\.balance), ledger.friendDebtItems.map(\.balance))
+            XCTAssertEqual(index.friends.map(\.owed), ledger.friendBalances.map(\.owed))
+            XCTAssertEqual(index.friends.map(\.payable), ledger.friendBalances.map(\.payable))
+            XCTAssertEqual(index.friends.map(\.count), ledger.friendBalances.map(\.count))
+            XCTAssertEqual(index.debts(friend: "AMY").map(\.id), ledger.friendDebtItems.filter { friendKey($0.friend) == "amy" }.map(\.id))
+            XCTAssertEqual(index.incomingReviewCount, 1)
+            XCTAssertEqual(index.confirmedIncome, 300)
+            XCTAssertEqual(index.pendingNotices.map(\.id), ["pending"])
+            XCTAssertEqual(index.notice(id: "income")?.status, "income")
+            XCTAssertNil(index.notice(id: "missing"))
+            XCTAssertEqual(index.notices.map(\.id), ["income", "pending"])
+        }
+        check(ledger)
+        let plan = try ledger.settlementPlan(friend: "Amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 500, date: date)
+        let id = try ledger.confirmSettlement(plan)
+        check(ledger)
+        try ledger.undoSettlement(id: id)
+        check(ledger)
+    }
+
+    @MainActor func testRapidRepeatedPaymentActionCommitsOnlyOnceAndClearsBusyState() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let fixture = settlementExample()
+        try store.change { $0 = fixture }
+        let model = LedgerModel()
+        let expenseID = fixture.expenses[0].id, shareID = fixture.expenses[0].shares[0].id, date = Date()
+        var completions = 0
+        for _ in 0..<12 {
+            model.perform(key: "repayment", using: worker, action: {
+                try $0.repay(expenseID: expenseID, shareID: shareID, cents: 500, date: date)
+            }, completion: { _ in completions += 1 })
+        }
+        XCTAssertTrue(model.isWorking("repayment"))
+        await model.waitForOperation("repayment")
+        XCTAssertFalse(model.isWorking("repayment"))
+        XCTAssertEqual(completions, 1)
+        XCTAssertEqual(model.ledger.expenses[0].shares[0].repayments.count, 1)
+        XCTAssertEqual(model.ledger.expenses[0].shares[0].repaid, 500)
+        XCTAssertEqual(model.ledger.expenses.reduce(0) { $0 + $1.personal }, 5500)
+        XCTAssertEqual(model.ledger.expenses, try store.read().expenses)
+        XCTAssertNil(model.error)
+    }
+
+    @MainActor func testOverlappingIndependentOperationsPublishLatestSnapshotAndRejectFailedWrite() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let fixture = settlementExample()
+        try store.change { $0 = fixture }
+        let model = LedgerModel()
+        model.perform(key: "first", using: worker, action: { $0.expenses[0].note = "Lunch note" })
+        model.perform(key: "second", using: worker, action: { $0.expenses[1].note = "Drinks note" })
+        await model.waitForOperation("first"); await model.waitForOperation("second")
+        XCTAssertEqual(model.ledger.expenses, try store.read().expenses)
+        XCTAssertEqual(model.ledger.expenses[0].note, "Lunch note")
+        XCTAssertEqual(model.ledger.expenses[1].note, "Drinks note")
+        let saved = try LocalStore.encode(store.read())
+        model.perform(key: "bad", using: worker, action: { ledger -> Void in
+            ledger.expenses.removeAll()
+            throw LedgerError.invalid("Rejected operation")
+        })
+        await model.waitForOperation("bad")
+        XCTAssertFalse(model.isWorking("bad"))
+        XCTAssertNotNil(model.error)
+        XCTAssertEqual(try LocalStore.encode(store.read()), saved)
+        XCTAssertEqual(model.ledger.expenses, try store.read().expenses)
+    }
+
+    func testCancelledBackgroundMutationDoesNotAlterStoredLedger() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let fixture = settlementExample()
+        try store.change { $0 = fixture }
+        let task = Task { () -> Bool in
+            withUnsafeCurrentTask { $0?.cancel() }
+            do { _ = try await worker.mutate { $0.expenses.removeAll() }; return false }
+            catch is CancellationError { return true }
+            catch { return false }
+        }
+        let cancelled = await task.value
+        XCTAssertTrue(cancelled)
+        XCTAssertEqual(try store.read().expenses, fixture.expenses)
+    }
+
+    @MainActor func testCancellationAfterCommitStillPublishesSavedRecord() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let fixture = settlementExample()
+        try store.change { $0 = fixture }
+        let model = LedgerModel()
+        let task = Task {
+            try await model.mutate({ ledger in
+                ledger.expenses[0].note = "Committed before cancellation"
+                withUnsafeCurrentTask { $0?.cancel() }
+            }, using: worker)
+        }
+        try await task.value
+        XCTAssertEqual(model.ledger.expenses, try store.read().expenses)
+        XCTAssertEqual(model.expenseDetail(id: fixture.expenses[0].id)?.entry.note, "Committed before cancellation")
+    }
+
+    func testBackgroundBackupExportPreviewAndRestorePreserveExistingRecords() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let fixture = settlementExample()
+        try store.change { $0 = fixture }
+        let data = try await worker.exportBackup()
+        let file = folder.appendingPathComponent("test-export.json")
+        try data.write(to: file)
+        let preview = try await worker.preview(url: file)
+        XCTAssertEqual(preview.ledger.expenses, fixture.expenses)
+        try store.change { $0.expenses[0].note = "Changed" }
+        try await worker.restore(data: preview.data)
+        XCTAssertEqual(try store.read().expenses, fixture.expenses)
+        let backups = try await worker.backups()
+        XCTAssertFalse(backups.isEmpty)
+    }
+
     func testRepeatedIndexedDetailLookupsWithLargeLedgerPerformance() throws {
         let date = settlementDate
         let ledger = Ledger(expenses: (0..<20_000).map { Expense(id: "entry-\($0)", merchant: "Purchase", cents: 1000, date: date) })

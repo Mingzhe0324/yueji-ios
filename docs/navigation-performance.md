@@ -1,5 +1,7 @@
 # Transaction navigation verification — build 86
 
+Build 87 extends this work across the app and replaces the remaining synchronous UI mutations. See the [complete UX review and current native-device checklist](ux-review.md). The notes below describe the build 86 baseline, not device-verification results.
+
 ## What changed
 
 The transaction detail bottom action row uses `safeAreaInset` above the visible tab bar, with horizontal padding, separate Edit/Delete buttons, minimum 44-point target heights and a vertical layout for accessibility text sizes. The tab bar stays expanded while scrolling, keeping its navigation buttons available in their own safe area. The detail destination hides the inherited native bottom toolbar so it cannot share the action row. Native navigation restores any parent toolbar on returning to the ledger.

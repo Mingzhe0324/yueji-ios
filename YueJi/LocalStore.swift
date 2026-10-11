@@ -201,6 +201,25 @@ actor LedgerRefreshWorker {
     static let shared = LedgerRefreshWorker()
     private let store: LocalStore
     init(store: LocalStore = .shared) { self.store = store }
+    func backups() throws -> [URL] { try Task.checkCancellation(); return try store.backups() }
+    func exportBackup() throws -> Data { try Task.checkCancellation(); return try LocalStore.exportData(store.read()) }
+    func preview(url: URL) throws -> RestorePreview {
+        try Task.checkCancellation()
+        let access = url.startAccessingSecurityScopedResource()
+        defer { if access { url.stopAccessingSecurityScopedResource() } }
+        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size <= 20_000_000 else { throw reviewError("备份不能超过 20 MB。", "Backup must not exceed 20 MB.", "Sandaran tidak boleh melebihi 20 MB.") }
+        return try RestorePreview(data: Data(contentsOf: url))
+    }
+    func restore(data: Data) throws { try Task.checkCancellation(); try store.restore(data) }
+    func mutate<T>(postRecurring: Bool = true, _ action: @Sendable (inout Ledger) throws -> T) throws -> T {
+        try Task.checkCancellation()
+        return try store.change { ledger in
+            let result = try action(&ledger)
+            if postRecurring { try ledger.postDue() }
+            return result
+        }
+    }
     func snapshot(postRecurring: Bool) throws -> (ledger: Ledger, signature: Data) {
         try Task.checkCancellation()
         if postRecurring { try store.change { try $0.postDue() } }

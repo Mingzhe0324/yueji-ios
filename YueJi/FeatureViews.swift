@@ -2,13 +2,17 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 struct RatesView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var currency = "USD"
     @State private var rate = ""
     @State private var quote: RateQuote?
     @State private var busy = false
+    @State private var rateRequest = UUID()
+    @State private var initialized = false
     @State private var error: String?
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             Section {
                 Picker(tr("币种", "Currency", "Mata wang"), selection: $currency) { ForEach(Currency.codes.filter { $0 != "MYR" }, id: \.self) { Text($0).tag($0) } }.disabled(busy)
@@ -16,10 +20,15 @@ struct RatesView: View {
                 Text("1 \(currency) = ? MYR").font(.headline)
                 TextField(tr("每单位外币折合 MYR", "MYR per foreign unit", "MYR bagi setiap unit asing"), text: $rate).keyboardType(.decimalPad)
                 Button(tr("获取参考汇率", "Fetch reference rate", "Dapatkan kadar rujukan")) {
-                    busy = true; let code = currency
+                    busy = true; let code = currency, request = UUID(), submittedRate = rate
+                    rateRequest = request
                     Task { @MainActor in
-                        defer { busy = false }
-                        do { let q = try await FXService.fetch(code); quote = q; rate = q.text } catch { self.error = error.localizedDescription }
+                        defer { if rateRequest == request { busy = false } }
+                        do {
+                            let q = try await FXService.fetch(code)
+                            guard currency == code, rateRequest == request else { return }
+                            quote = q; if rate == submittedRate { rate = q.text }
+                        } catch { if rateRequest == request { self.error = error.localizedDescription } }
                     }
                 }.disabled(busy)
                 if busy { ProgressView() }
@@ -40,13 +49,17 @@ struct RatesView: View {
                 }
                 Text(tr("历史账目保留原汇率，不会重算。固定消费补记时采用当前保存的汇率，请检查较早月份的补记。", "Existing entries keep their rates. Recurring catch-up uses the currently saved rate; review entries for older periods.", "Rekod sedia ada mengekalkan kadarnya. Rekod berulang tertunggak menggunakan kadar simpanan semasa; semak tempoh lama.")).font(.footnote)
             }
-        }.navigationTitle(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")).navigationBarTitleDisplayMode(.inline).onAppear { load() }
+        }.yuejiListSurface().navigationTitle(tr("币种与汇率", "Currencies & rates", "Mata wang & kadar")).navigationBarTitleDisplayMode(.inline).onAppear { if !initialized { initialized = true; load() } }
             .task(id: currency) {
                 guard !model.isPreview else { return }
-                busy = true; defer { busy = false }
+                let request = UUID(), code = currency, submittedRate = rate
+                rateRequest = request; busy = true
+                defer { if rateRequest == request { busy = false } }
                 do {
-                    if let q = try await AutomaticRates.shared.refresh(currency) {
-                        try Task.checkCancellation(); quote = q; rate = q.text; model.reload()
+                    if let q = try await AutomaticRates.shared.refresh(code) {
+                        try Task.checkCancellation()
+                        guard currency == code, rateRequest == request else { return }
+                        quote = q; if rate == submittedRate { rate = q.text }; await model.refresh()
                     }
                 } catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
@@ -57,21 +70,27 @@ struct RatesView: View {
         do {
             let value = try parseRate(rate)
             let q = quote?.value == value ? quote! : RateQuote(value: value, date: Date(), source: "Manual")
-            try q.validate(); try LocalStore.shared.change { $0.rates[currency] = q }; quote = q; model.reload()
+            try q.validate()
+            model.perform(key: "rate-" + currency, action: { [currency] in $0.rates[currency] = q }, completion: { _ in quote = q; model.showSaved() }, failure: { self.error = $0.localizedDescription })
         } catch { self.error = error.localizedDescription }
     }
 }
+private enum RecurringEditorRoute: Identifiable {
+    case new, edit(RecurringExpense)
+    var id: String { if case .edit(let rule) = self { return "edit-" + rule.id }; return "new" }
+}
 struct RecurringView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
-    @State private var adding = false
-    @State private var editing: RecurringExpense?
+    @State private var editor: RecurringEditorRoute?
     @State private var deleting: RecurringExpense?
     @State private var paused = false
     private var rules: [RecurringExpense] {
         model.ledger.recurring.filter { $0.active != paused }.sorted { $0.nextDate < $1.nextDate }
     }
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             List {
                 Section {
@@ -91,18 +110,22 @@ struct RecurringView: View {
                     } description: {
                         Text(tr("设置金额和周期，每次到期更好记。", "Set an amount and a repeat schedule.", "Tetapkan amaun dan jadual berulang."))
                     } actions: {
-                        Button(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) { adding = true }.yuejiPrimaryButton()
+                        Button(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) { if editor == nil { editor = .new } }.yuejiPrimaryButton()
                     }.listRowBackground(Color.clear)
                 }
                 ForEach(rules) { rule in
                     Section {
-                        RecurringScheduleRow(rule: rule, edit: { editing = rule }, delete: { deleting = rule })
+                        RecurringScheduleRow(rule: rule, edit: { if editor == nil { editor = .edit(rule) } }, delete: { deleting = rule })
                     }
                 }
-            }.animation(reduceMotion ? nil : YueJiMotion.standard, value: paused).yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
-                .toolbar { Button { adding = true } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
-                .sheet(isPresented: $adding) { RecurringEditor(original: nil) }
-                .sheet(item: $editing) { RecurringEditor(original: $0) }
+            }.yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
+                .toolbar { Button { if editor == nil { editor = .new } } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
+                .sheet(item: $editor) { route in
+                    switch route {
+                    case .new: RecurringEditor(original: nil)
+                    case .edit(let rule): RecurringEditor(original: rule)
+                    }
+                }
                 .confirmationDialog(tr("删除固定项目？已入账记录会保留。", "Delete schedule? Recorded entries will stay.", "Padam jadual? Rekod sedia ada dikekalkan."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                     Button(tr("删除", "Delete", "Padam"), role: .destructive) { if let rule = deleting { model.change { $0.recurring.removeAll { $0.id == rule.id } } }; deleting = nil }
                 }
@@ -110,6 +133,7 @@ struct RecurringView: View {
     }
 }
 struct RecurringScheduleRow: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dynamicTypeSize) private var typeSize
     let rule: RecurringExpense
@@ -117,6 +141,7 @@ struct RecurringScheduleRow: View {
     let delete: () -> Void
     private var layout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(spacing: 12)) }
     var body: some View {
+        let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 14) {
             Button(action: edit) {
                 layout {
@@ -139,7 +164,7 @@ struct RecurringScheduleRow: View {
                 Menu {
                     Button(tr("编辑", "Edit", "Edit"), action: edit)
                     Button(rule.active ? tr("暂停", "Pause", "Jeda") : tr("恢复（跳过暂停期间）", "Resume (skip paused periods)", "Sambung (langkau tempoh dijeda)")) {
-                        model.change { ledger in
+                        model.change { [rule] ledger in
                             if rule.active {
                                 if let i = ledger.recurring.firstIndex(where: { $0.id == rule.id }) { ledger.recurring[i].active = false }
                             } else { ledger.resumeRule(rule.id) }
@@ -154,13 +179,14 @@ struct RecurringScheduleRow: View {
                     .foregroundStyle(.orange).font(.caption)
             }
             if rule.active && rule.nextDate <= Date() {
-                Button(tr("记录已到期消费", "Record due expenses", "Rekod belanja tiba")) { model.change { try $0.postDue(only: rule.id, force: true) } }
+                Button(tr("记录已到期消费", "Record due expenses", "Rekod belanja tiba")) { model.change { [rule] in try $0.postDue(only: rule.id, force: true) } }
                     .buttonStyle(.borderless).font(.subheadline.weight(.semibold))
             }
         }.padding(.vertical, 8)
     }
 }
 struct RecurringEditor: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let original: RecurringExpense?
@@ -172,9 +198,13 @@ struct RecurringEditor: View {
     @State private var cycle: RepeatCycle = .monthly
     @State private var autoPost = false
     @State private var rateBusy = false
+    @State private var rateRequest = UUID()
     @State private var rateStatus = ""
     @State private var error: String?
+    @State private var initialized = false
+    @State private var saving = false
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             Form {
                 TextField(tr("名称，例如房租", "Name, e.g. rent", "Nama, contoh sewa"), text: $name)
@@ -190,16 +220,19 @@ struct RecurringEditor: View {
                 DisclosureGroup(tr("周期与修改说明", "Schedule details", "Butiran jadual")) {
                 Text(tr("编辑金额只影响未来未入账项目。更改周期或首次日期请暂停旧项目，再新增。每月 31 日会在短月份落到月底。", "Amount edits affect unrecorded occurrences only. To change cycle or start date, pause this schedule and create another. The 31st uses month-end in shorter months.", "Perubahan amaun hanya untuk tempoh belum direkod. Untuk ubah kitaran atau tarikh mula, jeda jadual ini dan cipta baharu. Tarikh 31 menggunakan hujung bulan bagi bulan pendek.")).font(.footnote)
                 }
-            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() }.disabled(rateBusy) } }
-                .onAppear { if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
+            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.disabled(rateBusy || saving) } }
+                .onAppear { guard !initialized else { return }; initialized = true; if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
                 .task(id: currency) {
                 guard !model.isPreview else { return }
-                    guard currency != "MYR" else { rateStatus = ""; return }
-                    rateBusy = true; defer { rateBusy = false }
+                    let request = UUID(), code = currency
+                    rateRequest = request
+                    guard code != "MYR" else { rateBusy = false; rateStatus = ""; return }
+                    rateBusy = true; defer { if rateRequest == request { rateBusy = false } }
                     do {
-                        if let q = try await AutomaticRates.shared.refresh(currency) {
+                        if let q = try await AutomaticRates.shared.refresh(code) {
                             try Task.checkCancellation()
+                            guard rateRequest == request, currency == code else { return }
                             rateStatus = q.source + " · " + dateLabel(q.date)
                             model.reload(postRecurring: false)
                         }
@@ -211,26 +244,43 @@ struct RecurringEditor: View {
         }
     }
     private func save() {
+        guard !saving else { return }
         do {
             let minor = try Currency.parse(amount, code: currency)
             var r = original ?? RecurringExpense(name: "", minor: minor, start: start)
             r.name = name.trimmingCharacters(in: .whitespacesAndNewlines); r.minor = minor; r.currency = currency; r.category = category; r.cycle = cycle; r.autoPost = autoPost
             try r.validate(allowedCategories: model.ledger.categoryNames)
-            try LocalStore.shared.change { ledger in
-                if let original {
-                    guard let i = ledger.recurring.firstIndex(where: { $0.id == original.id }), ledger.recurring[i] == original else { throw LedgerError.invalid(tr("项目已改变，请重新打开。", "Schedule changed. Reopen it.", "Jadual berubah. Buka semula.")) }
-                    ledger.recurring[i] = r
-                } else { ledger.recurring.append(r) }
+            let saved = r, previous = original
+            saving = true
+            Task {
+                defer { saving = false }
+                do {
+                    try await model.mutate { ledger in
+                        if let previous {
+                            guard let i = ledger.recurring.firstIndex(where: { $0.id == previous.id }), ledger.recurring[i] == previous else {
+                                throw reviewError("项目已改变，请重新打开。", "Schedule changed. Reopen it.", "Jadual berubah. Buka semula.")
+                            }
+                            ledger.recurring[i] = saved
+                        } else {
+                            guard !ledger.recurring.contains(where: { $0.id == saved.id }) else {
+                                throw reviewError("项目已保存。", "Schedule already saved.", "Jadual sudah disimpan.")
+                            }
+                            ledger.recurring.append(saved)
+                        }
+                    }
+                    model.showSaved(); dismiss()
+                } catch { self.error = error.localizedDescription }
             }
-            model.reload(); model.showSaved(); dismiss()
         } catch { self.error = error.localizedDescription }
     }
 }
 
 struct DuplicateReviewView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var deleting: Expense?
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Text(tr("相同原币金额、24 小时内同商户，或同日不同来源的记录会列为疑似重复。这里只提示，不自动合并或删除。最多显示 200 组。", "Same original amount and merchant within 24 hours, or different sources on the same day, are flagged. Nothing is merged or deleted automatically. Up to 200 pairs.", "Amaun asal dan peniaga sama dalam 24 jam, atau sumber berbeza pada hari sama, ditandakan. Tiada gabungan atau pemadaman automatik. Sehingga 200 pasangan.")).font(.footnote)
             let pairs = model.ledger.duplicatePairs()
@@ -241,17 +291,18 @@ struct DuplicateReviewView: View {
                     Button(tr("删除上面这笔", "Delete the entry above", "Padam rekod di atas"), role: .destructive) { deleting = pair.first }
                     ExpenseRow(entry: pair.second)
                     Button(tr("删除上面这笔", "Delete the entry above", "Padam rekod di atas"), role: .destructive) { deleting = pair.second }
-                    Button(tr("这是两笔不同消费", "These are separate payments", "Ini dua bayaran berbeza")) { model.change { $0.dismissedDuplicates.insert(pair.id) } }
+                    Button(tr("这是两笔不同消费", "These are separate payments", "Ini dua bayaran berbeza")) { model.change { [pair] in $0.dismissedDuplicates.insert(pair.id) } }
                 }
             }
             Button(tr("重新检查已忽略的项目", "Review dismissed pairs again", "Semak semula pasangan diabaikan")) { model.change { $0.dismissedDuplicates = [] } }
         }.navigationTitle(tr("重复账目检查", "Duplicate review", "Semakan pendua")).navigationBarTitleDisplayMode(.inline)
             .confirmationDialog(tr("删除此账目及其分账、还款和退款？无法自动合并这些资料。", "Delete this entry and its splits, repayments and refunds? These cannot be merged automatically.", "Padam rekod serta pembahagian dan bayaran baliknya? Data ini tidak dapat digabungkan automatik."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
-                Button(tr("确认删除", "Delete", "Padam"), role: .destructive) { if let e = deleting { model.change { $0.expenses.removeAll { $0.id == e.id } } }; deleting = nil }
+                Button(tr("确认删除", "Delete", "Padam"), role: .destructive) { if let e = deleting { model.change { [e] in $0.expenses.removeAll { $0.id == e.id } } }; deleting = nil }
             }
     }
 }
 struct RefundsView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let expenseID: String
     @State private var amount = ""
@@ -261,8 +312,9 @@ struct RefundsView: View {
     @State private var date = Date()
     @State private var undo: RefundRecord?
     @State private var error: String?
-    private var expense: Expense? { model.ledger.expenses.first { $0.id == expenseID } }
+    private var expense: Expense? { model.expense(id: expenseID) }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             if let e = expense {
                 Section(e.merchant) {
@@ -291,8 +343,10 @@ struct RefundsView: View {
                             let distribution: [String: Int]?
                             if custom { distribution = try allocations.mapValues { try optionalMoney($0) ?? 0 } }
                             else { distribution = nil }
-                            try LocalStore.shared.change { try $0.addRefund(expenseID: expenseID, cents: n, date: date, custom: distribution, receivedByMe: e.paidByFriend == nil ? nil : refundReceivedByMe) }
-                            amount = ""; allocations = [:]; model.reload()
+                            let receivedByMe = e.paidByFriend == nil ? nil : refundReceivedByMe
+                            model.perform(key: "refund-" + expenseID, action: { [expenseID, date] in
+                                try $0.addRefund(expenseID: expenseID, cents: n, date: date, custom: distribution, receivedByMe: receivedByMe)
+                            }, completion: { _ in amount = ""; allocations = [:]; model.showSaved() }, failure: { self.error = $0.localizedDescription })
                         } catch { self.error = error.localizedDescription }
                     }.disabled(e.cents == e.refunded)
                 } header: {
@@ -318,11 +372,12 @@ struct RefundsView: View {
         }.navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
             .alert(tr("退款", "Refund", "Bayaran balik"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
             .confirmationDialog(tr("撤销退款？若已退钱给朋友，请先核对返款记录。", "Undo refund? Check any money already returned to friends first.", "Batalkan bayaran balik? Semak wang yang sudah dipulangkan kepada rakan dahulu."), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
-                Button(tr("撤销", "Undo", "Batal"), role: .destructive) { if let r = undo { model.change { try $0.removeRefund(expenseID: expenseID, refundID: r.id) } }; undo = nil }
+                Button(tr("撤销", "Undo", "Batal"), role: .destructive) { if let r = undo { model.perform(key: "refund-" + expenseID, action: { [expenseID, r] in try $0.removeRefund(expenseID: expenseID, refundID: r.id) }, completion: { _ in model.showSaved() }) }; undo = nil }
             }
     }
 }
 private struct RefundAllocationPreview: View {
+    @Environment(\.locale) private var uiLocale
     let expense: Expense
     let amount: String
 
@@ -347,6 +402,7 @@ private struct RefundAllocationPreview: View {
     }
 
     var body: some View {
+        let _ = uiLocale.identifier
         ForEach(rows) { row in
             if row.id == "owner" {
                 Text(row.label)
@@ -358,9 +414,11 @@ private struct RefundAllocationPreview: View {
 }
 
 struct FriendSummaryView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var settled = false
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             DisclosureGroup(tr("如何汇总", "How balances work", "Cara baki dikira")) {
             Text(tr("按姓名汇总，忽略大小写和多余空格。同名的不同朋友请使用不同备注名。一次收款按最旧欠款优先分配，不自动抵扣你需退回的款项。", "Grouped by name, ignoring case and extra spaces. Use distinct names for different people. Batch receipts settle oldest debts first and do not offset money you owe back.", "Dikumpulkan mengikut nama tanpa mengira huruf besar dan ruang tambahan. Gunakan nama berbeza untuk individu berlainan. Penerimaan kelompok melangsaikan hutang tertua dahulu tanpa menolak wang yang perlu dipulangkan.")).font(.footnote)
@@ -369,7 +427,7 @@ struct FriendSummaryView: View {
                 Text(tr("未结清", "Outstanding", "Belum selesai")).tag(false)
                 Text(tr("已结清", "Settled", "Selesai")).tag(true)
             }.pickerStyle(.segmented)
-            ForEach(model.ledger.friendBalances.filter { (($0.owed == 0) && ($0.payable == 0)) == settled }) { friend in
+            ForEach(model.friends.filter { (($0.owed == 0) && ($0.payable == 0)) == settled }) { friend in
                 NavigationLink { FriendDetailView(key: friend.id) } label: {
                     FriendBalanceRow(friend: friend)
                 }
@@ -378,6 +436,7 @@ struct FriendSummaryView: View {
     }
 }
 struct FuelCalculatorView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var model: LedgerModel
     @State private var names = Array(repeating: "", count: 20)
@@ -411,6 +470,7 @@ struct FuelCalculatorView: View {
     }
     private func optionalCost(_ text: String) -> Int? { text == "0" || text == "0.00" || text.isEmpty ? 0 : try? toCents(text) }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             Section(tr("行程估算", "Trip estimate", "Anggaran perjalanan")) {
                 TextField(tr("总里程 km（往返请填合计）", "Total km (include return trip)", "Jumlah km (termasuk pergi balik)"), text: $distance).keyboardType(.decimalPad)
@@ -458,7 +518,7 @@ struct FuelCalculatorView: View {
                 Button(tr("保存油耗、油价和同行朋友", "Save fuel use, price and companions", "Simpan penggunaan minyak, harga dan rakan")) {
                     do {
                         let defaults = TripDefaults(consumption: consumption, price: price, companions: Array(names.prefix(friends)), includeDriver: includeMe)
-                        try defaults.validate(); try LocalStore.shared.change { $0.tripDefaults = defaults }; model.reload()
+                        try defaults.validate(); model.perform(key: "trip-defaults", action: { $0.tripDefaults = defaults }, completion: { _ in model.showSaved() })
                         feedback = tr("已保存，下次打开自动填入。", "Saved. Applied next time you open the calculator.", "Disimpan. Diisi apabila kalkulator dibuka semula.")
                     } catch { feedback = error.localizedDescription }
                 }
@@ -500,13 +560,18 @@ struct FuelCalculatorView: View {
     }
 }
 struct UpcomingView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     var initialMonth: Date
     @State private var month = Date()
+    @State private var initialized = false
+    @State private var upcoming: [PlannedCharge] = []
+    @State private var loadedQuery: LedgerTimelineQuery?
     var body: some View {
+        let _ = uiLocale.identifier
+        let requestedMonth = month, query = model.overviewQuery(month: month)
         List {
             MonthPicker(month: $month)
-            let upcoming = model.ledger.upcoming(in: month)
             LabeledContent(tr("尚未入账的预计金额", "Estimated unrecorded total", "Anggaran belum direkod"), value: money(upcoming.compactMap(\.myr).reduce(0, +)))
             if upcoming.contains(where: { $0.myr == nil }) { Text(tr("部分外币缺少汇率，未计入上方合计。", "Some foreign entries lack rates and are excluded from the total.", "Sesetengah rekod asing tiada kadar dan tidak termasuk jumlah.")).foregroundStyle(.orange) }
             if upcoming.isEmpty { Text(tr("所选月份没有未来待记项目。", "No upcoming entries in this month.", "Tiada rekod akan datang dalam bulan ini.")) }
@@ -518,10 +583,21 @@ struct UpcomingView: View {
                 }
             }
             Text(tr("仅预览今天及以后、未入账且未暂停的固定项目；不会计入实际花费。逾期未记项目请在固定页检查。", "Preview of active, unrecorded schedules from today onward; excluded from actual spending. Review overdue entries in Recurring.", "Pratonton jadual aktif belum direkod mulai hari ini; tidak termasuk belanja sebenar. Semak rekod tertunggak dalam Berulang.")).font(.footnote)
-        }.navigationTitle(tr("固定消费预览", "Upcoming bills", "Bil akan datang")).navigationBarTitleDisplayMode(.inline).onAppear { month = initialMonth }
+        }.yuejiListSurface().navigationTitle(tr("固定消费预览", "Upcoming bills", "Bil akan datang")).navigationBarTitleDisplayMode(.inline).onAppear { if !initialized { month = initialMonth; initialized = true } }
+            .yuejiUpdating(loadedQuery != query)
+            .task(id: query) {
+                guard loadedQuery != query else { return }
+                do {
+                    let fresh = try await model.preparedUpcoming(month: requestedMonth)
+                    guard !Task.isCancelled, model.overviewQuery(month: month) == query else { return }
+                    upcoming = fresh; loadedQuery = query
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
     }
 }
 struct AutomationStatusView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var recoveryInputs: [AutomationDelivery] = []
     @State private var recoveryError: String?
@@ -539,6 +615,7 @@ struct AutomationStatusView: View {
         }
     }
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             if pendingCount > 0 {
                 Section(tr("需要你确认", "Needs your review", "Perlu semakan anda")) {
@@ -608,7 +685,7 @@ struct AutomationStatusView: View {
             }
         }.yuejiListSurface().navigationTitle(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")).navigationBarTitleDisplayMode(.inline)
             .task { loadRecoveryInputs() }
-            .refreshable { recoveryError = nil; model.reload(postRecurring: false); loadRecoveryInputs() }
+            .refreshable { recoveryError = nil; await model.refresh(postRecurring: false); loadRecoveryInputs() }
     }
     private func loadRecoveryInputs() {
         do { recoveryInputs = try AutomationInbox.shared.pending() }
@@ -618,18 +695,24 @@ struct AutomationStatusView: View {
 
 
 struct FriendSpendingView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let friend: String
     @State private var month = Date()
     @State private var allMonths = true
-    private var breakdown: FriendSpending { model.ledger.friendSpending(friend: friend, month: allMonths ? nil : month) }
-    private var total: FriendSpending { model.ledger.friendSpending(friend: friend, month: nil) }
-    private var name: String { model.ledger.friendBalances.first { $0.id == friend }?.name ?? friend }
+    @State private var breakdown = FriendSpending()
+    @State private var entries: [Expense] = []
+    @State private var loadedQuery: LedgerTimelineQuery?
+    private var query: LedgerTimelineQuery { LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: String(allMonths), filter: LedgerFilter(), provider: friend) }
+    private var total: FriendBalance? { model.friends.first { $0.id == friend } }
+    private var name: String { model.friends.first { $0.id == friend }?.name ?? friend }
     var body: some View {
+        let _ = uiLocale.identifier
+        let requestedQuery = query, selectedMonth = allMonths ? nil : month
         List {
             Section(tr("当前欠款 · 全部月份", "Current balance · all months", "Baki semasa · semua bulan")) {
-                LabeledContent(tr("尚欠我", "Still owes me", "Masih berhutang saya"), value: money(total.owed))
-                LabeledContent(tr("我需退回", "I owe back", "Saya perlu pulangkan"), value: money(total.payable))
+                LabeledContent(tr("尚欠我", "Still owes me", "Masih berhutang saya"), value: money(total?.owed ?? 0))
+                LabeledContent(tr("我欠朋友", "I owe this friend", "Saya berhutang rakan"), value: money(total?.payable ?? 0))
             }
             Section {
                 Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $allMonths)
@@ -651,9 +734,7 @@ struct FriendSpendingView: View {
                 }
             }
             Section(tr("消费明细", "Spending entries", "Butiran belanja")) {
-                ForEach(model.ledger.expenses.filter { e in
-                    (allMonths || monthKey(e.date) == monthKey(month)) && e.shares.contains { friendKey($0.name) == friend }
-                }.sorted { $0.date > $1.date }) { e in
+                ForEach(entries) { e in
                     let share = e.shares.filter { friendKey($0.name) == friend }.reduce(0) { $0 + $1.cents - $1.refunded }
                     VStack(alignment: .leading) {
                         HStack { Text(e.merchant); Spacer(); Text(money(share)) }
@@ -661,13 +742,26 @@ struct FriendSpendingView: View {
                     }
                 }
             }
-        }.navigationTitle(name)
+        }.yuejiListSurface().navigationTitle(name)
+            .yuejiUpdating(loadedQuery != requestedQuery)
+            .task(id: requestedQuery) {
+                guard loadedQuery != requestedQuery else { return }
+                do {
+                    let summary = try await model.preparedFriendSpending(friend: friend, month: selectedMonth)
+                    let collection = try await model.preparedEntries(month: selectedMonth, friend: friend)
+                    guard !Task.isCancelled, query == requestedQuery else { return }
+                    breakdown = summary; entries = collection.entries; loadedQuery = requestedQuery
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
     }
 }
 
 struct MerchantRulesView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Text(tr("记账时开启「以后此商户使用这个分类」，下次在同一家消费，月记会优先选用你记住的分类。", "Turn on the merchant category option when recording. YueJi will prefer that category next time you spend at the same merchant.", "Aktifkan pilihan kategori peniaga semasa merekod. YueJi akan mengutamakan kategori itu untuk belanja seterusnya di peniaga sama.")).font(.footnote)
             if model.ledger.merchantCategories.isEmpty {
@@ -677,34 +771,52 @@ struct MerchantRulesView: View {
                 HStack {
                     Text(merchant); Spacer()
                     Text(categoryLabel(model.ledger.merchantCategories[merchant] ?? "其他"))
-                }.swipeActions { Button(role: .destructive) { model.change { $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("不再记住", "Forget category", "Lupakan kategori"), systemImage: "trash") } }
+                }.swipeActions { Button(role: .destructive) { model.change { [merchant] in $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("不再记住", "Forget category", "Lupakan kategori"), systemImage: "trash") } }
             }
         }.navigationTitle(tr("记住商户分类", "Remember merchant categories", "Ingat kategori peniaga")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct FriendStatementView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let key: String
     @State private var month = Date()
     @State private var all = false
-    private var statement: String { model.ledger.friendStatement(key: key, month: all ? nil : month) }
+    @State private var statement = ""
+    @State private var loadedQuery: LedgerTimelineQuery?
+    private var query: LedgerTimelineQuery { LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: String(all), filter: LedgerFilter(), provider: key) }
     var body: some View {
+        let _ = uiLocale.identifier
+        let requestedQuery = query, selectedMonth = all ? nil : month
         List {
             Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $all)
             if !all { MonthPicker(month: $month) }
             Text(statement).textSelection(.enabled)
-            ShareLink(item: statement) { Label(tr("分享账单", "Share statement", "Kongsi penyata"), systemImage: "square.and.arrow.up") }
-        }.navigationTitle(tr("朋友账单", "Friend statement", "Penyata rakan")).navigationBarTitleDisplayMode(.inline)
+            ShareLink(item: statement) { Label(tr("分享账单", "Share statement", "Kongsi penyata"), systemImage: "square.and.arrow.up") }.disabled(loadedQuery != requestedQuery || statement.isEmpty)
+        }.yuejiListSurface().navigationTitle(tr("朋友账单", "Friend statement", "Penyata rakan")).navigationBarTitleDisplayMode(.inline)
+            .yuejiUpdating(loadedQuery != requestedQuery)
+            .task(id: requestedQuery) {
+                guard loadedQuery != requestedQuery else { return }
+                do {
+                    let fresh = try await model.preparedStatement(friend: key, month: selectedMonth)
+                    guard !Task.isCancelled, query == requestedQuery else { return }
+                    statement = fresh; loadedQuery = requestedQuery
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
     }
 }
 struct RestorePreviewView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let preview: RestorePreview
     var onRestored: () -> Void
     @State private var confirm = false
+    @State private var restoring = false
     @State private var error: String?
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             Form {
                 Section(tr("待恢复的备份", "Backup to restore", "Sandaran untuk dipulihkan")) {
@@ -723,11 +835,22 @@ struct RestorePreviewView: View {
                     Text(tr("恢复会替换账本。当前数据另存为「上次导入前的数据」，不受 30 份备份轮换影响；下次恢复时会更新这份副本。通知设置属于本机设置，不随账本恢复。", "Restoring replaces the ledger. Current data is kept separately as data before last restore, outside the 30-snapshot rotation. The next restore replaces that recovery copy. Notification preferences remain on this device.", "Pemulihan menggantikan lejar. Data semasa disimpan berasingan daripada 30 sandaran sebagai data sebelum pemulihan terakhir. Pemulihan seterusnya menggantikan salinan itu. Pilihan notifikasi kekal pada peranti ini."))
                     Button(tr("恢复这份备份", "Restore this backup", "Pulihkan sandaran ini"), role: .destructive) { confirm = true }
                 }
-            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(restoring).interactiveDismissDisabled(restoring)
+                .overlay { if restoring { ProgressView().accessibilityLabel(tr("正在恢复", "Restoring", "Memulihkan")) } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(restoring) } }
                 .confirmationDialog(tr("确认替换当前账本？", "Replace the current ledger?", "Ganti lejar semasa?"), isPresented: $confirm, titleVisibility: .visible) {
                     Button(tr("确认恢复", "Restore", "Pulihkan"), role: .destructive) {
-                        do { try LocalStore.shared.restore(preview.data); model.reload(); onRestored(); dismiss() } catch { self.error = error.localizedDescription }
+                        guard !restoring else { return }
+                        restoring = true
+                        let data = preview.data
+                        Task {
+                            defer { restoring = false }
+                            do {
+                                try await LedgerRefreshWorker.shared.restore(data: data)
+                                await model.refresh()
+                                onRestored(); dismiss()
+                            } catch { self.error = error.localizedDescription }
+                        }
                     }
                 }
                 .alert(tr("恢复失败", "Restore failed", "Pemulihan gagal"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -739,6 +862,7 @@ import UserNotifications
 import UIKit
 
 struct NotificationSettingsView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.scenePhase) private var scenePhase
     @State private var daily = UserDefaults.standard.bool(forKey: "dailyReminder")
     @State private var results = UserDefaults.standard.bool(forKey: "automationNotifications")
@@ -751,6 +875,7 @@ struct NotificationSettingsView: View {
     @State private var permission = tr("正在读取…", "Loading…", "Memuatkan…")
     @State private var notificationHint = ""
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             Section(tr("记账提醒", "Recording reminders", "Peringatan rekod")) {
                 Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
@@ -844,11 +969,13 @@ struct NotificationSettingsView: View {
 }
 
 struct CategoryBadge: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     let name: String
     var body: some View {
+        let _ = uiLocale.identifier
         Label { Text(categoryLabel(name)) } icon: {
             Image(systemName: model.ledger.categorySymbol(name))
                 .font(.system(size: 13, weight: .semibold))
@@ -898,9 +1025,11 @@ func categoryColorLabel(_ name: String) -> String {
     }
 }
 struct CategoriesView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var editing: CustomCategory?
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Section(tr("内置分类", "Built-in categories", "Kategori terbina")) {
                 ForEach(categories, id: \.self) { CategoryBadge(name: $0) }
@@ -908,7 +1037,7 @@ struct CategoriesView: View {
             Section(tr("自定义分类", "Custom categories", "Kategori sendiri")) {
                 ForEach(model.ledger.customCategories) { item in
                     Button { editing = item } label: { CategoryBadge(name: item.name) }
-                        .swipeActions { Button(role: .destructive) { model.change { try $0.deleteCategory(item.id) } } label: { Label(tr("删除", "Delete", "Padam"), systemImage: "trash") } }
+                        .swipeActions { Button(role: .destructive) { model.change { [item] in try $0.deleteCategory(item.id) } } label: { Label(tr("删除", "Delete", "Padam"), systemImage: "trash") } }
                 }
                 Button(tr("新增分类", "Add category", "Tambah kategori")) { editing = CustomCategory(name: "") }
             }
@@ -918,14 +1047,18 @@ struct CategoriesView: View {
     }
 }
 struct CategoryEditor: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let initial: CustomCategory
     @State private var name = ""
     @State private var icon = "tag.fill"
     @State private var color = "teal"
+    @State private var initialized = false
+    @State private var saving = false
     @State private var error: String?
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             Form {
                 TextField(tr("分类名称", "Category name", "Nama kategori"), text: $name)
@@ -936,46 +1069,70 @@ struct CategoryEditor: View {
                     ForEach(CustomCategory.colors, id: \.self) { value in Label(categoryColorLabel(value), systemImage: "circle.fill").foregroundStyle(categoryColor(value)).tag(value) }
                 }
                 Label(name.isEmpty ? tr("分类预览", "Preview", "Pratonton") : name, systemImage: icon).foregroundStyle(categoryColor(color)).font(.title2).padding()
-            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
-                .onAppear { name = initial.name; icon = initial.icon; color = initial.color }
+            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
+                .onAppear { if !initialized { initialized = true; name = initial.name; icon = initial.icon; color = initial.color } }
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) {
-                        do {
-                            var item = initial; item.name = name; item.icon = icon; item.color = color
-                            try LocalStore.shared.change { try $0.saveCategory(item) }; model.reload(); dismiss()
-                        } catch { self.error = error.localizedDescription }
-                    } }
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button {
+                        guard !saving else { return }
+                        var item = initial; item.name = name; item.icon = icon; item.color = color
+                        let saved = item
+                        saving = true
+                        Task {
+                            defer { saving = false }
+                            do { try await model.mutate { try $0.saveCategory(saved) }; model.showSaved(); dismiss() }
+                            catch { self.error = error.localizedDescription }
+                        }
+                    } label: { SaveActionLabel(saving: saving) } }
                 }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
     }
 }
 struct SpendingComparisonView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State var month: Date
+    @State private var currentSummary = OverviewSnapshot()
+    @State private var priorSummary = OverviewSnapshot()
+    @State private var loadedQuery: LedgerTimelineQuery?
     private var previous: Date { shiftedMonth(month, by: -1) }
     var body: some View {
+        let _ = uiLocale.identifier
+        let requestedMonth = month, query = model.overviewQuery(month: month)
         List {
             MonthPicker(month: $month)
             Section(tr("个人净消费", "Personal net spending", "Belanja bersih peribadi")) {
-                ComparisonRow(name: tr("总计", "Total", "Jumlah"), current: model.ledger.spending(in: month), previous: model.ledger.spending(in: previous))
+                ComparisonRow(name: tr("总计", "Total", "Jumlah"), current: currentSummary.personal, previous: priorSummary.personal)
                 Text(monthKey(month) + " / " + monthKey(previous)).font(.caption)
                 Text(tr("按两个完整自然月内已记录的账目比较；本月未结束时也不会按天折算。退款扣回原消费月份，朋友还款不算收入。", "Compares recorded entries in the two calendar months, without prorating an unfinished month. Refunds reduce the original month; repayments are not income.", "Membandingkan rekod dua bulan kalendar tanpa prorata bulan belum tamat. Pulangan mengurangkan bulan asal; bayaran balik hutang bukan pendapatan.")).font(.footnote)
             }
             Section(tr("分类变化", "Category changes", "Perubahan kategori")) {
                 ForEach(model.ledger.categoryNames, id: \.self) { category in
-                    let current = model.ledger.spending(in: month, category: category)
-                    let prior = model.ledger.spending(in: previous, category: category)
+                    let current = currentSummary.categoryTotals[category] ?? 0
+                    let prior = priorSummary.categoryTotals[category] ?? 0
                     if current > 0 || prior > 0 { ComparisonRow(name: categoryLabel(category), current: current, previous: prior) }
                 }
             }
         }.navigationTitle(tr("月度对比", "Monthly comparison", "Perbandingan bulanan")).navigationBarTitleDisplayMode(.inline)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: month)
+            .yuejiListSurface()
+            .yuejiUpdating(loadedQuery != query)
+            .task(id: query) {
+                guard loadedQuery != query else { return }
+                do {
+                    let previousMonth = shiftedMonth(requestedMonth, by: -1)
+                    let current = try await model.preparedOverview(month: requestedMonth, query: query)
+                    let prior = try await model.preparedOverview(month: previousMonth, query: model.overviewQuery(month: previousMonth))
+                    guard !Task.isCancelled, model.overviewQuery(month: month) == query else { return }
+                    currentSummary = current; priorSummary = prior; loadedQuery = query
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
     }
 }
 private struct ComparisonRow: View {
+    @Environment(\.locale) private var uiLocale
     let name: String
     let current: Int
     let previous: Int
@@ -987,6 +1144,7 @@ private struct ComparisonRow: View {
         return prefix + money(abs(difference)) + " · " + prefix + percent
     }
     var body: some View {
+        let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 8) {
             Text(name).font(.headline)
             HStack { Text(tr("所选月", "Selected", "Dipilih")); Spacer(); AnimatedMoney(cents: current) }
@@ -998,11 +1156,13 @@ private struct ComparisonRow: View {
     }
 }
 struct AnimatedMoney: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     let cents: Int
     var animateOnAppear = false
     var body: some View {
+        let _ = uiLocale.identifier
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
             .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
@@ -1013,12 +1173,14 @@ struct AnimatedMoney: View {
     }
 }
 struct LedgerFilterEditor: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     @State var value: LedgerFilter
     let apply: (LedgerFilter) -> Void
     @State private var error: String?
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             Form {
                 Picker(tr("分类", "Category", "Kategori"), selection: $value.category) {
@@ -1044,12 +1206,14 @@ struct LedgerFilterEditor: View {
 }
 
 struct RefundAllocationFields: View {
+    @Environment(\.locale) private var uiLocale
     let expense: Expense
     @Binding var values: [String: String]
     private func binding(_ key: String) -> Binding<String> {
         Binding(get: { values[key] ?? "" }, set: { values[key] = $0 })
     }
     var body: some View {
+        let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 12) {
             Text(tr("填写每人的退款 · MYR（留空为零）", "Refund per person · MYR (blank is zero)", "Pulangan setiap orang · MYR (kosong ialah sifar)")).font(.caption)
             LabeledContent(tr("我的退款", "My refund", "Pulangan saya")) {
@@ -1067,13 +1231,16 @@ struct RefundAllocationFields: View {
 }
 
 struct CSVExportView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var month = Date()
     @State private var all = false
     @State private var splits = false
     @State private var exporting = false
+    @State private var preparing = false
     @State private var document: CSVDocument?
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             Section {
                 Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $all)
@@ -1084,11 +1251,19 @@ struct CSVExportView: View {
                 }
                 Text(tr("消费明细保留原币金额和汇率；分账明细包含每人的份额、退款、已还、已退回及剩余欠款。所有统计金额使用 MYR。按消费月份选取，还款余额为截至导出时的状态。", "Expenses include original currency and rate. Splits include each person's share, refunds, repayments, returns and outstanding balance in MYR. Filtered by spending month, with balances as of export.", "Belanja termasuk mata wang asal dan kadar. Bahagian termasuk amaun, pulangan, bayaran dan baki setiap rakan dalam MYR. Ditapis mengikut bulan belanja, dengan baki semasa eksport.")).font(.footnote)
                 Button {
-                    document = CSVDocument(data: model.ledger.csv(month: all ? nil : month, splits: splits)); exporting = true
+                    guard !preparing else { return }
+                    let selectedMonth = all ? nil : month, selectedSplits = splits
+                    preparing = true
+                    Task {
+                        defer { preparing = false }
+                        do { document = CSVDocument(data: try await model.preparedCSV(month: selectedMonth, splits: selectedSplits)); exporting = true }
+                        catch is CancellationError { return }
+                        catch { model.error = error.localizedDescription }
+                    }
                 } label: { Label(tr("导出 CSV 文件", "Export CSV file", "Eksport fail CSV"), systemImage: "square.and.arrow.up") }
             }
             Text(tr("可用 Excel 打开。CSV 用于查看和整理，不是可恢复的完整备份；完整备份请使用 JSON 导出。", "Opens in Excel. CSV is for review, not full backup restoration; use JSON for backups.", "Boleh dibuka dalam Excel. CSV untuk semakan, bukan pemulihan penuh; gunakan JSON untuk sandaran.")).font(.footnote)
-        }.navigationTitle(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().disabled(preparing).overlay { if preparing { ProgressView().accessibilityLabel(tr("正在准备导出", "Preparing export", "Menyediakan eksport")) } }.navigationTitle(tr("导出 Excel / CSV", "Export Excel / CSV", "Eksport Excel / CSV")).navigationBarTitleDisplayMode(.inline)
             .fileExporter(isPresented: $exporting, document: document, contentType: .commaSeparatedText, defaultFilename: "YueJi-\(splits ? "splits" : "expenses")-\(all ? "all" : monthKey(month))") { result in
                 if case .failure(let error) = result { model.error = error.localizedDescription }
             }
@@ -1111,20 +1286,22 @@ func tngStatus(_ notice: TNGNotice) -> String {
     }
 }
 struct TNGInboxView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State var pendingOnly = false
     @State private var deletingNotice: TNGNotice?
     @State private var clearing = false
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             NavigationLink(tr("银行与 TNG 接入", "Bank and TNG setup", "Persediaan bank dan TNG")) { TNGSetupView() }
             Section(tr("收款概览 · 全部月份", "Incoming summary · all months", "Ringkasan wang masuk · semua bulan")) {
-                LabeledContent(tr("待确认收款", "Incoming to review", "Wang masuk untuk semakan"), value: String(model.ledger.tngNotices.filter { $0.kind == "incoming" && $0.status == "pending" }.count))
-                LabeledContent(tr("已确认其他收入", "Confirmed other income", "Pendapatan lain disahkan"), value: money(model.ledger.tngNotices.filter { $0.kind == "incoming" && $0.status == "income" }.reduce(0) { $0 + ($1.cents ?? 0) }))
+                LabeledContent(tr("待确认收款", "Incoming to review", "Wang masuk untuk semakan"), value: String(model.readIndex.incomingReviewCount))
+                LabeledContent(tr("已确认其他收入", "Confirmed other income", "Pendapatan lain disahkan"), value: money(model.readIndex.confirmedIncome))
                 Text(tr("其他收入保存在这里，不抵扣消费或预算；朋友还款不算收入。", "Other income is stored here, without reducing expenses or budget usage. Repayments are not income.", "Pendapatan lain disimpan di sini tanpa mengurangkan belanja atau bajet. Bayaran balik bukan pendapatan.")).font(.caption)
             }
             Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
-            ForEach(model.ledger.tngNotices.filter { !pendingOnly || $0.status == "pending" || $0.status == "transfer" }.sorted { $0.date > $1.date }) { item in
+            ForEach(pendingOnly ? model.readIndex.pendingNotices : model.readIndex.notices) { item in
                 NavigationLink { if item.kind == "incoming" { TNGIncomingView(id: item.id) } else { TNGNoticeView(id: item.id) } } label: {
                     TNGTimelineRow(notice: item)
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
@@ -1132,7 +1309,7 @@ struct TNGInboxView: View {
             }
             if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入银行或 TNG 通知。", "Waiting for bank or TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
             Button(tr("清理已处理通知", "Clear processed notices", "Kosongkan notifikasi selesai"), role: .destructive) { clearing = true }
-        }.navigationTitle(tr("银行与 TNG 通知", "Bank and TNG inbox", "Peti bank dan TNG")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("银行与 TNG 通知", "Bank and TNG inbox", "Peti bank dan TNG")).navigationBarTitleDisplayMode(.inline)
             .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
             .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账、待确认及已关联退款／充值保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers, pending notices and linked refunds/top-ups remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
                 Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.resolution == nil && ($0.status == "recorded" || $0.status == "ignored") } } }
@@ -1140,30 +1317,42 @@ struct TNGInboxView: View {
     }
 }
 struct NoticeNoteSection: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let id: String
     @State private var note = ""
+    @State private var initialized = false
+    @State private var saving = false
     @State private var error: String?
     private var savedNote: String {
-        guard let n = model.ledger.tngNotices.first(where: { $0.id == id }) else { return "" }
-        if let expenseID = n.expenseID, let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
+        guard let n = model.notice(id: id) else { return "" }
+        if let expenseID = n.expenseID, let entry = model.expense(id: expenseID) {
             return entry.note ?? ""
         }
         return n.note ?? ""
     }
     var body: some View {
+        let _ = uiLocale.identifier
         Section(tr("交易备注", "Transaction note", "Nota transaksi")) {
             TextField(tr("例如：午餐、替朋友付款、转入自己的账户", "E.g. lunch, paying for a friend, transfer to your own account", "Cth. makan tengah hari, bayaran untuk rakan, pindahan ke akaun sendiri"), text: $note, axis: .vertical).lineLimit(2...5)
             Text("\(note.count) / 2000").font(.caption).foregroundStyle(.secondary)
             Button(tr("保存备注", "Save note", "Simpan nota")) {
-                do {
-                    try LocalStore.shared.change { try $0.setNoticeNote(id: id, note: note) }
-                    model.reload(); model.showSaved(message: tr("备注已保存", "Note saved", "Nota disimpan"))
-                } catch { self.error = error.localizedDescription }
-            }.disabled(note == savedNote || note.count > 2000)
+                guard !saving else { return }
+                let recordID = id, savedText = note
+                saving = true
+                Task {
+                    defer { saving = false }
+                    do {
+                        try await model.mutate { try $0.setNoticeNote(id: recordID, note: savedText) }
+                        model.showSaved(message: tr("备注已保存", "Note saved", "Nota disimpan"))
+                    } catch { self.error = error.localizedDescription }
+                }
+            }.disabled(saving || note == savedNote || note.count > 2000)
+            if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
+
             Text(tr("付款、转账、收款及已排除记录均可备注；保存备注不会改变消费统计。", "Add notes to payments, transfers, receipts and excluded records. Notes do not change spending totals.", "Tambah nota pada bayaran, pindahan, penerimaan dan rekod dikecualikan. Nota tidak mengubah jumlah belanja.")).font(.caption)
         }
-        .onAppear { note = savedNote }
+        .onAppear { if !initialized { initialized = true; note = savedNote } }
         .onChange(of: savedNote) { old, new in if note == old { note = new } }
         .alert(tr("无法保存备注", "Unable to save note", "Tidak dapat menyimpan nota"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
             Button("OK") {}
@@ -1172,6 +1361,7 @@ struct NoticeNoteSection: View {
 }
 
 struct TNGNoticeView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let id: String
     @State private var merchant = ""
@@ -1185,8 +1375,9 @@ struct TNGNoticeView: View {
     @State private var confirming = false
     @State private var editing: Expense?
     @State private var error: String?
-    private var notice: TNGNotice? { model.ledger.tngNotices.first { $0.id == id } }
+    private var notice: TNGNotice? { model.notice(id: id) }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             if let notice {
                 NoticeNoteSection(id: id)
@@ -1204,7 +1395,7 @@ struct TNGNoticeView: View {
                             Task { @MainActor in
                                 let advice = await financialAIAdvice(body: notice.body, title: notice.title)
                                 do {
-                                    try LocalStore.shared.change { ledger in
+                                    try await model.mutate { [id] ledger in
                                         guard let i = ledger.tngNotices.firstIndex(where: { $0.id == id }), ledger.tngNotices[i].status == "pending" else { return }
                                         ledger.tngNotices[i].aiSuggestion = advice
                                     }
@@ -1214,8 +1405,7 @@ struct TNGNoticeView: View {
                             }
                         }.disabled(analyzing)
                         Button(tr("重新识别通知", "Recognise notification again", "Kenal pasti notifikasi semula")) {
-                            do {
-                                try LocalStore.shared.change { ledger in
+                            model.perform(key: "notice-" + id, action: { [id] ledger in
                                     guard let old = ledger.tngNotices.first(where: { $0.id == id }), old.status == "pending", old.expenseID == nil else { return }
                                     guard parseFinancialNotification(old.body, title: old.title, sourceApp: old.sourceBank) != nil else { throw LedgerError.invalid("当前仍未识别，请核对原文后手动确认。") }
                                     ledger.tngNotices.removeAll { $0.id == id }
@@ -1226,9 +1416,7 @@ struct TNGNoticeView: View {
                                         ledger.tngNotices[i].id = old.id
                                         try ledger.setNoticeNote(id: old.id, note: old.note ?? "")
                                     }
-                                }
-                                model.reload()
-                            } catch { self.error = error.localizedDescription }
+                            }, completion: { _ in model.showSaved() }, failure: { self.error = $0.localizedDescription })
                         }
                     }
                     Text(dateLabel(notice.date, time: true)).font(.caption)
@@ -1240,7 +1428,7 @@ struct TNGNoticeView: View {
                 }
                 if notice.resolution != nil { NoticeResolutionSection(notice: notice) }
                 if let expenseID = notice.expenseID {
-                    if let entry = model.ledger.expenses.first(where: { $0.id == expenseID }) {
+                    if let entry = model.expense(id: expenseID) {
                         ExpenseRow(entry: entry)
                         NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
                         Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) { editing = entry }
@@ -1262,33 +1450,41 @@ struct TNGNoticeView: View {
                         Text(tr("排除期间不计入消费。重新打开后，请核对金额与分类，再点「计入消费」。不会自动新增或重复记账。", "Excluded records do not count as spending. Reopen, check the amount and category, then tap Include in spending. Reopening does not create a new entry.", "Rekod dikecualikan tidak dikira sebagai belanja. Buka semula, semak amaun dan kategori, kemudian tekan Masukkan dalam belanja. Membuka semula tidak mencipta rekod baharu."))
                             .font(.footnote)
                         Button(tr("撤销排除 · 重新确认", "Undo exclusion · review again", "Batalkan pengecualian · semak semula")) {
-                            do { try LocalStore.shared.change { try $0.reopenExcludedNotice(id: id) }; model.reload() }
-                            catch { self.error = error.localizedDescription }
+                            model.perform(key: "notice-" + id, action: { [id] in try $0.reopenExcludedNotice(id: id) }, failure: { self.error = $0.localizedDescription })
                         }
                     }
                 }
             }
-        }.navigationTitle(sourceLabel(notice?.provider ?? "TNG"))
+        }.disabled(model.isWorking("notice-" + id))
+            .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
+            .navigationTitle(sourceLabel(notice?.provider ?? "TNG"))
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
                 category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant, description: n.title + " " + n.body)
             }
-            .sheet(item: $editing) { ExpenseDetailView(id: $0.id).ledgerFeedback(modal: true) }
+            .sheet(item: $editing) { ExpenseEditor(original: $0) }
             .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("确认入账", "Record", "Rekod")) {
-                    do { let cents = try toCents(amount); try LocalStore.shared.change { try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory) }; model.reload(); model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) } catch { self.error = error.localizedDescription }
+                    do {
+                        let cents = try toCents(amount)
+                        model.perform(key: "notice-" + id, action: { [id, merchant, date, category, rememberCategory] in
+                            try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory)
+                        }, completion: { _ in model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) }, failure: { self.error = $0.localizedDescription })
+                    } catch { self.error = error.localizedDescription }
                 }
             }
             .confirmationDialog(tr("排除此通知？如已自动入账，将移除关联消费；已有分账或退款时会阻止操作。", "Exclude this notice? Its linked expense will be removed unless splits or refunds exist.", "Kecualikan notifikasi? Belanja berkaitan dibuang kecuali bahagian atau pulangan wujud."), isPresented: $excluding, titleVisibility: .visible) {
-                Button(tr("确认排除", "Exclude", "Kecualikan"), role: .destructive) { do { try LocalStore.shared.change { try $0.excludeTNG(id: id) }; model.reload() } catch { self.error = error.localizedDescription } }
+                Button(tr("确认排除", "Exclude", "Kecualikan"), role: .destructive) { model.perform(key: "notice-" + id, action: { [id] in try $0.excludeTNG(id: id) }, failure: { self.error = $0.localizedDescription }) }
             }
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
 }
 struct TNGSetupView: View {
+    @Environment(\.locale) private var uiLocale
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Section(tr("接入你的银行", "Connect your bank", "Sambungkan bank anda")) {
                 Text(tr("在快捷指令的通知触发器里点 App 旁的 ＋，加入你使用的银行或 TNG。银行名称不限；能否触发取决于系统是否收到并传入通知。", "In the Shortcuts notification trigger, tap + next to App and add your bank or TNG. Any bank name is accepted; triggering depends on the system receiving and forwarding the notification.", "Dalam pencetus notifikasi Pintasan, tekan + di sebelah App dan tambah bank anda atau TNG. Sebarang nama bank diterima; pencetus bergantung pada sistem menerima dan menghantar notifikasi."))
@@ -1857,12 +2053,15 @@ struct ReceiptCamera: UIViewControllerRepresentable {
 }
 
 struct ReceiptScanView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var guideReduceMotion
     var guideSection: Int? = nil
     @EnvironmentObject var model: LedgerModel
     @State private var photo: PhotosPickerItem?
+    @State private var processedPhoto: PhotosPickerItem?
     @State private var camera = false
     @State private var busy = false
+    @State private var scanRequest = UUID()
     @State private var merchant = ""
     @State private var subtotal = ""
     @State private var tax = ""
@@ -2132,6 +2331,7 @@ struct ReceiptScanView: View {
         return (fields + rows + friends.map { $0.id.uuidString + $0.name }).joined(separator: "|")
     }
     var body: some View {
+        let _ = uiLocale.identifier
         ScrollViewReader { proxy in
         Form {
             Section { PageIntroduction(title: tr("一张收据，分得清楚", "One receipt. Clear shares.", "Satu resit, bahagian jelas."), subtitle: tr("先核对，再分给一起吃的人。", "Review first, then share with your table.", "Semak dahulu, kemudian bahagi bersama.")) }
@@ -2144,23 +2344,30 @@ struct ReceiptScanView: View {
                 resultSection.id(4)
             }
         }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
-            .animation(guideReduceMotion ? nil : .easeInOut(duration: 0.25), value: items.count)
-            .animation(guideReduceMotion ? nil : .easeInOut(duration: 0.25), value: friends.count)
             .sheet(item: $comparingItem) { item in
                 if let receiptImage { ReceiptComparisonView(image: receiptImage, item: item) }
             }
             .onChange(of: reviewKey) { _, _ in reviewed = false }
+            .disabled(model.isWorking("receipt-save"))
+            .overlay { if model.isWorking("receipt-save") { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .sheet(isPresented: $camera) {
                 ReceiptCamera { result in
                     camera = false
                     switch result {
-                    case .success(let data): if let data { Task { await recognize(data) } }
+                    case .success(let data): if let data { photo = nil; processedPhoto = nil; Task { await recognize(data) } }
                     case .failure(let failure): error = failure.localizedDescription
                     }
                 }
             }
-            .onChange(of: photo) { _, item in
-                Task { do { if let data = try await item?.loadTransferable(type: Data.self) { await recognize(data) } } catch { self.error = error.localizedDescription } }
+            .task(id: photo) {
+                guard !model.isPreview, let item = photo, processedPhoto != item else { return }
+                do {
+                    if let data = try await item.loadTransferable(type: Data.self) {
+                        try Task.checkCancellation()
+                        if await recognize(data), !Task.isCancelled, photo == item { processedPhoto = item }
+                    }
+                } catch is CancellationError { return }
+                catch { if !Task.isCancelled { self.error = error.localizedDescription } }
             }
             .alert(tr("收据", "Receipt", "Resit"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
             .task(id: guideSection) {
@@ -2182,18 +2389,22 @@ struct ReceiptScanView: View {
         }
 
     }
-    @MainActor private func recognize(_ data: Data) async {
-        guard !busy else { return }
-        busy = true; reviewed = false; defer { busy = false }
+    @discardableResult @MainActor private func recognize(_ data: Data) async -> Bool {
+        let request = UUID(); scanRequest = request
+        busy = true; reviewed = false
+        defer { if scanRequest == request { busy = false } }
         do {
             guard data.count < 25_000_000 else { throw LedgerError.invalid("Image too large") }
             let receipt = try await ReceiptOCR.scan(data)
+            guard !Task.isCancelled, scanRequest == request else { return false }
             scanNotice = receipt.scanNotice
             merchant = receipt.merchant; subtotal = receipt.subtotal; tax = receipt.tax
             service = receipt.service; discount = receipt.discount; rounding = receipt.rounding
             printedTotal = receipt.total; items = receipt.items; date = receipt.date ?? Date()
             dateMissing = receipt.date == nil; existingID = ""; hasReceipt = true; receiptImage = UIImage(data: data)
-        } catch { self.error = error.localizedDescription }
+            return true
+        } catch is CancellationError { return false }
+        catch { if !Task.isCancelled, scanRequest == request { self.error = error.localizedDescription }; return false }
     }
     private func save() {
         do {
@@ -2211,23 +2422,27 @@ struct ReceiptScanView: View {
             for (i, person) in people.enumerated() { details.append(person.name + ": " + money(result.totals[i])) }
             let summary = details.joined(separator: "\n") + "\n\n" + splitSummary(result)
             guard summary.count <= 20_000 else { throw reviewError("收据明细过长，请缩短商品或朋友名称。", "Receipt details are too long. Shorten item or friend names.", "Butiran resit terlalu panjang. Pendekkan nama item atau rakan.") }
+            let previous: Expense?
             if !existingID.isEmpty {
                 guard let original = matching.first(where: { $0.id == existingID }) else { throw LedgerError.invalid("Re-select the original payment") }
-                try LocalStore.shared.change { ledger in
-                    guard let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else { throw LedgerError.invalid("Record changed. Reopen it.") }
-                    ledger.expenses[i].shares = shares; ledger.expenses[i].receiptSummary = summary
-                    ledger.expenses[i].date = date
-                }
-            } else {
-                let expense = Expense(merchant: merchant, cents: total, date: date, category: "餐饮", source: "Receipt", shares: shares, receiptSummary: summary)
-                try LocalStore.shared.change { $0.expenses.append(expense) }
-            }
-            model.reload(); model.showSaved(); hasReceipt = false; photo = nil; receiptImage = nil; items = []; existingID = ""; reviewed = false
+                previous = original
+            } else { previous = nil }
+            let recordedDate = date
+            let newExpense = Expense(merchant: merchant, cents: total, date: recordedDate, category: "餐饮", source: "Receipt", shares: shares, receiptSummary: summary)
+            model.perform(key: "receipt-save", action: { ledger in
+                if let previous {
+                    guard let i = ledger.expenses.firstIndex(where: { $0.id == previous.id }), ledger.expenses[i] == previous else { throw LedgerError.invalid("Record changed. Reopen it.") }
+                    ledger.expenses[i].shares = shares; ledger.expenses[i].receiptSummary = summary; ledger.expenses[i].date = recordedDate
+                } else { ledger.expenses.append(newExpense) }
+            }, completion: { _ in
+                model.showSaved(); hasReceipt = false; photo = nil; receiptImage = nil; items = []; existingID = ""; reviewed = false
+            }, failure: { self.error = $0.localizedDescription })
         } catch { self.error = error.localizedDescription }
     }
 }
 
 struct TNGIncomingView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let id: String
     @State private var purpose = ""
@@ -2238,9 +2453,10 @@ struct TNGIncomingView: View {
     @State private var confirm = false
     @State private var reopen = false
     @State private var error: String?
-    private var notice: TNGNotice? { model.ledger.tngNotices.first { $0.id == id } }
-    private var friends: [FriendBalance] { model.ledger.friendBalances.filter { $0.owed > 0 } }
+    private var notice: TNGNotice? { model.notice(id: id) }
+    private var friends: [FriendBalance] { model.friends.filter { $0.owed > 0 } }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             if let n = notice {
                 NoticeNoteSection(id: id)
@@ -2267,7 +2483,9 @@ struct TNGIncomingView: View {
                     }
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
-        }.navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
+        }.disabled(model.isWorking("notice-" + id))
+            .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
+            .navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
             .confirmationDialog(tr("确认此收款用途？", "Confirm this purpose?", "Sahkan tujuan ini?"), isPresented: $confirm, titleVisibility: .visible) {
@@ -2275,8 +2493,7 @@ struct TNGIncomingView: View {
             } message: { Text(tr("朋友还款会抵扣所选朋友最早的欠款；请勿重复确认已手动记录的还款。", "Repayment settles the selected friend's oldest debts. Do not duplicate a repayment already recorded manually.", "Bayaran balik melangsaikan hutang tertua rakan. Jangan gandakan bayaran yang direkod manual.")) }
             .confirmationDialog(tr("撤销后将移除此收款生成的还款，恢复待确认；其他还款保留。", "Undo repayments created by this receipt and return it to review? Other repayments stay.", "Batalkan bayaran balik daripada penerimaan ini dan semak semula? Bayaran lain kekal."), isPresented: $reopen, titleVisibility: .visible) {
                 Button(tr("撤销确认", "Undo confirmation", "Batal pengesahan"), role: .destructive) {
-                    do { try LocalStore.shared.change { try $0.reopenTNGIncoming(id: id) }; model.reload(); purpose = ""; friend = ""; distinct = false }
-                    catch { self.error = error.localizedDescription }
+                    model.perform(key: "notice-" + id, action: { [id] in try $0.reopenTNGIncoming(id: id) }, completion: { _ in purpose = ""; friend = ""; distinct = false }, failure: { self.error = $0.localizedDescription })
                 }
             }
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -2314,18 +2531,19 @@ struct TNGIncomingView: View {
         }
     }
     private func save() {
-        do {
-            try LocalStore.shared.change { try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct) }
-            model.reload(); model.showSaved(message: tr("用途已确认", "Purpose confirmed", "Tujuan disahkan"))
-        } catch { self.error = error.localizedDescription }
+        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct] in
+            try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct)
+        }, completion: { _ in model.showSaved(message: tr("用途已确认", "Purpose confirmed", "Tujuan disahkan")) }, failure: { self.error = $0.localizedDescription })
     }
 }
 
 struct SavingsGoalsView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var adding = false
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Section {
                 Text(tr("为想做的事，慢慢存起来。", "Save for something that matters to you.", "Simpan untuk sesuatu yang bermakna."))
@@ -2345,7 +2563,7 @@ struct SavingsGoalsView: View {
                         }
                         Text(money(goal.balance) + " / " + money(goal.target)).font(.subheadline).monospacedDigit()
                         ProgressView(value: goal.progress).tint(goal.balance >= goal.target ? .green : .blue)
-                            .animation(reduceMotion ? nil : .easeInOut(duration: 0.6), value: goal.progress)
+                            .animation(reduceMotion ? nil : YueJiMotion.month, value: goal.progress)
                     }.padding(.vertical, 8)
                 }
             }
@@ -2399,6 +2617,7 @@ private enum SavingsAIStatus {
 }
 
 private struct SavingsGoalEditor: View {
+    @Environment(\.locale) private var uiLocale
     var original: SavingsGoal? = nil
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
@@ -2425,6 +2644,7 @@ private struct SavingsGoalEditor: View {
         return Calendar.current.date(byAdding: .month, value: months, to: Date())
     }
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             Form {
                 Section(tr("一句话建立目标", "Describe your goal", "Terangkan matlamat")) {
@@ -2471,7 +2691,7 @@ private struct SavingsGoalEditor: View {
             }
             .navigationTitle(tr("储蓄目标", "Savings goal", "Matlamat simpanan"))
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(model.isWorking("goal-editor")) }
                 ToolbarItem(placement: .confirmationAction) { Button(tr("确认保存", "Confirm", "Sahkan")) { save() }.disabled(requesting) }
             }
             .onAppear {
@@ -2535,7 +2755,7 @@ private struct SavingsGoalEditor: View {
             let planned: Int? = monthly.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : (try toCents(monthly))
             let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !hasDeadline || deadline > Date() else { throw LedgerError.invalid("请选择未来日期 / Choose a future date") }
-            try LocalStore.shared.change { ledger in
+            model.perform(key: "goal-editor", postRecurring: false, action: { [original, hasDeadline, deadline] ledger in
                 if let original {
                     guard let index = ledger.savingsGoals.firstIndex(where: { $0.id == original.id }), ledger.savingsGoals[index] == original else { throw LedgerError.invalid("目标已改变，请重新打开 / Goal changed; reopen it") }
                     ledger.savingsGoals[index].name = trimmed; ledger.savingsGoals[index].target = target
@@ -2544,13 +2764,13 @@ private struct SavingsGoalEditor: View {
                 } else {
                     ledger.savingsGoals.append(SavingsGoal(name: trimmed, target: target, deadline: hasDeadline ? deadline : nil, monthlyContribution: planned))
                 }
-            }
-            model.reload(postRecurring: false); model.showSaved(); dismiss()
+            }, completion: { _ in model.showSaved(); dismiss() }, failure: { self.error = $0.localizedDescription })
         } catch { self.error = error.localizedDescription }
     }
 }
 
 private struct SavingsGoalDetail: View {
+    @Environment(\.locale) private var uiLocale
     let id: String
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
@@ -2564,6 +2784,7 @@ private struct SavingsGoalDetail: View {
     @State private var celebrated = false
     private var goal: SavingsGoal? { model.ledger.savingsGoals.first { $0.id == id } }
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             if let goal {
                 Section {
@@ -2573,7 +2794,7 @@ private struct SavingsGoalDetail: View {
                             Circle().trim(from: 0, to: CGFloat(goal.progress))
                                 .stroke(goal.balance >= goal.target ? Color.green : .blue, style: StrokeStyle(lineWidth: 12, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
-                                .animation(reduceMotion ? nil : .spring(response: 0.75, dampingFraction: 0.9), value: goal.balance)
+                                .animation(reduceMotion ? nil : YueJiMotion.standard, value: goal.balance)
                             VStack(spacing: 5) {
                                 Text("\(Int(goal.progress * 100))%") .font(.largeTitle.bold()).contentTransition(.numericText())
                                 Text(goal.balance >= goal.target ? tr("已达成", "Reached", "Tercapai") : tr("已存下", "Saved", "Disimpan")).font(.caption).foregroundStyle(.secondary)
@@ -2638,11 +2859,10 @@ private struct SavingsGoalDetail: View {
         .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重新输入", "Edit amount", "Edit amaun")) { recording = true }; Button(tr("关闭", "Close", "Tutup"), role: .cancel) {} } message: { Text(error ?? "") }
         .confirmationDialog(tr("删除目标及全部储蓄记录？", "Delete this goal and its savings history?", "Padam matlamat dan sejarahnya?"), isPresented: $deleting, titleVisibility: .visible) {
             Button(tr("删除目标", "Delete goal", "Padam matlamat"), role: .destructive) {
-                do { try LocalStore.shared.change { $0.savingsGoals.removeAll { $0.id == id } }; model.reload(postRecurring: false); dismiss() }
-                catch { self.error = error.localizedDescription }
+                model.perform(key: "goal-" + id, postRecurring: false, action: { [id] in $0.savingsGoals.removeAll { $0.id == id } }, completion: { _ in dismiss() }, failure: { self.error = $0.localizedDescription })
             }
         }
-        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.85), value: celebrated)
+        .disabled(model.isWorking("goal-" + id))
         .task(id: celebrated) {
             guard celebrated else { return }
             do { try await Task.sleep(for: .seconds(3)) } catch { return }
@@ -2653,22 +2873,25 @@ private struct SavingsGoalDetail: View {
         do {
             let cents = try toCents(amount)
             guard cents > 0 else { throw LedgerError.invalid("金额必须大于零 / Enter an amount above zero") }
-            let reached = try LocalStore.shared.change { ledger -> Bool in
-                guard let index = ledger.savingsGoals.firstIndex(where: { $0.id == id }) else { throw LedgerError.invalid("目标已不存在 / Goal no longer exists") }
+            let withdrawal = withdrawing, goalID = id
+            model.perform(key: "goal-" + goalID, postRecurring: false, action: { ledger -> Bool in
+                guard let index = ledger.savingsGoals.firstIndex(where: { $0.id == goalID }) else { throw LedgerError.invalid("目标已不存在 / Goal no longer exists") }
                 let before = ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
-                try ledger.savingsGoals[index].record(cents: withdrawing ? -cents : cents)
+                try ledger.savingsGoals[index].record(cents: withdrawal ? -cents : cents)
                 return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
-            }
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.5)) { model.reload(postRecurring: false); celebrated = reached }
-            model.showSaved(message: reached ? tr("目标完成！", "Goal complete!", "Matlamat tercapai!") :
-                (withdrawing ? tr("已取出 ", "Withdrawn ", "Dikeluarkan ") : tr("已存入 ", "Deposited ", "Disimpan ")) + money(cents),
-                sound: reached ? .goal : (withdrawing ? .saved : .deposit))
+            }, completion: { reached in
+                withAnimation(reduceMotion ? nil : YueJiMotion.standard) { celebrated = reached }
+                model.showSaved(message: reached ? tr("目标完成！", "Goal complete!", "Matlamat tercapai!") :
+                    (withdrawal ? tr("已取出 ", "Withdrawn ", "Dikeluarkan ") : tr("已存入 ", "Deposited ", "Disimpan ")) + money(cents),
+                    sound: reached ? .goal : (withdrawal ? .saved : .deposit))
+            }, failure: { self.error = $0.localizedDescription; FeedbackHaptics.error() })
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
 }
 
 
 private struct ReceiptComparisonView: View {
+    @Environment(\.locale) private var uiLocale
     let image: UIImage
     let item: ScannedReceipt.Item
     @Environment(\.dismiss) private var dismiss
@@ -2676,6 +2899,7 @@ private struct ReceiptComparisonView: View {
     @State private var searching = true
     @State private var zoom: CGFloat = 1
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             ScrollView([.horizontal, .vertical]) {
                 VStack(alignment: .leading, spacing: 18) {
@@ -2722,9 +2946,11 @@ private struct ReceiptComparisonView: View {
 }
 
 struct TNGStatusFeedback: View {
+    @Environment(\.locale) private var uiLocale
     let notice: TNGNotice
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
+        let _ = uiLocale.identifier
         Label(tngStatus(notice), systemImage: notice.status == "pending" ? "clock" : "checkmark.circle.fill")
             .font(.headline).foregroundStyle(notice.status == "pending" ? Color.orange : Color.green)
             .contentTransition(.opacity)
@@ -2734,14 +2960,16 @@ struct TNGStatusFeedback: View {
 
 
 struct NoticeResolutionSection: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let notice: TNGNotice
     @State private var confirm = false
     var body: some View {
+        let _ = uiLocale.identifier
         Section(tr("已确认关联", "Confirmed link", "Pautan disahkan")) {
             Text(tngStatus(notice))
             if let relatedID = notice.relatedRecordID {
-                if let entry = model.ledger.expenses.first(where: { $0.id == relatedID }) {
+                if let entry = model.expense(id: relatedID) {
                     Text(entry.merchant + " · " + money(entry.cents))
                     NavigationLink(tr("查看关联消费", "View linked expense", "Lihat belanja dipautkan")) { ExpenseDetailView(id: relatedID, embeddedInNavigation: true) }
                 } else if let other = model.ledger.tngNotices.first(where: { $0.id == relatedID }) {
@@ -2750,12 +2978,13 @@ struct NoticeResolutionSection: View {
             }
             Button(tr("撤销关联并重新确认", "Remove link and review again", "Batalkan pautan dan semak semula")) { confirm = true }
         }.confirmationDialog(tr("撤销关联？关联退款会一并撤销；充值配对会重新待确认。", "Remove this link? Linked refunds will be undone and paired top-ups will need review again.", "Batalkan pautan ini? Bayaran balik dipautkan akan dibatalkan dan pasangan tambah nilai perlu disemak semula."), isPresented: $confirm, titleVisibility: .visible) {
-            Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.change { try $0.reopenResolvedNotice(id: notice.id) } }
+            Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.perform(key: "notice-" + notice.id, action: { [notice] in try $0.reopenResolvedNotice(id: notice.id) }, completion: { _ in model.showSaved() }) }
         }
     }
 }
 
 struct FinancialNoticeReviewView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let id: String
@@ -2770,7 +2999,7 @@ struct FinancialNoticeReviewView: View {
     @State private var initialized = false
     @State private var confirm = false
     @State private var error: String?
-    private var notice: TNGNotice? { model.ledger.tngNotices.first { $0.id == id } }
+    private var notice: TNGNotice? { model.notice(id: id) }
     private var candidates: [Expense] {
         let cents = (try? toCents(amount)) ?? 0
         return model.ledger.expenses.filter { entry in
@@ -2783,6 +3012,7 @@ struct FinancialNoticeReviewView: View {
         return model.ledger.tngNotices.filter { $0.id != id && $0.cents == cents && $0.expenseID == nil && ["pending", "transfer"].contains($0.status) }.sorted { $0.date > $1.date }
     }
     var body: some View {
+        let _ = uiLocale.identifier
         Form {
             if let notice {
                 Section { Text(notice.title); Text(notice.body).font(.caption).textSelection(.enabled) }
@@ -2829,7 +3059,9 @@ struct FinancialNoticeReviewView: View {
                 Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { confirm = true }
                     .disabled(purpose.isEmpty || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
             } else { Text(tr("通知已删除或清理。", "The notification has been deleted or cleared.", "Notifikasi telah dipadam atau dikosongkan.")) }
-        }.navigationTitle(tr("确认通知", "Review notification", "Semak notifikasi"))
+        }.disabled(model.isWorking("notice-" + id))
+            .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
+            .navigationTitle(tr("确认通知", "Review notification", "Semak notifikasi"))
             .onAppear {
                 guard !initialized, let n = notice else { return }; initialized = true
                 party = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = min(n.date, Date())
@@ -2844,14 +3076,11 @@ struct FinancialNoticeReviewView: View {
             .onChange(of: purpose) { _, _ in relatedID = "" }
             .confirmationDialog(tr("确认按所选用途处理？", "Process with the selected purpose?", "Proses mengikut tujuan yang dipilih?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认", "Confirm", "Sahkan")) {
-                    do {
-                        try LocalStore.shared.change { ledger in
-                            if purpose == "ignore" { try ledger.excludeTNG(id: id) }
-                            else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
-                            else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID) }
-                        }
-                        model.reload(); dismiss()
-                    } catch { self.error = error.localizedDescription }
+                    model.perform(key: "notice-" + id, action: { [id, purpose, party, amount, date, category, remember, relatedID] ledger in
+                        if purpose == "ignore" { try ledger.excludeTNG(id: id) }
+                        else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
+                        else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID) }
+                    }, completion: { _ in model.showSaved(); dismiss() }, failure: { self.error = $0.localizedDescription })
                 }
             }
             .alert(tr("无法处理", "Unable to process", "Tidak dapat diproses"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -2873,6 +3102,7 @@ struct ExpenseItemDraft: Identifiable {
     }
 }
 struct ExpenseItemsFields: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
@@ -2886,6 +3116,7 @@ struct ExpenseItemsFields: View {
     var initiallyExpanded = false
     private var itemTotal: Int { items.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
+        let _ = uiLocale.identifier
         Section {
             DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 ForEach($items) { $item in
@@ -2947,8 +3178,10 @@ struct ExpenseItemsFields: View {
     }
 }
 struct ExpenseItemsBreakdown: View {
+    @Environment(\.locale) private var uiLocale
     let entry: Expense
     var body: some View {
+        let _ = uiLocale.identifier
         let personalAmounts = entry.personalItemAmounts
         ForEach(entry.items ?? []) { item in
             VStack(alignment: .leading, spacing: 6) {
@@ -2972,6 +3205,7 @@ func normalizedExpenseTags(_ text: String) -> [String] {
     }
 }
 struct ExpenseBookkeepingFields: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tagsExpanded = false
@@ -2983,6 +3217,7 @@ struct ExpenseBookkeepingFields: View {
     var itemized = false
     private var allocated: Int { allocations.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
+        let _ = uiLocale.identifier
         Section(tr("备注", "Note", "Nota")) {
             TextField(tr("购买了什么？（选填）", "What was it for? (optional)", "Untuk apa? (pilihan)"), text: $note, axis: .vertical)
                 .lineLimit(1...4)
@@ -3022,9 +3257,11 @@ struct ExpenseBookkeepingFields: View {
     }
 }
 struct ExpenseBookkeepingDetails: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let entry: Expense
     var body: some View {
+        let _ = uiLocale.identifier
         Section(tr("分类与备注", "Categories and notes", "Kategori dan nota")) {
             if !(entry.items ?? []).isEmpty {
                 LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
@@ -3046,10 +3283,12 @@ struct ExpenseBookkeepingDetails: View {
     }
 }
 struct PendingBookkeepingCard: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     private var pending: Int { model.ledger.tngNotices.filter { ["pending", "transfer"].contains($0.status) }.count }
     private var duplicates: Int { model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count }
     var body: some View {
+        let _ = uiLocale.identifier
         if pending > 0 {
             Section {
                 NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan")) }
@@ -3061,6 +3300,7 @@ struct PendingBookkeepingCard: View {
     }
 }
 struct ExpenseTagsView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     private var tags: [String] {
         var values: [String: String] = [:]
@@ -3068,6 +3308,7 @@ struct ExpenseTagsView: View {
         return values.values.sorted()
     }
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Text(tr("在新增或编辑账目里填写标签，可跨餐饮、交通等分类汇总同一个项目。", "Add tags when creating or editing entries to group a project across categories such as food and transport.", "Tambah tag ketika mencipta atau mengedit rekod untuk mengumpulkan projek merentas kategori seperti makanan dan pengangkutan.")).font(.caption)
             ForEach(tags, id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
@@ -3076,27 +3317,40 @@ struct ExpenseTagsView: View {
     }
 }
 struct TagSpendingView: View {
+    @Environment(\.locale) private var uiLocale
     @Namespace private var expenseTransition
     @EnvironmentObject var model: LedgerModel
     let tag: String
     @State private var allMonths = true
     @State private var month = Date()
-    private var entries: [Expense] {
-        model.ledger.expenses.filter { ($0.tags ?? []).contains(where: { friendKey($0) == friendKey(tag) }) && (allMonths || monthKey($0.date) == monthKey(month)) }.sorted { $0.date > $1.date }
-    }
+    @State private var collection = ExpenseCollectionSnapshot()
+    @State private var loadedQuery: LedgerTimelineQuery?
+    private var query: LedgerTimelineQuery { LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: String(allMonths), filter: LedgerFilter(), provider: tag) }
     var body: some View {
+        let _ = uiLocale.identifier
+        let requestedQuery = query, selectedMonth = allMonths ? nil : month
         List {
             Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $allMonths)
             if !allMonths { MonthPicker(month: $month) }
-            LabeledContent(tr("实际付款总额", "Total paid", "Jumlah dibayar"), value: money(entries.reduce(0) { $0 + $1.cents }))
-            LabeledContent(tr("我的净消费", "My net spending", "Belanja bersih saya"), value: money(entries.reduce(0) { $0 + $1.personal }))
+            LabeledContent(tr("我的账户付款", "Paid from my account", "Dibayar dari akaun saya"), value: money(collection.paid))
+            LabeledContent(tr("我的净消费", "My net spending", "Belanja bersih saya"), value: money(collection.personal))
             Text(tr("同一账目可有多个标签，各标签合计不能再相加作为总消费。", "An entry can have several tags. Do not add tag totals together as total spending.", "Satu rekod boleh mempunyai beberapa tag. Jangan jumlahkan jumlah setiap tag sebagai jumlah belanja.")).font(.caption)
-            ForEach(entries) { entry in
+            ForEach(collection.entries) { entry in
                 NavigationLink {
                     ExpenseDetailView(id: entry.id, embeddedInNavigation: true).yuejiZoom(id: entry.id, namespace: expenseTransition)
                 } label: { ExpenseRow(entry: entry) }
                     .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
             }
-        }.navigationTitle("#" + tag)
+        }.yuejiListSurface().navigationTitle("#" + tag)
+            .yuejiUpdating(loadedQuery != requestedQuery)
+            .task(id: requestedQuery) {
+                guard loadedQuery != requestedQuery else { return }
+                do {
+                    let fresh = try await model.preparedEntries(month: selectedMonth, tag: tag)
+                    guard !Task.isCancelled, query == requestedQuery else { return }
+                    collection = fresh; loadedQuery = requestedQuery
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
     }
 }

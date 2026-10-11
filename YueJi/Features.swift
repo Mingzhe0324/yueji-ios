@@ -710,14 +710,55 @@ struct ExpenseDetailSnapshot {
     let payableToPayer: Int
     let shareBalances: [String: Int]
 }
+struct ExpenseCollectionSnapshot {
+    let entries: [Expense]
+    let paid: Int
+    let personal: Int
+    init(entries: [Expense] = []) {
+        self.entries = entries
+        paid = entries.reduce(0) { $0 + $1.paidFromMyAccount }
+        personal = entries.reduce(0) { $0 + $1.personal }
+    }
+}
 struct LedgerNavigationIndex {
+    let friends: [FriendBalance]
+    let debts: [FriendDebtItem]
+    let notices: [TNGNotice]
+    let pendingNotices: [TNGNotice]
+    let incomingReviewCount: Int
+    let confirmedIncome: Int
+    private var debtsByFriend: [String: [FriendDebtItem]] = [:]
+    private var noticesByID: [String: TNGNotice] = [:]
+    private var settlementsByID: [String: FriendSettlement] = [:]
+    private var settlementsByFriend: [String: [FriendSettlement]] = [:]
     private var expenses: [String: Expense] = [:]
     private var linked: [String: [FriendSettlement]] = [:]
     private var applied: [String: Int] = [:]
 
     init(ledger: Ledger) {
+        let debtItems = ledger.friendDebtItems
+        var groupedDebts: [String: [FriendDebtItem]] = [:]
+        var balances: [String: FriendBalance] = [:]
+        for item in debtItems {
+            let key = friendKey(item.friend)
+            groupedDebts[key, default: []].append(item)
+            var balance = balances[key] ?? FriendBalance(id: key, name: item.friend)
+            balance.owed += max(0, item.balance); balance.payable += max(0, -item.balance); balance.count += 1
+            balances[key] = balance
+        }
+        let orderedNotices = ledger.tngNotices.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        debts = debtItems
+        friends = balances.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        notices = orderedNotices
+        pendingNotices = orderedNotices.filter { $0.status == "pending" || $0.status == "transfer" }
+        incomingReviewCount = orderedNotices.filter { $0.kind == "incoming" && $0.status == "pending" }.count
+        confirmedIncome = orderedNotices.filter { $0.kind == "incoming" && $0.status == "income" }.reduce(0) { $0 + ($1.cents ?? 0) }
+        debtsByFriend = groupedDebts
+        for notice in orderedNotices { noticesByID[notice.id] = notice }
         for entry in ledger.expenses { expenses[entry.id] = entry }
         for record in ledger.settlements {
+            settlementsByID[record.id] = record
+            settlementsByFriend[record.friend, default: []].append(record)
             for expenseID in Set(record.lines.map { $0.expense.id }) {
                 linked[expenseID, default: []].append(record)
             }
@@ -725,7 +766,15 @@ struct LedgerNavigationIndex {
                 for line in record.lines { applied[line.id, default: 0] += line.applied }
             }
         }
+        for key in settlementsByFriend.keys {
+            settlementsByFriend[key]?.sort { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        }
     }
+    func expense(id: String) -> Expense? { expenses[id] }
+    func settlement(id: String) -> FriendSettlement? { settlementsByID[id] }
+    func settlements(friend: String) -> [FriendSettlement] { settlementsByFriend[friendKey(friend)] ?? [] }
+    func debts(friend: String) -> [FriendDebtItem] { debtsByFriend[friendKey(friend)] ?? [] }
+    func notice(id: String) -> TNGNotice? { noticesByID[id] }
     func detail(id: String) -> ExpenseDetailSnapshot? {
         guard let entry = expenses[id] else { return nil }
         let balances = Dictionary(entry.shares.map { share in
@@ -740,9 +789,62 @@ struct LedgerNavigationIndex {
 /// Pure display work runs independently of the storage actor and the main actor.
 actor LedgerProjectionWorker {
     private var timelines: [LedgerTimelineQuery: LedgerTimelineSnapshot] = [:]
+    private var overviews: [LedgerTimelineQuery: OverviewSnapshot] = [:]
     private var indexedSignature: Data?
     private var navigationIndex: LedgerNavigationIndex?
     private(set) var timelineBuildCount = 0
+    private(set) var overviewBuildCount = 0
+    func entries(ledger: Ledger, month: Date?, tag: String?, friend: String?) throws -> ExpenseCollectionSnapshot {
+        try Task.checkCancellation()
+        let interval = month.flatMap { Calendar(identifier: .gregorian).dateInterval(of: .month, for: $0) }
+        let tagKey = tag.map(friendKey), friendID = friend.map(friendKey)
+        let result = ledger.expenses.filter { entry in
+            if let interval, !(entry.date >= interval.start && entry.date < interval.end) { return false }
+            if let tagKey, !(entry.tags ?? []).contains(where: { friendKey($0) == tagKey }) { return false }
+            if let friendID, !entry.shares.contains(where: { friendKey($0.name) == friendID }) { return false }
+            return true
+        }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+        try Task.checkCancellation()
+        return ExpenseCollectionSnapshot(entries: result)
+    }
+    func upcoming(ledger: Ledger, month: Date) throws -> [PlannedCharge] {
+        try Task.checkCancellation()
+        let result = ledger.upcoming(in: month)
+        try Task.checkCancellation()
+        return result
+    }
+    func statement(ledger: Ledger, friend: String, month: Date?) throws -> String {
+        try Task.checkCancellation()
+        let result = ledger.friendStatement(key: friend, month: month)
+        try Task.checkCancellation()
+        return result
+    }
+    func friendSpending(ledger: Ledger, friend: String, month: Date?) throws -> FriendSpending {
+        try Task.checkCancellation()
+        let result = ledger.friendSpending(friend: friend, month: month)
+        try Task.checkCancellation()
+        return result
+    }
+    func csv(ledger: Ledger, month: Date?, splits: Bool) throws -> Data {
+        try Task.checkCancellation()
+        let result = ledger.csv(month: month, splits: splits)
+        try Task.checkCancellation()
+        return result
+    }
+
+    func overview(ledger: Ledger, month: Date, query: LedgerTimelineQuery) throws -> OverviewSnapshot {
+        try Task.checkCancellation()
+        guard query.month == monthKey(month), query.timeZone == TimeZone.current.identifier,
+              query.locale == AppLanguage.localeID else { throw CancellationError() }
+        if let cached = overviews[query] { return cached }
+        let snapshot = OverviewSnapshot(ledger: ledger, month: month)
+        try Task.checkCancellation()
+        overviews = overviews.filter { $0.key.revision == query.revision }
+        if overviews.count >= 6 { overviews.removeAll(keepingCapacity: true) }
+        overviews[query] = snapshot
+        overviewBuildCount += 1
+        return snapshot
+    }
 
     func index(ledger: Ledger, signature: Data) throws -> LedgerNavigationIndex {
         try Task.checkCancellation()
@@ -778,6 +880,8 @@ struct OverviewSnapshot {
     var owed = 0
     var categoryTotals: [String: Int] = [:]
     var recent: [Expense] { Array(entries.prefix(3)) }
+
+    init() {}
 
     init(ledger: Ledger, month: Date, timeZone: TimeZone = .current) {
         var calendar = Calendar(identifier: .gregorian)

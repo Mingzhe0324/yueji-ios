@@ -14,9 +14,11 @@ extension View {
 
 }
 struct PageIntroduction: View {
+    @Environment(\.locale) private var uiLocale
     let title: String
     let subtitle: String
     var body: some View {
+        let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 7) {
             Text(title).font(.largeTitle.weight(.bold)).tracking(-0.7).fixedSize(horizontal: false, vertical: true)
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -27,11 +29,22 @@ struct PageIntroduction: View {
 private struct YueJiListSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.listStyle(.insetGrouped)
-            .scrollContentBackground(.hidden).background(Color(uiColor: .systemGroupedBackground))
+            .scrollDismissesKeyboard(.interactively)
+            .scrollContentBackground(.hidden)
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 }
 extension View {
     func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
+    func yuejiUpdating(_ updating: Bool) -> some View {
+        overlay(alignment: .topTrailing) {
+            if updating {
+                ProgressView().controlSize(.small).padding(12)
+                    .accessibilityLabel(tr("正在更新", "Updating", "Mengemas kini"))
+                    .allowsHitTesting(false)
+            }
+        }
+    }
     func yuejiSheetSurface() -> some View {
         modifier(YueJiSheetSurface())
     }
@@ -41,6 +54,7 @@ private struct YueJiSheetSurface: ViewModifier {
         if #available(iOS 26.0, *) {
             // Let the system choose the sheet's curvature and material.
             content.presentationDragIndicator(.visible)
+                .presentationBackground(Color(uiColor: .systemGroupedBackground))
         } else {
             content.presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
@@ -58,6 +72,7 @@ private struct YueJiTabBarMotion: ViewModifier {
 }
 
 struct MainView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -92,6 +107,7 @@ struct MainView: View {
         }.tint(ink).modifier(YueJiTabBarMotion())
     }
     var body: some View {
+        let _ = uiLocale.identifier
         ZStack {
             Color("LaunchBackground").ignoresSafeArea()
             // Prepare the real screens beneath the opaque logo, before fading it away.
@@ -181,6 +197,7 @@ struct MainView: View {
     }
 }
 struct MonthPicker: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Binding var month: Date
@@ -192,6 +209,7 @@ struct MonthPicker: View {
             removal: .opacity.combined(with: .offset(x: CGFloat(direction) * -16)))
     }
     @ViewBuilder var body: some View {
+        let _ = uiLocale.identifier
         if #available(iOS 26.0, *), !reduceTransparency {
             GlassEffectContainer(spacing: 12) { controls }
         } else {
@@ -201,23 +219,24 @@ struct MonthPicker: View {
     }
     private var controls: some View {
         HStack(spacing: 0) {
-            Button { shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 20, height: 20) }
+            Button { shift(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
                 .yuejiSecondaryButton().buttonBorderShape(.circle)
                 .frame(minWidth: 44, minHeight: 44)
                 .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
             ZStack {
                 Text(monthLabel).font(.subheadline.weight(.semibold))
+                    .lineLimit(1).minimumScaleFactor(0.75)
                     .id(monthKey(month)).transition(labelTransition)
             }.animation(reduceMotion ? nil : YueJiMotion.month, value: monthKey(month))
                 .frame(maxWidth: .infinity, minHeight: 44).clipped().contentShape(Rectangle())
                 .accessibilityElement(children: .ignore).accessibilityLabel(monthLabel)
-                .gesture(DragGesture(minimumDistance: 25).onEnded { value in
+                .simultaneousGesture(DragGesture(minimumDistance: 25).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
                     guard abs(dx) > 45, abs(dx) > abs(dy) * 1.5 else { return }
                     shift(dx < 0 ? 1 : -1)
                 })
                 .accessibilityHint(tr("左右滑动切换月份", "Swipe left or right to change month", "Leret kiri atau kanan untuk menukar bulan"))
-            Button { shift(1) } label: { Image(systemName: "chevron.right").frame(width: 20, height: 20) }
+            Button { shift(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
                 .yuejiSecondaryButton().buttonBorderShape(.circle)
                 .frame(minWidth: 44, minHeight: 44)
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
@@ -231,6 +250,7 @@ struct MonthPicker: View {
     }
 }
 struct DashboardView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var guideFocus: String? = nil
     @Namespace private var navigationMotion
@@ -241,7 +261,8 @@ struct DashboardView: View {
     @State private var budgeting = false
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
     private var monthBinding: Binding<Date> { Binding(get: { month }, set: { monthTimestamp = $0.timeIntervalSince1970 }) }
-    private var summary: OverviewSnapshot { model.overview(in: month) }
+    @State private var summary = OverviewSnapshot()
+    @State private var loadedSummary: LedgerTimelineQuery?
     private var entries: [Expense] { summary.entries }
     private var personal: Int { summary.personal }
     private var budget: Int { model.ledger.budgets[monthKey(month)] ?? 0 }
@@ -264,6 +285,9 @@ struct DashboardView: View {
     }
     private var owed: Int { summary.owed }
     var body: some View {
+        let _ = uiLocale.identifier
+        let requestedMonth = month
+        let summaryQuery = model.overviewQuery(month: requestedMonth)
         NavigationStack {
             ScrollViewReader { guideScroll in
             List {
@@ -271,6 +295,13 @@ struct DashboardView: View {
                     MonthPicker(month: monthBinding)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                        .overlay(alignment: .bottom) {
+                            ProgressView().controlSize(.small).offset(y: 8)
+                                .opacity(loadedSummary == summaryQuery ? 0 : 1)
+                                .accessibilityHidden(loadedSummary == summaryQuery)
+                                .accessibilityLabel(tr("正在更新概览", "Updating overview", "Mengemas kini ringkasan"))
+                                .allowsHitTesting(false)
+                        }
                 }
                 Section {
                     spendingCard
@@ -300,6 +331,15 @@ struct DashboardView: View {
                     }
                 }
             }.yuejiListSurface()
+            .task(id: summaryQuery) {
+                guard loadedSummary != summaryQuery else { return }
+                do {
+                    let fresh = try await model.preparedOverview(month: requestedMonth, query: summaryQuery)
+                    guard !Task.isCancelled, model.overviewQuery(month: month) == summaryQuery else { return }
+                    summary = fresh; loadedSummary = summaryQuery
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
             .task(id: guideFocus) {
                 guard model.isPreview, let guideFocus else { return }
                 do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
@@ -316,25 +356,26 @@ struct DashboardView: View {
                         .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
                 }
             }
-            .toolbar {
-                ToolbarItem(placement: .bottomBar) {
-                    Button { adding = true } label: {
+            .toolbar(.hidden, for: .bottomBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                    Button { guard !adding else { return }; adding = true } label: {
                         Label(tr("记一笔", "Add entry", "Tambah rekod"), systemImage: "plus")
                             .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .yuejiPrimaryButton().buttonBorderShape(.capsule)
                     .guideTarget("dashboard.add")
-                    .yuejiZoomSource(id: "new-expense", namespace: navigationMotion)
-                }
+                    .accessibilityIdentifier("overview.manualEntry")
+                    .padding(.horizontal, 20).padding(.vertical, 12)
+                    .frame(maxWidth: .infinity)
+                    .background(Color(uiColor: .systemGroupedBackground))
             }
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
-                    .yuejiZoom(id: "new-expense", namespace: navigationMotion)
             }
             .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
                 TextField("1500.00", text: $budgetText).keyboardType(.decimalPad)
-                Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); model.change { $0.budgets[monthKey(month)] = n } } catch { model.error = error.localizedDescription } }
-                Button(tr("移除预算", "Remove budget", "Buang bajet"), role: .destructive) { model.change { $0.budgets.removeValue(forKey: monthKey(month)) } }
+                Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); let key = monthKey(month); model.change { $0.budgets[key] = n } } catch { model.error = error.localizedDescription } }
+                Button(tr("移除预算", "Remove budget", "Buang bajet"), role: .destructive) { let key = monthKey(month); model.change { $0.budgets.removeValue(forKey: key) } }
                 Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
             }
             }
@@ -481,23 +522,25 @@ struct DashboardView: View {
     }
 }
 struct CategoryPaymentsView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let category: String
     let month: Date
     private var tint: Color { model.ledger.categoryTint(category) }
-    private var entries: [Expense] {
-        model.overview(in: month).entries.filter { $0.hasCategory(category) }
-    }
+    @State private var summary = OverviewSnapshot()
+    @State private var entries: [Expense] = []
+    @State private var loadedQuery: LedgerTimelineQuery?
     var body: some View {
-        let entries = self.entries
+        let _ = uiLocale.identifier
+        let query = model.overviewQuery(month: month)
         List {
             Section {
                 VStack(alignment: .leading, spacing: 12) {
                     CategoryBadge(name: category).font(.headline)
                     Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
                         .font(.subheadline).foregroundStyle(.secondary)
-                    AnimatedMoney(cents: model.overview(in: month).categoryTotals[category] ?? 0)
+                    AnimatedMoney(cents: summary.categoryTotals[category] ?? 0)
                         .font(.largeTitle.bold()).foregroundStyle(tint)
                         .lineLimit(1).minimumScaleFactor(0.5)
                     Text(tr("我的分类消费", "My category spending", "Belanja kategori saya"))
@@ -508,7 +551,7 @@ struct CategoryPaymentsView: View {
                 Text(tr("分类合计是扣除退款后的个人份额；付款记录显示整笔金额。", "The category total is your share after refunds; payment records show the full payment amount.", "Jumlah kategori ialah bahagian anda selepas pulangan; rekod bayaran menunjukkan amaun penuh."))
             }
             Section(tr("付款记录", "Payments", "Bayaran")) {
-                if entries.isEmpty {
+                if entries.isEmpty && loadedQuery == query {
                     ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                 }
                 ForEach(entries) { entry in
@@ -526,12 +569,23 @@ struct CategoryPaymentsView: View {
             .tint(tint)
             .navigationTitle(categoryLabel(category)).navigationBarTitleDisplayMode(.inline)
             .refreshable { await model.refresh(postRecurring: false) }
-            .animation(reduceMotion ? nil : YueJiMotion.standard, value: entries.map(\.id))
+            .yuejiUpdating(loadedQuery != query)
+            .task(id: query) {
+                guard loadedQuery != query else { return }
+                do {
+                    let fresh = try await model.preparedOverview(month: month, query: query)
+                    guard !Task.isCancelled, model.overviewQuery(month: month) == query else { return }
+                    summary = fresh; entries = fresh.entries.filter { $0.hasCategory(category) }; loadedQuery = query
+                } catch is CancellationError { return }
+                catch { model.error = error.localizedDescription }
+            }
     }
 }
 struct OverviewToolsView: View {
+    @Environment(\.locale) private var uiLocale
     var month: Date = Date()
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
                 NavigationLink { ReceiptScanView() } label: { Label(tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), systemImage: "doc.viewfinder") }
@@ -550,9 +604,11 @@ struct OverviewToolsView: View {
     }
 }
 struct DashboardLinkLabel: View {
+    @Environment(\.locale) private var uiLocale
     let title: String
     let symbol: String
     var body: some View {
+        let _ = uiLocale.identifier
         HStack(spacing: 12) {
             Image(systemName: symbol).foregroundStyle(ink).frame(width: 28)
             Text(title).foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
@@ -561,6 +617,7 @@ struct DashboardLinkLabel: View {
     }
 }
 struct SpendingMeter: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
@@ -570,6 +627,7 @@ struct SpendingMeter: View {
     let color: Color
     private var fraction: Double { min(max(Double(value) / Double(max(total, 1)), 0), 1) }
     var body: some View {
+        let _ = uiLocale.identifier
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(color.opacity(contrast == .increased ? 0.30 : (colorScheme == .dark ? 0.22 : 0.10)))
@@ -587,16 +645,19 @@ extension AccountDirection {
 }
 /// Use the same signs and colors for manual entries, bank notices and settlements.
 struct TransactionAmount: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let cents: Int
     let direction: AccountDirection
     var body: some View {
+        let _ = uiLocale.identifier
         Text(direction.formattedAmount(cents)).foregroundStyle(direction.amountColor).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: direction == .outgoing ? -Double(cents) : Double(cents)))
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: cents)
     }
 }
 struct ExpenseRow: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.colorScheme) private var colorScheme
@@ -612,6 +673,7 @@ struct ExpenseRow: View {
     }
     private var rowLayout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .center, spacing: 12)) }
     var body: some View {
+        let _ = uiLocale.identifier
         rowLayout {
             Image(systemName: symbol)
                 .font(.body.weight(.semibold)).foregroundStyle(categoryColor).frame(width: 44, height: 44)
@@ -639,13 +701,24 @@ struct ExpenseRow: View {
         }.padding(.vertical, 10)
     }
 }
+private enum LedgerSheetRoute: Identifiable {
+    case new(Date), filter, edit(Expense)
+    var id: String {
+        switch self {
+        case .new: return "manual-entry"
+        case .filter: return "filters"
+        case .edit(let entry): return "edit-" + entry.id
+        }
+    }
+}
 struct ExpensesView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
     @State private var deletingNotice: TNGNotice?
     @Namespace private var expenseTransition
-    @State private var filtering = false
+    @State private var sheet: LedgerSheetRoute?
     @SceneStorage("ledgerMonth") private var monthTimestamp = Date().timeIntervalSince1970
     private var month: Date {
         get { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
@@ -653,8 +726,6 @@ struct ExpensesView: View {
     }
     private var monthBinding: Binding<Date> { Binding(get: { month }, set: { month = $0 }) }
     @State private var search = ""
-    @State private var adding = false
-    @State private var editing: Expense?
     @State private var deleting: Expense?
     @State private var timeline = LedgerTimelineSnapshot()
     @State private var loadedQuery: LedgerTimelineQuery?
@@ -662,6 +733,7 @@ struct ExpensesView: View {
         LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: search, filter: filter, provider: providerFilter)
     }
     var body: some View {
+        let _ = uiLocale.identifier
         let requestedMonth = month
         let query = self.query
         let days = timeline.days
@@ -685,7 +757,7 @@ struct ExpensesView: View {
                                 .opacity(updating ? 1 : 0).accessibilityHidden(!updating)
                                 .accessibilityLabel(tr("正在更新账本", "Updating ledger", "Mengemas kini lejar"))
                             Spacer()
-                            Button { filtering = true } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
+                            Button { if sheet == nil { sheet = .filter } } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                                 .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
                                 .yuejiZoomSource(id: "ledger-filter", namespace: expenseTransition)
                         }
@@ -702,7 +774,7 @@ struct ExpensesView: View {
                         if filter.active || !search.isEmpty || providerFilter != "all" {
                             Button(tr("清除筛选与搜索", "Clear filters and search", "Kosongkan penapis dan carian")) { filter = LedgerFilter(); search = ""; providerFilter = "all" }
                         } else {
-                            Button(tr("记一笔", "Add entry", "Tambah rekod")) { adding = true }.yuejiPrimaryButton()
+                            Button(tr("记一笔", "Add entry", "Tambah rekod")) { if sheet == nil { sheet = .new(dateForNewExpense(in: month)) } }.yuejiPrimaryButton()
                         }
                     }.listRowBackground(Color.clear)
                 }
@@ -730,7 +802,7 @@ struct ExpensesView: View {
                                     }.tint(.red)
                                 }
                                 .contextMenu {
-                                    Button(tr("编辑", "Edit", "Edit"), systemImage: "pencil") { editing = entry }
+                                    Button(tr("编辑", "Edit", "Edit"), systemImage: "pencil") { if sheet == nil { sheet = .edit(entry) } }
                                     Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive) { deleting = entry }
                                 }
                             }
@@ -753,10 +825,14 @@ struct ExpensesView: View {
                     }
                 }
                 .refreshable { await model.refresh(postRecurring: false) }
-                .sheet(isPresented: $filtering) {
-                    LedgerFilterEditor(value: filter) { filter = $0 }
-                        .presentationDetents([.medium, .large])
-                        .yuejiZoom(id: "ledger-filter", namespace: expenseTransition)
+                .sheet(item: $sheet) { route in
+                    switch route {
+                    case .filter:
+                        LedgerFilterEditor(value: filter) { filter = $0 }
+                            .presentationDetents([.medium, .large])
+                    case .new(let date): ExpenseEditor(original: nil, initialDate: date)
+                    case .edit(let expense): ExpenseEditor(original: expense)
+                    }
                 }
                 .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large).searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
                 .toolbar {
@@ -768,31 +844,30 @@ struct ExpensesView: View {
                             .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
                     }
                     ToolbarItem(placement: .topBarTrailing) {
-                        Button { adding = true } label: { Image(systemName: "plus") }
+                        Button { if sheet == nil { sheet = .new(dateForNewExpense(in: month)) } } label: { Image(systemName: "plus") }
                             .accessibilityLabel(tr("记一笔", "Add entry", "Tambah rekod"))
                             .yuejiZoomSource(id: "new-expense", namespace: expenseTransition)
                     }
                 }
-                .sheet(isPresented: $adding) {
-                    ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
-                        .yuejiZoom(id: "new-expense", namespace: expenseTransition)
-                }
-                .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
                 .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
         }
     }
 }
 private struct TNGTimelineDetail: View {
+    @Environment(\.locale) private var uiLocale
     let notice: TNGNotice
     var body: some View {
+        let _ = uiLocale.identifier
         Group { if notice.kind == "incoming" { TNGIncomingView(id: notice.id) } else { TNGNoticeView(id: notice.id) } }
     }
 }
 struct TNGTimelineRow: View {
+    @Environment(\.locale) private var uiLocale
     let notice: TNGNotice
     @Environment(\.dynamicTypeSize) private var textSize
     var body: some View {
+        let _ = uiLocale.identifier
         let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout {
             VStack(alignment: .leading, spacing: 6) {
@@ -815,6 +890,7 @@ struct TNGTimelineRow: View {
     }
 }
 struct ExpenseDetailView: View {
+    @Environment(\.locale) private var uiLocale
     let id: String
     var embeddedInNavigation = false
     @EnvironmentObject private var model: LedgerModel
@@ -823,6 +899,8 @@ struct ExpenseDetailView: View {
     @Environment(\.dynamicTypeSize) private var typeSize
     @Namespace private var detailTransition
     @State private var editing: Expense?
+    @State private var editorPresented = false
+    @State private var returnedAfterDeletion = false
     @State private var editingItems = false
     @State private var itemsExpanded = false
     @State private var deleting: Expense?
@@ -830,6 +908,7 @@ struct ExpenseDetailView: View {
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
     var body: some View {
+        let _ = uiLocale.identifier
         Group {
             if embeddedInNavigation { detailContent }
             else { NavigationStack { detailContent }.yuejiSheetSurface() }
@@ -948,32 +1027,45 @@ struct ExpenseDetailView: View {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .fixedSize(horizontal: false, vertical: true)
-                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveDetail == nil)
+                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveDetail == nil || model.deletionInFlight)
+                            .accessibilityIdentifier("transaction.edit")
                             .yuejiZoomSource(id: "expense-edit-" + id, namespace: detailTransition)
                         Button(role: .destructive) { deleting = entry } label: {
                             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .fixedSize(horizontal: false, vertical: true)
-                        }.yuejiSecondaryButton().buttonBorderShape(.capsule).tint(.red).disabled(liveDetail == nil)
+                        }.yuejiSecondaryButton().buttonBorderShape(.capsule).tint(.red).disabled(liveDetail == nil || model.deletionInFlight)
+                            .accessibilityIdentifier("transaction.delete")
                     }
                     .padding(.horizontal, 20).padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .systemGroupedBackground))
                 }
             }
-            .sheet(item: $editing) {
+            .sheet(item: $editing, onDismiss: {
+                editorPresented = false
+                dismissDeletedDetailIfReady()
+            }) {
                 ExpenseEditor(original: $0, startWithItems: editingItems)
                     .yuejiZoom(id: (editingItems ? "expense-items-" : "expense-edit-") + id, namespace: detailTransition)
             }
+            .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
-            .onAppear { if let liveDetail { lastVisibleDetail = liveDetail } }
+            .onAppear { if let liveDetail, lastVisibleDetail?.entry.id != liveDetail.entry.id { lastVisibleDetail = liveDetail } }
             .onChange(of: model.ledgerRevision) { _, _ in
-                if let liveDetail { lastVisibleDetail = liveDetail } else { dismiss() }
+                if let current = model.expenseDetail(id: id) { lastVisibleDetail = current }
+                else { dismissDeletedDetailIfReady() }
             }
             .transaction { transaction in
                 if liveDetail == nil { transaction.animation = nil }
             }
     }
+    private func dismissDeletedDetailIfReady() {
+        guard !returnedAfterDeletion, !editorPresented, editing == nil, model.expense(id: id) == nil else { return }
+        returnedAfterDeletion = true
+        dismiss()
+    }
+
 }
 
 /// A captured presenting value survives the dialog resetting its binding.
@@ -991,10 +1083,10 @@ private struct ExpenseDeletionConfirmation: ViewModifier {
         ) { entry in
             Button(tr("删除", "Delete", "Padam"), role: .destructive) {
                 guard !model.isPreview else { return }
-                do {
-                    try model.deleteExpense(entry)
-                    onDeleted()
-                } catch { failure = error.localizedDescription }
+                Task {
+                    do { try await model.deleteExpense(entry); onDeleted() }
+                    catch { failure = error.localizedDescription }
+                }
             }
             Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
         } message: { entry in
@@ -1015,6 +1107,7 @@ struct FriendDraft: Identifiable {
     init(_ s: Share = Share(name: "", cents: 0)) { id = s.id; name = s.name; amount = Currency.input(s.cents, "MYR"); repayments = s.repayments }
 }
 struct ExpenseEditor: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let original: Expense?
@@ -1056,6 +1149,7 @@ struct ExpenseEditor: View {
     @State private var initialized = false
     @State private var saving = false
     @State private var rateLoading = false
+    @State private var rateRequest = UUID()
     @State private var rateNote = ""
     private func foreign() throws -> ForeignAmount? {
         if currency == "MYR" { return nil }
@@ -1064,6 +1158,7 @@ struct ExpenseEditor: View {
     }
     private func total() throws -> Int { if let fx = try foreign() { return try fx.myrCents() }; return try toCents(amount) }
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             if original == nil && initialDraft == nil && entryType == "settlement" {
                 ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
@@ -1122,12 +1217,15 @@ struct ExpenseEditor: View {
                 .onAppear { load() }
                 .task(id: currency) {
                     guard !model.isPreview else { return }
-                    guard original == nil, currency != "MYR" else { return }
-                    rateLoading = true; defer { rateLoading = false }
+                    let request = UUID(), code = currency, submittedRate = rate
+                    rateRequest = request
+                    guard original == nil, code != "MYR" else { rateLoading = false; return }
+                    rateLoading = true; defer { if rateRequest == request { rateLoading = false } }
                     do {
-                        if let q = try await AutomaticRates.shared.refresh(currency) {
+                        if let q = try await AutomaticRates.shared.refresh(code) {
                             try Task.checkCancellation()
-                            rate = q.text; rateDate = q.date; rateSource = q.source
+                            guard currency == code, rateRequest == request else { return }
+                            if rate == submittedRate { rate = q.text; rateDate = q.date; rateSource = q.source }
                             rateNote = q.source + " · " + dateLabel(q.date)
                         }
                     } catch {
@@ -1162,9 +1260,9 @@ struct ExpenseEditor: View {
             }
             if friendPays {
                 TextField(tr("付款朋友姓名", "Paying friend's name", "Nama rakan pembayar"), text: $payerName)
-                if !model.ledger.friendBalances.isEmpty {
+                if !model.friends.isEmpty {
                     Menu(tr("选择已有朋友", "Choose existing friend", "Pilih rakan sedia ada")) {
-                        ForEach(model.ledger.friendBalances) { friend in Button(friend.name) { payerName = friend.name } }
+                        ForEach(model.friends) { friend in Button(friend.name) { payerName = friend.name } }
                     }
                 }
             }
@@ -1353,13 +1451,15 @@ struct ExpenseEditor: View {
 }
 struct RepayTarget: Identifiable { var id: String { share.id }; let expense: Expense; let share: Share }
 struct FriendsView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
     @State private var settled = false
     @State private var adding = false
-    private var balances: [FriendBalance] { model.ledger.friendBalances }
+    private var balances: [FriendBalance] { model.friends }
     private var visible: [FriendBalance] { balances.filter { ($0.owed == 0 && $0.payable == 0) == settled } }
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             List {
                 Section {
@@ -1390,15 +1490,17 @@ struct FriendsView: View {
                     NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: .teal) }
                     NavigationLink { SplitHistoryView() } label: { Label(tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), systemImage: "list.bullet.rectangle") }
                 }
-            }.animation(reduceMotion ? nil : YueJiMotion.standard, value: settled).yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
+            }.yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
         }
     }
 }
 struct FriendBalanceRow: View {
+    @Environment(\.locale) private var uiLocale
     let friend: FriendBalance
     var body: some View {
+        let _ = uiLocale.identifier
         HStack(spacing: 14) {
             Text(String(friend.name.prefix(1)).uppercased()).font(.headline)
                 .frame(width: 44, height: 44).foregroundStyle(.teal)
@@ -1421,18 +1523,21 @@ struct FriendBalanceRow: View {
     }
 }
 struct RepaymentView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let target: RepayTarget
     @State private var amount = ""
     @State private var date = Date()
     @State private var error: String?
+    @State private var initialized = false
+    @State private var saving = false
     private var balance: Int {
-        guard let expense = model.ledger.expenses.first(where: { $0.id == target.expense.id }),
-              let share = expense.shares.first(where: { $0.id == target.share.id }) else { return 0 }
-        return model.ledger.outstanding(expense: expense, share: share)
+        model.expenseDetail(id: target.expense.id)?.shareBalances[target.share.id] ?? 0
     }
+
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             Form {
                 LabeledContent(target.share.name, value: money(abs(balance)))
@@ -1440,10 +1545,40 @@ struct RepaymentView: View {
                 DatePicker(tr("还款日期", "Repayment date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                 Text(tr("还款只减少欠款，不重复计作收入。", "Repayments reduce debt and are not counted as new income.", "Bayaran balik mengurangkan hutang dan bukan pendapatan baharu."))
             }.navigationTitle(tr("记录还款", "Repayment", "Bayaran balik")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
-                .onAppear { amount = Currency.input(abs(balance), "MYR") }
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }; ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(amount); try LocalStore.shared.change { if balance < 0 { try $0.returnToFriend(expenseID: target.expense.id, shareID: target.share.id, cents: n, date: date) } else { try $0.repay(expenseID: target.expense.id, shareID: target.share.id, cents: n, date: date) } }; model.reload(); model.showSaved(); dismiss() } catch { self.error = error.localizedDescription } } } }
+                .disabled(saving).interactiveDismissDisabled(saving)
+                .onAppear { if !initialized { initialized = true; amount = Currency.input(abs(balance), "MYR") } }
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.disabled(saving) }
+                }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
+    }
+    private func save() {
+        guard !saving else { return }
+        do {
+            let n = try toCents(amount), recordedDate = date, capturedTarget = target, returning = balance < 0
+            saving = true
+            Task {
+                defer { saving = false }
+                do {
+                    try await model.mutate { ledger in
+                        if returning { try ledger.returnToFriend(expenseID: capturedTarget.expense.id, shareID: capturedTarget.share.id, cents: n, date: recordedDate) }
+                        else { try ledger.repay(expenseID: capturedTarget.expense.id, shareID: capturedTarget.share.id, cents: n, date: recordedDate) }
+                    }
+                    model.showSaved(); dismiss()
+                } catch { self.error = error.localizedDescription }
+            }
+        } catch { self.error = error.localizedDescription }
+    }
+}
+struct SaveActionLabel: View {
+    @Environment(\.locale) private var uiLocale
+    let saving: Bool
+    var body: some View {
+        let _ = uiLocale.identifier
+        if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
+        else { Text(tr("保存", "Save", "Simpan")) }
     }
 }
 struct LedgerDocument: FileDocument {
@@ -1454,6 +1589,7 @@ struct LedgerDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 struct SettingsView: View {
+    @Environment(\.locale) private var uiLocale
     @State private var showingUsageGuide = false
     var guideDestination: String? = nil
     @EnvironmentObject var model: LedgerModel
@@ -1464,7 +1600,11 @@ struct SettingsView: View {
     @State private var document: LedgerDocument?
     @State private var restorePreview: RestorePreview?
     @State private var backups: [URL] = []
+    @State private var backupBusy = false
+    @State private var backupTask: Task<Void, Never>?
+    @State private var backupRequest = UUID()
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             if guideDestination == "appearance" { appearancePage }
             else if guideDestination == "categories" { categoriesPage }
@@ -1525,7 +1665,7 @@ struct SettingsView: View {
             }.yuejiListSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.large)
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                    do { let url = try result.get(); let access = url.startAccessingSecurityScopedResource(); defer { if access { url.stopAccessingSecurityScopedResource() } }; let data = try Data(contentsOf: url); restorePreview = try RestorePreview(data: data) } catch { model.error = error.localizedDescription }
+                    do { previewBackup(try result.get()) } catch { model.error = error.localizedDescription }
                 }
                 .sheet(isPresented: $showingUsageGuide) { UsageGuideView() }
                 .sheet(item: $restorePreview) { preview in
@@ -1561,21 +1701,24 @@ struct SettingsView: View {
                 Section(tr("保管好你的账本", "Keep your ledger safe", "Simpan lejar dengan selamat")) {
                     Text(tr("换手机或卸载前，请先把完整备份存到「文件」或 iCloud Drive。", "Save a complete backup to Files or iCloud Drive before changing phones or uninstalling.", "Simpan sandaran lengkap ke Files atau iCloud Drive sebelum menukar telefon atau menyahpasang.")).font(.footnote)
                     NavigationLink(tr("导出账单表格", "Export a spreadsheet", "Eksport hamparan")) { CSVExportView() }
-                    Button(tr("保存一份完整备份", "Save a complete backup", "Simpan sandaran lengkap")) { do { document = LedgerDocument(data: try LocalStore.exportData(LocalStore.shared.read())); exporting = true } catch { model.error = error.localizedDescription } }
-                    Button(tr("从备份文件恢复", "Restore from a backup file", "Pulihkan daripada fail sandaran")) { importing = true }
+                    Button(tr("保存一份完整备份", "Save a complete backup", "Simpan sandaran lengkap")) { exportBackup() }
+                    Button(tr("从备份文件恢复", "Restore from a backup file", "Pulihkan daripada fail sandaran")) { if !backupBusy { importing = true } }
                     if FileManager.default.fileExists(atPath: LocalStore.shared.recoveryFile.path) {
                         Button(tr("恢复上次导入前的数据", "Recover data before last restore", "Pulihkan data sebelum pemulihan terakhir")) {
-                            do { restorePreview = try RestorePreview(data: Data(contentsOf: LocalStore.shared.recoveryFile)) } catch { model.error = error.localizedDescription }
+                            previewBackup(LocalStore.shared.recoveryFile)
                         }
                     }
                     DisclosureGroup(tr("找回较早的账本", "Recover an earlier ledger", "Pulihkan lejar terdahulu")) {
-                    ForEach(backups, id: \.self) { url in Button { do { restorePreview = try RestorePreview(data: Data(contentsOf: url)) } catch { model.error = error.localizedDescription } } label: {
+                    ForEach(backups, id: \.self) { url in Button { previewBackup(url) } label: {
                         Text(tr("恢复：", "Restore: ", "Pulihkan: ") + backupTitle(url))
                     } }
                     }
                 }
 
-        }.yuejiListSurface().navigationTitle(tr("备份与导出", "Backups & export", "Sandaran & eksport")).onAppear { loadBackups() }
+        }.yuejiListSurface().disabled(backupBusy)
+            .overlay { if backupBusy { ProgressView().accessibilityLabel(tr("正在处理备份", "Processing backup", "Memproses sandaran")).allowsHitTesting(false) } }
+            .navigationTitle(tr("备份与导出", "Backups & export", "Sandaran & eksport")).onAppear { loadBackups() }
+            .onDisappear { backupTask?.cancel(); backupRequest = UUID(); backupBusy = false }
     }
     private var aboutPage: some View {
         List {
@@ -1583,16 +1726,53 @@ struct SettingsView: View {
             Text(tr("如果通过 AltStore 安装，请按时刷新月记，以免无法打开或中断自动记账。", "If installed with AltStore, refresh YueJi on time to keep the app and automatic recording available.", "Jika dipasang melalui AltStore, segarkan YueJi tepat pada masanya supaya aplikasi dan rekod automatik terus tersedia."))
         }.yuejiListSurface().navigationTitle(tr("关于月记", "About YueJi", "Tentang YueJi"))
     }
-    private func loadBackups() { guard !model.isPreview else { return }; do { backups = try LocalStore.shared.backups() } catch { model.error = error.localizedDescription } }
+    private func loadBackups() {
+        guard !model.isPreview else { return }
+        Task {
+            do { backups = try await LedgerRefreshWorker.shared.backups() }
+            catch { model.error = error.localizedDescription }
+        }
+    }
+    private func previewBackup(_ url: URL) {
+        guard !backupBusy, restorePreview == nil else { return }
+        let request = UUID(); backupRequest = request; backupBusy = true
+        backupTask = Task {
+            defer { if backupRequest == request { backupBusy = false } }
+            do {
+                let preview = try await LedgerRefreshWorker.shared.preview(url: url)
+                guard !Task.isCancelled, backupRequest == request else { return }
+                restorePreview = preview
+            } catch is CancellationError { return }
+            catch { if !Task.isCancelled, backupRequest == request { model.error = error.localizedDescription } }
+        }
+    }
+    private func exportBackup() {
+        guard !backupBusy else { return }
+        let request = UUID(); backupRequest = request; backupBusy = true
+        backupTask = Task {
+            defer { if backupRequest == request { backupBusy = false } }
+            do {
+                let data = try await LedgerRefreshWorker.shared.exportBackup()
+                guard !Task.isCancelled, backupRequest == request else { return }
+                document = LedgerDocument(data: data); exporting = true
+            } catch is CancellationError { return }
+            catch { if !Task.isCancelled, backupRequest == request { model.error = error.localizedDescription } }
+        }
+    }
     private func backupTitle(_ url: URL) -> String { guard let s = url.lastPathComponent.split(separator: "-").first, let ms = Double(s) else { return url.lastPathComponent }; return dateLabel(Date(timeIntervalSince1970: ms / 1000), time: true) }
 }
 struct ShortcutHelpView: View {
-    var body: some View { ShortcutSetupGuide(provider: .applePay) }
+    @Environment(\.locale) private var uiLocale
+    var body: some View {
+        let _ = uiLocale.identifier
+        ShortcutSetupGuide(provider: .applePay)
+    }
 }
 
 enum ShortcutSetupProvider: Equatable { case applePay, tng }
 
 struct ShortcutSetupGuide: View {
+    @Environment(\.locale) private var uiLocale
     let provider: ShortcutSetupProvider
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1611,6 +1791,7 @@ struct ShortcutSetupGuide: View {
         return GuideGesture.actions(chapter: chapter, stage: page + 1).dropFirst(gestureStep).first
     }
     var body: some View {
+        let _ = uiLocale.identifier
         Group {
             if unavailable {
                 ContentUnavailableView(tr("需要通知触发器", "Notification trigger required", "Pencetus notifikasi diperlukan"), systemImage: "bell.badge", description: Text(tr("此演示使用 iOS 27 的通知自动化。当前系统没有这个入口时，可继续手动记账。", "This walkthrough uses iOS 27 notification automations. If your system does not have this trigger, use manual recording.", "Panduan ini menggunakan automasi notifikasi iOS 27. Jika pencetus tiada, guna rekod manual.")))
@@ -1685,11 +1866,13 @@ struct CSVDocument: FileDocument {
 
 
 struct SimpleSettingsRow: View {
+    @Environment(\.locale) private var uiLocale
     let title: String
     let subtitle: String
     let symbol: String
     let color: Color
     var body: some View {
+        let _ = uiLocale.identifier
         HStack(spacing: 14) {
             Image(systemName: symbol).font(.body.weight(.medium))
                 .foregroundStyle(.white).frame(width: 34, height: 34)
@@ -1705,7 +1888,9 @@ struct SimpleSettingsRow: View {
 
 
 struct AutomationSetupView: View {
+    @Environment(\.locale) private var uiLocale
     var body: some View {
+        let _ = uiLocale.identifier
         List {
             Section {
                 NavigationLink { ShortcutHelpView() } label: {
@@ -1758,25 +1943,18 @@ private struct YueJiGlassSurface: ViewModifier {
 
 
 private struct YueJiZoomDestination: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: String
     let namespace: Namespace.ID
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 18.0, *), !reduceMotion {
-            content.navigationTransition(.zoom(sourceID: id, in: namespace))
-        } else { content }
-    }
+    func body(content: Content) -> some View { content }
 }
+
 private struct YueJiZoomSource: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: String
     let namespace: Namespace.ID
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 18.0, *), !reduceMotion {
-            content.matchedTransitionSource(id: id, in: namespace)
-        } else { content }
-    }
+    func body(content: Content) -> some View { content }
 }
+// Existing guide/source IDs remain stable; navigation uses the native system transitions.
+
 extension View {
     func yuejiZoom(id: String, namespace: Namespace.ID) -> some View {
         modifier(YueJiZoomDestination(id: id, namespace: namespace))
@@ -1835,6 +2013,7 @@ enum GuideSample {
 }
 
 struct UsageGuideView: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
@@ -1852,6 +2031,7 @@ struct UsageGuideView: View {
         return "\(current + 1) / \(count) · " + label
     }
     var body: some View {
+        let _ = uiLocale.identifier
         NavigationStack {
             GeometryReader { geometry in
                 TabView(selection: selection) {
@@ -2008,6 +2188,7 @@ private enum GuideCue {
 }
 
 private struct GuideTouchIndicator: View {
+    @Environment(\.locale) private var uiLocale
     let phase: Int
     let action: GuideGesture
     let measured: CGRect
@@ -2015,6 +2196,7 @@ private struct GuideTouchIndicator: View {
         CGPoint(x: measured.midX, y: measured.minY + measured.height * action.position)
     }
     var body: some View {
+        let _ = uiLocale.identifier
         ZStack {
             if phase == 2 && !action.swipe {
                 Circle().stroke(.blue.opacity(0.55), lineWidth: 2)
@@ -2033,12 +2215,14 @@ private struct GuideTouchIndicator: View {
 }
 
 private struct GuideScreenFrame: View {
+    @Environment(\.locale) private var uiLocale
     let screen: GuideScreen
     let action: GuideGesture?
     let gesturePhase: Int
     @State private var measuredTargets: [String: CGRect] = [:]
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
+        let _ = uiLocale.identifier
         GeometryReader { geometry in
             let scale = min(geometry.size.width / 410, geometry.size.height / 820)
             VStack(spacing: 0) {
@@ -2081,6 +2265,7 @@ private struct GuideScreenFrame: View {
 // A read-only Tips scene. It borrows the app's labels and workflow, while keeping
 // editor toolbars, sheets, keyboards and system menus out of the demonstration.
 private struct GuideDemoScene: View {
+    @Environment(\.locale) private var uiLocale
     let screen: GuideScreen
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -2116,6 +2301,7 @@ private struct GuideDemoScene: View {
         }
     }
     var body: some View {
+        let _ = uiLocale.identifier
         VStack(spacing: 0) {
             HStack {
                 if tab == nil { Image(systemName: "chevron.left").frame(width: 42, alignment: .leading) }
@@ -2472,6 +2658,7 @@ private struct MoonBody: Shape {
 enum MoonGesture: String { case hello, dance, star, cuddle }
 
 struct MoonBuddy: View {
+    @Environment(\.locale) private var uiLocale
     var size: CGFloat = 100
     var celebrating = false
     var animated = true
@@ -2488,6 +2675,7 @@ struct MoonBuddy: View {
     private var motion: Bool { animated && playful && !reduceMotion }
     private var animationKey: String { "\(motion)-\(gesture.rawValue)-\(reaction?.uuidString ?? "once")" }
     var body: some View {
+        let _ = uiLocale.identifier
         ZStack {
             Ellipse().fill(Color.blue.opacity(0.12)).frame(width: size * 0.62, height: size * 0.07)
                 .blur(radius: size * 0.035).offset(y: size * 0.46).scaleEffect(lift < 0 ? 0.82 : 1)
@@ -2571,12 +2759,14 @@ struct MoonBuddy: View {
 }
 
 struct SavedFeedback: View {
+    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var appeared = false
     let token: UUID
     let message: String
     var mascot = false
     var body: some View {
+        let _ = uiLocale.identifier
         HStack(spacing: 10) {
             if mascot { MoonBuddy(size: 42, celebrating: true, reaction: token) }
             Label {
@@ -2595,6 +2785,7 @@ struct SavedFeedback: View {
 }
 
 private struct OpeningAnimationView: View {
+    @Environment(\.locale) private var uiLocale
     var sound = true
     var onFinished: () -> Void
     @Environment(\.scenePhase) private var phase
@@ -2604,6 +2795,7 @@ private struct OpeningAnimationView: View {
     @State private var playedSound = false
     private var animates: Bool { playful && !reduceMotion }
     var body: some View {
+        let _ = uiLocale.identifier
         ZStack {
             Color("LaunchBackground").ignoresSafeArea()
             VStack(spacing: 20) {
@@ -2653,7 +2845,7 @@ private struct LedgerFeedbackHost: ViewModifier {
         content
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 Group {
-                    if visible && (!model.undoEntries.isEmpty || model.savedNotice != nil) {
+                    if visible && !model.undoEntries.isEmpty {
                         VStack(spacing: 0) {
                             if !model.undoEntries.isEmpty {
                                 ViewThatFits(in: .horizontal) {
@@ -2661,9 +2853,6 @@ private struct LedgerFeedbackHost: ViewModifier {
                                     VStack(spacing: 4) { deletionStatus; undoButton }
                                 }
                                 .padding(.horizontal, 18).padding(.vertical, 6).ledgerGlass()
-                            } else if let token = model.savedNotice {
-                                SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
-                                    .id(token)
                             }
                         }
                         .frame(maxWidth: 520).padding(.horizontal, 20).padding(.vertical, 8)
@@ -2673,6 +2862,15 @@ private struct LedgerFeedbackHost: ViewModifier {
                 }
                 .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.savedNotice)
                 .animation(reduceMotion ? nil : YueJiMotion.standard, value: model.undoEntries.count)
+            }
+            .overlay(alignment: .top) {
+                if visible, model.undoEntries.isEmpty, let token = model.savedNotice {
+                    SavedFeedback(token: token, message: model.feedbackMessage, mascot: model.feedbackMascot)
+                        .id(token).padding(.horizontal, 20).padding(.top, 8)
+                        .frame(maxWidth: 520)
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                        .transition(.opacity)
+                }
             }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
             .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
@@ -2692,8 +2890,8 @@ private struct LedgerFeedbackHost: ViewModifier {
     }
     private var undoButton: some View {
         Button(tr("撤销", "Undo", "Batal padam")) {
-            withAnimation(reduceMotion ? nil : YueJiMotion.standard) { model.undoDeletion() }
-        }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44)
+            Task { await model.undoDeletion() }
+        }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44).disabled(model.deletionInFlight)
     }
 }
 extension View {
@@ -2719,10 +2917,10 @@ struct AutomaticRecordDeletion: ViewModifier {
             .confirmationDialog(tr("删除这笔自动记录？", "Delete this automatic record?", "Padam rekod automatik ini?"), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("删除", "Delete", "Padam"), role: .destructive) {
                     guard let notice else { return }
-                    do {
-                        try model.deleteAutomaticRecord(notice)
-                        if detail { dismiss() }
-                    } catch { failure = error.localizedDescription }
+                    Task {
+                        do { try await model.deleteAutomaticRecord(notice); if detail { dismiss() } }
+                        catch { failure = error.localizedDescription }
+                    }
                 }
                 Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
             } message: {
@@ -2761,8 +2959,10 @@ struct AutomaticRecordDeletionConfirmation: ViewModifier {
             titleVisibility: .visible, presenting: notice
         ) { selected in
             Button(tr("删除", "Delete", "Padam"), role: .destructive) {
-                do { try model.deleteAutomaticRecord(selected) }
-                catch { failure = error.localizedDescription }
+                Task {
+                    do { try await model.deleteAutomaticRecord(selected) }
+                    catch { failure = error.localizedDescription }
+                }
             }
             Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
         } message: { selected in
@@ -2785,12 +2985,14 @@ struct NotificationDestination: Identifiable {
     let action: String
 }
 struct NotificationDestinationView: View {
+    @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let target: NotificationDestination
     var body: some View {
+        let _ = uiLocale.identifier
         Group {
-            if target.kind == "expense", let entry = model.ledger.expenses.first(where: { $0.id == target.recordID }) {
+            if target.kind == "expense", let entry = model.expense(id: target.recordID) {
                 if target.action == "category" { ExpenseEditor(original: entry) }
                 else { ExpenseDetailView(id: entry.id) }
             } else {
