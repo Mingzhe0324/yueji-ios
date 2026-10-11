@@ -703,7 +703,6 @@ struct ExpenseRow: View {
                 Text(entry.merchant).font(.body.weight(.semibold))
                 Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
-                if let note = entry.note, !note.isEmpty { Text(note).font(.footnote).foregroundStyle(.secondary).lineLimit(1) }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
                 if !entry.shares.isEmpty {
                     HStack {
@@ -918,8 +917,6 @@ struct ExpenseDetailView: View {
     @State private var editing: Expense?
     @State private var editorPresented = false
     @State private var returnedAfterDeletion = false
-    @State private var editingItems = false
-    @State private var itemsExpanded = false
     @State private var deleting: Expense?
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
@@ -975,22 +972,12 @@ struct ExpenseDetailView: View {
                         }
                         NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: id) }
                     }
-                    Section {
-                        DisclosureGroup(tr("物品", "Items", "Item"), isExpanded: $itemsExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
-                            if (entry.items ?? []).isEmpty {
-                                Text(tr("交易已保存，尚未填写物品。", "Transaction saved; items have not been added yet.", "Transaksi disimpan; item belum ditambah."))
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            } else {
-                                ExpenseItemsBreakdown(entry: entry)
-                                LabeledContent(tr("物品合计", "Item total", "Jumlah item")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
-                                Text(tr("按物品分类统计；分账及退款按金额比例分配。", "Reports use item categories; shares and refunds are distributed proportionally.", "Laporan menggunakan kategori item; bahagian dan pulangan diagihkan mengikut nisbah."))
-                                    .font(.footnote).foregroundStyle(.secondary)
-                            }
-                            Button(tr("编辑物品", "Edit items", "Edit item")) { editingItems = true; editing = entry }
-                                .yuejiZoomSource(id: "expense-items-" + id, namespace: detailTransition)
-                        }
-                    }
+                    SavedTransactionItemsSection(entry: entry, presentationAllowed: !editorPresented && deleting == nil, onEditingChanged: {
+                        editorPresented = $0
+                        if !$0 { dismissDeletedDetailIfReady() }
+                    })
                     ExpenseBookkeepingDetails(entry: entry)
+                    ForEach(detail.sourceNotices) { notice in NoticeSourceSection(notice: notice) }
                     if !entry.shares.isEmpty {
                         Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
                             ForEach(entry.shares) { share in
@@ -1040,18 +1027,22 @@ struct ExpenseDetailView: View {
                         ? AnyLayout(VStackLayout(spacing: 12))
                         : AnyLayout(HStackLayout(spacing: 16))
                     layout {
-                        Button { editingItems = false; editing = entry } label: {
+                        Button {
+                            guard !editorPresented, editing == nil else { return }
+                            editorPresented = true
+                            editing = entry
+                        } label: {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .fixedSize(horizontal: false, vertical: true)
-                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveDetail == nil || model.deletionInFlight)
+                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(liveDetail == nil || model.deletionInFlight || editorPresented)
                             .accessibilityIdentifier("transaction.edit")
                             .yuejiZoomSource(id: "expense-edit-" + id, namespace: detailTransition)
                         Button(role: .destructive) { deleting = entry } label: {
                             Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                                 .frame(maxWidth: .infinity, minHeight: 44)
                                 .fixedSize(horizontal: false, vertical: true)
-                        }.yuejiSecondaryButton().buttonBorderShape(.capsule).tint(.red).disabled(liveDetail == nil || model.deletionInFlight)
+                        }.yuejiSecondaryButton().buttonBorderShape(.capsule).tint(.red).disabled(liveDetail == nil || model.deletionInFlight || editorPresented)
                             .accessibilityIdentifier("transaction.delete")
                     }
                     .padding(.horizontal, 20).padding(.vertical, 12)
@@ -1063,8 +1054,8 @@ struct ExpenseDetailView: View {
                 editorPresented = false
                 dismissDeletedDetailIfReady()
             }) {
-                ExpenseEditor(original: $0, startWithItems: editingItems)
-                    .yuejiZoom(id: (editingItems ? "expense-items-" : "expense-edit-") + id, namespace: detailTransition)
+                ExpenseEditor(original: $0)
+                    .yuejiZoom(id: "expense-edit-" + id, namespace: detailTransition)
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
@@ -1148,7 +1139,6 @@ struct ExpenseEditor: View {
     @State private var category = "其他"
     @State private var rememberCategory = true
     @State private var itemDrafts: [ExpenseItemDraft] = []
-    @State private var note = ""
     @State private var tagsText = ""
     @State private var splitting = false
     @State private var entryType = "expense"
@@ -1184,13 +1174,13 @@ struct ExpenseEditor: View {
                 paymentSection
                 merchantSection
                 ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, initiallyExpanded: startWithItems)
-                ExpenseBookkeepingFields(note: $note, tagsText: $tagsText)
+                ExpenseBookkeepingFields(tagsText: $tagsText)
                 currencySection
                 friendSplitSection
                 if let original {
                     if model.ledger.hasActiveSettlement(expenseID: original.id) {
                         Section {
-                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、物品、分账或退款前，请先撤销相关结算。备注仍可编辑。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, items, shares or refunds. Notes can still be edited.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, item, bahagian atau pulangan. Nota masih boleh diedit."))
+                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、物品、分账或退款前，请先撤销相关结算。标签仍可编辑。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, items, shares or refunds. Tags can still be edited.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, item, bahagian atau pulangan. Tag masih boleh diedit."))
                             ForEach(model.ledger.settlements.filter { $0.active && $0.lines.contains { $0.expense.id == original.id && $0.applied != 0 } }) { record in
                                 NavigationLink(tr("查看结算", "View settlement", "Lihat penyelesaian")) { SettlementDetailView(id: record.id) }
                             }
@@ -1375,7 +1365,7 @@ struct ExpenseEditor: View {
             friendPays = e.paidByFriend != nil; payerName = e.paidByFriend ?? ""
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
             itemDrafts = (e.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
-            note = e.note ?? ""; tagsText = (e.tags ?? []).joined(separator: ", ")
+            tagsText = (e.tags ?? []).joined(separator: ", ")
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -1396,7 +1386,7 @@ struct ExpenseEditor: View {
     }
     private func finishKeyboard() {
         focusedField = nil
-        // Includes fields in the reusable note, item and friend rows.
+        // Includes fields in the reusable tag, item and friend rows.
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     private func beginSave() {
@@ -1421,14 +1411,8 @@ struct ExpenseEditor: View {
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
             entry.paidByFriend = friendPays ? payerName.trimmingCharacters(in: .whitespacesAndNewlines) : nil
-            entry.note = note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : note
             entry.tags = normalizedExpenseTags(tagsText)
-            if itemDrafts.isEmpty { entry.items = nil }
-            else { entry.items = try itemDrafts.map { try $0.savedItem() } }
-            entry.categoryAllocations = nil
-            if let items = entry.items, let first = items.first, original?.items != items {
-                entry.category = first.category
-            }
+            entry = try entry.replacingItems(try itemDrafts.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
             if let original, original.refunded > 0 {
                 guard entry.cents == original.cents, entry.date == original.date, entry.foreign == original.foreign, entry.paidByFriend == original.paidByFriend else { throw reviewError("已有退款，请先撤销退款再修改金额或日期。", "Undo refunds before changing amount or date.", "Batalkan bayaran balik sebelum mengubah amaun atau tarikh.") }
             }

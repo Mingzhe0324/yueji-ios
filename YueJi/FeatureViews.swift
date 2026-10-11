@@ -1193,7 +1193,7 @@ struct LedgerFilterEditor: View {
                 }
                 TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
-                Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户、备注和标签可在账本搜索。多分类按包含分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants in the ledger search field.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dalam carian lejar.")).font(.footnote)
+                Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户、物品和标签可在账本搜索。物品按各自分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants, items and tags in the ledger. Item categories are included; rows still show the transaction total.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga, item dan tag dalam lejar. Kategori item disertakan; baris masih menunjukkan jumlah transaksi.")).font(.footnote)
                 Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
             }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar {
@@ -1316,47 +1316,125 @@ struct TNGInboxView: View {
             }
     }
 }
-struct NoticeNoteSection: View {
+struct NoticeSourceSection: View {
     @Environment(\.locale) private var uiLocale
-    @EnvironmentObject var model: LedgerModel
-    let id: String
-    @State private var note = ""
+    let notice: TNGNotice
+    var body: some View {
+        let _ = uiLocale.identifier
+        Section(tr("来源信息", "Source information", "Maklumat sumber")) {
+            LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(notice.provider))
+            DisclosureGroup(tr("通知原文", "Original notification", "Notifikasi asal")) {
+                if !notice.title.isEmpty { Text(notice.title).textSelection(.enabled) }
+                Text(notice.body).textSelection(.enabled)
+            }
+        }
+    }
+}
+
+struct SavedTransactionItemsSection: View {
+    @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let entry: Expense
+    var presentationAllowed = true
+    var onEditingChanged: ((Bool) -> Void)? = nil
+    @State private var expanded = false
+    @State private var editing: Expense?
+    var body: some View {
+        let _ = uiLocale.identifier
+        Section {
+            DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
+                if (entry.items ?? []).isEmpty {
+                    Text(tr("交易已保存，可稍后补充物品。", "Transaction saved; add items whenever you are ready.", "Transaksi disimpan; tambah item apabila anda bersedia."))
+                        .font(.footnote).foregroundStyle(.secondary)
+                } else {
+                    ExpenseItemsBreakdown(entry: entry)
+                    LabeledContent(tr("物品合计", "Item total", "Jumlah item")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
+                    Text(tr("按物品分类统计；分账及退款按金额比例分配。", "Reports use item categories; shares and refunds are distributed proportionally.", "Laporan menggunakan kategori item; bahagian dan pulangan diagihkan mengikut nisbah."))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            } label: {
+                LabeledContent(tr("物品", "Items", "Item"), value: String(entry.items?.count ?? 0))
+            }
+            Button {
+                guard presentationAllowed, editing == nil else { return }
+                onEditingChanged?(true)
+                editing = entry
+            } label: {
+                Label((entry.items ?? []).isEmpty ? tr("添加物品", "Add items", "Tambah item") : tr("编辑物品", "Edit items", "Edit item"), systemImage: "list.bullet.rectangle")
+                    .frame(minHeight: 44)
+            }.buttonStyle(.borderless).disabled(!presentationAllowed)
+                .accessibilityIdentifier("transaction.items.edit")
+        }.sheet(item: $editing, onDismiss: { onEditingChanged?(false) }) { ExpenseItemsEditor(original: $0) }
+    }
+}
+
+/// A focused editor changes only itemization; payment and settlement history stay intact.
+struct ExpenseItemsEditor: View {
+    @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let original: Expense
+    @State private var items: [ExpenseItemDraft] = []
     @State private var initialized = false
     @State private var saving = false
     @State private var error: String?
-    private var savedNote: String {
-        guard let n = model.notice(id: id) else { return "" }
-        if let expenseID = n.expenseID, let entry = model.expense(id: expenseID) {
-            return entry.note ?? ""
-        }
-        return n.note ?? ""
-    }
     var body: some View {
         let _ = uiLocale.identifier
-        Section(tr("交易备注", "Transaction note", "Nota transaksi")) {
-            TextField(tr("例如：午餐、替朋友付款、转入自己的账户", "E.g. lunch, paying for a friend, transfer to your own account", "Cth. makan tengah hari, bayaran untuk rakan, pindahan ke akaun sendiri"), text: $note, axis: .vertical).lineLimit(2...5)
-            Text("\(note.count) / 2000").font(.caption).foregroundStyle(.secondary)
-            Button(tr("保存备注", "Save note", "Simpan nota")) {
-                guard !saving else { return }
-                let recordID = id, savedText = note
-                saving = true
-                Task {
-                    defer { saving = false }
-                    do {
-                        try await model.mutate { try $0.setNoticeNote(id: recordID, note: savedText) }
-                        model.showSaved(message: tr("备注已保存", "Note saved", "Nota disimpan"))
-                    } catch { self.error = error.localizedDescription }
+        NavigationStack {
+            Form {
+                Section {
+                    Text(original.merchant).font(.headline)
+                    LabeledContent(tr("交易总额", "Transaction total", "Jumlah transaksi")) {
+                        TransactionAmount(cents: original.cents, direction: .outgoing)
+                    }
                 }
-            }.disabled(saving || note == savedNote || note.count > 2000)
-            if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
-
-            Text(tr("付款、转账、收款及已排除记录均可备注；保存备注不会改变消费统计。", "Add notes to payments, transfers, receipts and excluded records. Notes do not change spending totals.", "Tambah nota pada bayaran, pindahan, penerimaan dan rekod dikecualikan. Nota tidak mengubah jumlah belanja.")).font(.caption)
-        }
-        .onAppear { if !initialized { initialized = true; note = savedNote } }
-        .onChange(of: savedNote) { old, new in if note == old { note = new } }
-        .alert(tr("无法保存备注", "Unable to save note", "Tidak dapat menyimpan nota"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-            Button("OK") {}
-        } message: { Text(error ?? "") }
+                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true, initiallyExpanded: true)
+                if model.ledger.hasActiveSettlement(expenseID: original.id) {
+                    Section {
+                        Text(tr("修改物品前，请先撤销关联结算。原消费和历史记录会保留。", "Undo linked settlements before changing items. The original expense and history are preserved.", "Batalkan penyelesaian dipautkan sebelum mengubah item. Belanja asal dan sejarah dikekalkan."))
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+            }.yuejiListSurface()
+                .navigationTitle(tr("编辑物品", "Edit items", "Edit item"))
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(tr("保存", "Save", "Simpan")) { save() }.disabled(saving || !initialized)
+                    }
+                }
+                .disabled(saving)
+                .overlay { if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
+                .interactiveDismissDisabled(saving)
+                .onAppear {
+                    guard !initialized else { return }
+                    items = (original.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
+                    initialized = true
+                }
+                .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                    Button("OK") {}
+                } message: { Text(error ?? "") }
+        }.yuejiSheetSurface().ledgerFeedback(modal: true)
+    }
+    private func save() {
+        guard initialized, !saving else { return }
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        do {
+            let entry = try original.replacingItems(try items.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
+            saving = true
+            Task { @MainActor in
+                defer { saving = false }
+                do {
+                    try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: false)
+                    await model.refresh(postRecurring: false)
+                    model.showSaved(message: tr("物品已保存", "Items saved", "Item disimpan"))
+                    dismiss()
+                } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
+            }
+        } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
 }
 
@@ -1374,19 +1452,21 @@ struct TNGNoticeView: View {
     @State private var excluding = false
     @State private var confirming = false
     @State private var editing: Expense?
+    @State private var itemsEditorPresented = false
+    @State private var itemDrafts: [ExpenseItemDraft] = []
     @State private var error: String?
     private var notice: TNGNotice? { model.notice(id: id) }
     var body: some View {
         let _ = uiLocale.identifier
         Form {
             if let notice {
-                NoticeNoteSection(id: id)
                 SettlementNoticeSection(notice: notice)
+                if let expenseID = notice.expenseID, let entry = model.expense(id: expenseID) {
+                    SavedTransactionItemsSection(entry: entry, presentationAllowed: editing == nil, onEditingChanged: { itemsEditorPresented = $0 })
+                }
                 Section {
                     TNGTimelineRow(notice: notice)
                     if let reference = notice.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
-                    if !notice.title.isEmpty { Text(notice.title) }
-                    Text(notice.body).textSelection(.enabled)
                     if let reason = notice.reviewReason { Text(localizedError(reason)).foregroundStyle(.orange) }
                     if let suggestion = notice.aiSuggestion { Text(tr("AI 建议（请核对）：", "AI suggestion (please review): ", "Cadangan AI (sila semak): ") + localizedAppText(suggestion)).font(.caption) }
                     if notice.kind == "unknown" {
@@ -1423,6 +1503,7 @@ struct TNGNoticeView: View {
                     if notice.usesReceivedDate { Text(tr("时间来自通知或自动化接收时刻；补录旧通知时请修改账目日期。", "Uses received time; body has no transaction date. Edit the entry date when importing an old notice.", "Menggunakan masa diterima; teks tiada tarikh transaksi. Ubah tarikh rekod bagi notifikasi lama.")).font(.caption) }
                     if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
                 }
+                NoticeSourceSection(notice: notice)
                 if ["pending", "transfer"].contains(notice.status), notice.expenseID == nil {
                     NavigationLink(tr("确认用途 / 收入 / 充值 / 退款", "Confirm purpose / income / top-up / refund", "Sahkan tujuan / pendapatan / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) }
                 }
@@ -1431,7 +1512,10 @@ struct TNGNoticeView: View {
                     if let entry = model.expense(id: expenseID) {
                         ExpenseRow(entry: entry)
                         NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
-                        Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) { editing = entry }
+                        Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) {
+                            guard !itemsEditorPresented, editing == nil else { return }
+                            editing = entry
+                        }.disabled(itemsEditorPresented)
                     } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
                 } else if ["pending", "transfer"].contains(notice.status) {
                     Section(tr("确认记为消费", "Confirm as expense", "Sahkan sebagai belanja")) {
@@ -1442,6 +1526,7 @@ struct TNGNoticeView: View {
                         Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant in future", "Gunakan kategori ini untuk peniaga ini pada masa depan"), isOn: $rememberCategory)
                         Button(tr("计入消费", "Record expense", "Rekod belanja")) { confirming = true }
                     }
+                    ExpenseItemsFields(items: $itemDrafts, totalCents: (try? toCents(amount)) ?? 0, defaultCategory: category, savedTransaction: true)
                 }
                 if notice.status != "ignored" && notice.settlementID == nil {
                     Button(tr("不计消费 / 排除此通知", "Exclude from spending", "Kecualikan daripada belanja"), role: .destructive) { excluding = true }
@@ -1469,8 +1554,9 @@ struct TNGNoticeView: View {
                 Button(tr("确认入账", "Record", "Rekod")) {
                     do {
                         let cents = try toCents(amount)
+                        let items = try itemDrafts.map { try $0.savedItem() }
                         model.perform(key: "notice-" + id, action: { [id, merchant, date, category, rememberCategory] in
-                            try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory)
+                            try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory, items: items)
                         }, completion: { _ in model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) }, failure: { self.error = $0.localizedDescription })
                     } catch { self.error = error.localizedDescription }
                 }
@@ -2459,7 +2545,6 @@ struct TNGIncomingView: View {
         let _ = uiLocale.identifier
         Form {
             if let n = notice {
-                NoticeNoteSection(id: id)
                 SettlementNoticeSection(notice: n)
                 if n.status == "pending" { NavigationLink(tr("账户转账 / 充值 / 退款关联", "Link account transfer / top-up / refund", "Pautkan pindahan akaun / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) } }
                 if n.resolution != nil { NoticeResolutionSection(notice: n) }
@@ -2471,8 +2556,8 @@ struct TNGIncomingView: View {
                     if let account = n.accountSuffix { LabeledContent(tr("账户尾号", "Account ending", "Akhiran akaun"), value: account) }
                     if let reference = n.bankReference { LabeledContent(tr("参考编号", "Reference", "Rujukan"), value: reference) }
                     TNGStatusFeedback(notice: n)
-                    DisclosureGroup(tr("通知原文", "Original notification", "Notifikasi asal")) { Text(n.body).textSelection(.enabled) }
                 }
+                NoticeSourceSection(notice: n)
                 if n.status == "pending" { reviewSection }
                 else if n.settlementID == nil {
                     Section {
@@ -2999,6 +3084,7 @@ struct FinancialNoticeReviewView: View {
     @State private var initialized = false
     @State private var confirm = false
     @State private var error: String?
+    @State private var itemDrafts: [ExpenseItemDraft] = []
     private var notice: TNGNotice? { model.notice(id: id) }
     private var candidates: [Expense] {
         let cents = (try? toCents(amount)) ?? 0
@@ -3015,8 +3101,7 @@ struct FinancialNoticeReviewView: View {
         let _ = uiLocale.identifier
         Form {
             if let notice {
-                Section { Text(notice.title); Text(notice.body).font(.caption).textSelection(.enabled) }
-                NoticeNoteSection(id: id)
+                NoticeSourceSection(notice: notice)
                 Section(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) {
                     Picker(tr("这是什么交易？", "What is this transaction?", "Apakah transaksi ini?"), selection: $purpose) {
                         Text(tr("请选择用途", "Select a purpose", "Pilih tujuan")).tag("")
@@ -3037,6 +3122,9 @@ struct FinancialNoticeReviewView: View {
                     if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer"].contains(purpose) {
                         Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                     }
+                }
+                if purpose == "expense" {
+                    ExpenseItemsFields(items: $itemDrafts, totalCents: (try? toCents(amount)) ?? 0, defaultCategory: category, savedTransaction: true)
                 }
                 if purpose == "refund" || purpose == "duplicate" {
                     Section(purpose == "refund" ? tr("选择原消费", "Choose original expense", "Pilih belanja asal") : tr("选择已有账目", "Choose existing entry", "Pilih rekod sedia ada")) {
@@ -3076,10 +3164,11 @@ struct FinancialNoticeReviewView: View {
             .onChange(of: purpose) { _, _ in relatedID = "" }
             .confirmationDialog(tr("确认按所选用途处理？", "Process with the selected purpose?", "Proses mengikut tujuan yang dipilih?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认", "Confirm", "Sahkan")) {
+                    let drafts = itemDrafts
                     model.perform(key: "notice-" + id, action: { [id, purpose, party, amount, date, category, remember, relatedID] ledger in
                         if purpose == "ignore" { try ledger.excludeTNG(id: id) }
                         else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
-                        else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID) }
+                        else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID, items: purpose == "expense" ? try drafts.map { try $0.savedItem() } : []) }
                     }, completion: { _ in model.showSaved(); dismiss() }, failure: { self.error = $0.localizedDescription })
                 }
             }
@@ -3133,7 +3222,8 @@ struct ExpenseItemsFields: View {
                             FeedbackHaptics.selection()
                         } label: {
                             Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
-                        }
+                        }.buttonStyle(.borderless)
+                            .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.name)
                     }.padding(.vertical, 6)
                         .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 4)))
                 }
@@ -3142,6 +3232,7 @@ struct ExpenseItemsFields: View {
                     withAnimation(reduceMotion ? nil : YueJiMotion.standard) { items.append(draft) }
                     FeedbackHaptics.selection()
                 } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
+                    .buttonStyle(.borderless)
                     .disabled(items.count >= 100)
                 if !items.isEmpty {
                     LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
@@ -3203,13 +3294,10 @@ struct ExpenseBookkeepingFields: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var tagsExpanded = false
-    @Binding var note: String
     @Binding var tagsText: String
     var body: some View {
         let _ = uiLocale.identifier
-        Section(tr("备注", "Note", "Nota")) {
-            TextField(tr("购买了什么？（选填）", "What was it for? (optional)", "Untuk apa? (pilihan)"), text: $note, axis: .vertical)
-                .lineLimit(1...4)
+        Section {
             DisclosureGroup(isExpanded: $tagsExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 TextField(tr("用逗号分隔，例如旅行, 家庭", "Comma-separated, e.g. Trip, Family", "Pisahkan dengan koma, cth. Percutian, Keluarga"), text: $tagsText)
                 Text(tr("标签可汇总同一次旅行或活动。", "Group expenses for a trip or event using tags.", "Kumpulkan belanja perjalanan atau acara dengan tag."))
@@ -3226,13 +3314,8 @@ struct ExpenseBookkeepingDetails: View {
     let entry: Expense
     var body: some View {
         let _ = uiLocale.identifier
-        Section(tr("分类与备注", "Categories and notes", "Kategori dan nota")) {
+        Section(tr("分类与标签", "Categories and tags", "Kategori dan tag")) {
             LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
-            if let note = entry.note, !note.isEmpty {
-                Text(note).textSelection(.enabled)
-            } else {
-                Text(tr("未填写备注", "No note", "Tiada nota")).foregroundStyle(.secondary)
-            }
             ForEach(entry.tags ?? [], id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
         }
     }

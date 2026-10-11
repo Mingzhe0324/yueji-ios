@@ -730,6 +730,7 @@ struct LedgerTimelineSnapshot {
 /// Index the original records and settlement applications once, preserving accounting rules.
 struct ExpenseDetailSnapshot {
     let entry: Expense
+    let sourceNotices: [TNGNotice]
     let settlements: [FriendSettlement]
     let payableToPayer: Int
     let shareBalances: [String: Int]
@@ -753,6 +754,7 @@ struct LedgerNavigationIndex {
     let confirmedIncome: Int
     private var debtsByFriend: [String: [FriendDebtItem]] = [:]
     private var noticesByID: [String: TNGNotice] = [:]
+    private var noticesByExpense: [String: [TNGNotice]] = [:]
     private var settlementsByID: [String: FriendSettlement] = [:]
     private var settlementsByFriend: [String: [FriendSettlement]] = [:]
     private var expenses: [String: Expense] = [:]
@@ -778,7 +780,10 @@ struct LedgerNavigationIndex {
         incomingReviewCount = orderedNotices.filter { $0.kind == "incoming" && $0.status == "pending" }.count
         confirmedIncome = orderedNotices.filter { $0.kind == "incoming" && $0.status == "income" }.reduce(0) { $0 + ($1.cents ?? 0) }
         debtsByFriend = groupedDebts
-        for notice in orderedNotices { noticesByID[notice.id] = notice }
+        for notice in orderedNotices {
+            noticesByID[notice.id] = notice
+            if let expenseID = notice.expenseID { noticesByExpense[expenseID, default: []].append(notice) }
+        }
         for entry in ledger.expenses { expenses[entry.id] = entry }
         for record in ledger.settlements {
             settlementsByID[record.id] = record
@@ -804,7 +809,7 @@ struct LedgerNavigationIndex {
         let balances = Dictionary(entry.shares.map { share in
             (share.id, entry.paidByFriend == nil ? share.owed - (applied[FriendDebtItem.key(id, share.id)] ?? 0) : 0)
         }, uniquingKeysWith: { first, _ in first })
-        return ExpenseDetailSnapshot(entry: entry, settlements: linked[id] ?? [],
+        return ExpenseDetailSnapshot(entry: entry, sourceNotices: noticesByExpense[id] ?? [], settlements: linked[id] ?? [],
             payableToPayer: entry.paidByFriend == nil ? 0 : max(0, entry.owingToPayer + (applied[FriendDebtItem.key(id, nil)] ?? 0)),
             shareBalances: balances)
     }

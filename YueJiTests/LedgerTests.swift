@@ -136,6 +136,153 @@ final class TransactionItemsTests: XCTestCase {
         Expense(id: "mixed", merchant: "Mixed purchase", cents: 3500, date: date, category: "其他", source: source, items: items)
     }
 
+    func testSharedItemsEditorPreservesNotesHistoryAndSourceAcrossAddEditRemove() async throws {
+        for automatic in [false, true] {
+            let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: folder) }
+            let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+            try store.change { ledger in
+                if automatic {
+                    _ = try ledger.receiveTNG(body: "You have paid RM35.00 for Shop.", title: "Payment", date: date, eventID: "notes-items")
+                    try ledger.setNoticeNote(id: ledger.tngNotices[0].id, note: "旧备注 · Legacy note · Nota lama")
+                } else {
+                    ledger.expenses = [Expense(merchant: "Shop", cents: 3500, date: date, note: "  Old note\n保留原文  ")]
+                }
+                ledger.expenses[0].tags = ["Family"]
+                ledger.expenses[0].shares = [Share(name: "Amy", cents: 1000, repayments: [Repayment(cents: 200, date: date.addingTimeInterval(60))])]
+                try ledger.addRefund(expenseID: ledger.expenses[0].id, cents: 350, date: date.addingTimeInterval(120))
+            }
+            let initial = try store.read()
+            var previous = initial.expenses[0]
+            let personal = previous.personal, outstanding = initial.friendBalances.map(\.owed)
+            let modified = [ExpenseItem(id: "lunch-item", name: "Dinner", cents: 1000, category: "餐饮"),
+                            ExpenseItem(id: "supplies-item", name: "Supplies", cents: 2500, category: "购物")]
+            let single = [ExpenseItem(id: "supplies-item", name: "Supplies", cents: 3500, category: "购物")]
+            for nextItems in [items, modified, single, []] {
+                let edited = try previous.replacingItems(nextItems, allowedCategories: initial.categoryNames)
+                try await worker.saveExpense(edited, replacing: previous, rememberCategory: false)
+                let after = try store.read()
+                XCTAssertEqual(after.expenses.count, 1)
+                XCTAssertEqual(after.expenses[0].id, previous.id)
+                XCTAssertEqual(after.expenses[0].note, initial.expenses[0].note)
+                XCTAssertEqual(after.expenses[0].tags, initial.expenses[0].tags)
+                XCTAssertEqual(after.expenses[0].shares, initial.expenses[0].shares)
+                XCTAssertEqual(after.expenses[0].refunds, initial.expenses[0].refunds)
+                XCTAssertEqual(after.tngNotices, initial.tngNotices)
+                XCTAssertEqual(after.seenEvents, initial.seenEvents)
+                XCTAssertEqual(after.friendBalances.map(\.owed), outstanding)
+                XCTAssertEqual(after.spending(in: date), personal)
+                XCTAssertEqual(OverviewSnapshot(ledger: after, month: date).categoryTotals.values.reduce(0, +), personal)
+                let backup = try LocalStore.decode(LocalStore.exportData(after))
+                XCTAssertEqual(backup.expenses, after.expenses)
+                XCTAssertEqual(backup.tngNotices, after.tngNotices)
+                previous = after.expenses[0]
+            }
+        }
+    }
+
+    func testSharedItemsEditorRejectsInvalidTotalsAndConcurrentNotesWithoutDataLoss() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        try store.change { ledger in
+            _ = try ledger.receiveTNG(body: "You have paid RM35.00 for Shop.", date: date, eventID: "invalid-items-note")
+        }
+        let original = try XCTUnwrap(store.read().expenses.first)
+        XCTAssertThrowsError(try original.replacingItems([ExpenseItem(name: "Incomplete", cents: 1500, category: "餐饮")], allowedCategories: Ledger().categoryNames))
+        XCTAssertEqual(try store.read().expenses, [original])
+        let valid = try original.replacingItems(items, allowedCategories: Ledger().categoryNames)
+        try store.change { try $0.setNoticeNote(id: $0.tngNotices[0].id, note: "Newer note") }
+        do { try await worker.saveExpense(valid, replacing: original, rememberCategory: false); XCTFail("A stale item edit must not overwrite newer notes") }
+        catch {
+            let after = try store.read()
+            XCTAssertEqual(after.expenses[0].note, "Newer note")
+            XCTAssertEqual(after.tngNotices[0].note, "Newer note")
+            XCTAssertNil(after.expenses[0].items)
+        }
+    }
+
+    func testPendingNotificationCanBeConfirmedWithItemsAndKeepsSourceAndNote() throws {
+        for review in [false, true] {
+            let notice = TNGNotice(id: "pending-items", body: "Original bank payment description", title: "Bank alert", date: date,
+                                   usesReceivedDate: true, kind: "unknown", status: "pending", cents: 3500, party: "Shop", note: "Legacy note")
+            var ledger = try Ledger(tngNotices: [notice]).validated()
+            if review {
+                try ledger.resolveNotice(id: notice.id, purpose: "expense", party: "Shop", cents: 3500, date: date, category: "其他", remember: true, items: items)
+            } else {
+                try ledger.confirmTNGExpense(id: notice.id, merchant: "Shop", cents: 3500, date: date, category: "其他", remember: true, items: items)
+                ledger = try ledger.validated()
+            }
+            let entry = try XCTUnwrap(ledger.expenses.first)
+            XCTAssertEqual(entry.items, items)
+            XCTAssertEqual(entry.note, "Legacy note")
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.tngNotices[0].body, notice.body)
+            XCTAssertEqual(ledger.tngNotices[0].title, notice.title)
+            XCTAssertEqual(ledger.tngNotices[0].expenseID, entry.id)
+            XCTAssertEqual(ledger.spending(in: date), 3500)
+            XCTAssertEqual(ledger.spending(in: date, category: "餐饮"), 1500)
+            XCTAssertEqual(ledger.spending(in: date, category: "购物"), 2000)
+            XCTAssertTrue(ledger.merchantCategories.isEmpty)
+            XCTAssertThrowsError(try ledger.confirmTNGExpense(id: notice.id, merchant: "Shop", cents: 3500, date: date, category: "其他", items: items))
+            XCTAssertEqual(ledger.expenses.count, 1)
+        }
+    }
+
+    func testInvalidItemsLeavePendingNotificationUnchangedInBothConfirmationPaths() throws {
+        for review in [false, true] {
+            let notice = TNGNotice(id: "pending", body: "Original source text", title: "Payment", date: date,
+                                   usesReceivedDate: true, kind: "unknown", status: "pending", cents: 3500, note: "Keep this")
+            var ledger = try Ledger(tngNotices: [notice]).validated()
+            let invalid = [ExpenseItem(name: "Lunch", cents: 1500, category: "餐饮")]
+            if review {
+                XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "expense", party: "Edited merchant", cents: 3500, date: date, category: "其他", items: invalid))
+            } else {
+                XCTAssertThrowsError(try ledger.confirmTNGExpense(id: notice.id, merchant: "Edited merchant", cents: 3500, date: date, category: "其他", items: invalid))
+            }
+            XCTAssertTrue(ledger.expenses.isEmpty)
+            XCTAssertEqual(ledger.tngNotices, [notice])
+            XCTAssertTrue(ledger.merchantCategories.isEmpty)
+        }
+    }
+
+    func testExpenseSourceIndexKeepsOriginalNotificationsSeparateFromLegacyNotes() throws {
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "You have paid RM35.00 for Shop.", title: "Original alert", date: date, eventID: "source-index")
+        let original = ledger.tngNotices[0]
+        try ledger.setNoticeNote(id: original.id, note: "A personal note, not the source")
+        ledger.expenses.append(Expense(id: "manual", merchant: "Manual", cents: 100, date: date))
+        ledger.expenses[0] = try ledger.expenses[0].replacingItems(items, allowedCategories: ledger.categoryNames)
+        let index = LedgerNavigationIndex(ledger: try ledger.validated())
+        let detail = try XCTUnwrap(index.detail(id: ledger.expenses[0].id))
+        XCTAssertEqual(detail.sourceNotices.count, 1)
+        XCTAssertEqual(detail.sourceNotices[0].body, original.body)
+        XCTAssertEqual(detail.sourceNotices[0].title, original.title)
+        XCTAssertEqual(detail.entry.note, "A personal note, not the source")
+        XCTAssertTrue(try XCTUnwrap(index.detail(id: "manual")).sourceNotices.isEmpty)
+        ledger.tngNotices.removeAll()
+        XCTAssertTrue(try XCTUnwrap(LedgerNavigationIndex(ledger: ledger).detail(id: detail.entry.id)).sourceNotices.isEmpty)
+        XCTAssertEqual(ledger.expenses[0].note, detail.entry.note)
+    }
+
+    func testItemsEditorCannotSilentlyChangeActiveSettlement() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        try store.change { ledger in
+            ledger.expenses = [Expense(merchant: "Lunch", cents: 3500, date: date, shares: [Share(name: "Amy", cents: 1000)], note: "Stored note")]
+            let plan = try ledger.settlementPlan(friend: "Amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 1000, date: date.addingTimeInterval(60))
+            _ = try ledger.confirmSettlement(plan)
+        }
+        let before = try store.read(), original = try XCTUnwrap(store.read().expenses.first)
+        let edited = try original.replacingItems(items, allowedCategories: before.categoryNames)
+        do { try await worker.saveExpense(edited, replacing: original, rememberCategory: false); XCTFail("Undo the settlement before editing its items") }
+        catch {
+            XCTAssertEqual(try store.read().expenses, before.expenses)
+            XCTAssertEqual(try store.read().settlements, before.settlements)
+        }
+    }
+
     func testRM35ItemsUseTheirCategoriesWithoutCountingParentTwice() throws {
         for source in ["手动", "TNG", "Apple Pay", "Maybank"] {
             let expense = purchase(source: source)
