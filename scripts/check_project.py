@@ -108,6 +108,15 @@ for source in (root / 'YueJi').glob('*.swift'):
     assert re.search(r'(?<!\\)\\u(?!\{)', source.read_text()) is None, f'Invalid Swift Unicode escape: {source.name}'
 print('PASS: app Swift Unicode escapes use braces.')
 
+# These system-provided environment values are get-only in the supported Apple SDK.
+# Writing them with .environment requires a WritableKeyPath and prevents the app compiling.
+read_only_environment = ('colorSchemeContrast', 'accessibilityReduceMotion', 'accessibilityReduceTransparency')
+for source in (root / 'YueJi').glob('*.swift'):
+    writes = re.findall(r'\.\s*(?:environment|transformEnvironment)\s*\(\s*\\\.\s*(\w+)', source.read_text())
+    invalid = set(writes).intersection(read_only_environment)
+    assert not invalid, f'Read-only SwiftUI environment write in {source.name}: {sorted(invalid)}'
+print('PASS: no writes to read-only SwiftUI contrast or accessibility environment values.')
+
 # Direction sounds must be standalone bundle resources, distinct and short PCM.
 direction_audio = []
 for stem in ('YueJiIncoming', 'YueJiOutgoing'):

@@ -1,5 +1,7 @@
 # Build 89: notifications and transitions
 
+Build 91 compatibility correction: the native compiler rejected explicit `.environment` overrides for `colorSchemeContrast`, `accessibilityReduceMotion` and `accessibilityReduceTransparency` because their key paths are read-only. These writes have been removed. The child hosting controller reads the system's contrast/transparency/motion preferences normally, while the UIKit swipe animation controller still receives the parent Reduce Motion value directly. Writable app overrides (language, appearance, Dynamic Type and layout direction) remain. The project preflight now rejects writes to these three system keys. Native compilation and toggling accessibility settings on a physical iPhone require CI/device verification.
+
 ## Changes
 
 - Foreground system alerts are handed to the app's banner host, retaining the OS sound and Notification Center entry. Background and lock-screen banners are still managed by iOS. Native photo/file pickers, share sheets and system alerts use native banners because they can cover the app's overlay; their gestures are controlled by iOS. Privacy-sensitive titles/bodies remain those prepared by the existing notification producer.

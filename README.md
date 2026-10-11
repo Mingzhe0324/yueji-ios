@@ -1,6 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.62.0 · Build 90**
+**版本 / Version：1.62.1 · Build 91**
+
+Build 91 fixes the three native compilation errors in the notification banner: contrast, Reduce Motion and Reduce Transparency are read-only SwiftUI environment values and cannot be written using `.environment`. The native hosting controller reads these system preferences; UIKit banner animations still receive Reduce Motion directly. App language, appearance, text size and layout direction keep their existing writable overrides. A preflight guard now rejects this known invalid API usage before starting Xcode. Local syntax/project/workflow checks pass; a successful native CI build and physical accessibility checks remain pending.
 
 Build 90 removes transaction Notes fields while retaining legacy notes in stored records and backups. Bank/TNG purchases now expose an Items section with a direct add/edit action, using the same item fields as manual entry. A focused item editor preserves payment, split, repayment and refund history, validates totals, and saves on the storage worker with protection against concurrent edits. Pending notices can also be itemized when explicitly confirmed as expenses. Original notification titles and descriptions remain separately accessible as Source information from notification pages and linked expense details. Six focused regressions cover note/source preservation, item edits without double-counting, invalid and stale edits, confirmation, and settled-expense protection. Native compilation, XCTest and physical iPhone verification remain pending. See [Transaction Items verification](docs/transaction-items-interface.md).
 

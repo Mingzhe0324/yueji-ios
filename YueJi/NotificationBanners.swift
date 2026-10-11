@@ -271,20 +271,18 @@ enum BannerSwipePolicy {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.layoutDirection) private var direction
-    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @State private var interaction = BannerInteraction()
     let onDismiss: () -> Void
     var onInteraction: (Bool) -> Void = { _ in }
     @ViewBuilder let content: (BannerInteraction) -> Content
     var body: some View {
+        // Forward app overrides through writable keys. Contrast and accessibility preferences
+        // are read-only system values; the child UIHostingController reads them from iOS.
+        // Pass Reduce Motion directly to the UIKit animation controller instead of overriding it.
         SwipeBannerBridge(content: AnyView(content(interaction)
             .environmentObject(model).environment(\.locale, locale).environment(\.colorScheme, scheme)
-            .environment(\.dynamicTypeSize, typeSize).environment(\.layoutDirection, direction)
-            .environment(\.colorSchemeContrast, contrast)
-            .environment(\.accessibilityReduceMotion, reduceMotion)
-            .environment(\.accessibilityReduceTransparency, reduceTransparency)),
+            .environment(\.dynamicTypeSize, typeSize).environment(\.layoutDirection, direction)),
             interaction: interaction, reduceMotion: reduceMotion, onDismiss: onDismiss, onInteraction: onInteraction)
     }
 }
