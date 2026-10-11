@@ -206,7 +206,9 @@ final class TransactionItemsTests: XCTestCase {
         for review in [false, true] {
             let notice = TNGNotice(id: "pending-items", body: "Original bank payment description", title: "Bank alert", date: date,
                                    usesReceivedDate: true, kind: "unknown", status: "pending", cents: 3500, party: "Shop", note: "Legacy note")
-            var ledger = try Ledger(tngNotices: [notice]).validated()
+            var ledger = Ledger()
+            ledger.tngNotices = [notice]
+            ledger = try ledger.validated()
             if review {
                 try ledger.resolveNotice(id: notice.id, purpose: "expense", party: "Shop", cents: 3500, date: date, category: "其他", remember: true, items: items)
             } else {
@@ -233,7 +235,9 @@ final class TransactionItemsTests: XCTestCase {
         for review in [false, true] {
             let notice = TNGNotice(id: "pending", body: "Original source text", title: "Payment", date: date,
                                    usesReceivedDate: true, kind: "unknown", status: "pending", cents: 3500, note: "Keep this")
-            var ledger = try Ledger(tngNotices: [notice]).validated()
+            var ledger = Ledger()
+            ledger.tngNotices = [notice]
+            ledger = try ledger.validated()
             let invalid = [ExpenseItem(name: "Lunch", cents: 1500, category: "餐饮")]
             if review {
                 XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "expense", party: "Edited merchant", cents: 3500, date: date, category: "其他", items: invalid))

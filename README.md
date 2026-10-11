@@ -1,6 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.62.1 · Build 91**
+**版本 / Version：1.62.2 · Build 92**
+
+Build 92 corrects two item regression-test fixtures that passed `tngNotices` to Ledger's explicit initializer. The fixtures now create an empty Ledger, assign the notification records and validate it before exercising confirmation. This fixes the unsupported initializer arguments that blocked native test compilation. App transaction behavior and backup schema are unchanged. Local syntax, constructor-call, project and workflow checks pass; native compilation and XCTest still require a fresh CI run.
 
 Build 91 fixes the three native compilation errors in the notification banner: contrast, Reduce Motion and Reduce Transparency are read-only SwiftUI environment values and cannot be written using `.environment`. The native hosting controller reads these system preferences; UIKit banner animations still receive Reduce Motion directly. App language, appearance, text size and layout direction keep their existing writable overrides. A preflight guard now rejects this known invalid API usage before starting Xcode. Local syntax/project/workflow checks pass; a successful native CI build and physical accessibility checks remain pending.
 
