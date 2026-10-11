@@ -2876,6 +2876,7 @@ struct ExpenseItemsFields: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var expanded = false
+    @State private var initialized = false
     private enum ItemField: Hashable { case name(String), amount(String) }
     @FocusState private var focusedItem: ItemField?
     @Binding var items: [ExpenseItemDraft]
@@ -2920,6 +2921,11 @@ struct ExpenseItemsFields: View {
                     LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
                         .foregroundStyle(itemTotal == totalCents ? Color.secondary : Color.orange)
                     if itemTotal != totalCents {
+                        LabeledContent(itemTotal < totalCents
+                            ? tr("尚需分配", "Left to allocate", "Baki untuk diagihkan")
+                            : tr("超过交易总额", "Over transaction total", "Melebihi jumlah transaksi"),
+                            value: money(abs(totalCents - itemTotal)))
+                            .font(.subheadline).foregroundStyle(.orange)
                         Text(tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan."))
                             .font(.footnote).foregroundStyle(.orange)
                     }
@@ -2932,7 +2938,11 @@ struct ExpenseItemsFields: View {
             } label: {
                 LabeledContent(tr("物品", "Items", "Item"), value: items.isEmpty ? tr("选填", "Optional", "Pilihan") : String(items.count))
             }
-        }.onAppear { if initiallyExpanded { expanded = true } }
+        }.onAppear {
+            guard !initialized else { return }
+            expanded = initiallyExpanded
+            initialized = true
+        }
             .onChange(of: expanded) { _, isExpanded in if !isExpanded { focusedItem = nil } }
     }
 }

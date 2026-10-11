@@ -163,6 +163,32 @@ final class TransactionItemsTests: XCTestCase {
         XCTAssertEqual(restored.expenses, ledger.expenses)
     }
 
+    func testEntirelyMineFriendPaidItemsKeepDebtThroughBackupAndUndo() throws {
+        var expense = purchase()
+        expense.paidByFriend = "Amy"
+        // The payer's own share is zero when the purchase is entirely mine.
+        expense.shares = [Share(id: "amy", name: "Amy", cents: 0)]
+        var ledger = try Ledger(expenses: [expense]).validated()
+        XCTAssertEqual(expense.shares[0].cents, 0)
+        XCTAssertEqual(expense.purchaseDirection.formattedAmount(expense.purchaseDisplayCents), "−RM 35.00")
+        XCTAssertEqual(expense.paidFromMyAccount, 0)
+        XCTAssertEqual(ledger.payableToPayer(expense), 3500)
+        let plan = try ledger.repaymentPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)),
+                                            payment: 500, date: date.addingTimeInterval(60), direction: .outgoing)
+        let id = try ledger.confirmSettlement(plan)
+        ledger = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 3000)
+        XCTAssertEqual(ledger.expenses, [expense])
+        XCTAssertEqual(ledger.settlements[0].lines[0].expense.items, items)
+        XCTAssertEqual(OverviewSnapshot(ledger: ledger, month: date).categoryTotals, ["餐饮": 1500, "购物": 2000])
+        XCTAssertEqual(ledger.spending(in: date), 3500)
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 3500)
+        XCTAssertEqual(ledger.spending(in: date), 3500)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+    }
+
     func testItemizedExactOffsetKeepsBothPurchasesAndCategoryTotals() throws {
         var mine = purchase(); mine.shares = [Share(name: "Amy", cents: 1750)]
         var friend = purchase(); friend.id = "friend-purchase"

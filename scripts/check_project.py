@@ -43,7 +43,7 @@ assert compiled == {p.name for p in (root / 'YueJi').glob('*.swift')}
 resource_phase = next(o for o in phases if o['isa'] == 'PBXResourcesBuildPhase')
 resources = {objects[objects[i]['fileRef']]['path'] for i in resource_phase['files']}
 assert {'Assets.xcassets', 'Localizable.xcstrings'} <= resources
-plistlib.loads((root / 'YueJi/Info.plist').read_bytes())
+info = plistlib.loads((root / 'YueJi/Info.plist').read_bytes())
 ET.parse(root / 'YueJi.xcodeproj/xcshareddata/xcschemes/YueJi.xcscheme')
 catalog = json.loads((root / 'YueJi/Localizable.xcstrings').read_text())
 assert all({'en', 'ms'} <= set(v['localizations']) for v in catalog['strings'].values())
@@ -70,6 +70,12 @@ for source in (root / 'YueJi').glob('*.swift'):
         filenames = [item['filename'] for item in metadata['images'] if 'filename' in item]
         assert filenames and all((asset / name).is_file() for name in filenames), f'Missing bundled image: {source.name} / {name}'
 print('PASS: static SwiftUI image names resolve to bundled image assets.')
+launch_color_name = info['UILaunchScreen']['UIColorName']
+launch_color = json.loads((root / 'YueJi/Assets.xcassets' / (launch_color_name + '.colorset') / 'Contents.json').read_text())
+assert any(not color.get('appearances') for color in launch_color['colors']), 'Launch background needs a default appearance'
+assert any({'appearance': 'luminosity', 'value': 'dark'} in color.get('appearances', []) for color in launch_color['colors']), 'Launch background needs a dark appearance'
+assert all(float(color['color']['components']['alpha']) == 1 for color in launch_color['colors']), 'Launch background must be opaque'
+print('PASS: launch screen background resolves to bundled, opaque light and dark colors.')
 for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'DeleteCue', 'RestoreCue', 'DepositCue'):
     asset = root / 'YueJi/Assets.xcassets' / (name + '.dataset')
     metadata = json.loads((asset / 'Contents.json').read_text())

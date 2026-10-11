@@ -4,7 +4,7 @@ import UIKit
 
 private let ink = Color(uiColor: .systemBlue)
 enum YueJiMotion {
-    static let standard = Animation.snappy(duration: 0.28, extraBounce: 0)
+    static let standard = Animation.smooth(duration: 0.24)
     static let detail = Animation.smooth(duration: 0.32)
     static let month = Animation.smooth(duration: 0.28)
 }
@@ -69,10 +69,11 @@ struct MainView: View {
     @State private var notificationDestination: NotificationDestination?
     @State private var logoFinished = false
     @State private var initialLoadFinished = false
+    @State private var tabsReady = false
     private func finishLaunchIfReady() {
-        guard !model.didFinishLaunch, phase == .active, initialLoadFinished,
+        guard !model.didFinishLaunch, phase == .active, initialLoadFinished, tabsReady,
               logoFinished || !openingEnabled else { return }
-        withAnimation(.easeOut(duration: reduceMotion ? 0.15 : 0.22)) { model.didFinishLaunch = true }
+        withAnimation(reduceMotion ? nil : YueJiMotion.standard) { model.didFinishLaunch = true }
     }
     private func openPendingNotification() {
         guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil,
@@ -92,9 +93,15 @@ struct MainView: View {
     }
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground).ignoresSafeArea()
-            // Present the logo before constructing the lists and their navigation stacks.
-            if model.didFinishLaunch { tabs.transition(.opacity) }
+            Color("LaunchBackground").ignoresSafeArea()
+            // Prepare the real screens beneath the opaque logo, before fading it away.
+            if initialLoadFinished || model.didFinishLaunch {
+                tabs
+                    .allowsHitTesting(model.didFinishLaunch)
+                    .accessibilityHidden(!model.didFinishLaunch)
+                    .transition(.identity)
+                    .task { tabsReady = true; finishLaunchIfReady() }
+            }
             if !model.didFinishLaunch && openingEnabled {
                 OpeningAnimationView(sound: !model.isPreview) {
                     logoFinished = true
@@ -230,7 +237,6 @@ struct DashboardView: View {
     @EnvironmentObject var model: LedgerModel
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
     @State private var adding = false
-    @State private var reviewing: Expense?
     @State private var budgetText = ""
     @State private var budgeting = false
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
@@ -321,10 +327,6 @@ struct DashboardView: View {
                     .yuejiZoomSource(id: "new-expense", namespace: navigationMotion)
                 }
             }
-            .sheet(item: $reviewing) { entry in
-                ExpenseDetailView(id: entry.id).ledgerFeedback(modal: true)
-                    .yuejiZoom(id: entry.id, namespace: navigationMotion)
-            }
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
                     .yuejiZoom(id: "new-expense", namespace: navigationMotion)
@@ -346,8 +348,9 @@ struct DashboardView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(recentEntries) { entry in
-                Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
-                    .buttonStyle(.automatic).yuejiZoomSource(id: entry.id, namespace: navigationMotion)
+                NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                    ExpenseRow(entry: entry).foregroundStyle(.primary)
+                }
             }
         } header: {
             Text(tr("最近账目", "Recent entries", "Rekod terkini"))
@@ -480,8 +483,6 @@ struct DashboardView: View {
 struct CategoryPaymentsView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Namespace private var paymentTransition
-    @State private var reviewing: Expense?
     let category: String
     let month: Date
     private var tint: Color { model.ledger.categoryTint(category) }
@@ -511,25 +512,20 @@ struct CategoryPaymentsView: View {
                     ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                 }
                 ForEach(entries) { entry in
-                    Button { reviewing = entry } label: {
+                    NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             ExpenseRow(entry: entry)
                             LabeledContent(tr("此分类 · 我的份额", "This category · my share", "Kategori ini · bahagian saya")) {
                                 TransactionAmount(cents: entry.personalAmount(category: category), direction: .outgoing)
                             }.font(.caption)
                         }
-                    }.buttonStyle(.automatic).foregroundStyle(.primary)
-                        .yuejiZoomSource(id: entry.id, namespace: paymentTransition)
+                    }.foregroundStyle(.primary)
                 }
             }
         }.yuejiListSurface()
             .tint(tint)
             .navigationTitle(categoryLabel(category)).navigationBarTitleDisplayMode(.inline)
             .refreshable { await model.refresh(postRecurring: false) }
-            .sheet(item: $reviewing) { entry in
-                ExpenseDetailView(id: entry.id).tint(tint).ledgerFeedback(modal: true)
-                    .yuejiZoom(id: entry.id, namespace: paymentTransition)
-            }
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: entries.map(\.id))
     }
 }
@@ -649,7 +645,6 @@ struct ExpensesView: View {
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
     @State private var deletingNotice: TNGNotice?
-    @State private var reviewing: Expense?
     @Namespace private var expenseTransition
     @State private var filtering = false
     @SceneStorage("ledgerMonth") private var monthTimestamp = Date().timeIntervalSince1970
@@ -724,10 +719,10 @@ struct ExpensesView: View {
                                 }.yuejiZoomSource(id: item.id, namespace: expenseTransition)
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
-                            Button { reviewing = entry } label: { ExpenseRow(entry: entry).foregroundStyle(.primary) }
-                                .buttonStyle(.automatic)
+                            NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                                ExpenseRow(entry: entry).foregroundStyle(.primary)
+                            }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
-                                .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button { deleting = entry } label: {
                                         Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
@@ -766,10 +761,6 @@ struct ExpensesView: View {
                 .sheet(isPresented: $adding) {
                     ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
                         .yuejiZoom(id: "new-expense", namespace: expenseTransition)
-                }
-                .sheet(item: $reviewing) { entry in
-                    ExpenseDetailView(id: entry.id).ledgerFeedback(modal: true)
-                        .yuejiZoom(id: entry.id, namespace: expenseTransition)
                 }
                 .sheet(item: $editing) { ExpenseEditor(original: $0) }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
@@ -858,6 +849,10 @@ struct ExpenseDetailView: View {
                         LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personal, direction: .outgoing) }
                         if entry.paidByFriend != nil {
                             LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
+                            LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(model.ledger.payableToPayer(entry)))
+                            if let payer = entry.paidByFriend {
+                                NavigationLink(tr("朋友余额 / 净额结算", "Friend balance / net settlement", "Baki rakan / penyelesaian bersih")) { FriendDetailView(key: friendKey(payer)) }
+                            }
                         }
                         if let fx = entry.foreign {
                             LabeledContent(tr("原币金额", "Original amount", "Amaun asal"), value: Currency.display(fx.minor, fx.currency))
@@ -886,9 +881,6 @@ struct ExpenseDetailView: View {
                     ExpenseBookkeepingDetails(entry: entry)
                     if !entry.shares.isEmpty {
                         Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
-                            if entry.paidByFriend != nil {
-                                LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(model.ledger.payableToPayer(entry)))
-                            }
                             ForEach(entry.shares) { share in
                                 VStack(alignment: .leading, spacing: 8) {
                                     LabeledContent(share.name, value: money(share.cents)).font(.headline)
@@ -1089,8 +1081,6 @@ struct ExpenseEditor: View {
                 }
             }.yuejiListSurface().scrollDismissesKeyboard(.interactively)
                 .disabled(saving).interactiveDismissDisabled(saving)
-                .animation(reduceMotion ? nil : YueJiMotion.standard, value: splitting)
-                .animation(reduceMotion ? nil : YueJiMotion.standard, value: people.count)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
                 .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
@@ -1233,7 +1223,10 @@ struct ExpenseEditor: View {
                 }
             }
             }
-        } footer: { if splitting { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) } }.disabled((original?.refunded ?? 0) > 0)
+        } footer: { if splitting { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) } }
+            .disabled((original?.refunded ?? 0) > 0)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: splitting)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: people.count)
     }
     private func load() {
         guard !initialized else { return }; initialized = true
@@ -2586,7 +2579,7 @@ private struct OpeningAnimationView: View {
     private var animates: Bool { playful && !reduceMotion }
     var body: some View {
         ZStack {
-            Color(uiColor: .systemBackground).ignoresSafeArea()
+            Color("LaunchBackground").ignoresSafeArea()
             VStack(spacing: 20) {
                 Image("YueJiLogo").resizable().scaledToFit().frame(width: 112, height: 112)
                     .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
@@ -2598,21 +2591,24 @@ private struct OpeningAnimationView: View {
                         .font(.subheadline).foregroundStyle(.secondary)
                 }
             }.padding(24)
-            .scaleEffect(entered || !animates ? 1 : 0.84)
-            .offset(y: entered || !animates ? 0 : 12)
+            .scaleEffect(entered || !animates ? 1 : 0.96)
+            .offset(y: entered || !animates ? 0 : 6)
         }
         .task(id: phase) {
             // Wait for foreground activation so the opening cue is audible on a cold launch.
             guard phase == .active else { return }
-            // Let the initial logo frame reach the screen before starting its spring.
-            do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
-            if sound && !playedSound {
-                FeedbackSounds.shared.play(.launch)
-                playedSound = true
+            if !entered {
+                // Give the initial logo frame time to appear, without blocking the main actor.
+                do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
+                if sound && !playedSound {
+                    FeedbackSounds.shared.play(.launch)
+                    playedSound = true
+                }
+                withAnimation(animates ? YueJiMotion.detail : nil) { entered = true }
+                do { try await Task.sleep(for: .milliseconds(animates ? 350 : 100)) }
+                catch { return }
             }
-            withAnimation(animates ? .spring(duration: 0.42, bounce: 0.18) : nil) { entered = true }
-            do { try await Task.sleep(for: .milliseconds(animates ? 650 : 100)) }
-            catch { return }
+            guard !Task.isCancelled, phase == .active else { return }
             onFinished()
         }
         .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
