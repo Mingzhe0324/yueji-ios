@@ -1,5 +1,7 @@
 # Build 89: notifications and transitions
 
+The current implementation extends this historical design with upward swipes and consistent four-second idle dismissal. See [current layout and banner behavior](ledger-layout-and-banner-dismissal.md) for the updated implementation and verification checklist.
+
 Build 91 compatibility correction: the native compiler rejected explicit `.environment` overrides for `colorSchemeContrast`, `accessibilityReduceMotion` and `accessibilityReduceTransparency` because their key paths are read-only. These writes have been removed. The child hosting controller reads the system's contrast/transparency/motion preferences normally, while the UIKit swipe animation controller still receives the parent Reduce Motion value directly. Writable app overrides (language, appearance, Dynamic Type and layout direction) remain. The project preflight now rejects writes to these three system keys. Native compilation and toggling accessibility settings on a physical iPhone require CI/device verification.
 
 ## Changes

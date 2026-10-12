@@ -1333,27 +1333,18 @@ struct NoticeSourceSection: View {
 
 struct SavedTransactionItemsSection: View {
     @Environment(\.locale) private var uiLocale
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let entry: Expense
     var presentationAllowed = true
     var onEditingChanged: ((Bool) -> Void)? = nil
-    @State private var expanded = false
     @State private var editing: Expense?
     var body: some View {
         let _ = uiLocale.identifier
-        Section {
-            DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
-                if (entry.items ?? []).isEmpty {
-                    Text(tr("交易已保存，可稍后补充物品。", "Transaction saved; add items whenever you are ready.", "Transaksi disimpan; tambah item apabila anda bersedia."))
-                        .font(.footnote).foregroundStyle(.secondary)
-                } else {
-                    ExpenseItemsBreakdown(entry: entry)
-                    LabeledContent(tr("物品合计", "Item total", "Jumlah item")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
-                    Text(tr("按物品分类统计；分账及退款按金额比例分配。", "Reports use item categories; shares and refunds are distributed proportionally.", "Laporan menggunakan kategori item; bahagian dan pulangan diagihkan mengikut nisbah."))
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            } label: {
-                LabeledContent(tr("物品", "Items", "Item"), value: String(entry.items?.count ?? 0))
+        Section(tr("物品", "Items", "Item")) {
+            if (entry.items ?? []).isEmpty {
+                Text(tr("交易已保存，可稍后补充物品。", "Transaction saved; add items whenever you are ready.", "Transaksi disimpan; tambah item apabila anda bersedia."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            } else {
+                ExpenseItemsBreakdown(entry: entry)
             }
             Button {
                 guard presentationAllowed, editing == nil else { return }
@@ -1388,7 +1379,7 @@ struct ExpenseItemsEditor: View {
                         TransactionAmount(cents: original.cents, direction: .outgoing)
                     }
                 }
-                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true, initiallyExpanded: true)
+                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true)
                 if model.ledger.hasActiveSettlement(expenseID: original.id) {
                     Section {
                         Text(tr("修改物品前，请先撤销关联结算。原消费和历史记录会保留。", "Undo linked settlements before changing items. The original expense and history are preserved.", "Batalkan penyelesaian dipautkan sebelum mengubah item. Belanja asal dan sejarah dikekalkan."))
@@ -3203,88 +3194,72 @@ struct ExpenseItemDraft: Identifiable {
 struct ExpenseItemsFields: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var expanded = false
-    @State private var initialized = false
     private enum ItemField: Hashable { case name(String), amount(String) }
     @FocusState private var focusedItem: ItemField?
     @Binding var items: [ExpenseItemDraft]
     let totalCents: Int
     let defaultCategory: String
     let savedTransaction: Bool
-    var initiallyExpanded = false
     private var itemTotal: Int { items.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
         let _ = uiLocale.identifier
-        Section {
-            DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
-                ForEach(items) { draft in
-                    let item = draft.binding(in: $items)
-                    VStack(alignment: .leading, spacing: 10) {
-                        TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
-                            .accessibilityIdentifier("transaction.item.name")
-                            .focused($focusedItem, equals: .name(draft.id)).submitLabel(.next)
-                            .onSubmit { focusedItem = .amount(draft.id) }
-                        LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
-                            TextField("0.00", text: item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                                .accessibilityIdentifier("transaction.item.amount")
-                                .focused($focusedItem, equals: .amount(draft.id))
-                        }
-                        Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
-                            ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
-                        }.pickerStyle(.navigationLink)
-                            .accessibilityIdentifier("transaction.item.category")
-                        Button(role: .destructive) {
-                            let id = draft.id
-                            if focusedItem == .name(id) || focusedItem == .amount(id) { focusedItem = nil }
-                            updateRows { items.removeAll { $0.id == id } }
-                            FeedbackHaptics.selection()
-                        } label: {
-                            Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
-                        }.buttonStyle(.borderless)
-                            .accessibilityIdentifier("transaction.item.remove")
-                            .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
-                    }.padding(.vertical, 6)
-                }
-                Button {
-                    let draft = ExpenseItemDraft(category: defaultCategory)
-                    updateRows { items.append(draft) }
-                    FeedbackHaptics.selection()
-                } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
-                    .buttonStyle(.borderless)
-                    .accessibilityIdentifier("transaction.item.add")
-                    .disabled(items.count >= 100)
-                if !items.isEmpty {
-                    LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
-                        .foregroundStyle(itemTotal == totalCents ? Color.secondary : Color.orange)
-                    if itemTotal != totalCents {
-                        LabeledContent(itemTotal < totalCents
-                            ? tr("尚需分配", "Left to allocate", "Baki untuk diagihkan")
-                            : tr("超过交易总额", "Over transaction total", "Melebihi jumlah transaksi"),
-                            value: money(abs(totalCents - itemTotal)))
-                            .font(.subheadline).foregroundStyle(.orange)
-                        Text(tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan."))
-                            .font(.footnote).foregroundStyle(.orange)
+        Section(tr("物品", "Items", "Item")) {
+            ForEach(items) { draft in
+                let item = draft.binding(in: $items)
+                VStack(alignment: .leading, spacing: 10) {
+                    TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
+                        .accessibilityIdentifier("transaction.item.name")
+                        .focused($focusedItem, equals: .name(draft.id)).submitLabel(.next)
+                        .onSubmit { focusedItem = .amount(draft.id) }
+                    LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
+                        TextField("0.00", text: item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                            .accessibilityIdentifier("transaction.item.amount")
+                            .focused($focusedItem, equals: .amount(draft.id))
                     }
-                } else if savedTransaction {
-                    Text(tr("交易已保存，可稍后补充物品。取消编辑不会删除交易。", "This transaction is saved. Add items later; cancelling edits keeps the transaction.", "Transaksi ini telah disimpan. Tambah item kemudian; membatalkan edit mengekalkan transaksi."))
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                Text(tr("物品使用各自分类，不会重复计入消费。分账和退款按物品金额比例分配。金额使用 MYR。", "Each item uses its own category and is counted once. Shares and refunds are distributed proportionally by item amount. Enter amounts in MYR.", "Setiap item menggunakan kategori sendiri dan dikira sekali. Bahagian dan pulangan diagihkan mengikut nisbah amaun item. Masukkan amaun dalam MYR."))
-                    .font(.footnote).foregroundStyle(.secondary)
-            } label: {
-                LabeledContent(tr("物品", "Items", "Item"), value: items.isEmpty ? tr("选填", "Optional", "Pilihan") : String(items.count))
-                    .accessibilityIdentifier("transaction.items.toggle")
+                    Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
+                        ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                    }.pickerStyle(.navigationLink)
+                        .accessibilityIdentifier("transaction.item.category")
+                    Button(role: .destructive) {
+                        let id = draft.id
+                        if focusedItem == .name(id) || focusedItem == .amount(id) { focusedItem = nil }
+                        updateRows { items.removeAll { $0.id == id } }
+                        FeedbackHaptics.selection()
+                    } label: {
+                        Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
+                    }.buttonStyle(.borderless)
+                        .accessibilityIdentifier("transaction.item.remove")
+                        .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
+                }.padding(.vertical, 6)
             }
-        }.onAppear {
-            guard !initialized else { return }
-            expanded = initiallyExpanded
-            initialized = true
+            Button {
+                let draft = ExpenseItemDraft(category: defaultCategory)
+                updateRows { items.append(draft) }
+                FeedbackHaptics.selection()
+            } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("transaction.item.add")
+                .disabled(items.count >= 100)
+            if !items.isEmpty {
+                LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
+                    .foregroundStyle(itemTotal == totalCents ? Color.secondary : Color.orange)
+                if itemTotal != totalCents {
+                    LabeledContent(itemTotal < totalCents
+                        ? tr("尚需分配", "Left to allocate", "Baki untuk diagihkan")
+                        : tr("超过交易总额", "Over transaction total", "Melebihi jumlah transaksi"),
+                        value: money(abs(totalCents - itemTotal)))
+                        .font(.subheadline).foregroundStyle(.orange)
+                    Text(tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan."))
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+            } else if savedTransaction {
+                Text(tr("交易已保存，可稍后补充物品。取消编辑不会删除交易。", "This transaction is saved. Add items later; cancelling edits keeps the transaction.", "Transaksi ini telah disimpan. Tambah item kemudian; membatalkan edit mengekalkan transaksi."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
         }
-            .onChange(of: expanded) { _, isExpanded in if !isExpanded { focusedItem = nil } }
     }
     private func updateRows(_ update: () -> Void) {
-        // Form/DisclosureGroup must reconcile row insertion and native pickers
+        // Form must reconcile row insertion and native pickers
         // together, without carrying an insertion animation into navigation.
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
@@ -3299,14 +3274,19 @@ struct ExpenseItemsBreakdown: View {
         let personalAmounts = entry.personalItemAmounts
         ForEach(entry.items ?? []) { item in
             VStack(alignment: .leading, spacing: 6) {
-                LabeledContent(item.name) { TransactionAmount(cents: item.cents, direction: .outgoing) }
+                LabeledContent {
+                    TransactionAmount(cents: item.cents, direction: .outgoing).monospacedDigit()
+                } label: {
+                    Text(item.name).fontWeight(.medium).fixedSize(horizontal: false, vertical: true)
+                }
                 Text(categoryLabel(item.category)).font(.caption).foregroundStyle(.secondary)
                 if !entry.shares.isEmpty || entry.refunded > 0 {
                     LabeledContent(tr("我的净份额", "My net share", "Bahagian bersih saya")) {
                         TransactionAmount(cents: personalAmounts[item.id] ?? 0, direction: .outgoing)
                     }.font(.caption)
                 }
-            }.padding(.vertical, 4)
+            }.padding(.vertical, 6).accessibilityElement(children: .combine)
+                .accessibilityIdentifier("transaction.item.detail")
         }
     }
 }

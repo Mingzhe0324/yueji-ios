@@ -296,7 +296,7 @@ struct YueJiApp: App {
         guard !undoExpiryPaused, bannerInteraction != undoToken.uuidString else { return }
         let token = undoToken
         undoExpiry = Task { [weak self] in
-            do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 30 : 10)) }
+            do { try await Task.sleep(for: .seconds(BannerTiming.duration)) }
             catch { return }
             guard self?.undoToken == token else { return }
             self?.undoEntries = []

@@ -111,6 +111,11 @@ struct MainView: View {
         BannerExpirationKey(id: model.foregroundNotice?.id, paused: phase != .active || !model.didFinishLaunch || model.error != nil ||
             model.bannerInteraction == model.foregroundNotice?.id.uuidString)
     }
+    private var importedExpiration: BannerExpirationKey {
+        BannerExpirationKey(id: model.newTNGCount > 0 ? model.newTNGToken : nil,
+            paused: phase != .active || !model.didFinishLaunch || model.error != nil || model.foregroundNotice != nil ||
+                model.bannerInteraction == model.newTNGToken.uuidString)
+    }
     private var tabs: some View {
         TabView(selection: $selectedTab) {
             DashboardView().ledgerFeedback().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
@@ -204,13 +209,18 @@ struct MainView: View {
             }
             .task(id: savedExpiration) {
                 guard !savedExpiration.paused, let token = savedExpiration.id else { return }
-                do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 6 : 3)) } catch { return }
+                do { try await Task.sleep(for: .seconds(BannerTiming.duration)) } catch { return }
                 model.dismissSavedNotice(id: token)
             }
             .task(id: foregroundExpiration) {
                 guard !foregroundExpiration.paused, let token = foregroundExpiration.id else { return }
-                do { try await Task.sleep(for: .seconds(UIAccessibility.isVoiceOverRunning ? 12 : 6)) } catch { return }
+                do { try await Task.sleep(for: .seconds(BannerTiming.duration)) } catch { return }
                 model.dismissForegroundNotice(id: token)
+            }
+            .task(id: importedExpiration) {
+                guard !importedExpiration.paused, let token = importedExpiration.id else { return }
+                do { try await Task.sleep(for: .seconds(BannerTiming.duration)) } catch { return }
+                model.dismissNewTNG(id: token)
             }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 if !model.loaded {
@@ -713,10 +723,21 @@ struct ExpenseRow: View {
                 .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(categoryColor.opacity(contrast == .increased ? 0.45 : (colorScheme == .dark ? 0.25 : 0.10)), lineWidth: 0.5) }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                if !["手动", "固定消费", "账单补录"].contains(entry.source) {
-                    Text(entry.source + tr(" · 支出", " · Expense", " · Belanja")).font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                Text(entry.merchant).font(.body.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                if let preview = entry.itemPreview {
+                    ViewThatFits(in: .horizontal) {
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Text(preview.names).lineLimit(1)
+                            if preview.remaining > 0 { Text(preview.moreLabel).fixedSize() }
+                        }
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(preview.names).lineLimit(2)
+                            if preview.remaining > 0 { Text(preview.moreLabel) }
+                        }
+                    }.font(.subheadline).foregroundStyle(.secondary)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("transaction.items.preview")
                 }
-                Text(entry.merchant).font(.body.weight(.semibold))
                 Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
@@ -1138,7 +1159,6 @@ struct ExpenseEditor: View {
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
     var startWithSplit = false
-    var startWithItems = false
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var foreignExpanded = false
@@ -1188,7 +1208,7 @@ struct ExpenseEditor: View {
                 payerSection
                 paymentSection
                 merchantSection
-                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, initiallyExpanded: startWithItems)
+                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil)
                 currencySection
                 friendSplitSection
                 if let original {
@@ -2799,7 +2819,7 @@ private struct NotificationBannerCard: View {
         }.padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 8)
             .modifier(NotificationBannerSurface())
             .accessibilityElement(children: .contain)
-            .accessibilityHint(tr("向左或向右滑动可关闭提示。", "Swipe left or right to dismiss.", "Leret ke kiri atau kanan untuk menutup."))
+            .accessibilityHint(tr("向左、向右或向上滑动可关闭提示。", "Swipe left, right, or up to dismiss.", "Leret ke kiri, kanan atau atas untuk menutup."))
             .accessibilityAction(named: Text(tr("关闭提示", "Dismiss notice", "Tutup notis"))) { interaction.dismiss?() }
             .accessibilityAction(.escape) { interaction.dismiss?() }
     }
@@ -2883,8 +2903,10 @@ private struct LedgerFeedbackHost: ViewModifier {
                         .accessibilityAction(named: Text(tr("关闭提示", "Dismiss notice", "Tutup notis"))) { interaction.dismiss?() }
                     }.id(token).frame(maxWidth: 520).padding(.horizontal, 20).padding(.vertical, 8)
                         .frame(maxWidth: .infinity)
+                        .transition(.opacity)
                 }
             }
+            .animation(.easeOut(duration: reduceMotion ? 0.14 : 0.18), value: model.undoEntries.isEmpty)
             .overlay(alignment: .top) {
                 // Keep the navigation bar's Back/Close and trailing buttons fully reachable.
                 topBanner.frame(maxWidth: 520).padding(.horizontal, 20).padding(.top, 52)

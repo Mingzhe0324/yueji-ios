@@ -27,10 +27,21 @@ struct BannerExpirationKey: Hashable {
     let paused: Bool
 }
 
+@MainActor enum BannerTiming {
+    // Give VoiceOver time to read the message and reach its actions.
+    static var duration: TimeInterval { UIAccessibility.isVoiceOverRunning ? 12 : 4 }
+}
+
 enum BannerSwipePolicy {
     static func accepts(translation: CGPoint, velocity: CGPoint) -> Bool {
         let vector = abs(translation.x) + abs(translation.y) > 2 ? translation : velocity
-        return abs(vector.x) > abs(vector.y) * 1.25 && abs(vector.x) > 0
+        return axis(translation: vector) != nil
+    }
+    enum Axis { case horizontal, upward }
+    static func axis(translation: CGPoint) -> Axis? {
+        if abs(translation.x) > abs(translation.y) * 1.25 { return .horizontal }
+        if translation.y < 0 && abs(translation.y) > abs(translation.x) * 1.25 { return .upward }
+        return nil
     }
     /// A reverse flick cancels an otherwise long drag; a short deliberate flick can dismiss.
     static func dismissalDirection(offset: CGFloat, velocity: CGFloat, width: CGFloat, cancelled: Bool = false) -> CGFloat? {
@@ -53,28 +64,36 @@ enum BannerSwipePolicy {
     var canActivate: Bool { !dragged && !exiting }
 }
 
-@MainActor private final class BannerPan: UIPanGestureRecognizer {
+/// Observe the entire contact, including a downward drag rejected by the dismissal pan.
+/// This recognizer never cancels the hosted button or the simultaneous pan.
+@MainActor private final class BannerContact: UIGestureRecognizer {
     var contactBegan: (() -> Void)?
     var contactMoved: ((CGPoint) -> Void)?
     var contactEnded: (() -> Void)?
     private var origin: CGPoint?
+    private var contacts = Set<UITouch>()
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        contacts.formUnion(touches)
         if origin == nil { origin = touches.first?.location(in: view); contactBegan?() }
         super.touchesBegan(touches, with: event)
+        if state == .possible { state = .began }
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent) {
         if let origin, let point = touches.first?.location(in: view) {
             contactMoved?(CGPoint(x: point.x - origin.x, y: point.y - origin.y))
         }
         super.touchesMoved(touches, with: event)
+        state = .changed
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesEnded(touches, with: event); contactEnded?()
+        super.touchesEnded(touches, with: event)
+        contacts.subtract(touches)
+        if contacts.isEmpty { contactEnded?(); state = .ended }
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent) {
-        super.touchesCancelled(touches, with: event); contactEnded?()
+        super.touchesCancelled(touches, with: event); contactEnded?(); state = .cancelled
     }
-    override func reset() { super.reset(); origin = nil; contactEnded?() }
+    override func reset() { super.reset(); origin = nil; contacts.removeAll(); contactEnded?() }
 }
 
 @MainActor final class SwipeBannerController: UIViewController, UIGestureRecognizerDelegate {
@@ -84,7 +103,8 @@ enum BannerSwipePolicy {
     var onDismiss: () -> Void
     var onInteraction: (Bool) -> Void
     private var animator: UIViewPropertyAnimator?
-    private var initialOffset: CGFloat = 0
+    private var initialOffset = CGPoint.zero
+    private var axis: BannerSwipePolicy.Axis = .horizontal
     private var touching = false
     private var entered = false
     private var stopped = false
@@ -114,14 +134,19 @@ enum BannerSwipePolicy {
             host.view.bottomAnchor.constraint(equalTo: view.bottomAnchor)
         ])
         host.didMove(toParent: self)
-        let pan = BannerPan(target: self, action: #selector(panned(_:)))
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
         pan.maximumNumberOfTouches = 1; pan.cancelsTouchesInView = true
         pan.delaysTouchesBegan = false; pan.delaysTouchesEnded = false
         pan.delegate = self
-        pan.contactBegan = { [weak self] in self?.beginContact() }
-        pan.contactMoved = { [weak self] in self?.movedContact(translation: $0) }
-        pan.contactEnded = { [weak self] in self?.setTouching(false) }
         view.addGestureRecognizer(pan)
+        let contact = BannerContact(target: nil, action: nil)
+        contact.cancelsTouchesInView = false
+        contact.delaysTouchesBegan = false; contact.delaysTouchesEnded = false
+        contact.delegate = self
+        contact.contactBegan = { [weak self] in self?.beginContact() }
+        contact.contactMoved = { [weak self] in self?.movedContact(translation: $0) }
+        contact.contactEnded = { [weak self] in self?.endContact() }
+        view.addGestureRecognizer(contact)
     }
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
@@ -138,15 +163,19 @@ enum BannerSwipePolicy {
         return CGSize(width: width, height: max(44, size.height))
     }
     func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        if gestureRecognizer is BannerContact { return !interaction.exiting && !stopped }
         guard let pan = gestureRecognizer as? UIPanGestureRecognizer, !interaction.exiting, !stopped else { return false }
         return BannerSwipePolicy.accepts(translation: pan.translation(in: view), velocity: pan.velocity(in: view))
+    }
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        gestureRecognizer is BannerContact || otherGestureRecognizer is BannerContact
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldReceive touch: UITouch) -> Bool {
         // The host occupies only the card, never a full-screen gesture shield.
         view.bounds.contains(touch.location(in: view))
     }
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRequireFailureOf otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        otherGestureRecognizer is UIScreenEdgePanGestureRecognizer
+        !(gestureRecognizer is BannerContact) && otherGestureRecognizer is UIScreenEdgePanGestureRecognizer
     }
     private func setTouching(_ value: Bool) {
         guard !stopped else { return }
@@ -157,8 +186,7 @@ enum BannerSwipePolicy {
         guard !interaction.exiting, !stopped else { return }
         interaction.dragged = false
         interruptAnimation()
-        initialOffset = host.view.transform.tx
-        host.view.transform = CGAffineTransform(translationX: initialOffset, y: 0)
+        initialOffset = CGPoint(x: host.view.transform.tx, y: host.view.transform.ty)
         host.view.alpha = 1
         setTouching(true)
     }
@@ -167,6 +195,7 @@ enum BannerSwipePolicy {
         // Even a rejected vertical pan must not turn into a button tap at touch-up.
         if max(abs(translation.x), abs(translation.y)) > 10 { interaction.dragged = true }
     }
+    func endContact() { setTouching(false) }
     private func interruptAnimation() {
         let transform = host.view.layer.presentation()?.affineTransform() ?? host.view.transform
         let alpha = host.view.layer.presentation()?.opacity ?? Float(host.view.alpha)
@@ -181,16 +210,18 @@ enum BannerSwipePolicy {
         switch state {
         case .began:
             interaction.dragged = true
+            axis = BannerSwipePolicy.axis(translation: translation) ?? BannerSwipePolicy.axis(translation: velocity) ?? .horizontal
             // Recognition cancels the hosted button; retain this latch through touch-up as well.
             host.view.alpha = 1
-            host.view.transform = CGAffineTransform(translationX: initialOffset + translation.x, y: 0)
+            move(translation)
         case .changed:
-            host.view.transform = CGAffineTransform(translationX: initialOffset + translation.x, y: 0)
+            move(translation)
         case .ended, .cancelled, .failed:
-            let offset = initialOffset + translation.x
-            if let direction = BannerSwipePolicy.dismissalDirection(offset: offset, velocity: velocity.x,
-                width: view.bounds.width, cancelled: state != .ended) {
-                exit(direction: direction)
+            let upward = axis == .upward
+            let offset = upward ? min(0, initialOffset.y + translation.y) : initialOffset.x + translation.x
+            if let direction = BannerSwipePolicy.dismissalDirection(offset: offset, velocity: upward ? velocity.y : velocity.x,
+                width: upward ? view.bounds.height : view.bounds.width, cancelled: state != .ended), !upward || direction < 0 {
+                exit(direction: direction, upward: upward)
             } else {
                 if reduceMotion { host.view.transform = .identity; host.view.alpha = 1 }
                 else {
@@ -199,9 +230,13 @@ enum BannerSwipePolicy {
                     }
                 }
             }
-            setTouching(false)
         default: break
         }
+    }
+    private func move(_ translation: CGPoint) {
+        host.view.transform = axis == .upward
+            ? CGAffineTransform(translationX: 0, y: min(0, initialOffset.y + translation.y))
+            : CGAffineTransform(translationX: initialOffset.x + translation.x, y: 0)
     }
     private func animate(duration: TimeInterval, spring: Bool, changes: @escaping () -> Void, completion: (() -> Void)? = nil) {
         stopAnimator()
@@ -218,7 +253,7 @@ enum BannerSwipePolicy {
         if animator?.state == .active { animator?.stopAnimation(true) }
         animator = nil
     }
-    private func exit(direction: CGFloat) {
+    private func exit(direction: CGFloat, upward: Bool = false) {
         guard !interaction.exiting, !stopped else { return }
         interruptAnimation(); interaction.exiting = true
         host.view.isUserInteractionEnabled = false
@@ -228,8 +263,14 @@ enum BannerSwipePolicy {
         animate(duration: reduceMotion ? 0.14 : 0.20, spring: false, changes: { [weak self] in
             guard let self else { return }
             if self.reduceMotion { self.host.view.alpha = 0 }
-            else { self.host.view.transform = CGAffineTransform(translationX: target, y: 0) }
-        }, completion: { [weak self] in self?.onDismiss() })
+            else { self.host.view.transform = upward
+                ? CGAffineTransform(translationX: 0, y: -frame.maxY - 24)
+                : CGAffineTransform(translationX: target, y: 0) }
+        }, completion: { [weak self] in
+            // Consume the dismissing touch through the animation, then release the card's hit area.
+            self?.view.isUserInteractionEnabled = false
+            self?.onDismiss()
+        })
     }
     func stop() {
         guard !stopped else { return }; stopped = true

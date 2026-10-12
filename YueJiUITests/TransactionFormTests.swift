@@ -65,8 +65,6 @@ final class TransactionFormTests: XCTestCase {
         let food = app.buttons["Food"].firstMatch
         XCTAssertTrue(food.waitForExistence(timeout: 5), "Food category choice is absent from the native picker"); food.tap()
 
-        let disclosure = app.descendants(matching: .any)["transaction.items.toggle"].firstMatch
-        reveal(disclosure, in: app); disclosure.tap()
         let add = app.buttons["transaction.item.add"]
         reveal(add, in: app); add.tap()
         let names = app.textFields.matching(identifier: "transaction.item.name")

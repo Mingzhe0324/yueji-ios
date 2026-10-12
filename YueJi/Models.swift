@@ -950,7 +950,19 @@ struct ExpenseItem: Codable, Identifiable, Equatable {
     var cents: Int
     var category: String
 }
+struct ExpenseItemPreview: Equatable {
+    let names: String
+    let remaining: Int
+    var moreLabel: String { tr("另有 \(remaining) 件", "+\(remaining) more", "+\(remaining) lagi") }
+}
 extension Expense {
+    /// Only actual saved purchase names belong in the row, never inferred categories.
+    var itemPreview: ExpenseItemPreview? {
+        let names = (items ?? []).map { $0.name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ") }
+            .filter { !$0.isEmpty }
+        guard !names.isEmpty else { return nil }
+        return ExpenseItemPreview(names: names.prefix(2).joined(separator: " · "), remaining: max(0, names.count - 2))
+    }
     var hasLegacyCategorySplits: Bool { !(categoryAllocations ?? []).isEmpty }
 
     /// Preserve order and capacities so proportional shares/refunds keep every cent.

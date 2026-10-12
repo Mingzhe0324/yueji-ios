@@ -5,14 +5,15 @@ import SwiftUI
 @testable import YueJi
 
 final class NotificationBannerTests: XCTestCase {
-    func testHorizontalIntentDoesNotAcceptScrollingOrDiagonalMovement() {
+    func testAcceptsLeftRightAndUpButRejectsDownAndAmbiguousDiagonals() {
         for direction in [CGFloat(-1), CGFloat(1)] {
             XCTAssertTrue(BannerSwipePolicy.accepts(translation: CGPoint(x: direction * 20, y: 3), velocity: .zero))
-            XCTAssertFalse(BannerSwipePolicy.accepts(translation: CGPoint(x: 3, y: direction * 20), velocity: .zero))
+            XCTAssertEqual(BannerSwipePolicy.accepts(translation: CGPoint(x: 3, y: direction * 20), velocity: .zero), direction < 0)
             XCTAssertFalse(BannerSwipePolicy.accepts(translation: CGPoint(x: direction * 20, y: 20), velocity: .zero))
             XCTAssertTrue(BannerSwipePolicy.accepts(translation: .zero, velocity: CGPoint(x: direction * 800, y: 20)))
         }
         XCTAssertFalse(BannerSwipePolicy.accepts(translation: .zero, velocity: .zero))
+        XCTAssertTrue(BannerSwipePolicy.accepts(translation: .zero, velocity: CGPoint(x: 10, y: -800)))
     }
     func testShortSwipesSnapBackAndCancellationNeverDismisses() {
         for direction in [CGFloat(-1), CGFloat(1)] {
@@ -123,6 +124,56 @@ final class NotificationBannerTests: XCTestCase {
         await fulfillment(of: [done], timeout: 3)
         XCTAssertEqual(dismissals, 1)
         controller.stop()
+    }
+    @MainActor func testUpwardSwipePausesInteractionBlocksActivationAndReleasesHitArea() async throws {
+        let gate = BannerInteraction()
+        var contacts: [Bool] = []
+        let done = expectation(description: "Upward dismissal completed")
+        done.assertForOverFulfill = true
+        let controller = SwipeBannerController(content: AnyView(Text("Notice").padding()), interaction: gate,
+            reduceMotion: false, onDismiss: { done.fulfill() }, onInteraction: { contacts.append($0) })
+        controller.loadViewIfNeeded()
+        controller.view.frame = CGRect(x: 0, y: 0, width: 320, height: 64)
+        controller.view.layoutIfNeeded()
+        let card = try XCTUnwrap(controller.children.first?.view)
+        controller.beginContact()
+        XCTAssertEqual(contacts, [true])
+        controller.handlePan(state: .began, translation: CGPoint(x: 2, y: -15), velocity: .zero)
+        controller.handlePan(state: .changed, translation: CGPoint(x: 5, y: -90), velocity: .zero)
+        XCTAssertEqual(card.transform.ty, -90, accuracy: 0.01)
+        XCTAssertEqual(card.transform.tx, 0, accuracy: 0.01)
+        XCTAssertFalse(gate.canActivate)
+        controller.handlePan(state: .ended, translation: CGPoint(x: 5, y: -90), velocity: .zero)
+        controller.endContact()
+        XCTAssertEqual(contacts, [true, false])
+        XCTAssertTrue(gate.exiting)
+        await fulfillment(of: [done], timeout: 3)
+        XCTAssertFalse(controller.view.isUserInteractionEnabled)
+        XCTAssertFalse(gate.canActivate)
+        controller.stop()
+    }
+}
+
+final class ExpenseItemPreviewTests: XCTestCase {
+    func testPreviewUsesSavedNamesInOrderAndCountsRemainingItemsWithoutChangingMoney() throws {
+        for source in ["手动", "TNG"] {
+            var entry = Expense(merchant: "Market", cents: 1000, date: Date())
+            entry.source = source
+            XCTAssertNil(entry.itemPreview)
+            entry.items = []
+            XCTAssertNil(entry.itemPreview)
+            entry.items = [ExpenseItem(name: "Milk", cents: 100, category: "Food")]
+            XCTAssertEqual(entry.itemPreview, ExpenseItemPreview(names: "Milk", remaining: 0))
+            entry.items?.append(ExpenseItem(name: "Bread\n loaf", cents: 200, category: "Food"))
+            XCTAssertEqual(entry.itemPreview, ExpenseItemPreview(names: "Milk · Bread loaf", remaining: 0))
+            entry.items?.append(ExpenseItem(name: "Soap", cents: 300, category: "Shopping"))
+            entry.items?.append(ExpenseItem(name: "Milk", cents: 400, category: "Food"))
+            let original = entry
+            XCTAssertEqual(entry.itemPreview, ExpenseItemPreview(names: "Milk · Bread loaf", remaining: 2))
+            XCTAssertEqual(entry, original)
+            XCTAssertEqual(entry.cents, 1000)
+            XCTAssertEqual(entry.categoryDistribution(total: 1000), ["Food": 700, "Shopping": 300])
+        }
     }
 }
 
