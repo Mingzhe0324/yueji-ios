@@ -126,6 +126,64 @@ final class NotificationBannerTests: XCTestCase {
     }
 }
 
+final class ColdLaunchReadinessTests: XCTestCase {
+    @MainActor func testColdLaunchUsesSuccessfulSnapshotAndEitherOpeningCompletionOrder() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let purchase = Expense(merchant: "Saved purchase", cents: 3500, date: Date(timeIntervalSince1970: 1_700_000_000))
+        try store.change { $0.expenses = [purchase] }
+
+        for (openingEnabled, openingFinishedBeforeRead) in [(false, false), (true, true), (true, false)] {
+            let model = LedgerModel()
+            XCTAssertFalse(model.finishLaunchIfReady(openingEnabled: openingEnabled, openingFinished: openingFinishedBeforeRead))
+            XCTAssertFalse(model.didFinishLaunch, "Never unlock an empty draft ledger before reading the saved file")
+            await model.refresh(postRecurring: false, using: worker)
+            XCTAssertTrue(model.loaded)
+            XCTAssertEqual(model.ledger.expenses, [purchase])
+            if openingEnabled && !openingFinishedBeforeRead {
+                XCTAssertFalse(model.finishLaunchIfReady(openingEnabled: true, openingFinished: false))
+                XCTAssertFalse(model.didFinishLaunch)
+            }
+            // No mounted TabView or foreground scene callback is needed to finish.
+            let finalOpeningFinished = openingEnabled
+            XCTAssertTrue(model.finishLaunchIfReady(openingEnabled: openingEnabled, openingFinished: finalOpeningFinished))
+            XCTAssertTrue(model.didFinishLaunch)
+            XCTAssertFalse(model.finishLaunchIfReady(openingEnabled: openingEnabled, openingFinished: finalOpeningFinished))
+            XCTAssertEqual(model.ledger.expenses, [purchase])
+            XCTAssertEqual(try store.read().expenses, [purchase])
+        }
+    }
+
+    @MainActor func testFailedColdReadKeepsSavedFileLockedUntilSuccessfulRetry() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        let purchase = Expense(merchant: "Keep this record", cents: 1500, date: Date(timeIntervalSince1970: 1_700_000_000))
+        try store.change { $0.expenses = [purchase] }
+        let file = folder.appendingPathComponent("ledger.json")
+        let originalData = try Data(contentsOf: file)
+        let unreadable = Data("unreadable ledger".utf8)
+        try unreadable.write(to: file)
+        let model = LedgerModel()
+        await model.refresh(postRecurring: false, using: worker)
+        XCTAssertNotNil(model.error)
+        XCTAssertFalse(model.loaded)
+        XCTAssertFalse(model.finishLaunchIfReady(openingEnabled: false, openingFinished: true))
+        XCTAssertFalse(model.didFinishLaunch)
+        XCTAssertEqual(try Data(contentsOf: file), unreadable)
+
+        // Restore only this disposable fixture, then exercise the same retry path.
+        try originalData.write(to: file)
+        model.error = nil
+        await model.refresh(postRecurring: false, using: worker)
+        XCTAssertNil(model.error)
+        XCTAssertTrue(model.finishLaunchIfReady(openingEnabled: false, openingFinished: false))
+        XCTAssertEqual(model.ledger.expenses, [purchase])
+        XCTAssertEqual(try Data(contentsOf: file), originalData)
+    }
+}
+
 final class TransactionItemsTests: XCTestCase {
     @MainActor func testItemBindingsFollowIdentityAfterDeletionAndIgnoreLateWrites() {
         let first = ExpenseItemDraft(id: "first", name: "Lunch", amount: "15.00", category: "餐饮")

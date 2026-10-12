@@ -147,6 +147,14 @@ struct YueJiApp: App {
     @Published var error: String?
     @Published var didFinishLaunch = false
     @Published var loaded = false
+    /// A successful storage snapshot and optional opening are the only launch
+    /// prerequisites. Hidden TabView appearance and scene callbacks must not gate it.
+    @discardableResult
+    func finishLaunchIfReady(openingEnabled: Bool, openingFinished: Bool) -> Bool {
+        guard !didFinishLaunch, loaded, !openingEnabled || openingFinished else { return false }
+        didFinishLaunch = true
+        return true
+    }
     @Published var feedbackOwners = FeedbackPresentationOwners()
     @Published var savedNotice: UUID?
     @Published var feedbackMessage = ""

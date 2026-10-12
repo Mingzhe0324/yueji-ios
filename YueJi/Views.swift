@@ -84,12 +84,10 @@ struct MainView: View {
     @State private var pendingInbox = false
     @State private var notificationDestination: NotificationDestination?
     @State private var logoFinished = false
-    @State private var initialLoadFinished = false
-    @State private var tabsReady = false
     private func finishLaunchIfReady() {
-        guard !model.didFinishLaunch, phase == .active, initialLoadFinished, tabsReady,
-              logoFinished || !openingEnabled else { return }
-        withAnimation(reduceMotion ? nil : YueJiMotion.standard) { model.didFinishLaunch = true }
+        withAnimation(reduceMotion ? nil : YueJiMotion.standard) {
+            _ = model.finishLaunchIfReady(openingEnabled: openingEnabled, openingFinished: logoFinished)
+        }
     }
     private func openPendingNotification() {
         guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil,
@@ -127,12 +125,14 @@ struct MainView: View {
         ZStack {
             Color("LaunchBackground").ignoresSafeArea()
             // Prepare the real screens beneath the opaque logo, before fading it away.
-            if initialLoadFinished || model.didFinishLaunch {
+            if model.loaded || model.didFinishLaunch {
                 tabs
                     .allowsHitTesting(model.didFinishLaunch)
                     .accessibilityHidden(!model.didFinishLaunch)
                     .transition(.identity)
-                    .task { tabsReady = true; finishLaunchIfReady() }
+            } else if !openingEnabled {
+                ProgressView(tr("正在读取账本", "Loading ledger", "Memuatkan lejar"))
+                    .accessibilityIdentifier("launch.loading")
             }
             if !model.didFinishLaunch && openingEnabled {
                 OpeningAnimationView(sound: !model.isPreview) {
@@ -144,12 +144,17 @@ struct MainView: View {
         }
             .task(id: phase) {
                 model.pauseUndoExpiry(phase != .active)
-                guard phase == .active else { FeedbackSounds.shared.stop(); return }
+                if phase != .active { FeedbackSounds.shared.stop() }
+                // The first read must run even before scene activation arrives.
+                // Later background/inactive transitions do not reload the ledger.
+                guard phase == .active || !model.loaded else { return }
                 await model.refresh()
                 guard !Task.isCancelled else { return }
-                initialLoadFinished = true
                 finishLaunchIfReady()
                 openPendingNotification()
+            }
+            .onChange(of: model.loaded) { _, loaded in
+                if loaded { finishLaunchIfReady() }
             }
             .task(id: model.didFinishLaunch && phase == .active) {
                 guard model.didFinishLaunch, phase == .active, !model.isPreview else { return }
@@ -208,6 +213,12 @@ struct MainView: View {
                 model.dismissForegroundNotice(id: token)
             }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
+                if !model.loaded {
+                    Button(tr("重试", "Retry", "Cuba lagi")) {
+                        model.error = nil
+                        Task { await model.refresh(); finishLaunchIfReady() }
+                    }
+                }
                 Button(tr("知道了", "OK", "OK"), role: .cancel) { model.error = nil }
             } message: { Text(model.error ?? "") }
     }
@@ -2822,22 +2833,21 @@ private struct OpeningAnimationView: View {
             .scaleEffect(entered || !animates ? 1 : 0.96)
             .offset(y: entered || !animates ? 0 : 6)
         }
-        .task(id: phase) {
-            // Wait for foreground activation so the opening cue is audible on a cold launch.
-            guard phase == .active else { return }
-            if !entered {
-                // Give the initial logo frame time to appear, without blocking the main actor.
-                do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
-                if sound && !playedSound {
-                    FeedbackSounds.shared.play(.launch)
-                    playedSound = true
-                }
-                withAnimation(animates ? YueJiMotion.detail : nil) { entered = true }
-                do { try await Task.sleep(for: .milliseconds(animates ? 350 : 100)) }
-                catch { return }
-            }
-            guard !Task.isCancelled, phase == .active else { return }
+        .task {
+            // Finishing the optional opening must not depend on scene callbacks.
+            // Give the initial logo frame time to appear without blocking the UI.
+            do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
+            withAnimation(animates ? YueJiMotion.detail : nil) { entered = true }
+            do { try await Task.sleep(for: .milliseconds(animates ? 350 : 100)) }
+            catch { return }
+            guard !Task.isCancelled else { return }
             onFinished()
+        }
+        .task(id: phase) {
+            // Sound still waits for foreground activation; screen readiness does not.
+            guard phase == .active, sound, !playedSound else { return }
+            FeedbackSounds.shared.play(.launch)
+            playedSound = true
         }
         .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
     }
