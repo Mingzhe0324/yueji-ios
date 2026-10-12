@@ -61,8 +61,9 @@ final class TransactionFormTests: XCTestCase {
 
         let category = app.descendants(matching: .any)["transaction.category"].firstMatch
         reveal(category, in: app); category.tap()
-        let food = app.staticTexts["Food"].firstMatch
-        XCTAssertTrue(food.waitForExistence(timeout: 5)); food.tap()
+        // Navigation-style Picker choices are buttons in the native iOS hierarchy.
+        let food = app.buttons["Food"].firstMatch
+        XCTAssertTrue(food.waitForExistence(timeout: 5), "Food category choice is absent from the native picker"); food.tap()
 
         let disclosure = app.descendants(matching: .any)["transaction.items.toggle"].firstMatch
         reveal(disclosure, in: app); disclosure.tap()
@@ -81,8 +82,8 @@ final class TransactionFormTests: XCTestCase {
         // Item category navigation must return to the same unsaved form.
         let itemCategory = app.descendants(matching: .any)["transaction.item.category"].firstMatch
         reveal(itemCategory, in: app); itemCategory.tap()
-        let shopping = app.staticTexts["Shopping"].firstMatch
-        XCTAssertTrue(shopping.waitForExistence(timeout: 5)); shopping.tap()
+        let shopping = app.buttons["Shopping"].firstMatch
+        XCTAssertTrue(shopping.waitForExistence(timeout: 5), "Shopping category choice is absent from the native picker"); shopping.tap()
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
         reveal(add, in: app); add.tap(); reveal(add, in: app); add.tap()
         XCTAssertEqual(names.count, 3)
