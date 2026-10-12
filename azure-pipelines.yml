@@ -62,12 +62,8 @@ jobs:
         displayName: Choose an iOS 26 iPhone simulator
       - bash: |
           set -euo pipefail
-          xcodebuild test -project YueJi.xcodeproj -scheme YueJi \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -derivedDataPath build-simulator \
-            -resultBundlePath "$BUILD_ARTIFACTSTAGINGDIRECTORY/TestResults.xcresult" \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            2>&1 | tee "$BUILD_ARTIFACTSTAGINGDIRECTORY/build-test.log"
+          python3 -u scripts/run_simulator_tests.py --simulator "$SIMULATOR_ID" \
+            --artifacts "$BUILD_ARTIFACTSTAGINGDIRECTORY"
         displayName: Build and test on iPhone simulator
         env:
           SIMULATOR_ID: $(SIMULATOR_ID)

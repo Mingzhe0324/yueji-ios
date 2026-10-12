@@ -1,0 +1,9 @@
+# Simulator UI runner initialization timeout
+
+The supplied build-test (1).log passes all 235 unit tests, then reports `XCTDaemonErrorDomain Code=18`, `Timed out waiting for AX loaded notification`. Neither transaction UI test starts. Audio overload warnings are also present, but the log does not establish the underlying simulator/framework cause. This run cannot verify the item keyboard correction.
+
+Azure now builds for testing once and runs the complete unit and UI targets sequentially with parallel testing disabled. It waits for simulator boot, runs unit tests, shuts down and boots the selected simulator again, waits for readiness, and then runs UI tests. Restarting preserves installed app data. No test is skipped, retried automatically, or converted to a passing result.
+
+The runner streams one build-test.log and writes separate UnitTestResults.xcresult and UITestResults.xcresult bundles. Build is bounded to ten minutes, each test suite to fifteen minutes, and each simulator boot to three minutes. An explicit UI initialization failure stops the process group promptly; silent hangs also terminate with a failing exit status. Existing always-running Azure diagnostics/artifact publication steps retain the log and available result bundles. A forcibly stopped Xcode process may leave an incomplete result bundle; the streamed log remains available. Device build and IPA packaging require both test stages to succeed.
+
+Five local subprocess tests cover success/output, nonzero exit preservation, immediate initialization-failure termination, silent timeout, and preventing unit-only success from being reported as complete native success. Project checks and workflow YAML validation pass. macOS simulator boot behavior and native test execution require a new Azure run; this change is containment and simulator isolation, not a confirmed resolution of the platform timeout.

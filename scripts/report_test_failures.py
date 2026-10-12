@@ -5,15 +5,20 @@ import re
 
 
 def report(log: str) -> str:
-    failures = [line for line in log.splitlines() if re.search(r'\.swift:\d+(?::\d+)?: error:', line)]
+    failures = [line for line in log.splitlines() if re.search(r'(?:\.swift:\d+(?::\d+)?|<unknown>:0): error:', line)]
+    infrastructure = [line for line in log.splitlines() if
+                      'Failed to initialize for UI testing:' in line or 'CI stage timed out' in line]
     bundles = re.findall(r"Test Suite '([^'\n]+\.xctest)' (passed|failed)[^\n]*\n\s*(Executed[^\n]*)", log)
     sections = []
+    if infrastructure:
+        sections.append('Native runner/startup failures (UI verification incomplete):\n' + '\n'.join(dict.fromkeys(infrastructure)))
     if failures:
         sections.append('Native XCTest assertion failures:\n' + '\n'.join(dict.fromkeys(failures)))
-    elif '** TEST SUCCEEDED **' in log:
+    elif not infrastructure and ('** ALL NATIVE SUITES SUCCEEDED **' in log or
+                                 ('build-for-testing' not in log and '** TEST SUCCEEDED **' in log)):
         sections.append('Native tests succeeded; no assertion failures were reported.')
-    else:
-        sections.append('No Swift XCTest assertion lines were found. Inspect build-test.log and TestResults.xcresult for build, launch or infrastructure errors.')
+    elif not infrastructure:
+        sections.append('No Swift XCTest assertion lines were found. Inspect build-test.log and the .xcresult bundles for build, launch or infrastructure errors.')
     if bundles:
         sections.append('Test bundle summaries:\n' + '\n'.join(f'{name} {status}: {summary}' for name, status, summary in bundles))
     return '\n\n'.join(sections) + '\n'
