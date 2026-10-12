@@ -1139,7 +1139,6 @@ struct ExpenseEditor: View {
     @State private var category = "其他"
     @State private var rememberCategory = true
     @State private var itemDrafts: [ExpenseItemDraft] = []
-    @State private var tagsText = ""
     @State private var splitting = false
     @State private var entryType = "expense"
     @State private var friendPays = false
@@ -1174,13 +1173,12 @@ struct ExpenseEditor: View {
                 paymentSection
                 merchantSection
                 ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, initiallyExpanded: startWithItems)
-                ExpenseBookkeepingFields(tagsText: $tagsText)
                 currencySection
                 friendSplitSection
                 if let original {
                     if model.ledger.hasActiveSettlement(expenseID: original.id) {
                         Section {
-                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、物品、分账或退款前，请先撤销相关结算。标签仍可编辑。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, items, shares or refunds. Tags can still be edited.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, item, bahagian atau pulangan. Tag masih boleh diedit."))
+                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、物品、分账或退款前，请先撤销相关结算。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, items, shares or refunds.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, item, bahagian atau pulangan."))
                             ForEach(model.ledger.settlements.filter { $0.active && $0.lines.contains { $0.expense.id == original.id && $0.applied != 0 } }) { record in
                                 NavigationLink(tr("查看结算", "View settlement", "Lihat penyelesaian")) { SettlementDetailView(id: record.id) }
                             }
@@ -1247,6 +1245,7 @@ struct ExpenseEditor: View {
                 Text(currency).font(.headline).foregroundStyle(.secondary)
                 TextField("0.00", text: $amount)
                     .keyboardType(.decimalPad).focused($focusedField, equals: .amount)
+                    .accessibilityIdentifier("transaction.amount")
                     .font(.system(.largeTitle, design: .rounded, weight: .semibold))
                     .monospacedDigit().padding(.vertical, 12)
                     .accessibilityLabel(tr("付款金额", "Payment amount", "Amaun bayaran"))
@@ -1279,22 +1278,25 @@ struct ExpenseEditor: View {
     private var merchantSection: some View {
         Section(tr("商户与分类", "Merchant and category", "Peniaga dan kategori")) {
             TextField(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), text: $name)
+                .accessibilityIdentifier("transaction.merchant")
                 .focused($focusedField, equals: .merchant).submitLabel(.done)
                 .onSubmit { finishKeyboard() }
-            if itemDrafts.isEmpty {
+            // Keep this navigation row mounted when the first item is inserted.
+            // Removing it in the same Form update can invalidate native navigation.
             Picker(tr("分类", "Category", "Kategori"), selection: $category) {
                 ForEach(model.ledger.categoryNames, id: \.self) { item in
                     Text(categoryLabel(item)).tag(item)
                 }
-            }.pickerStyle(.navigationLink)
-            }
+            }.pickerStyle(.navigationLink).disabled(!itemDrafts.isEmpty)
+                .accessibilityIdentifier("transaction.category")
+            Text(tr("填写物品后，消费按每件物品的分类统计。", "When items are entered, spending uses each item's category.", "Apabila item diisi, belanja menggunakan kategori setiap item."))
+                .font(.footnote).foregroundStyle(.secondary)
         }.disabled((original?.refunded ?? 0) > 0)
     }
     private var currencySection: some View {
         Section {
-            if itemDrafts.isEmpty {
-                Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
-            }
+            Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
+                .disabled(!itemDrafts.isEmpty)
             DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
             DisclosureGroup(isExpanded: $foreignExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
@@ -1365,7 +1367,6 @@ struct ExpenseEditor: View {
             friendPays = e.paidByFriend != nil; payerName = e.paidByFriend ?? ""
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
             itemDrafts = (e.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
-            tagsText = (e.tags ?? []).joined(separator: ", ")
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -1386,7 +1387,7 @@ struct ExpenseEditor: View {
     }
     private func finishKeyboard() {
         focusedField = nil
-        // Includes fields in the reusable tag, item and friend rows.
+        // Includes fields in the reusable item and friend rows.
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
     private func beginSave() {
@@ -1411,7 +1412,6 @@ struct ExpenseEditor: View {
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
             entry.paidByFriend = friendPays ? payerName.trimmingCharacters(in: .whitespacesAndNewlines) : nil
-            entry.tags = normalizedExpenseTags(tagsText)
             entry = try entry.replacingItems(try itemDrafts.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
             if let original, original.refunded > 0 {
                 guard entry.cents == original.cents, entry.date == original.date, entry.foreign == original.foreign, entry.paidByFriend == original.paidByFriend else { throw reviewError("已有退款，请先撤销退款再修改金额或日期。", "Undo refunds before changing amount or date.", "Batalkan bayaran balik sebelum mengubah amaun atau tarikh.") }

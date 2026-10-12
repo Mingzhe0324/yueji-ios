@@ -127,6 +127,63 @@ final class NotificationBannerTests: XCTestCase {
 }
 
 final class TransactionItemsTests: XCTestCase {
+    @MainActor func testItemBindingsFollowIdentityAfterDeletionAndIgnoreLateWrites() {
+        let first = ExpenseItemDraft(id: "first", name: "Lunch", amount: "15.00", category: "餐饮")
+        let second = ExpenseItemDraft(id: "second", name: "Supplies", amount: "20.00", category: "购物")
+        var drafts = [first, second]
+        let collection = Binding(get: { drafts }, set: { drafts = $0 })
+        let removedBinding = first.binding(in: collection)
+        let retainedBinding = second.binding(in: collection)
+
+        drafts.removeFirst()
+        // SwiftUI can finish a text or picker callback after a row is removed.
+        removedBinding.name.wrappedValue = "Late text"
+        removedBinding.category.wrappedValue = "交通"
+        XCTAssertEqual(drafts.count, 1)
+        XCTAssertEqual(drafts[0].name, "Supplies")
+        XCTAssertEqual(drafts[0].category, "购物")
+        retainedBinding.amount.wrappedValue = "35.00"
+        XCTAssertEqual(drafts[0].id, "second")
+        XCTAssertEqual(drafts[0].amount, "35.00")
+
+        drafts.removeAll()
+        XCTAssertEqual(retainedBinding.wrappedValue.id, "second")
+        retainedBinding.amount.wrappedValue = "99.00"
+        XCTAssertTrue(drafts.isEmpty)
+        // Replacing all rows must not revive the removed item or redirect a write.
+        drafts = [ExpenseItemDraft(id: "third", category: "其他")]
+        retainedBinding.name.wrappedValue = "Late update"
+        XCTAssertEqual(drafts[0].name, "")
+    }
+
+    func testEditingTransactionWithHiddenLegacyTagsPreservesBackupAndReports() async throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let store = LocalStore(folder: folder), worker = LedgerRefreshWorker(store: store)
+        var expense = purchase()
+        expense.tags = ["Trip", "家庭"]
+        expense.note = "Legacy note"
+        try store.change { $0.expenses = [expense] }
+        let before = try store.read()
+        let original = try XCTUnwrap(before.expenses.first)
+        // General editing starts with the original record; Tags have no UI binding.
+        var edited = original
+        edited.merchant = "Renamed purchase"
+        try await worker.saveExpense(edited, replacing: original, rememberCategory: false)
+        let after = try store.read()
+        XCTAssertEqual(after.expenses[0].tags, original.tags)
+        XCTAssertEqual(after.expenses[0].note, original.note)
+        XCTAssertEqual(after.expenses[0].items, original.items)
+        XCTAssertEqual(after.expenses[0].cents, original.cents)
+        XCTAssertEqual(after.spending(in: date), before.spending(in: date))
+        for category in before.categoryNames {
+            XCTAssertEqual(after.spending(in: date, category: category), before.spending(in: date, category: category))
+        }
+        let backup = try LocalStore.decode(LocalStore.exportData(after))
+        XCTAssertEqual(backup.expenses, after.expenses)
+        XCTAssertEqual(backup.expenses[0].tags, ["Trip", "家庭"])
+    }
+
     private let date = Date(timeIntervalSince1970: 1_700_000_000)
     private var items: [ExpenseItem] {
         [ExpenseItem(id: "lunch-item", name: "Lunch", cents: 1500, category: "餐饮"),

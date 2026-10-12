@@ -1193,7 +1193,7 @@ struct LedgerFilterEditor: View {
                 }
                 TextField(tr("最低金额 · MYR（选填）", "Minimum · MYR (optional)", "Minimum · MYR (pilihan)"), text: $value.minimum).keyboardType(.decimalPad)
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
-                Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户、物品和标签可在账本搜索。物品按各自分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants, items and tags in the ledger. Item categories are included; rows still show the transaction total.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga, item dan tag dalam lejar. Kategori item disertakan; baris masih menunjukkan jumlah transaksi.")).font(.footnote)
+                Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户和物品可在账本搜索。物品按各自分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants and items in the ledger. Item categories are included; rows still show the transaction total.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dan item dalam lejar. Kategori item disertakan; baris masih menunjukkan jumlah transaksi.")).font(.footnote)
                 Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
             }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar {
@@ -3177,12 +3177,27 @@ struct FinancialNoticeReviewView: View {
 }
 
 struct ExpenseItemDraft: Identifiable {
-    var id = UUID().uuidString
+    let id: String
     var name = ""
     var amount = ""
     var category: String
+    init(id: String = UUID().uuidString, name: String = "", amount: String = "", category: String) {
+        self.id = id; self.name = name; self.amount = amount; self.category = category
+    }
     func savedItem() throws -> ExpenseItem {
         ExpenseItem(id: id, name: name.trimmingCharacters(in: .whitespacesAndNewlines), cents: try toCents(amount), category: category)
+    }
+    // Navigation destinations and text fields can retain a binding after a row
+    // disappears. Resolve its ID on every access instead of retaining an index.
+    func binding(in drafts: Binding<[ExpenseItemDraft]>) -> Binding<ExpenseItemDraft> {
+        Binding(get: {
+            drafts.wrappedValue.first { $0.id == id } ?? self
+        }, set: { updated in
+            var current = drafts.wrappedValue
+            guard updated.id == id, let index = current.firstIndex(where: { $0.id == id }) else { return }
+            current[index] = updated
+            drafts.wrappedValue = current
+        })
     }
 }
 struct ExpenseItemsFields: View {
@@ -3203,36 +3218,41 @@ struct ExpenseItemsFields: View {
         let _ = uiLocale.identifier
         Section {
             DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
-                ForEach($items) { $item in
+                ForEach(items) { draft in
+                    let item = draft.binding(in: $items)
                     VStack(alignment: .leading, spacing: 10) {
-                        TextField(tr("物品名称", "Item name", "Nama item"), text: $item.name)
-                            .focused($focusedItem, equals: .name(item.id)).submitLabel(.next)
-                            .onSubmit { focusedItem = .amount(item.id) }
+                        TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
+                            .accessibilityIdentifier("transaction.item.name")
+                            .focused($focusedItem, equals: .name(draft.id)).submitLabel(.next)
+                            .onSubmit { focusedItem = .amount(draft.id) }
                         LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
-                            TextField("0.00", text: $item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
-                                .focused($focusedItem, equals: .amount(item.id))
+                            TextField("0.00", text: item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
+                                .accessibilityIdentifier("transaction.item.amount")
+                                .focused($focusedItem, equals: .amount(draft.id))
                         }
-                        Picker(tr("分类", "Category", "Kategori"), selection: $item.category) {
+                        Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
                             ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
                         }.pickerStyle(.navigationLink)
+                            .accessibilityIdentifier("transaction.item.category")
                         Button(role: .destructive) {
-                            let id = item.id
+                            let id = draft.id
                             if focusedItem == .name(id) || focusedItem == .amount(id) { focusedItem = nil }
-                            withAnimation(reduceMotion ? nil : YueJiMotion.standard) { items.removeAll { $0.id == id } }
+                            updateRows { items.removeAll { $0.id == id } }
                             FeedbackHaptics.selection()
                         } label: {
                             Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
                         }.buttonStyle(.borderless)
-                            .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.name)
+                            .accessibilityIdentifier("transaction.item.remove")
+                            .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
                     }.padding(.vertical, 6)
-                        .transition(reduceMotion ? .identity : .opacity.combined(with: .offset(y: 4)))
                 }
                 Button {
                     let draft = ExpenseItemDraft(category: defaultCategory)
-                    withAnimation(reduceMotion ? nil : YueJiMotion.standard) { items.append(draft) }
+                    updateRows { items.append(draft) }
                     FeedbackHaptics.selection()
                 } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
                     .buttonStyle(.borderless)
+                    .accessibilityIdentifier("transaction.item.add")
                     .disabled(items.count >= 100)
                 if !items.isEmpty {
                     LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
@@ -3254,6 +3274,7 @@ struct ExpenseItemsFields: View {
                     .font(.footnote).foregroundStyle(.secondary)
             } label: {
                 LabeledContent(tr("物品", "Items", "Item"), value: items.isEmpty ? tr("选填", "Optional", "Pilihan") : String(items.count))
+                    .accessibilityIdentifier("transaction.items.toggle")
             }
         }.onAppear {
             guard !initialized else { return }
@@ -3261,6 +3282,13 @@ struct ExpenseItemsFields: View {
             initialized = true
         }
             .onChange(of: expanded) { _, isExpanded in if !isExpanded { focusedItem = nil } }
+    }
+    private func updateRows(_ update: () -> Void) {
+        // Form/DisclosureGroup must reconcile row insertion and native pickers
+        // together, without carrying an insertion animation into navigation.
+        var transaction = Transaction(animation: nil)
+        transaction.disablesAnimations = true
+        withTransaction(transaction, update)
     }
 }
 struct ExpenseItemsBreakdown: View {
@@ -3290,33 +3318,13 @@ func normalizedExpenseTags(_ text: String) -> [String] {
         return value
     }
 }
-struct ExpenseBookkeepingFields: View {
-    @Environment(\.locale) private var uiLocale
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var tagsExpanded = false
-    @Binding var tagsText: String
-    var body: some View {
-        let _ = uiLocale.identifier
-        Section {
-            DisclosureGroup(isExpanded: $tagsExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
-                TextField(tr("用逗号分隔，例如旅行, 家庭", "Comma-separated, e.g. Trip, Family", "Pisahkan dengan koma, cth. Percutian, Keluarga"), text: $tagsText)
-                Text(tr("标签可汇总同一次旅行或活动。", "Group expenses for a trip or event using tags.", "Kumpulkan belanja perjalanan atau acara dengan tag."))
-                    .font(.footnote).foregroundStyle(.secondary)
-            } label: {
-                LabeledContent(tr("标签", "Tags", "Tag"), value: tagsText.isEmpty ? tr("选填", "Optional", "Pilihan") : tagsText)
-            }
-        }
-    }
-}
 struct ExpenseBookkeepingDetails: View {
     @Environment(\.locale) private var uiLocale
-    @EnvironmentObject var model: LedgerModel
     let entry: Expense
     var body: some View {
         let _ = uiLocale.identifier
-        Section(tr("分类与标签", "Categories and tags", "Kategori dan tag")) {
+        Section(tr("分类", "Categories", "Kategori")) {
             LabeledContent(tr("分类", "Category", "Kategori"), value: entry.categorySummary)
-            ForEach(entry.tags ?? [], id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
         }
     }
 }
@@ -3348,7 +3356,7 @@ struct ExpenseTagsView: View {
     var body: some View {
         let _ = uiLocale.identifier
         List {
-            Text(tr("在新增或编辑账目里填写标签，可跨餐饮、交通等分类汇总同一个项目。", "Add tags when creating or editing entries to group a project across categories such as food and transport.", "Tambah tag ketika mencipta atau mengedit rekod untuk mengumpulkan projek merentas kategori seperti makanan dan pengangkutan.")).font(.caption)
+            Text(tr("此处保留已有标签的消费汇总。账目表单不再填写标签。", "Spending reports for previously saved tags remain available here. Transaction forms no longer include tags.", "Laporan belanja untuk tag yang disimpan sebelum ini masih tersedia di sini. Borang transaksi tidak lagi menyertakan tag.")).font(.caption)
             ForEach(tags, id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
             if tags.isEmpty { Text(tr("还没有标签。", "No tags yet.", "Belum ada tag.")) }
         }.navigationTitle(tr("标签与项目", "Tags and projects", "Tag dan projek"))

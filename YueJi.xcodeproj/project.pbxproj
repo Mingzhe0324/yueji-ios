@@ -157,6 +157,7 @@
 			"children" = (
 				"A172CEDCAE47474B615C54D5",
 				"1EF00B791BBDE7E67F408150",
+				"CE9300000000000000000003",
 			);
 			"name" = "Products";
 			"sourceTree" = "<group>";
@@ -166,6 +167,7 @@
 			"children" = (
 				"E17E80AD8E2103CF3FC3FD96",
 				"781CAA6738A604344AE86EE3",
+				"CE9300000000000000000004",
 				"0A3E27B8CA818264D75C8D81",
 			);
 			"sourceTree" = "<group>";
@@ -411,12 +413,32 @@
 				"8CE3E71EF8635D2BF27913BB",
 			);
 		};
+		"CE9300000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "TransactionFormTests.swift"; "sourceTree" = "<group>"; };
+		"CE9300000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CE9300000000000000000001"; };
+		"CE9300000000000000000003" = { "isa" = "PBXFileReference"; "explicitFileType" = "wrapper.cfbundle"; "includeInIndex" = 0; "path" = "YueJiUITests.xctest"; "sourceTree" = "BUILT_PRODUCTS_DIR"; };
+		"CE9300000000000000000004" = { "isa" = "PBXGroup"; "children" = ("CE9300000000000000000001",); "path" = "YueJiUITests"; "sourceTree" = "<group>"; };
+		"CE9300000000000000000005" = { "isa" = "PBXSourcesBuildPhase"; "buildActionMask" = 2147483647; "files" = ("CE9300000000000000000002",); "runOnlyForDeploymentPostprocessing" = 0; };
+		"CE9300000000000000000006" = { "isa" = "PBXFrameworksBuildPhase"; "buildActionMask" = 2147483647; "files" = (); "runOnlyForDeploymentPostprocessing" = 0; };
+		"CE9300000000000000000007" = { "isa" = "PBXResourcesBuildPhase"; "buildActionMask" = 2147483647; "files" = (); "runOnlyForDeploymentPostprocessing" = 0; };
+		"CE9300000000000000000008" = {
+			"isa" = "XCBuildConfiguration"; "name" = "Debug";
+			"buildSettings" = { "PRODUCT_NAME" = "$(TARGET_NAME)"; "PRODUCT_BUNDLE_IDENTIFIER" = "com.yueji.personal.ledger.uitests"; "GENERATE_INFOPLIST_FILE" = "YES"; "TARGETED_DEVICE_FAMILY" = "1"; "TEST_TARGET_NAME" = "YueJi"; "CODE_SIGN_STYLE" = "Automatic"; "LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks",); };
+		};
+		"CE9300000000000000000009" = {
+			"isa" = "XCBuildConfiguration"; "name" = "Release";
+			"buildSettings" = { "PRODUCT_NAME" = "$(TARGET_NAME)"; "PRODUCT_BUNDLE_IDENTIFIER" = "com.yueji.personal.ledger.uitests"; "GENERATE_INFOPLIST_FILE" = "YES"; "TARGETED_DEVICE_FAMILY" = "1"; "TEST_TARGET_NAME" = "YueJi"; "CODE_SIGN_STYLE" = "Automatic"; "LD_RUNPATH_SEARCH_PATHS" = ("$(inherited)", "@executable_path/Frameworks", "@loader_path/Frameworks",); };
+		};
+		"CE930000000000000000000A" = { "isa" = "XCConfigurationList"; "buildConfigurations" = ("CE9300000000000000000008", "CE9300000000000000000009",); "defaultConfigurationIsVisible" = 0; "defaultConfigurationName" = "Release"; };
+		"CE930000000000000000000B" = {
+			"isa" = "PBXNativeTarget"; "name" = "YueJiUITests"; "productName" = "YueJiUITests"; "productType" = "com.apple.product-type.bundle.ui-testing"; "productReference" = "CE9300000000000000000003"; "buildConfigurationList" = "CE930000000000000000000A"; "buildPhases" = ("CE9300000000000000000005", "CE9300000000000000000006", "CE9300000000000000000007",); "buildRules" = (); "dependencies" = ("8CE3E71EF8635D2BF27913BB",);
+		};
 		"244210E48437B6556980A702" = {
 			"isa" = "PBXProject";
 			"attributes" = {
 				"LastUpgradeCheck" = "2600";
 				"BuildIndependentTargetsInParallel" = "YES";
 				"TargetAttributes" = {
+					"CE930000000000000000000B" = { "CreatedOnToolsVersion" = "26.0"; "TestTargetID" = "E7A3CDEFEB9193C848ACCD43"; };
 					"E7A3CDEFEB9193C848ACCD43" = {
 						"CreatedOnToolsVersion" = "26.0";
 					};
@@ -443,6 +465,7 @@
 			"targets" = (
 				"E7A3CDEFEB9193C848ACCD43",
 				"E5B4A42C1A9B11F842B19C64",
+				"CE930000000000000000000B",
 			);
 		};
 	};

@@ -44,7 +44,14 @@ resource_phase = next(o for o in phases if o['isa'] == 'PBXResourcesBuildPhase')
 resources = {objects[objects[i]['fileRef']]['path'] for i in resource_phase['files']}
 assert {'Assets.xcassets', 'Localizable.xcstrings'} <= resources
 info = plistlib.loads((root / 'YueJi/Info.plist').read_bytes())
-ET.parse(root / 'YueJi.xcodeproj/xcshareddata/xcschemes/YueJi.xcscheme')
+scheme = ET.parse(root / 'YueJi.xcodeproj/xcshareddata/xcschemes/YueJi.xcscheme')
+testables = {ref.attrib['BlueprintName'] for ref in scheme.findall('.//TestableReference/BuildableReference')}
+for name in ('YueJiTests', 'YueJiUITests'):
+    assert name in testables, f'Missing test target in shared scheme: {name}'
+    target = next(o for o in objects.values() if o['isa'] == 'PBXNativeTarget' and o['name'] == name)
+    sources = next(objects[i] for i in target['buildPhases'] if objects[i]['isa'] == 'PBXSourcesBuildPhase')
+    compiled_tests = {objects[objects[i]['fileRef']]['path'] for i in sources['files']}
+    assert compiled_tests == {p.name for p in (root / name).glob('*.swift')}, f'Missing compiled test file: {name}'
 catalog = json.loads((root / 'YueJi/Localizable.xcstrings').read_text())
 assert all({'en', 'ms'} <= set(v['localizations']) for v in catalog['strings'].values())
 print(f'PASS: {len(compiled)} app Swift files in build, localized resources, references, Info.plist and shared scheme.')

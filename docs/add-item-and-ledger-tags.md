@@ -1,0 +1,22 @@
+# Add Item and ledger Tags fixes
+
+Source investigation found no save, dismiss, disk IO or asynchronous task in Add Item: it only appended an in-memory draft and played selection feedback. The first append did, however, animate the whole Form transaction while also removing the parent navigation-style category picker and merchant-category toggle. Later appends did not remove those controls. This is a plausible native Form/navigation invalidation behind the first-tap report. No device crash log or iOS reproduction was available on this Windows workstation, so a process crash versus an unintended sheet dismissal is not established.
+
+The parent category picker and merchant-category toggle now remain mounted, disabled while Items supply the spending categories. Their selections are retained and become editable again after the last item is removed. Item insertion/removal uses an unanimated structural transaction; disclosure expansion still respects Reduce Motion. Each item has an immutable ID, and its fields resolve their binding by that ID on every read/write. Late text or category callbacks for a deleted row cannot access a stale array index, change another item or recreate a deleted item. Add Item stays in the existing form and never resets the merchant, payment, date, currency, payer or split drafts.
+
+Tags fields, controls, detail links and tag-related transaction help text are removed. The general editor still copies the original Expense, preserving its legacy tags without normalizing or overwriting them. Items and category reporting are unchanged. Stored tags, legacy search, CSV/JSON exports, settlement snapshots and historical tag reports remain compatible. Historical reports in Settings no longer direct users to an absent Tags field. There is no schema change, migration or ledger rewrite.
+
+## Verification
+
+The shared YueJi test scheme now includes a YueJiUITests target. Two UI tests launch the actual app with the opening enabled/disabled, open New entry immediately when Overview is available, and exercise the first Add Item tap, category navigation, repeated additions and deletion while checking unsaved merchant/amount values. They separately assert that the app remains running and that the editor remains presented. Standard launch defaults suppress onboarding and the notification permission dialog; normal ledger refresh and rate tasks still run. These tests cancel the form and do not create saved transactions.
+
+Two additional unit regressions cover retained item bindings after deleting/replacing rows and editing a transaction with legacy tags through the storage worker, backup round-trips and unchanged per-category spending. Existing item regressions cover add/edit/remove, friend shares, repayments, refunds, automatic entries, invalid edits and active settlements.
+
+Windows project/resource, test registration, syntax and workflow checks do not execute SwiftUI or XCTest. Run the shared scheme on macOS CI and verify on an iPhone before treating the runtime issue as confirmed fixed:
+
+1. Cold launch with the opening enabled and disabled. Immediately open New entry, enter merchant, amount, date, foreign currency/rate and payer/split details, then tap Add Item once. The app and form must stay open; all transaction fields must retain their values.
+2. Add, edit and remove items repeatedly, including the last item and a focused item. Open each category picker and return. Collapse/expand Items. Verify values, selections and totals remain intact.
+3. Repeat from Overview, Ledger and Friends, plus a saved bank/TNG purchase's focused item editor and both notification-confirmation forms. Test light/dark appearance, larger text, all three languages and Reduce Motion.
+4. Open an existing tagged transaction, edit its merchant and save; also add/change/remove its items. Creation, editing, detail and automatic-expense detail pages must expose Items/Categories without tag fields or labels. Export and restore JSON; original tags, notes, shares, repayments, refunds and settlement history must survive.
+5. Compare personal/category spending and paid amounts before/after a merchant-only edit. A RM35 itemized expense with RM15 Food and RM20 Shopping must still count once. Confirm invalid item totals retain the draft and saved original.
+6. If the app exits, collect the device crash report/console and UI-test result bundle. A terminated process indicates a crash; a live process showing the parent page indicates presentation/navigation loss. Keep this distinction in the follow-up diagnosis.
