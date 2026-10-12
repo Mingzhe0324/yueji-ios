@@ -380,10 +380,15 @@ struct DashboardView: View {
                     }
                     .yuejiPrimaryButton().buttonBorderShape(.capsule)
                     .guideTarget("dashboard.add")
-                    .accessibilityIdentifier("overview.manualEntry")
                     .padding(.horizontal, 20).padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
                     .background(Color(uiColor: .systemGroupedBackground))
+                    // Expose the decorated safe-area control as one actionable
+                    // element, including when the system uses a glass button style.
+                    .accessibilityElement(children: .combine)
+                    .accessibilityLabel(tr("记一笔", "Add entry", "Tambah rekod"))
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityIdentifier("overview.manualEntry")
             }
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))

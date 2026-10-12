@@ -98,6 +98,11 @@ jobs:
         displayName: Verify and package IPA for personal signing
         env:
           IPA_LABEL: $(IPA_LABEL)
+      - bash: |
+          python3 scripts/report_test_failures.py "$BUILD_ARTIFACTSTAGINGDIRECTORY/build-test.log" \
+            --output "$BUILD_ARTIFACTSTAGINGDIRECTORY/test-failures.txt"
+        displayName: Show native test assertion failures
+        condition: always()
       - task: PublishPipelineArtifact@1
         displayName: Publish IPA and build diagnostics
         condition: always()

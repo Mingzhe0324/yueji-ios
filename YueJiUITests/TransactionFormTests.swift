@@ -1,7 +1,31 @@
 import XCTest
 
 final class TransactionFormTests: XCTestCase {
+    private var runningApp: XCUIApplication?
     override func setUpWithError() throws { continueAfterFailure = false }
+
+    override func tearDownWithError() throws {
+        if let app = runningApp {
+            if (testRun?.failureCount ?? 0) > 0 {
+                let state = app.state
+                let hierarchy = "UI failure: app state = \(state)\n" + (state == .runningForeground ? app.debugDescription : "App is not in the foreground; no accessibility snapshot is available.")
+                print(hierarchy)
+                let attachment = XCTAttachment(string: hierarchy)
+                attachment.name = "App accessibility hierarchy at failure"
+                attachment.lifetime = .keepAlways
+                add(attachment)
+                if state == .runningForeground {
+                    let screenshot = XCTAttachment(screenshot: app.screenshot())
+                    screenshot.name = "App screen at failure"
+                    screenshot.lifetime = .keepAlways
+                    add(screenshot)
+                }
+            }
+            app.terminate()
+        }
+        runningApp = nil
+        try super.tearDownWithError()
+    }
 
     func testFirstAddItemImmediatelyAfterLaunchWithOpening() {
         verifyFirstAddItem(opening: true)
@@ -13,15 +37,18 @@ final class TransactionFormTests: XCTestCase {
 
     private func verifyFirstAddItem(opening: Bool) {
         let app = XCUIApplication()
+        runningApp = app
         // Standard UserDefaults launch overrides, no app-only test code or saved
         // ledger fixtures. Leave the normal startup refresh/rate tasks enabled.
         app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
-        defer { app.terminate() }
-        let newEntry = app.buttons["overview.manualEntry"]
-        XCTAssertTrue(newEntry.waitForExistence(timeout: 20))
+        // Identify the actual control independently of the accessibility role
+        // chosen by the system's SwiftUI button style/container.
+        let newEntry = app.descendants(matching: .any).matching(identifier: "overview.manualEntry").firstMatch
+        XCTAssertTrue(newEntry.waitForExistence(timeout: 20), "Overview Add Entry is absent after launch; app state = \(app.state)")
+        XCTAssertTrue(newEntry.isHittable, "Overview Add Entry exists but cannot be tapped after launch")
         // No warm-up tap or delay after the launch screen becomes interactive.
         newEntry.tap()
         let amount = app.textFields["transaction.amount"]
