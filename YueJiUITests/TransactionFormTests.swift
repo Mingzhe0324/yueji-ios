@@ -76,6 +76,13 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertEqual(names.count, 1)
         names.firstMatch.tap(); names.firstMatch.typeText("Lunch")
         finishKeyboard(in: app)
+        XCTAssertEqual(names.firstMatch.value as? String, "Lunch", "Keyboard Done must retain the item draft")
+
+        // Exercise the item's decimal keyboard as well as its name keyboard.
+        let itemAmount = app.textFields["transaction.item.amount"].firstMatch
+        reveal(itemAmount, in: app); itemAmount.tap(); itemAmount.typeText("35.00")
+        finishKeyboard(in: app)
+        XCTAssertEqual(itemAmount.value as? String, "35.00", "Keyboard Done must retain the item amount")
 
         // Item category navigation must return to the same unsaved form.
         let itemCategory = app.descendants(matching: .any)["transaction.item.category"].firstMatch
@@ -114,6 +121,11 @@ final class TransactionFormTests: XCTestCase {
 
     private func finishKeyboard(in app: XCUIApplication) {
         let done = app.toolbars.buttons["Done"].firstMatch
-        if done.exists { done.tap() }
+        if done.exists {
+            done.tap()
+            let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == false"), object: done)
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed,
+                           "Keyboard Done remained interactive after dismissal")
+        }
     }
 }

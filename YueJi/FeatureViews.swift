@@ -3191,15 +3191,21 @@ struct ExpenseItemDraft: Identifiable {
         })
     }
 }
+enum ExpenseInputField: Hashable {
+    case amount, merchant, rate
+    case itemName(String), itemAmount(String)
+}
+
 struct ExpenseItemsFields: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
-    private enum ItemField: Hashable { case name(String), amount(String) }
-    @FocusState private var focusedItem: ItemField?
+    @FocusState private var localFocus: ExpenseInputField?
     @Binding var items: [ExpenseItemDraft]
     let totalCents: Int
     let defaultCategory: String
     let savedTransaction: Bool
+    var sharedFocus: FocusState<ExpenseInputField?>.Binding? = nil
+    private var focus: FocusState<ExpenseInputField?>.Binding { sharedFocus ?? $localFocus }
     private var itemTotal: Int { items.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
     var body: some View {
         let _ = uiLocale.identifier
@@ -3209,12 +3215,12 @@ struct ExpenseItemsFields: View {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
                         .accessibilityIdentifier("transaction.item.name")
-                        .focused($focusedItem, equals: .name(draft.id)).submitLabel(.next)
-                        .onSubmit { focusedItem = .amount(draft.id) }
+                        .focused(focus, equals: .itemName(draft.id)).submitLabel(.next)
+                        .onSubmit { focus.wrappedValue = .itemAmount(draft.id) }
                     LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
                         TextField("0.00", text: item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                             .accessibilityIdentifier("transaction.item.amount")
-                            .focused($focusedItem, equals: .amount(draft.id))
+                            .focused(focus, equals: .itemAmount(draft.id))
                     }
                     Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
                         ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
@@ -3222,7 +3228,7 @@ struct ExpenseItemsFields: View {
                         .accessibilityIdentifier("transaction.item.category")
                     Button(role: .destructive) {
                         let id = draft.id
-                        if focusedItem == .name(id) || focusedItem == .amount(id) { focusedItem = nil }
+                        if focus.wrappedValue == .itemName(id) || focus.wrappedValue == .itemAmount(id) { focus.wrappedValue = nil }
                         updateRows { items.removeAll { $0.id == id } }
                         FeedbackHaptics.selection()
                     } label: {

@@ -1,0 +1,9 @@
+# Item keyboard CI failure
+
+The supplied build-test.log for 8aa0219 passes all 235 unit tests and the complete cold-launch transaction UI test with the opening disabled. With the opening enabled, the first Add Item tap succeeds, the editor remains open, and the test types Lunch. After keyboard Done, XCTest cannot obtain a main-run-loop snapshot for 30 seconds. The eventual hierarchy still contains New entry, Lunch, Food and keyboard/accessory windows. This is an unresponsive-main-thread failure, not evidence of process termination or unintended transaction dismissal. The log contains no main-thread stack sample, so it cannot establish the cause of the stall or prove the opening animation caused it.
+
+The source has separate parent and child FocusState values. Done clears only the parent's value and unconditionally sends a global resignFirstResponder action; item focus is owned by the child. The correction gives transaction and item inputs a shared focus binding and clears that binding through SwiftUI. UIKit resignation remains only for unrelated friend/payer fields outside that focus chain. Standalone item forms retain their local focus fallback. Draft values, stable item IDs, validation and persistence are unchanged.
+
+Both cold-launch UI tests retain their original startup coverage and assertions. They now check item text after Done and exercise the decimal item keyboard as well. The keyboard helper verifies Done is no longer hittable before proceeding to category navigation. No startup delay, timeout increase, retry or skipped test was added.
+
+Local validation: project/resource checks, Swift syntax parsing and diff checks. Native Xcode compilation and execution remain pending. Re-run Azure from the new commit; a repeated main-thread stall requires the xcresult diagnostics/main-thread sample to distinguish app work from simulator or keyboard framework contention.

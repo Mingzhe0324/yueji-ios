@@ -1162,8 +1162,7 @@ struct ExpenseEditor: View {
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var foreignExpanded = false
-    private enum Field: Hashable { case amount, merchant, rate }
-    @FocusState private var focusedField: Field?
+    @FocusState private var focusedField: ExpenseInputField?
     @State private var deleting: Expense?
     @State private var name = ""
     @State private var amount = ""
@@ -1208,7 +1207,7 @@ struct ExpenseEditor: View {
                 payerSection
                 paymentSection
                 merchantSection
-                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil)
+                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField)
                 currencySection
                 friendSplitSection
                 if let original {
@@ -1422,9 +1421,14 @@ struct ExpenseEditor: View {
         }
     }
     private func finishKeyboard() {
-        focusedField = nil
-        // Includes fields in the reusable item and friend rows.
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        if focusedField != nil {
+            // The item fields and transaction fields have one SwiftUI focus owner.
+            // Do not also force UIKit resignation while SwiftUI reconciles its focus.
+            focusedField = nil
+        } else {
+            // Friend/payer fields do not participate in the explicit focus chain.
+            UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        }
     }
     private func beginSave() {
         guard !saving else { return }
