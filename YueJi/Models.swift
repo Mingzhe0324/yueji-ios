@@ -528,9 +528,7 @@ extension Ledger {
         var expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference)
         expense.timeSource = date == tngNotices[i].date ? (tngNotices[i].usesReceivedDate ? (tngNotices[i].provider == "Apple Pay" ? "received" : "notification") : "supplied") : "edited"
         expense.note = tngNotices[i].note
-        expense.items = items.isEmpty ? nil : items
-        try expense.validateItems(allowedCategories: categoryNames)
-        if let first = items.first { expense.category = first.category }
+        expense = try expense.replacingItems(items, allowedCategories: categoryNames)
         expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
         if remember && items.isEmpty { merchantCategories[friendKey(expense.merchant)] = category }
     }
@@ -949,6 +947,31 @@ struct ExpenseItem: Codable, Identifiable, Equatable {
     var name: String
     var cents: Int
     var category: String
+    var quantity: Int? = nil // Missing in old records means one, without rewriting their amounts.
+    var ownership: ItemOwnership? = nil // Missing preserves the original whole-transaction split.
+    var count: Int { quantity ?? 1 }
+    var unitCents: Int { cents / max(1, count) }
+    var personalGross: Int { ownership.map { cents - $0.friendAmounts(cents: cents).reduce(0, +) } ?? cents }
+    func friendGross(_ name: String) -> Int {
+        guard let ownership, let index = ownership.friends.firstIndex(where: { friendKey($0) == friendKey(name) }) else { return 0 }
+        return ownership.friendAmounts(cents: cents)[index]
+    }
+}
+struct ItemOwnership: Codable, Equatable {
+    var includesMe: Bool
+    var friends: [String]
+    var label: String {
+        let names = (includesMe ? [tr("我", "Me", "Saya")] : []) + friends
+        return names.isEmpty ? tr("未选择", "Not selected", "Belum dipilih") : names.joined(separator: tr("、", ", ", ", "))
+    }
+    func friendAmounts(cents: Int) -> [Int] { equalShares(total: cents, count: friends.count, includeMe: includesMe) }
+    func validate() throws {
+        guard includesMe || !friends.isEmpty, friends.count <= 100,
+              friends.allSatisfy({ !friendKey($0).isEmpty && $0.count <= 200 }),
+              Set(friends.map(friendKey)).count == friends.count else {
+            throw reviewError("请选择物品归属，朋友姓名不能重复。", "Choose who the item belongs to, with distinct friend names.", "Pilih pemilik item dengan nama rakan yang berbeza.")
+        }
+    }
 }
 struct ExpenseItemPreview: Equatable {
     let names: String
@@ -1017,7 +1040,7 @@ extension Expense {
     }
     var personalItemAmounts: [String: Int] {
         guard let items, !items.isEmpty else { return [:] }
-        let amounts = (try? allocateRefund(personal, capacities: items.map(\.cents))) ?? Array(repeating: 0, count: items.count)
+        let amounts = (try? allocateRefund(personal, capacities: items.map { usesItemOwnership ? $0.personalGross : $0.cents })) ?? Array(repeating: 0, count: items.count)
         return Dictionary(uniqueKeysWithValues: zip(items, amounts).map { ($0.0.id, $0.1) })
     }
     func validateItems(allowedCategories: [String]? = nil) throws {
@@ -1026,16 +1049,29 @@ extension Expense {
               (categoryAllocations ?? []).isEmpty,
               items.allSatisfy({ !$0.id.isEmpty && $0.id.count <= 200 && !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && $0.name.count <= 200
                   && !$0.category.isEmpty && $0.category.count <= 200 && (allowedCategories?.contains($0.category) ?? true)
+                  && (1...999).contains($0.count) && $0.cents % $0.count == 0
                   && $0.cents > 0 && $0.cents <= 10_000_000_000 }),
               items.reduce(0, { $0 + $1.cents }) == cents else {
             throw reviewError("请填写每件物品的名称、正数金额和分类；物品合计必须等于交易总额。", "Enter a name, positive amount and category for each item. Item amounts must equal the transaction total.", "Isi nama, amaun positif dan kategori setiap item. Jumlah item mesti sama dengan jumlah transaksi.")
         }
+        if usesItemOwnership {
+            guard items.allSatisfy({ $0.ownership != nil }) else {
+                throw reviewError("请为每件物品选择归属，或全部沿用整笔分账。", "Assign every item, or keep the whole-transaction split for all items.", "Tetapkan pemilik setiap item atau gunakan pembahagian transaksi untuk semua item.")
+            }
+            for item in items { try item.ownership?.validate() }
+            let expected = itemFriendTotals
+            guard shares.allSatisfy({ $0.cents == expected[friendKey($0.name), default: 0] }),
+                  expected.allSatisfy({ key, amount in shares.contains { friendKey($0.name) == key && $0.cents == amount } }) else {
+                throw reviewError("物品归属与分账金额不一致，请重新编辑物品。", "Item ownership and shares do not match. Edit the items again.", "Pemilikan item dan bahagian tidak sepadan. Edit item semula.")
+            }
+        }
     }
-    /// Personal spending and refunds are distributed proportionally, with exact integer totals.
-    func categoryDistribution(total: Int) -> [String: Int] {
+    /// Allocate net spending within the selected person's item capacities; legacy entries retain proportional splits.
+    func categoryDistribution(total: Int, friend: String? = nil) -> [String: Int] {
         let parts = allocatedCategories
         guard total >= 0, total <= cents, !parts.isEmpty else { return [:] }
-        let amounts = (try? allocateRefund(total, capacities: parts.map(\.cents))) ?? Array(repeating: 0, count: parts.count)
+        let capacities = usesItemOwnership ? (items ?? []).map { item in friend.map { item.friendGross($0) } ?? item.personalGross } : parts.map(\.cents)
+        let amounts = (try? allocateRefund(total, capacities: capacities)) ?? Array(repeating: 0, count: parts.count)
         var result: [String: Int] = [:]
         for (part, amount) in zip(parts, amounts) { result[part.category, default: 0] += amount }
         return result
@@ -1056,12 +1092,62 @@ extension Ledger {
 }
 
 extension Expense {
+    var usesItemOwnership: Bool { (items ?? []).contains { $0.ownership != nil } }
+    var itemFriendTotals: [String: Int] {
+        var result: [String: Int] = [:]
+        for item in items ?? [] {
+            guard let owner = item.ownership else { continue }
+            for (name, amount) in zip(owner.friends, owner.friendAmounts(cents: item.cents)) {
+                result[friendKey(name), default: 0] += amount
+            }
+        }
+        return result
+    }
+    func applyingItemOwnership() throws -> Expense {
+        guard usesItemOwnership else { return self }
+        guard let items, items.count <= 100, items.allSatisfy({ $0.cents > 0 && $0.cents <= 10_000_000_000 }) else {
+            throw reviewError("请检查物品数量和金额。", "Check item count and amounts.", "Semak bilangan dan amaun item.")
+        }
+        var copy = self
+        var names: [String] = []
+        for item in items {
+            guard let owner = item.ownership else {
+                throw reviewError("请为每件物品选择归属。", "Choose ownership for every item.", "Pilih pemilik bagi setiap item.")
+            }
+            try owner.validate()
+            for name in owner.friends where !names.contains(where: { friendKey($0) == friendKey(name) }) { names.append(name) }
+        }
+        if let payer = paidByFriend {
+            guard names.allSatisfy({ friendKey($0) == friendKey(payer) }) else {
+                throw reviewError("朋友付款的账目只能分给自己和付款人。", "Friend-paid purchases can only be split between you and the payer.", "Belanja dibayar rakan hanya boleh dibahagi antara anda dan pembayar.")
+            }
+            names = [payer]
+        }
+        let totals = itemFriendTotals
+        // Keep IDs and repayment/refund history, including zero-value old shares.
+        copy.shares = shares.map { share in var next = share; next.cents = totals[friendKey(share.name), default: 0]; return next }
+        for name in names where !copy.shares.contains(where: { friendKey($0.name) == friendKey(name) }) {
+            copy.shares.append(Share(name: name, cents: totals[friendKey(name), default: 0]))
+        }
+        if let payer = paidByFriend { copy.shares = copy.shares.filter { friendKey($0.name) == friendKey(payer) } }
+        return copy
+    }
     /// Item edits retain the purchase identity, source metadata, legacy notes and debt history.
     func replacingItems(_ newItems: [ExpenseItem], allowedCategories: [String]) throws -> Expense {
         var copy = self
         copy.items = newItems.isEmpty ? nil : newItems
         copy.categoryAllocations = nil
         if copy.items != items, let first = newItems.first { copy.category = first.category }
+        if usesItemOwnership || copy.usesItemOwnership {
+            let previous = items ?? []
+            let allocationChanged = previous.count != newItems.count || zip(previous, newItems).contains { old, new in
+                old.id != new.id || old.cents != new.cents || old.ownership != new.ownership
+            }
+            if allocationChanged && (refunded > 0 || shares.contains { !$0.repayments.isEmpty || !($0.returns ?? []).isEmpty }) {
+                throw reviewError("请先撤销已有退款或还款，再修改物品分账。", "Undo refunds or repayments before changing item splits.", "Batalkan pulangan atau bayaran balik sebelum menukar pembahagian item.")
+            }
+        }
+        copy = try copy.applyingItemOwnership()
         try copy.validateItems(allowedCategories: allowedCategories)
         return copy
     }

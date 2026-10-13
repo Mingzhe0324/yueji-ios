@@ -343,7 +343,7 @@ extension Ledger {
                     let balance = outstanding(expense: e, share: s)
                     result.owed += max(0, balance); result.payable += max(0, -balance)
                 }
-                for (category, amount) in e.categoryDistribution(total: net) { result.categories[category, default: 0] += amount }
+                for (category, amount) in e.categoryDistribution(total: net, friend: s.name) { result.categories[category, default: 0] += amount }
             }
         }
         for item in friendDebtItems where item.shareID == nil && friendKey(item.friend) == key && (month == nil || monthKey(item.expense.date) == monthKey(month!)) {
@@ -661,7 +661,12 @@ extension Ledger {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
                 let allocationText = e.allocatedCategories.map { $0.category + ":" + Currency.input($0.cents, "MYR") }.joined(separator: "; ")
-                let itemText = (e.items ?? []).map { $0.name + ":" + Currency.input($0.cents, "MYR") + ":" + $0.category }.joined(separator: "; ")
+                let itemText = (e.items ?? []).map { item in
+                    var text = item.name + ":" + Currency.input(item.cents, "MYR") + ":" + item.category
+                    if item.quantity != nil { text += ":\(item.count)x" + Currency.input(item.unitCents, "MYR") }
+                    if let owner = item.ownership { text += ":" + owner.label }
+                    return text
+                }.joined(separator: "; ")
                 rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR"), itemText])
             }
         }

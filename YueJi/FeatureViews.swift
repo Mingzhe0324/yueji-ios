@@ -1371,7 +1371,7 @@ struct SavedTransactionItemsSection: View {
     }
 }
 
-/// A focused editor changes only itemization; payment and settlement history stay intact.
+/// A focused editor updates itemization and explicit ownership without discarding history.
 struct ExpenseItemsEditor: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
@@ -1394,7 +1394,7 @@ struct ExpenseItemsEditor: View {
                         TransactionAmount(cents: original.cents, direction: .outgoing)
                     }
                 }
-                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField)
+                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField, friendNames: original.shares.map(\.name), payer: original.paidByFriend)
                 if model.ledger.hasActiveSettlement(expenseID: original.id) {
                     Section {
                         Text(tr("修改物品前，请先撤销关联结算。原消费和历史记录会保留。", "Undo linked settlements before changing items. The original expense and history are preserved.", "Batalkan penyelesaian dipautkan sebelum mengubah item. Belanja asal dan sejarah dikekalkan."))
@@ -1417,7 +1417,7 @@ struct ExpenseItemsEditor: View {
                 .interactiveDismissDisabled()
                 .onAppear {
                     guard !initialized else { return }
-                    items = (original.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
+                    items = (original.items ?? []).map(ExpenseItemDraft.init)
                     initialized = true
                 }
                 .onChange(of: initialized) { _, ready in
@@ -3208,11 +3208,21 @@ struct ExpenseItemDraft: Identifiable {
     var name = ""
     var amount = ""
     var category: String
-    init(id: String = UUID().uuidString, name: String = "", amount: String = "", category: String) {
+    var quantity = 1
+    var ownership: ItemOwnership? = nil
+    init(id: String = UUID().uuidString, name: String = "", amount: String = "", category: String, quantity: Int = 1, ownership: ItemOwnership? = nil) {
         self.id = id; self.name = name; self.amount = amount; self.category = category
+        self.quantity = quantity; self.ownership = ownership
+    }
+    init(_ item: ExpenseItem) {
+        self.init(id: item.id, name: item.name, amount: Currency.input(item.unitCents, "MYR"), category: item.category, quantity: item.count, ownership: item.ownership)
     }
     func savedItem() throws -> ExpenseItem {
-        ExpenseItem(id: id, name: name.trimmingCharacters(in: .whitespacesAndNewlines), cents: try toCents(amount), category: category)
+        let unit = try toCents(amount)
+        guard (1...999).contains(quantity), unit <= 10_000_000_000 / quantity else {
+            throw reviewError("数量须为 1–999，物品小计不能超过金额上限。", "Quantity must be 1–999 and the line total must stay within the amount limit.", "Kuantiti mesti 1–999 dan jumlah baris tidak boleh melebihi had amaun.")
+        }
+        return ExpenseItem(id: id, name: name.trimmingCharacters(in: .whitespacesAndNewlines), cents: unit * quantity, category: category, quantity: quantity == 1 ? nil : quantity, ownership: ownership)
     }
     // Navigation destinations and text fields can retain a binding after a row
     // disappears. Resolve its ID on every access instead of retaining an index.
@@ -3241,8 +3251,10 @@ struct ExpenseItemsFields: View {
     let defaultCategory: String
     let savedTransaction: Bool
     var sharedFocus: FocusState<ExpenseInputField?>.Binding? = nil
+    var friendNames: [String] = []
+    var payer: String? = nil
     private var focus: FocusState<ExpenseInputField?>.Binding { sharedFocus ?? $localFocus }
-    private var itemTotal: Int { items.reduce(0) { $0 + ((try? toCents($1.amount)) ?? 0) } }
+    private var itemTotal: Int { items.reduce(0) { $0 + ((try? $1.savedItem().cents) ?? 0) } }
     var body: some View {
         let _ = uiLocale.identifier
         Section(tr("物品", "Items", "Item")) {
@@ -3250,18 +3262,29 @@ struct ExpenseItemsFields: View {
                 let item = draft.binding(in: $items)
                 VStack(alignment: .leading, spacing: 10) {
                     TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
+                        .font(.headline)
                         .accessibilityIdentifier("transaction.item.name")
                         .focused(focus, equals: .itemName(draft.id)).submitLabel(.next)
                         .onSubmit { focus.wrappedValue = .itemAmount(draft.id) }
-                    LabeledContent(tr("金额（MYR）", "Amount (MYR)", "Amaun (MYR)")) {
+                    LabeledContent(tr("单价（MYR）", "Unit price (MYR)", "Harga seunit (MYR)")) {
                         TextField("0.00", text: item.amount).keyboardType(.decimalPad).multilineTextAlignment(.trailing)
                             .accessibilityIdentifier("transaction.item.amount")
                             .focused(focus, equals: .itemAmount(draft.id))
                     }
+                    Stepper(value: item.quantity, in: 1...999) {
+                        LabeledContent(tr("数量", "Quantity", "Kuantiti"), value: "\(draft.quantity)")
+                    }.accessibilityIdentifier("transaction.item.quantity")
+                    LabeledContent(tr("小计", "Line total", "Jumlah baris"), value: money((try? draft.savedItem().cents) ?? 0))
+                        .font(.subheadline.weight(.semibold)).monospacedDigit()
                     Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
                         ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
                     }.pickerStyle(.navigationLink)
                         .accessibilityIdentifier("transaction.item.category")
+                    NavigationLink {
+                        ItemOwnershipPicker(ownership: item.ownership, friendNames: friendNames + items.flatMap { $0.ownership?.friends ?? [] }, payer: payer)
+                    } label: {
+                        LabeledContent(tr("属于谁", "Belongs to", "Milik siapa"), value: draft.ownership?.label ?? tr("沿用整笔分账", "Use transaction split", "Ikut pembahagian transaksi"))
+                    }.accessibilityIdentifier("transaction.item.ownership")
                     Button(role: .destructive) {
                         let id = draft.id
                         if focus.wrappedValue == .itemName(id) || focus.wrappedValue == .itemAmount(id) { focus.wrappedValue = nil }
@@ -3294,6 +3317,14 @@ struct ExpenseItemsFields: View {
                     Text(tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan."))
                         .font(.footnote).foregroundStyle(.orange)
                 }
+                if items.contains(where: { $0.ownership != nil }) {
+                    if items.contains(where: { $0.ownership == nil }) {
+                        Text(tr("请为每件物品选择归属，才可按物品分账。", "Choose ownership for every item to split by item.", "Pilih pemilik setiap item untuk membahagi mengikut item."))
+                            .font(.footnote).foregroundStyle(.orange)
+                    } else {
+                        ItemSplitSummary(items: items)
+                    }
+                }
             } else if savedTransaction {
                 Text(tr("交易已保存，可稍后补充物品。取消编辑不会删除交易。", "This transaction is saved. Add items later; cancelling edits keeps the transaction.", "Transaksi ini telah disimpan. Tambah item kemudian; membatalkan edit mengekalkan transaksi."))
                     .font(.footnote).foregroundStyle(.secondary)
@@ -3306,6 +3337,102 @@ struct ExpenseItemsFields: View {
         var transaction = Transaction(animation: nil)
         transaction.disablesAnimations = true
         withTransaction(transaction, update)
+    }
+}
+struct ItemOwnershipPicker: View {
+    @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @Binding var ownership: ItemOwnership?
+    var friendNames: [String]
+    var payer: String?
+    @State private var addingFriend = false
+    @State private var newName = ""
+    private var choices: [String] {
+        let names = payer.map { [$0] } ?? (friendNames + model.friends.map(\.name) + (ownership?.friends ?? []))
+        var seen = Set<String>()
+        return names.map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !friendKey($0).isEmpty && seen.insert(friendKey($0)).inserted }.sorted()
+    }
+    var body: some View {
+        let _ = uiLocale.identifier
+        List {
+            Section {
+                choice(tr("我", "Me", "Saya"), selected: ownership?.includesMe == true) {
+                    var next = ownership ?? ItemOwnership(includesMe: false, friends: [])
+                    next.includesMe.toggle(); ownership = next
+                }
+                ForEach(choices, id: \.self) { name in
+                    choice(name, selected: ownership?.friends.contains(where: { friendKey($0) == friendKey(name) }) == true) {
+                        var next = ownership ?? ItemOwnership(includesMe: false, friends: [])
+                        if next.friends.contains(where: { friendKey($0) == friendKey(name) }) {
+                            next.friends.removeAll { friendKey($0) == friendKey(name) }
+                        } else { next.friends.append(name) }
+                        ownership = next
+                    }
+                }
+                if payer == nil {
+                    Button { newName = ""; addingFriend = true } label: {
+                        Label(tr("添加朋友", "Add friend", "Tambah rakan"), systemImage: "person.badge.plus")
+                    }
+                }
+            } footer: {
+                Text(payer == nil
+                     ? tr("可选一人或多人；多人按这件物品的小计均分。", "Choose one or more people. Multiple owners split this line total equally.", "Pilih seorang atau lebih. Jumlah baris dibahagi sama rata antara pemilik.")
+                     : tr("朋友付款的账目可分给自己和付款人。", "Split this friend-paid purchase between you and the payer.", "Bahagikan belanja ini antara anda dan pembayar."))
+            }
+            Section {
+                choice(tr("沿用整笔分账", "Use transaction split", "Ikut pembahagian transaksi"), selected: ownership == nil) { ownership = nil }
+            } footer: {
+                Text(tr("旧账目保留原分账。要按物品分账，请为每件物品选择归属。", "Existing entries keep their original split. Assign every item to switch to item-based splitting.", "Rekod lama mengekalkan pembahagian asal. Tetapkan pemilik setiap item untuk membahagi mengikut item."))
+            }
+        }.yuejiListSurface()
+            .navigationTitle(tr("属于谁", "Belongs to", "Milik siapa")).navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
+            .alert(tr("添加朋友", "Add friend", "Tambah rakan"), isPresented: $addingFriend) {
+                TextField(tr("朋友姓名", "Friend's name", "Nama rakan"), text: $newName)
+                Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+                Button(tr("添加", "Add", "Tambah")) {
+                    var next = ownership ?? ItemOwnership(includesMe: false, friends: [])
+                    next.friends.append(newName.trimmingCharacters(in: .whitespacesAndNewlines)); ownership = next
+                }.disabled(friendKey(newName).isEmpty || newName.count > 200 || choices.contains { friendKey($0) == friendKey(newName) })
+            }
+    }
+    private func choice(_ name: String, selected: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack {
+                Text(name).foregroundStyle(.primary)
+                Spacer()
+                if selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
+            }.frame(minHeight: 36).contentShape(Rectangle())
+        }.accessibilityLabel(name)
+            .accessibilityValue(selected ? tr("已选择", "Selected", "Dipilih") : tr("未选择", "Not selected", "Tidak dipilih"))
+    }
+}
+struct ItemSplitSummary: View {
+    @Environment(\.locale) private var uiLocale
+    let items: [ExpenseItemDraft]
+    var body: some View {
+        let _ = uiLocale.identifier
+        if let saved = try? items.map({ draft -> ExpenseItem in
+            let item = try draft.savedItem(); try item.ownership?.validate(); return item
+        }) {
+            let entry = Expense(merchant: "", cents: saved.reduce(0) { $0 + $1.cents }, items: saved)
+            let totals = entry.itemFriendTotals
+            let names = saved.flatMap { $0.ownership?.friends ?? [] }.reduce(into: [String: String]()) { $0[friendKey($1)] = $1 }
+            VStack(alignment: .leading, spacing: 8) {
+                Text(tr("按物品分账", "Split by item", "Bahagi mengikut item")).font(.subheadline.weight(.semibold))
+                LabeledContent(tr("我", "Me", "Saya"), value: money(saved.reduce(0) { $0 + $1.personalGross }))
+                ForEach(totals.keys.sorted(), id: \.self) { key in
+                    LabeledContent(names[key] ?? key, value: money(totals[key] ?? 0))
+                }
+                Text(tr("均分精确到分，尾差会自动分配。", "Equal splits keep every cent, with rounding handled automatically.", "Pembahagian mengekalkan setiap sen dengan pembundaran automatik."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }.font(.subheadline).monospacedDigit().padding(.vertical, 4)
+        } else {
+            Text(tr("请填写有效单价，并为每件物品选择至少一位归属人。", "Enter a valid unit price and choose at least one owner per item.", "Isi harga seunit yang sah dan pilih sekurang-kurangnya seorang pemilik setiap item."))
+                .font(.footnote).foregroundStyle(.orange)
+        }
     }
 }
 struct ExpenseItemsBreakdown: View {
@@ -3335,9 +3462,15 @@ struct ExpenseItemsBreakdown: View {
                 } label: {
                     Text(item.name).fontWeight(.medium).fixedSize(horizontal: false, vertical: true)
                 }
-                Text(categoryLabel(item.category)).font(.caption).foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline) {
+                    Text("\(item.count) × \(money(item.unitCents))").monospacedDigit()
+                    Spacer(minLength: 8)
+                    Text(categoryLabel(item.category))
+                }.font(.caption).foregroundStyle(.secondary)
+                Label(item.ownership?.label ?? (entry.shares.isEmpty ? tr("我", "Me", "Saya") : tr("沿用整笔分账", "Uses transaction split", "Ikut pembahagian transaksi")), systemImage: "person")
+                    .font(.caption).foregroundStyle(.secondary)
                 if !entry.shares.isEmpty || entry.refunded > 0 {
-                    LabeledContent(tr("我的净份额", "My net share", "Bahagian bersih saya")) {
+                    LabeledContent(entry.usesItemOwnership ? tr("我的净份额", "My net share", "Bahagian bersih saya") : tr("我的净份额（按比例）", "My net share (proportional)", "Bahagian bersih saya (berkadar)")) {
                         TransactionAmount(cents: personalAmounts[item.id] ?? 0, direction: .outgoing)
                     }.font(.caption)
                 }

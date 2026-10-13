@@ -233,6 +233,15 @@ final class TransactionFormTests: XCTestCase {
         let shopping = app.buttons["Shopping"].firstMatch
         XCTAssertTrue(shopping.waitForExistence(timeout: 5), "Shopping category choice is absent from the native picker"); shopping.tap()
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
+        let ownership = app.descendants(matching: .any)["transaction.item.ownership"].firstMatch
+        reveal(ownership, in: app); ownership.tap()
+        let owners = app.navigationBars["Belongs to"]
+        XCTAssertTrue(owners.waitForExistence(timeout: 5))
+        app.buttons["Me"].firstMatch.tap()
+        owners.buttons["Done"].tap()
+        XCTAssertTrue(app.navigationBars["New entry"].waitForExistence(timeout: 5))
+        XCTAssertEqual(names.firstMatch.value as? String, "Lunch", "Choosing ownership must retain the unsaved item")
+        XCTAssertEqual(itemAmount.value as? String, "35.00")
         reveal(add, in: app); add.tap(); reveal(add, in: app); add.tap()
         XCTAssertEqual(names.count, 3)
 

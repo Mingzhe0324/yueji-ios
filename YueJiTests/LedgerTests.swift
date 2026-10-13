@@ -4,6 +4,138 @@ import AVFoundation
 import SwiftUI
 @testable import YueJi
 
+final class ItemOwnershipAndQuantityTests: XCTestCase {
+    private let categories = Ledger().categoryNames
+    private let mine = ItemOwnership(includesMe: true, friends: [])
+    private let amy = ItemOwnership(includesMe: false, friends: ["Amy"])
+
+    func testLegacyItemsKeepAmountsSharesAndBackupShape() throws {
+        let json = Data(#"{"id":"old","name":"Tea","cents":480,"category":"餐饮"}"#.utf8)
+        let item = try JSONDecoder().decode(ExpenseItem.self, from: json)
+        XCTAssertEqual(item.count, 1); XCTAssertNil(item.quantity); XCTAssertNil(item.ownership)
+        XCTAssertEqual(try ExpenseItemDraft(item).savedItem(), item)
+        let original = Expense(merchant: "Old purchase", cents: 480, shares: [Share(name: "Amy", cents: 240)], items: [item])
+        let restored = try LocalStore.decode(LocalStore.encode(Ledger(expenses: [original]))).expenses[0]
+        XCTAssertEqual(restored, original)
+        XCTAssertEqual(restored.personalItemAmounts["old"], 240)
+        let encoded = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(item)) as? [String: Any])
+        XCTAssertNil(encoded["quantity"]); XCTAssertNil(encoded["ownership"])
+    }
+
+    func testQuantityMultipliesUnitPriceAndRoundTripsWithoutRounding() throws {
+        let draft = ExpenseItemDraft(name: "Tea", amount: "4.80", category: "餐饮", quantity: 3, ownership: mine)
+        let item = try draft.savedItem()
+        XCTAssertEqual(item.cents, 1440); XCTAssertEqual(item.unitCents, 480)
+        XCTAssertEqual(try ExpenseItemDraft(item).savedItem(), item)
+        let expense = try Expense(merchant: "Cafe", cents: 1440).replacingItems([item], allowedCategories: categories)
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(Ledger(expenses: [expense]))).expenses[0], expense)
+        for count in [0, -1, 1000, Int.max] {
+            var invalid = draft; invalid.quantity = count
+            XCTAssertThrowsError(try invalid.savedItem())
+        }
+        var overflow = draft; overflow.amount = "100000000.00"
+        XCTAssertThrowsError(try overflow.savedItem())
+        var malformed = item; malformed.cents = 1441
+        XCTAssertThrowsError(try Expense(merchant: "Bad", cents: 1441).replacingItems([malformed], allowedCategories: categories))
+    }
+
+    func testOwnershipDrivesPersonalFriendAndCategoryAmounts() throws {
+        let items = [ExpenseItem(id: "mine", name: "Tea", cents: 480, category: "餐饮", ownership: mine),
+                     ExpenseItem(id: "friend", name: "Supplies", cents: 1200, category: "购物", ownership: amy)]
+        let entry = try Expense(merchant: "Store", cents: 1680).replacingItems(items, allowedCategories: categories)
+        let ledger = try Ledger(expenses: [entry]).validated()
+        XCTAssertEqual(entry.personal, 480)
+        XCTAssertEqual(entry.shares.first?.cents, 1200)
+        XCTAssertEqual(entry.personalItemAmounts, ["mine": 480, "friend": 0])
+        XCTAssertEqual(entry.personalAmount(category: "餐饮"), 480)
+        XCTAssertEqual(entry.personalAmount(category: "购物"), 0)
+        XCTAssertEqual(ledger.friendSpending(friend: "Amy").categories["购物"], 1200)
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 1200)
+    }
+
+    func testSharedItemsPreserveEveryCentIncludingZeroShares() throws {
+        for cents in 1...101 {
+            let item = ExpenseItem(name: "Shared", cents: cents, category: "餐饮", ownership: ItemOwnership(includesMe: true, friends: ["Amy", "Ben"]))
+            let entry = try Expense(merchant: "Cafe", cents: cents).replacingItems([item], allowedCategories: categories)
+            XCTAssertEqual(entry.personal + entry.shares.reduce(0) { $0 + $1.cents }, cents)
+            XCTAssertLessThanOrEqual(abs(entry.shares[0].cents - entry.personal), 1)
+            _ = try Ledger(expenses: [entry]).validated()
+        }
+    }
+
+    func testPartialDuplicateAndMissingOwnersCannotSave() throws {
+        let base = Expense(merchant: "Cafe", cents: 200)
+        let owned = ExpenseItem(name: "Tea", cents: 100, category: "餐饮", ownership: mine)
+        let legacy = ExpenseItem(name: "Water", cents: 100, category: "餐饮")
+        XCTAssertThrowsError(try base.replacingItems([owned, legacy], allowedCategories: categories))
+        for owner in [ItemOwnership(includesMe: false, friends: []), ItemOwnership(includesMe: true, friends: ["Amy", " AMY "]), ItemOwnership(includesMe: false, friends: [" "])] {
+            var invalid = owned; invalid.ownership = owner; invalid.cents = 200
+            XCTAssertThrowsError(try base.replacingItems([invalid], allowedCategories: categories))
+        }
+    }
+
+    func testRefundsUseOwnedCategoriesAndProtectHistory() throws {
+        let items = [ExpenseItem(id: "me", name: "Lunch", cents: 1000, category: "餐饮", ownership: mine),
+                     ExpenseItem(id: "amy", name: "Supplies", cents: 2000, category: "购物", ownership: amy)]
+        let entry = try Expense(merchant: "Store", cents: 3000, date: Date().addingTimeInterval(-3600)).replacingItems(items, allowedCategories: categories)
+        var ledger = Ledger(expenses: [entry])
+        try ledger.addRefund(expenseID: entry.id, cents: 300, date: Date())
+        let refunded = ledger.expenses[0]
+        XCTAssertEqual(refunded.personalItemAmounts, ["me": 900, "amy": 0])
+        XCTAssertEqual(ledger.friendSpending(friend: "Amy").categories["购物"], 1800)
+        XCTAssertEqual(try refunded.replacingItems(items, allowedCategories: categories), refunded)
+        var changed = items; changed[1].ownership = mine
+        XCTAssertThrowsError(try refunded.replacingItems(changed, allowedCategories: categories))
+        var repaid = entry
+        repaid.shares[0].repayments = [Repayment(cents: 100)]
+        XCTAssertThrowsError(try repaid.replacingItems(changed, allowedCategories: categories))
+        _ = try ledger.validated()
+    }
+
+    func testFriendPaidItemsOnlyUseMeAndThePayer() throws {
+        let base = Expense(merchant: "Cafe", cents: 1000, paidByFriend: "Amy")
+        let item = ExpenseItem(name: "Lunch", cents: 1000, category: "餐饮", ownership: ItemOwnership(includesMe: true, friends: ["Amy"]))
+        let entry = try base.replacingItems([item], allowedCategories: categories)
+        XCTAssertEqual(entry.personal, 500); XCTAssertEqual(entry.paidFromMyAccount, 0)
+        XCTAssertEqual(entry.shares.first?.name, "Amy")
+        _ = try Ledger(expenses: [entry]).validated()
+        var other = item; other.ownership = ItemOwnership(includesMe: true, friends: ["Ben"])
+        XCTAssertThrowsError(try base.replacingItems([other], allowedCategories: categories))
+    }
+
+    func testEditingAutomaticEntryRetainsIdentityAndSplitIDs() throws {
+        let original = Expense(id: "auto", merchant: "Store", cents: 1000, source: "TNG", shares: [Share(id: "amy-share", name: "Amy", cents: 500)], transactionReference: "REF123", note: "Keep", tags: ["Legacy"])
+        let item = ExpenseItem(name: "Tea", cents: 1000, category: "餐饮", quantity: 2, ownership: amy)
+        let entry = try original.replacingItems([item], allowedCategories: categories)
+        XCTAssertEqual(entry.id, original.id); XCTAssertEqual(entry.source, original.source)
+        XCTAssertEqual(entry.transactionReference, original.transactionReference); XCTAssertEqual(entry.tags, original.tags)
+        XCTAssertEqual(entry.shares[0].id, "amy-share"); XCTAssertEqual(entry.shares[0].cents, 1000)
+        var corrupt = entry; corrupt.shares[0].cents = 999
+        XCTAssertThrowsError(try LocalStore.decode(LocalStore.encode(Ledger(expenses: [corrupt]))))
+    }
+
+    func testPendingAutomaticPaymentUsesTheSameOwnershipCalculation() throws {
+        for review in [false, true] {
+            let date = Date().addingTimeInterval(-60)
+            let notice = TNGNotice(id: "owned-notice", body: "Original source text", title: "Payment", date: date,
+                                  usesReceivedDate: true, kind: "unknown", status: "pending", cents: 960, party: "Cafe")
+            var ledger = Ledger(); ledger.tngNotices = [notice]
+            let items = [ExpenseItem(name: "Tea", cents: 960, category: "餐饮", quantity: 2, ownership: amy)]
+            if review {
+                try ledger.resolveNotice(id: notice.id, purpose: "expense", party: "Cafe", cents: 960, date: date, items: items)
+            } else {
+                try ledger.confirmTNGExpense(id: notice.id, merchant: "Cafe", cents: 960, date: date, category: "餐饮", items: items)
+            }
+            let restored = try LocalStore.decode(LocalStore.encode(ledger))
+            XCTAssertEqual(restored.expenses[0].personal, 0)
+            XCTAssertEqual(restored.expenses[0].shares[0].cents, 960)
+            XCTAssertEqual(restored.expenses[0].items, items)
+            XCTAssertEqual(restored.tngNotices[0].body, notice.body)
+            XCTAssertEqual(restored.tngNotices[0].expenseID, restored.expenses[0].id)
+        }
+    }
+}
+
 final class NotificationBannerTests: XCTestCase {
     @MainActor func testWaitingNoticesSurviveHigherPriorityBannerDismissal() throws {
         let model = LedgerModel(previewLedger: GuideSample.ledger())

@@ -1229,7 +1229,7 @@ struct ExpenseEditor: View {
                 payerSection
                 paymentSection
                 merchantSection
-                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField)
+                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil)
                 currencySection
                 friendSplitSection
                 if let original {
@@ -1376,6 +1376,7 @@ struct ExpenseEditor: View {
     }
     private var friendSplitSection: some View {
         Section {
+            if !itemDrafts.contains(where: { $0.ownership != nil }) {
             if friendPays {
                 Picker(tr("归属与分摊", "Ownership and split", "Pemilikan dan pembahagian"), selection: $friendPaidMode) {
                     Text(tr("各半", "Equal halves", "Separuh sama rata")).tag("equal")
@@ -1411,7 +1412,8 @@ struct ExpenseEditor: View {
                 }
             }
             }
-        } footer: { if splitting { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) } }
+            }
+        } footer: { if splitting && !itemDrafts.contains(where: { $0.ownership != nil }) { Text(tr("分账和还款金额使用 MYR。已有付款请编辑分账，避免重复新增。", "Shares and repayments use MYR. Edit an existing payment to split it without duplicating it.", "Bahagian dan bayaran balik menggunakan MYR. Edit bayaran sedia ada untuk mengelakkan pendua.")) } }
             .disabled((original?.refunded ?? 0) > 0)
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: splitting)
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: people.count)
@@ -1423,7 +1425,7 @@ struct ExpenseEditor: View {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             friendPays = e.paidByFriend != nil; payerName = e.paidByFriend ?? ""
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
-            itemDrafts = (e.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
+            itemDrafts = (e.items ?? []).map(ExpenseItemDraft.init)
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -1474,10 +1476,12 @@ struct ExpenseEditor: View {
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
             entry.paidByFriend = friendPays ? payerName.trimmingCharacters(in: .whitespacesAndNewlines) : nil
-            entry = try entry.replacingItems(try itemDrafts.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
+            let savedItems = try itemDrafts.map { try $0.savedItem() }
+            let byItem = savedItems.contains { $0.ownership != nil }
             if let original, original.refunded > 0 {
                 guard entry.cents == original.cents, entry.date == original.date, entry.foreign == original.foreign, entry.paidByFriend == original.paidByFriend else { throw reviewError("已有退款，请先撤销退款再修改金额或日期。", "Undo refunds before changing amount or date.", "Batalkan bayaran balik sebelum mengubah amaun atau tarikh.") }
             }
+            if !byItem {
             if !splitting && (original?.shares.contains { !$0.repayments.isEmpty } ?? false) { throw LedgerError.invalid(tr("请先撤销已有还款。", "Undo repayments before removing the split.", "Batalkan bayaran balik sebelum membuang pembahagian.")) }
             if friendPays {
                 guard !(original?.shares.contains { !$0.repayments.isEmpty || !($0.returns ?? []).isEmpty } ?? false) else { throw settlementError("请先撤销已有还款再更改付款人。", "Undo existing repayments before changing payer.", "Batalkan bayaran sedia ada sebelum menukar pembayar.") }
@@ -1489,6 +1493,8 @@ struct ExpenseEditor: View {
                 entry.shares = zip(people, values).map { p, v in Share(id: p.id, name: p.name.trimmingCharacters(in: .whitespacesAndNewlines), cents: v, repayments: p.repayments) }
                 guard !entry.shares.contains(where: { $0.repayments.contains { $0.date < Calendar.current.startOfDay(for: date) } }) else { throw LedgerError.invalid(tr("付款日期不能晚于还款。", "Payment date cannot be after repayment.", "Tarikh bayaran tidak boleh selepas bayaran balik.")) }
             } else { entry.shares = [] }
+            }
+            entry = try entry.replacingItems(savedItems, allowedCategories: model.ledger.categoryNames)
             if let original, original.refunded > 0 {
                 guard entry.shares.map(\.id) == original.shares.map(\.id), zip(entry.shares, original.shares).allSatisfy({ pair in pair.0.cents == pair.1.cents && pair.0.name == pair.1.name }) else { throw reviewError("已有退款，请先撤销退款再修改分账。", "Undo refunds before changing splits.", "Batalkan bayaran balik sebelum mengubah pembahagian.") }
                 entry.shares = original.shares
