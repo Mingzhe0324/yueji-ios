@@ -139,7 +139,6 @@ func localizedAppText(_ text: String) -> String {
         "待处理": ("Needs attention", "Perlu tindakan"),
         "在新增或编辑账目里填写标签，可跨餐饮、交通等分类汇总同一个项目。": ("Add tags when creating or editing entries to group a project across categories such as food and transport.", "Tambah tag ketika mencipta atau mengedit rekod untuk mengumpulkan projek merentas kategori seperti makanan dan pengangkutan."),
         "还没有标签。": ("No tags yet.", "Belum ada tag."),
-        "标签与项目": ("Tags and projects", "Tag dan projek"),
         "全部月份": ("All months", "Semua bulan"),
         "实际付款总额": ("Total paid", "Jumlah dibayar"),
         "我的净消费": ("My net spending", "Belanja bersih saya"),

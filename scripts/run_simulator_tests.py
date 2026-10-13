@@ -108,7 +108,7 @@ def main():
         (['xcrun', 'simctl', 'shutdown', args.simulator], 60),
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 180),
         (base + ['test-without-building', '-only-testing:YueJiUITests',
-                 '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 900),
+                 '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 1200),
     ]
     with (args.artifacts / 'build-test.log').open('w', encoding='utf-8') as log:
         for command, timeout in stages:

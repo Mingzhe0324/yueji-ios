@@ -2,6 +2,8 @@
 
 **版本 / Version：1.62.2 · Build 92**
 
+Saved transaction item editors now have screen-owned presentation and stable Overview/Ledger navigation. Unsaved editors require Save or Cancel, and Settings Tags & Projects is removed while stored transaction data is retained. The recorded dismissal and new regression coverage are documented in [saved-item editor verification](docs/saved-item-editor-lifecycle.md). Local checks pass; native tests and device confirmation remain pending.
+
 Azure native tests now run unit and UI targets sequentially with a simulator restart between them, explicit boot readiness, and bounded execution. UI runner initialization failures stop promptly and remain failures; logs and available result bundles are published. See [simulator timeout diagnosis and verification](docs/simulator-runner-timeout.md).
 
 The ledger now shows purchased-item previews with a localized `+N more` count and keeps Items visible in details and editors. Shared banners support left, right and upward dismissal, use a four-second idle timeout (longer for VoiceOver), and pause while touched. Source data, categories and spending calculations are preserved. Local project and Swift syntax checks pass; native tests and device visual checks remain pending. See [ledger layout and banner verification](docs/ledger-layout-and-banner-dismissal.md).

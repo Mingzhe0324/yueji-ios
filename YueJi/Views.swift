@@ -293,6 +293,7 @@ struct DashboardView: View {
     @Namespace private var navigationMotion
     @EnvironmentObject var model: LedgerModel
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
+    @State private var path = NavigationPath()
     @State private var adding = false
     @State private var budgetText = ""
     @State private var budgeting = false
@@ -325,7 +326,7 @@ struct DashboardView: View {
         let _ = uiLocale.identifier
         let requestedMonth = month
         let summaryQuery = model.overviewQuery(month: requestedMonth)
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollViewReader { guideScroll in
             List {
                 Section {
@@ -368,6 +369,9 @@ struct DashboardView: View {
                     }
                 }
             }.yuejiListSurface()
+            .navigationDestination(for: LedgerExpenseDestination.self) { destination in
+                ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+            }
             .task(id: summaryQuery) {
                 guard loadedSummary != summaryQuery else { return }
                 do {
@@ -431,7 +435,7 @@ struct DashboardView: View {
                     .foregroundStyle(.secondary)
             }
             ForEach(recentEntries) { entry in
-                NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                     ExpenseRow(entry: entry).foregroundStyle(.primary)
                 }
             }
@@ -763,6 +767,8 @@ private enum LedgerSheetRoute: Identifiable {
         }
     }
 }
+private struct LedgerExpenseDestination: Hashable { let id: String }
+
 struct ExpensesView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
@@ -771,6 +777,7 @@ struct ExpensesView: View {
     @State private var deletingNotice: TNGNotice?
     @Namespace private var expenseTransition
     @State private var sheet: LedgerSheetRoute?
+    @State private var path = NavigationPath()
     @SceneStorage("ledgerMonth") private var monthTimestamp = Date().timeIntervalSince1970
     private var month: Date {
         get { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
@@ -790,7 +797,7 @@ struct ExpensesView: View {
         let query = self.query
         let days = timeline.days
         let updating = loadedQuery != query
-        NavigationStack {
+        NavigationStack(path: $path) {
             List {
                 Section {
                     MonthPicker(month: monthBinding)
@@ -844,7 +851,7 @@ struct ExpensesView: View {
                                 }
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
-                            NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                            NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                                 ExpenseRow(entry: entry).foregroundStyle(.primary)
                             }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
@@ -862,6 +869,9 @@ struct ExpensesView: View {
                     } header: { Text(dateLabel(day.date)) }
                 }
             }.listStyle(.insetGrouped)
+                .navigationDestination(for: LedgerExpenseDestination.self) { destination in
+                    ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+                }
                 .task(id: query) {
                     guard loadedQuery != query else { return }
                     do {
@@ -951,7 +961,7 @@ struct ExpenseDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @Namespace private var detailTransition
-    @State private var editing: Expense?
+    @State private var editing: TransactionEditorRoute?
     @State private var editorPresented = false
     @State private var returnedAfterDeletion = false
     @State private var deleting: Expense?
@@ -1009,10 +1019,11 @@ struct ExpenseDetailView: View {
                         }
                         NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: id) }
                     }
-                    SavedTransactionItemsSection(entry: entry, presentationAllowed: !editorPresented && deleting == nil, onEditingChanged: {
-                        editorPresented = $0
-                        if !$0 { dismissDeletedDetailIfReady() }
-                    })
+                    SavedTransactionItemsSection(entry: entry, presentationAllowed: !editorPresented && deleting == nil) { selectedID in
+                        guard !editorPresented, editing == nil, deleting == nil else { return }
+                        editorPresented = true
+                        editing = .items(entry, selectedID: selectedID)
+                    }
                     ExpenseBookkeepingDetails(entry: entry)
                     ForEach(detail.sourceNotices) { notice in NoticeSourceSection(notice: notice) }
                     if !entry.shares.isEmpty {
@@ -1067,7 +1078,7 @@ struct ExpenseDetailView: View {
                         Button {
                             guard !editorPresented, editing == nil else { return }
                             editorPresented = true
-                            editing = entry
+                            editing = .expense(entry)
                         } label: {
                             Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
                                 .frame(maxWidth: .infinity, minHeight: 44)
@@ -1090,9 +1101,14 @@ struct ExpenseDetailView: View {
             .sheet(item: $editing, onDismiss: {
                 editorPresented = false
                 dismissDeletedDetailIfReady()
-            }) {
-                ExpenseEditor(original: $0)
-                    .yuejiZoom(id: "expense-edit-" + id, namespace: detailTransition)
+            }) { route in
+                switch route {
+                case .expense(let entry):
+                    ExpenseEditor(original: entry)
+                        .yuejiZoom(id: "expense-edit-" + id, namespace: detailTransition)
+                case .items(let entry, let selectedID):
+                    ExpenseItemsEditor(original: entry, selectedID: selectedID)
+                }
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
@@ -1239,7 +1255,7 @@ struct ExpenseEditor: View {
                     }
                 }
             }.yuejiListSurface().scrollDismissesKeyboard(.interactively)
-                .disabled(saving).interactiveDismissDisabled(saving)
+                .disabled(saving).interactiveDismissDisabled()
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
                 .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
@@ -1671,9 +1687,6 @@ struct SettingsView: View {
                 Section {
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: .teal)
-                    }
-                    NavigationLink { ExpenseTagsView() } label: {
-                        SimpleSettingsRow(title: tr("标签与项目", "Tags & projects", "Tag & projek"), subtitle: tr("整理旅行、活动等相关开销", "Group spending for trips and events", "Kumpulkan belanja perjalanan dan acara"), symbol: "tag.fill", color: .purple)
                     }
                     NavigationLink { categoriesPage } label: {
                         SimpleSettingsRow(title: tr("消费分类", "Spending categories", "Kategori belanja"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)

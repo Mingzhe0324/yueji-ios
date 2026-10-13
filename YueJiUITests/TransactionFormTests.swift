@@ -35,6 +35,136 @@ final class TransactionFormTests: XCTestCase {
         verifyFirstAddItem(opening: false)
     }
 
+    func testSavedItemFirstTapAfterColdLaunchWithOpening() {
+        verifySavedItemEditing(opening: true)
+    }
+
+    func testSavedItemFirstTapAfterColdLaunchWithoutOpening() {
+        verifySavedItemEditing(opening: false)
+    }
+
+    private func verifySavedItemEditing(opening: Bool) {
+        let app = XCUIApplication()
+        runningApp = app
+        app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
+                               "-openingAnimationEnabled", opening ? "YES" : "NO",
+                               "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
+        app.launch()
+        let addEntry = app.descendants(matching: .any)["overview.manualEntry"].firstMatch
+        XCTAssertTrue(addEntry.waitForExistence(timeout: 20))
+        addEntry.tap()
+        let merchantName = "Item regression " + UUID().uuidString.prefix(8)
+        let amount = app.textFields["transaction.amount"]
+        XCTAssertTrue(amount.waitForExistence(timeout: 5))
+        amount.tap(); amount.typeText("35.00"); finishKeyboard(in: app)
+        let merchant = app.textFields["transaction.merchant"]
+        reveal(merchant, in: app); merchant.tap(); merchant.typeText(merchantName); finishKeyboard(in: app)
+        let addItem = app.buttons["transaction.item.add"]
+        let name = app.textFields["transaction.item.name"].firstMatch
+        let itemAmount = app.textFields["transaction.item.amount"].firstMatch
+        app.navigationBars.buttons["Save"].tap()
+        waitUntilGone(app.navigationBars["New entry"])
+        XCTAssertTrue(addEntry.waitForExistence(timeout: 10))
+
+        // Saved fixture created through the real UI; startup refreshes stay enabled.
+        app.terminate(); app.launch()
+        XCTAssertTrue(addEntry.waitForExistence(timeout: 20))
+        let purchase = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", merchantName)).firstMatch
+        // Match the recording: Overview -> saved purchase without items -> Add items.
+        reveal(purchase, in: app); purchase.tap()
+        XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 5))
+        let editItems = app.buttons["transaction.items.edit"]
+        for shouldSave in [false, true] {
+            reveal(editItems, in: app); editItems.tap()
+            let editor = app.navigationBars["Edit items"]
+            XCTAssertTrue(editor.waitForExistence(timeout: 5), "Saved empty transaction dismissed its item editor")
+            reveal(addItem, in: app); addItem.tap()
+            reveal(name, in: app); name.tap(); name.typeText("Original item"); finishKeyboard(in: app)
+            reveal(itemAmount, in: app); itemAmount.tap(); itemAmount.typeText("35.00"); finishKeyboard(in: app)
+            XCTAssertTrue(editor.exists)
+            XCTAssertEqual(name.value as? String, "Original item")
+            editor.buttons[shouldSave ? "Save" : "Cancel"].tap()
+            waitUntilGone(editor)
+            XCTAssertTrue(app.navigationBars["Entry details"].exists)
+            if !shouldSave {
+                XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transaction.item.open.")).count, 0)
+            }
+        }
+        app.navigationBars["Entry details"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(addEntry.waitForExistence(timeout: 5))
+        let ledger = app.tabBars.buttons["Ledger"]
+        ledger.tap()
+        reveal(purchase, in: app); purchase.tap()
+        XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 5))
+        let item = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transaction.item.open.")).firstMatch
+
+        for attempt in 0..<3 {
+            // Exact reported sequence: scroll a saved detail, then ONE item tap.
+            reveal(item, in: app); item.tap()
+            let editor = app.navigationBars["Edit items"]
+            XCTAssertTrue(editor.waitForExistence(timeout: 5), "First tap failed on attempt \(attempt)")
+            XCTAssertEqual(app.state, .runningForeground, "App crashed instead of presenting items")
+            XCTAssertTrue(name.waitForExistence(timeout: 5))
+            XCTAssertEqual(name.value as? String, attempt == 2 ? "Original item saved" : "Original item")
+            XCTAssertEqual(itemAmount.value as? String, "35.00")
+            reveal(name, in: app); name.tap(); name.typeText(attempt == 1 ? " saved" : " unsaved")
+            finishKeyboard(in: app)
+            // A sheet drag must neither close the editor nor discard the draft.
+            editor.swipeDown()
+            XCTAssertTrue(editor.exists)
+            XCTAssertTrue((name.value as? String)?.contains(attempt == 1 ? " saved" : " unsaved") == true)
+            let category = app.descendants(matching: .any)["transaction.item.category"].firstMatch
+            reveal(category, in: app); category.tap()
+            let shopping = app.buttons["Shopping"].firstMatch
+            XCTAssertTrue(shopping.waitForExistence(timeout: 5)); shopping.tap()
+            XCTAssertTrue(editor.waitForExistence(timeout: 5))
+            XCTAssertTrue((name.value as? String)?.contains(attempt == 1 ? " saved" : " unsaved") == true)
+
+            if attempt == 1 {
+                // Invalid new row must keep all input and must not save a duplicate.
+                reveal(addItem, in: app); addItem.tap()
+                editor.buttons["Save"].tap()
+                XCTAssertTrue(app.alerts["Unable to save"].waitForExistence(timeout: 5))
+                app.alerts.buttons["OK"].tap()
+                let names = app.textFields.matching(identifier: "transaction.item.name")
+                XCTAssertEqual(names.count, 2)
+                let remove = app.buttons.matching(identifier: "transaction.item.remove").element(boundBy: 1)
+                reveal(remove, in: app); remove.tap()
+                XCTAssertEqual(names.count, 1)
+                editor.buttons["Save"].tap()
+            } else {
+                editor.buttons["Cancel"].tap()
+            }
+            waitUntilGone(editor)
+            XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 10), "Save/cancel reset ledger navigation")
+            XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transaction.item.open.")).count, 1)
+        }
+        app.navigationBars["Entry details"].buttons.element(boundBy: 0).tap()
+        XCTAssertTrue(app.navigationBars["Ledger"].waitForExistence(timeout: 5))
+        XCTAssertTrue(purchase.waitForExistence(timeout: 5))
+        XCTAssertEqual(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", merchantName)).count, 1)
+        // Remove only the unique record this test created and verify the return.
+        purchase.tap()
+        let delete = app.buttons["transaction.delete"]
+        XCTAssertTrue(delete.waitForExistence(timeout: 5)); delete.tap()
+        let confirmDelete = app.sheets.buttons["Delete"].firstMatch
+        XCTAssertTrue(confirmDelete.waitForExistence(timeout: 5)); confirmDelete.tap()
+        waitUntilGone(app.navigationBars["Entry details"])
+        XCTAssertTrue(app.navigationBars["Ledger"].waitForExistence(timeout: 10))
+        waitUntilGone(purchase)
+        app.tabBars.buttons["Settings"].tap()
+        let categories = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Spending categories")).firstMatch
+        reveal(categories, in: app)
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Tags & projects")).firstMatch.exists)
+        categories.tap()
+        XCTAssertTrue(app.navigationBars["Spending categories"].waitForExistence(timeout: 5))
+    }
+
+    private func waitUntilGone(_ element: XCUIElement) {
+        let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
+        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "Unexpectedly retained \(element)")
+    }
+
     private func verifyFirstAddItem(opening: Bool) {
         let app = XCUIApplication()
         runningApp = app

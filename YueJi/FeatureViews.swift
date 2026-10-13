@@ -1331,12 +1331,24 @@ struct NoticeSourceSection: View {
     }
 }
 
+// Presentation belongs to the containing screen, never a lazy List/Form section.
+// Capture the transaction once so refreshes cannot replace an unsaved draft.
+enum TransactionEditorRoute: Identifiable {
+    case expense(Expense)
+    case items(Expense, selectedID: String?)
+    var id: String {
+        switch self {
+        case .expense(let entry): return "expense-" + entry.id
+        case .items(let entry, _): return "items-" + entry.id
+        }
+    }
+}
+
 struct SavedTransactionItemsSection: View {
     @Environment(\.locale) private var uiLocale
     let entry: Expense
     var presentationAllowed = true
-    var onEditingChanged: ((Bool) -> Void)? = nil
-    @State private var editing: Expense?
+    let onEdit: (String?) -> Void
     var body: some View {
         let _ = uiLocale.identifier
         Section(tr("物品", "Items", "Item")) {
@@ -1344,18 +1356,18 @@ struct SavedTransactionItemsSection: View {
                 Text(tr("交易已保存，可稍后补充物品。", "Transaction saved; add items whenever you are ready.", "Transaksi disimpan; tambah item apabila anda bersedia."))
                     .font(.footnote).foregroundStyle(.secondary)
             } else {
-                ExpenseItemsBreakdown(entry: entry)
+                ExpenseItemsBreakdown(entry: entry, onSelect: { onEdit($0) })
+                    .disabled(!presentationAllowed)
             }
             Button {
-                guard presentationAllowed, editing == nil else { return }
-                onEditingChanged?(true)
-                editing = entry
+                guard presentationAllowed else { return }
+                onEdit(nil)
             } label: {
                 Label((entry.items ?? []).isEmpty ? tr("添加物品", "Add items", "Tambah item") : tr("编辑物品", "Edit items", "Edit item"), systemImage: "list.bullet.rectangle")
                     .frame(minHeight: 44)
             }.buttonStyle(.borderless).disabled(!presentationAllowed)
                 .accessibilityIdentifier("transaction.items.edit")
-        }.sheet(item: $editing, onDismiss: { onEditingChanged?(false) }) { ExpenseItemsEditor(original: $0) }
+        }
     }
 }
 
@@ -1365,6 +1377,8 @@ struct ExpenseItemsEditor: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let original: Expense
+    var selectedID: String? = nil
+    @FocusState private var focusedField: ExpenseInputField?
     @State private var items: [ExpenseItemDraft] = []
     @State private var initialized = false
     @State private var saving = false
@@ -1372,6 +1386,7 @@ struct ExpenseItemsEditor: View {
     var body: some View {
         let _ = uiLocale.identifier
         NavigationStack {
+            ScrollViewReader { proxy in
             Form {
                 Section {
                     Text(original.merchant).font(.headline)
@@ -1379,7 +1394,7 @@ struct ExpenseItemsEditor: View {
                         TransactionAmount(cents: original.cents, direction: .outgoing)
                     }
                 }
-                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true)
+                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField)
                 if model.ledger.hasActiveSettlement(expenseID: original.id) {
                     Section {
                         Text(tr("修改物品前，请先撤销关联结算。原消费和历史记录会保留。", "Undo linked settlements before changing items. The original expense and history are preserved.", "Batalkan penyelesaian dipautkan sebelum mengubah item. Belanja asal dan sejarah dikekalkan."))
@@ -1399,20 +1414,32 @@ struct ExpenseItemsEditor: View {
                 }
                 .disabled(saving)
                 .overlay { if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
-                .interactiveDismissDisabled(saving)
+                .interactiveDismissDisabled()
                 .onAppear {
                     guard !initialized else { return }
                     items = (original.items ?? []).map { ExpenseItemDraft(id: $0.id, name: $0.name, amount: Currency.input($0.cents, "MYR"), category: $0.category) }
                     initialized = true
                 }
+                .onChange(of: initialized) { _, ready in
+                    if ready, let selectedID { proxy.scrollTo(selectedID, anchor: .center) }
+                }
+                .toolbar {
+                    ToolbarItemGroup(placement: .keyboard) {
+                        Spacer()
+                        Button(tr("完成", "Done", "Selesai")) {
+                            focusedField = nil
+                        }
+                    }
+                }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                     Button("OK") {}
                 } message: { Text(error ?? "") }
+            }
         }.yuejiSheetSurface().ledgerFeedback(modal: true)
     }
     private func save() {
         guard initialized, !saving else { return }
-        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+        focusedField = nil
         do {
             let entry = try original.replacingItems(try items.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
             saving = true
@@ -1442,7 +1469,7 @@ struct TNGNoticeView: View {
     @State private var initialized = false
     @State private var excluding = false
     @State private var confirming = false
-    @State private var editing: Expense?
+    @State private var editing: TransactionEditorRoute?
     @State private var itemsEditorPresented = false
     @State private var itemDrafts: [ExpenseItemDraft] = []
     @State private var error: String?
@@ -1453,7 +1480,11 @@ struct TNGNoticeView: View {
             if let notice {
                 SettlementNoticeSection(notice: notice)
                 if let expenseID = notice.expenseID, let entry = model.expense(id: expenseID) {
-                    SavedTransactionItemsSection(entry: entry, presentationAllowed: editing == nil, onEditingChanged: { itemsEditorPresented = $0 })
+                    SavedTransactionItemsSection(entry: entry, presentationAllowed: editing == nil && !itemsEditorPresented) { selectedID in
+                        guard editing == nil, !itemsEditorPresented else { return }
+                        itemsEditorPresented = true
+                        editing = .items(entry, selectedID: selectedID)
+                    }
                 }
                 Section {
                     TNGTimelineRow(notice: notice)
@@ -1505,7 +1536,7 @@ struct TNGNoticeView: View {
                         NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
                         Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) {
                             guard !itemsEditorPresented, editing == nil else { return }
-                            editing = entry
+                            editing = .expense(entry)
                         }.disabled(itemsEditorPresented)
                     } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
                 } else if ["pending", "transfer"].contains(notice.status) {
@@ -1540,7 +1571,12 @@ struct TNGNoticeView: View {
                 merchant = n.party ?? ""; amount = n.cents.map { Currency.input($0, "MYR") } ?? ""; date = n.date
                 category = model.ledger.merchantCategories[friendKey(merchant)] ?? guessCategory(merchant, description: n.title + " " + n.body)
             }
-            .sheet(item: $editing) { ExpenseEditor(original: $0) }
+            .sheet(item: $editing, onDismiss: { itemsEditorPresented = false }) { route in
+                switch route {
+                case .expense(let entry): ExpenseEditor(original: entry)
+                case .items(let entry, let selectedID): ExpenseItemsEditor(original: entry, selectedID: selectedID)
+                }
+            }
             .confirmationDialog(tr("确认新增消费？请先检查是否已有相同付款。", "Record a new expense? Check for an existing payment first.", "Rekod belanja baharu? Semak bayaran sedia ada dahulu."), isPresented: $confirming, titleVisibility: .visible) {
                 Button(tr("确认入账", "Record", "Rekod")) {
                     do {
@@ -3236,7 +3272,7 @@ struct ExpenseItemsFields: View {
                     }.buttonStyle(.borderless)
                         .accessibilityIdentifier("transaction.item.remove")
                         .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
-                }.padding(.vertical, 6)
+                }.padding(.vertical, 6).id(draft.id)
             }
             Button {
                 let draft = ExpenseItemDraft(category: defaultCategory)
@@ -3275,10 +3311,24 @@ struct ExpenseItemsFields: View {
 struct ExpenseItemsBreakdown: View {
     @Environment(\.locale) private var uiLocale
     let entry: Expense
+    var onSelect: ((String) -> Void)? = nil
     var body: some View {
         let _ = uiLocale.identifier
         let personalAmounts = entry.personalItemAmounts
         ForEach(entry.items ?? []) { item in
+            if let onSelect {
+                Button { onSelect(item.id) } label: {
+                    itemRow(item, personalAmounts: personalAmounts)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }.buttonStyle(.borderless).foregroundStyle(.primary)
+                    .accessibilityIdentifier("transaction.item.open." + item.id)
+            } else {
+                itemRow(item, personalAmounts: personalAmounts)
+            }
+        }
+    }
+    private func itemRow(_ item: ExpenseItem, personalAmounts: [String: Int]) -> some View {
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent {
                     TransactionAmount(cents: item.cents, direction: .outgoing).monospacedDigit()
@@ -3293,7 +3343,6 @@ struct ExpenseItemsBreakdown: View {
                 }
             }.padding(.vertical, 6).accessibilityElement(children: .combine)
                 .accessibilityIdentifier("transaction.item.detail")
-        }
     }
 }
 func normalizedExpenseTags(_ text: String) -> [String] {
@@ -3329,60 +3378,5 @@ struct PendingBookkeepingCard: View {
                 Label(tr("待处理", "Needs attention", "Perlu tindakan"), systemImage: "tray.full.fill")
             }
         }
-    }
-}
-struct ExpenseTagsView: View {
-    @Environment(\.locale) private var uiLocale
-    @EnvironmentObject var model: LedgerModel
-    private var tags: [String] {
-        var values: [String: String] = [:]
-        for tag in model.ledger.expenses.flatMap({ $0.tags ?? [] }) { if values[friendKey(tag)] == nil { values[friendKey(tag)] = tag } }
-        return values.values.sorted()
-    }
-    var body: some View {
-        let _ = uiLocale.identifier
-        List {
-            Text(tr("此处保留已有标签的消费汇总。账目表单不再填写标签。", "Spending reports for previously saved tags remain available here. Transaction forms no longer include tags.", "Laporan belanja untuk tag yang disimpan sebelum ini masih tersedia di sini. Borang transaksi tidak lagi menyertakan tag.")).font(.caption)
-            ForEach(tags, id: \.self) { tag in NavigationLink("#" + tag) { TagSpendingView(tag: tag) } }
-            if tags.isEmpty { Text(tr("还没有标签。", "No tags yet.", "Belum ada tag.")) }
-        }.navigationTitle(tr("标签与项目", "Tags and projects", "Tag dan projek"))
-    }
-}
-struct TagSpendingView: View {
-    @Environment(\.locale) private var uiLocale
-    @Namespace private var expenseTransition
-    @EnvironmentObject var model: LedgerModel
-    let tag: String
-    @State private var allMonths = true
-    @State private var month = Date()
-    @State private var collection = ExpenseCollectionSnapshot()
-    @State private var loadedQuery: LedgerTimelineQuery?
-    private var query: LedgerTimelineQuery { LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: String(allMonths), filter: LedgerFilter(), provider: tag) }
-    var body: some View {
-        let _ = uiLocale.identifier
-        let requestedQuery = query, selectedMonth = allMonths ? nil : month
-        List {
-            Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $allMonths)
-            if !allMonths { MonthPicker(month: $month) }
-            LabeledContent(tr("我的账户付款", "Paid from my account", "Dibayar dari akaun saya"), value: money(collection.paid))
-            LabeledContent(tr("我的净消费", "My net spending", "Belanja bersih saya"), value: money(collection.personal))
-            Text(tr("同一账目可有多个标签，各标签合计不能再相加作为总消费。", "An entry can have several tags. Do not add tag totals together as total spending.", "Satu rekod boleh mempunyai beberapa tag. Jangan jumlahkan jumlah setiap tag sebagai jumlah belanja.")).font(.caption)
-            ForEach(collection.entries) { entry in
-                NavigationLink {
-                    ExpenseDetailView(id: entry.id, embeddedInNavigation: true).yuejiZoom(id: entry.id, namespace: expenseTransition)
-                } label: { ExpenseRow(entry: entry) }
-                    .yuejiZoomSource(id: entry.id, namespace: expenseTransition)
-            }
-        }.yuejiListSurface().navigationTitle("#" + tag)
-            .yuejiUpdating(loadedQuery != requestedQuery)
-            .task(id: requestedQuery) {
-                guard loadedQuery != requestedQuery else { return }
-                do {
-                    let fresh = try await model.preparedEntries(month: selectedMonth, tag: tag)
-                    guard !Task.isCancelled, query == requestedQuery else { return }
-                    collection = fresh; loadedQuery = requestedQuery
-                } catch is CancellationError { return }
-                catch { model.error = error.localizedDescription }
-            }
     }
 }
