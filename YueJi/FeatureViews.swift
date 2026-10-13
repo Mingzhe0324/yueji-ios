@@ -3276,26 +3276,28 @@ struct ExpenseItemsFields: View {
                     }.accessibilityIdentifier("transaction.item.quantity")
                     LabeledContent(tr("小计", "Line total", "Jumlah baris"), value: money((try? draft.savedItem().cents) ?? 0))
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
-                    Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
-                        ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
-                    }.pickerStyle(.navigationLink)
-                        .accessibilityIdentifier("transaction.item.category")
-                    NavigationLink {
-                        ItemOwnershipPicker(ownership: item.ownership, friendNames: friendNames + items.flatMap { $0.ownership?.friends ?? [] }, payer: payer)
-                    } label: {
-                        LabeledContent(tr("属于谁", "Belongs to", "Milik siapa"), value: draft.ownership?.label ?? tr("沿用整笔分账", "Use transaction split", "Ikut pembahagian transaksi"))
-                    }.accessibilityIdentifier("transaction.item.ownership")
-                    Button(role: .destructive) {
-                        let id = draft.id
-                        if focus.wrappedValue == .itemName(id) || focus.wrappedValue == .itemAmount(id) { focus.wrappedValue = nil }
-                        updateRows { items.removeAll { $0.id == id } }
-                        FeedbackHaptics.selection()
-                    } label: {
-                        Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
-                    }.buttonStyle(.borderless)
-                        .accessibilityIdentifier("transaction.item.remove")
-                        .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
-                }.padding(.vertical, 6).id(draft.id)
+                }.padding(.vertical, 6)
+                // Native navigation controls must each own a Form row.
+                // Two links inside one VStack can both activate on one tap.
+                Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
+                    ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                }.pickerStyle(.navigationLink)
+                    .accessibilityIdentifier("transaction.item.category")
+                NavigationLink {
+                    ItemOwnershipPicker(ownership: item.ownership, friendNames: friendNames + items.flatMap { $0.ownership?.friends ?? [] }, payer: payer)
+                } label: {
+                    LabeledContent(tr("属于谁", "Belongs to", "Milik siapa"), value: draft.ownership?.label ?? tr("沿用整笔分账", "Use transaction split", "Ikut pembahagian transaksi"))
+                }.accessibilityIdentifier("transaction.item.ownership")
+                Button(role: .destructive) {
+                    let id = draft.id
+                    if focus.wrappedValue == .itemName(id) || focus.wrappedValue == .itemAmount(id) { focus.wrappedValue = nil }
+                    updateRows { items.removeAll { $0.id == id } }
+                    FeedbackHaptics.selection()
+                } label: {
+                    Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
+                }.buttonStyle(.borderless)
+                    .accessibilityIdentifier("transaction.item.remove")
+                    .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
             }
             Button {
                 let draft = ExpenseItemDraft(category: defaultCategory)

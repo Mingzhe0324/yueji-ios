@@ -314,34 +314,73 @@ struct YueJiApp: App {
     static func permits(_ cue: Cue, mode: String, enabled: Bool) -> Bool {
         enabled && mode != "off" && (mode != "success" || cue == .saved || cue == .goal)
     }
-    private var player: AVAudioPlayer?
-    private var releaseTask: Task<Void, Never>?
+    private let playback = FeedbackAudioPlayback()
+    private var revision: UInt64 = 0
     func play(_ cue: Cue) {
         let enabled = UserDefaults.standard.object(forKey: "animationSounds") as? Bool ?? true
         let mode = UserDefaults.standard.string(forKey: "soundFeedbackMode") ?? "full"
         guard Self.permits(cue, mode: mode, enabled: enabled), UIApplication.shared.applicationState == .active,
               let asset = NSDataAsset(name: cue.rawValue) else { return }
-        stop()
+        revision += 1
+        let request = revision
+        let data = asset.data
+        let volume: Float = cue == .launch ? 0.85 : 0.55
+        Task { await playback.play(data: data, volume: volume, revision: request) }
+    }
+    func stop() {
+        revision += 1
+        let request = revision
+        Task { await playback.stop(revision: request) }
+    }
+}
+
+/// Session activation and player setup can block in the simulator or audio
+/// service. Serialize them away from the main actor; stale requests cannot
+/// restart a cue after a newer stop or replace a newer sound.
+private actor FeedbackAudioPlayback {
+    private var revision: UInt64 = 0
+    private var player: AVAudioPlayer?
+    private var releaseTask: Task<Void, Never>?
+    private var sessionActive = false
+
+    func play(data: Data, volume: Float, revision request: UInt64) {
+        guard request > revision else { return }
+        revision = request
+        releaseTask?.cancel(); releaseTask = nil
+        player?.stop(); player = nil
         do {
             let session = AVAudioSession.sharedInstance()
             try session.setCategory(.ambient, mode: .default)
             try session.setActive(true)
-            let audio = try AVAudioPlayer(data: asset.data)
-            audio.volume = cue == .launch ? 0.85 : 0.55
+            sessionActive = true
+            let audio = try AVAudioPlayer(data: data)
+            audio.volume = volume
             audio.prepareToPlay()
             player = audio
-            guard audio.play() else { stop(); return }
+            guard audio.play() else { release(); return }
             let duration = audio.duration
             releaseTask = Task { [weak self] in
                 do { try await Task.sleep(for: .seconds(duration + 0.1)) } catch { return }
-                self?.stop()
+                await self?.finish(revision: request)
             }
-        } catch { stop() } // An optional cue never blocks bookkeeping.
+        } catch { release() }
     }
-    func stop() {
+    func stop(revision request: UInt64) {
+        guard request > revision else { return }
+        revision = request
+        release()
+    }
+    private func finish(revision request: UInt64) {
+        guard request == revision else { return }
+        release()
+    }
+    private func release() {
         releaseTask?.cancel(); releaseTask = nil
         player?.stop(); player = nil
-        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+        if sessionActive {
+            try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+            sessionActive = false
+        }
     }
 }
 

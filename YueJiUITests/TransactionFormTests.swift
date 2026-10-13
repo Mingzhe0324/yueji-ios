@@ -115,6 +115,8 @@ final class TransactionFormTests: XCTestCase {
             XCTAssertTrue((name.value as? String)?.contains(attempt == 1 ? " saved" : " unsaved") == true)
             let category = app.descendants(matching: .any)["transaction.item.category"].firstMatch
             reveal(category, in: app); category.tap()
+            XCTAssertTrue(app.navigationBars["Category"].waitForExistence(timeout: 5))
+            XCTAssertFalse(app.navigationBars["Belongs to"].exists, "Category tap must not also open ownership")
             let shopping = app.buttons["Shopping"].firstMatch
             XCTAssertTrue(shopping.waitForExistence(timeout: 5))
             let alreadySelected = shopping.isSelected
@@ -230,6 +232,8 @@ final class TransactionFormTests: XCTestCase {
         // Item category navigation must return to the same unsaved form.
         let itemCategory = app.descendants(matching: .any)["transaction.item.category"].firstMatch
         reveal(itemCategory, in: app); itemCategory.tap()
+        XCTAssertTrue(app.navigationBars["Category"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.navigationBars["Belongs to"].exists, "Category tap must not also open ownership")
         let shopping = app.buttons["Shopping"].firstMatch
         XCTAssertTrue(shopping.waitForExistence(timeout: 5), "Shopping category choice is absent from the native picker"); shopping.tap()
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
