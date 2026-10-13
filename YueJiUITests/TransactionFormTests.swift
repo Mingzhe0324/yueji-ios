@@ -179,6 +179,9 @@ final class TransactionFormTests: XCTestCase {
         let newEntry = app.descendants(matching: .any).matching(identifier: "overview.manualEntry").firstMatch
         XCTAssertTrue(newEntry.waitForExistence(timeout: 20), "Overview Add Entry is absent after launch; app state = \(app.state)")
         XCTAssertTrue(newEntry.isHittable, "Overview Add Entry exists but cannot be tapped after launch")
+        let tabBar = app.tabBars.firstMatch
+        XCTAssertLessThanOrEqual(newEntry.frame.maxY, tabBar.frame.minY,
+                                 "Add Entry's accessible target must not extend behind the tab bar")
         // No warm-up tap or delay after the launch screen becomes interactive.
         newEntry.tap()
         let amount = app.textFields["transaction.amount"]
@@ -243,10 +246,33 @@ final class TransactionFormTests: XCTestCase {
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, above: Bool = false) {
         for _ in 0..<6 {
-            if element.exists && element.isHittable { return }
-            if above { app.swipeDown() } else { app.swipeUp() }
+            let viewport = unobscuredContent(in: app)
+            if element.exists {
+                let frame = element.frame
+                // A partly exposed row can be hittable while its tap point lies
+                // beneath Edit/Delete or the tab bar. Reveal the whole target.
+                if !frame.isEmpty && viewport.contains(frame) && element.isHittable { return }
+                if frame.minY < viewport.minY { app.swipeDown() } else { app.swipeUp() }
+            } else if above { app.swipeDown() } else { app.swipeUp() }
         }
-        XCTAssertTrue(element.exists && element.isHittable, "Could not reach \(element)")
+        XCTAssertTrue(element.exists && element.isHittable && unobscuredContent(in: app).contains(element.frame),
+                      "Could not fully reveal \(element) above the screen controls")
+    }
+
+    private func unobscuredContent(in app: XCUIApplication) -> CGRect {
+        let screen = app.frame
+        var top = screen.minY
+        var bottom = screen.maxY
+        for bar in app.navigationBars.allElementsBoundByIndex where bar.isHittable {
+            top = max(top, bar.frame.maxY)
+        }
+        let tabBar = app.tabBars.firstMatch
+        if tabBar.exists && tabBar.isHittable { bottom = min(bottom, tabBar.frame.minY) }
+        for id in ["transaction.edit", "transaction.delete", "overview.manualEntry"] {
+            let control = app.buttons[id].firstMatch
+            if control.exists && control.isHittable { bottom = min(bottom, control.frame.minY - 12) }
+        }
+        return CGRect(x: screen.minX, y: top, width: screen.width, height: max(0, bottom - top))
     }
 
     private func finishKeyboard(in app: XCUIApplication) {

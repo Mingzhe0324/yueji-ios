@@ -1,0 +1,9 @@
+# Native hit-target failures
+
+The supplied build-test (3).log completes compilation, simulator boots and all 235 unit tests. The UI runner executes all four tests; no runner timeout or compiler error occurs. This is progress over the earlier infrastructure failures, not a passing UI result.
+
+Both new-entry tests fail at the Add Entry hittability assertion. The captured hierarchy gives overview.manualEntry a frame of x=0, y=709, width=402, height=165, reaching the screen bottom at 874. Its visible label occupies y=721...779; the tab bar begins at y=791. Accessibility had been combined after safe-area padding/background modifiers. A separate container now owns that decoration, while the identifier, label and button traits attach to the styled button itself. A UI assertion checks that its accessible frame ends above the tab bar. There is no coordinate-tap workaround, startup delay or extra tap.
+
+Both saved-item tests successfully create a saved transaction, relaunch, open its detail from Overview, add and cancel an item, reopen and save it, then return and open the same purchase from Ledger. They fail when tapping the saved item without scrolling it fully into view. The failure hierarchy places the item at y=749.3...832, Edit/Delete at y=721...779, and the tab bar at y=791...874. The old reveal helper returned as soon as isHittable was true, even for a partly exposed row. The helper now requires the whole target to lie below visible navigation bars and above visible bottom controls before tapping; it scrolls toward the target otherwise. The original editor-presentation and draft-retention assertions remain required.
+
+Local project/resource, Swift syntax, diff and runner checks pass. Native UI validation remains pending; Windows checks cannot establish iOS hit-testing behavior or certify the remaining test steps. Run Azure from the new commit and inspect all four UI outcomes. No assertion is skipped and no failure is converted to success.

@@ -399,21 +399,23 @@ struct DashboardView: View {
             }
             .toolbar(.hidden, for: .bottomBar)
             .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
                     Button { guard !adding else { return }; adding = true } label: {
                         Label(tr("记一笔", "Add entry", "Tambah rekod"), systemImage: "plus")
                             .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
                     }
                     .yuejiPrimaryButton().buttonBorderShape(.capsule)
-                    .guideTarget("dashboard.add")
-                    .padding(.horizontal, 20).padding(.vertical, 12)
-                    .frame(maxWidth: .infinity)
-                    .background(Color(uiColor: .systemGroupedBackground))
-                    // Expose the decorated safe-area control as one actionable
-                    // element, including when the system uses a glass button style.
-                    .accessibilityElement(children: .combine)
+                    // The accessible target is the button, not the background that
+                    // extends through the bottom safe area behind the tab bar.
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel(tr("记一笔", "Add entry", "Tambah rekod"))
                     .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier("overview.manualEntry")
+                    .guideTarget("dashboard.add")
+                }
+                .padding(.horizontal, 20).padding(.vertical, 12)
+                .frame(maxWidth: .infinity)
+                .background(Color(uiColor: .systemGroupedBackground))
             }
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
