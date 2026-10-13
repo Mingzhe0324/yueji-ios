@@ -25,6 +25,10 @@ class SimulatorRunnerTests(unittest.TestCase):
             self.assertIn('-only-testing:YueJiUITests', commands[5])
             self.assertEqual(stage.call_args_list[5].kwargs['test_case_timeout'], 900)
             self.assertEqual(stage.call_args_list[2].kwargs, {})
+            for command in (commands[2], commands[5]):
+                self.assertEqual(command[command.index('-collect-test-diagnostics') + 1], 'never')
+                self.assertIn('-resultBundlePath', command)
+            self.assertNotIn('-collect-test-diagnostics', commands[0])
             for command in (commands[0], commands[2], commands[5]):
                 self.assertIn('ONLY_ACTIVE_ARCH=YES', command)
                 self.assertEqual(command[command.index('-configuration') + 1], 'Debug')

@@ -156,20 +156,23 @@ def main():
             '-derivedDataPath', 'build-simulator', '-parallel-testing-enabled', 'NO',
             'ONLY_ACTIVE_ARCH=YES',
             'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO']
+    # Hosted Xcode can hang waiting for asynchronous simulator diagnostics after
+    # all cases end. Keep xcresult/test attachments, but skip OS diagnostic dumps.
+    test_options = ['-collect-test-diagnostics', 'never']
     stages = [
         # Build for the selected destination before running simulator services.
         # The project otherwise builds both arm64 and x86_64 on a cold runner.
         (base + ['build-for-testing', '-showBuildTimingSummary'], 600),
         # A hosted image's first boot may still be migrating LaunchServices data.
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 480),
-        (base + ['test-without-building', '-only-testing:YueJiTests',
+        (base + test_options + ['test-without-building', '-only-testing:YueJiTests',
                  '-resultBundlePath', str(args.artifacts / 'UnitTestResults.xcresult')], 900),
         # Keep the installed app/data, but give the UI runner a fresh simulator process.
         (['xcrun', 'simctl', 'shutdown', args.simulator], 60),
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 180),
         # Keep one UI runner and all tests. The latest run was still progressing
         # after 30 minutes; bound individual cases/transitions as well as the suite.
-        (base + ['test-without-building', '-only-testing:YueJiUITests',
+        (base + test_options + ['test-without-building', '-only-testing:YueJiUITests',
                  '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 2400),
     ]
     with (args.artifacts / 'build-test.log').open('w', encoding='utf-8') as log:
