@@ -26,12 +26,24 @@ struct PageIntroduction: View {
             .padding(.horizontal, 20)
     }
 }
+private struct YueJiBarAppearance: ViewModifier {
+    @Environment(\.colorScheme) private var scheme
+    func body(content: Content) -> some View {
+        content
+            // Keep native chrome in the same resolved theme as the page. A
+            // visible background keeps the requested bar scheme in effect at
+            // scroll edges as well as when content is beneath the bar.
+            .toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
+            .toolbarBackground(.visible, for: .navigationBar, .tabBar)
+    }
+}
 private struct YueJiListSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.listStyle(.insetGrouped)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .modifier(YueJiBarAppearance())
     }
 }
 extension View {
@@ -55,10 +67,12 @@ private struct YueJiSheetSurface: ViewModifier {
             // Let the system choose the sheet's curvature and material.
             content.presentationDragIndicator(.visible)
                 .presentationBackground(Color(uiColor: .systemGroupedBackground))
+                .modifier(YueJiBarAppearance())
         } else {
             content.presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
                 .presentationBackground(Color(uiColor: .systemGroupedBackground))
+                .modifier(YueJiBarAppearance())
         }
     }
 }
@@ -122,11 +136,11 @@ struct MainView: View {
     }
     private var tabs: some View {
         TabView(selection: $selectedTab) {
-            DashboardView().ledgerFeedback().tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView().ledgerFeedback().tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
-            RecurringView().ledgerFeedback().tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
-            FriendsView().ledgerFeedback().tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
-            SettingsView().ledgerFeedback().tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
+            DashboardView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
+            ExpensesView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
+            RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
+            FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
+            SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
         }.tint(ink).modifier(YueJiTabBarMotion())
     }
     var body: some View {
