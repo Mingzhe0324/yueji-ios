@@ -6,6 +6,9 @@ import SwiftUI
 
 final class ItemOwnershipAndQuantityTests: XCTestCase {
     private let categories = Ledger().categoryNames
+    // LocalStore's existing ISO-8601 backup format stores whole seconds.
+    // Keep full-record equality meaningful without comparing fractional Date() precision.
+    private let backupDate = Date(timeIntervalSince1970: 1_700_000_000)
     private let mine = ItemOwnership(includesMe: true, friends: [])
     private let amy = ItemOwnership(includesMe: false, friends: ["Amy"])
 
@@ -14,7 +17,7 @@ final class ItemOwnershipAndQuantityTests: XCTestCase {
         let item = try JSONDecoder().decode(ExpenseItem.self, from: json)
         XCTAssertEqual(item.count, 1); XCTAssertNil(item.quantity); XCTAssertNil(item.ownership)
         XCTAssertEqual(try ExpenseItemDraft(item).savedItem(), item)
-        let original = Expense(merchant: "Old purchase", cents: 480, shares: [Share(name: "Amy", cents: 240)], items: [item])
+        let original = Expense(merchant: "Old purchase", cents: 480, date: backupDate, shares: [Share(name: "Amy", cents: 240)], items: [item])
         let restored = try LocalStore.decode(LocalStore.encode(Ledger(expenses: [original]))).expenses[0]
         XCTAssertEqual(restored, original)
         XCTAssertEqual(restored.personalItemAmounts["old"], 240)
@@ -27,7 +30,7 @@ final class ItemOwnershipAndQuantityTests: XCTestCase {
         let item = try draft.savedItem()
         XCTAssertEqual(item.cents, 1440); XCTAssertEqual(item.unitCents, 480)
         XCTAssertEqual(try ExpenseItemDraft(item).savedItem(), item)
-        let expense = try Expense(merchant: "Cafe", cents: 1440).replacingItems([item], allowedCategories: categories)
+        let expense = try Expense(merchant: "Cafe", cents: 1440, date: backupDate).replacingItems([item], allowedCategories: categories)
         XCTAssertEqual(try LocalStore.decode(LocalStore.encode(Ledger(expenses: [expense]))).expenses[0], expense)
         for count in [0, -1, 1000, Int.max] {
             var invalid = draft; invalid.quantity = count
