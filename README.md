@@ -2,6 +2,8 @@
 
 **版本 / Version：1.62.2 · Build 92**
 
+In-app feedback now uses one compact, readable banner at a time, with a quieter surface, shorter previews and a clear Undo action. Waiting notices retain their display time. See [notification visual refinement](docs/notification-visual-refinement.md) for behavior and pending device checks.
+
 Saved transaction item editors now have screen-owned presentation and stable Overview/Ledger navigation. Unsaved editors require Save or Cancel, and Settings Tags & Projects is removed while stored transaction data is retained. The recorded dismissal and new regression coverage are documented in [saved-item editor verification](docs/saved-item-editor-lifecycle.md). Local checks pass; native tests and device confirmation remain pending.
 
 Azure native tests now run unit and UI targets sequentially with a simulator restart between them, explicit boot readiness, and bounded execution. UI runner initialization failures stop promptly and remain failures; logs and available result bundles are published. See [simulator timeout diagnosis and verification](docs/simulator-runner-timeout.md).

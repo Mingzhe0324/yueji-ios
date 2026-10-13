@@ -104,16 +104,20 @@ struct MainView: View {
     }
     private var savedExpiration: BannerExpirationKey {
         BannerExpirationKey(id: model.savedNotice, paused: phase != .active || !model.didFinishLaunch ||
-            model.error != nil || model.foregroundNotice != nil || model.newTNGCount > 0 || !model.undoEntries.isEmpty ||
+            model.error != nil || model.activeBanner != .saved ||
             model.bannerInteraction == model.savedNotice?.uuidString)
+    }
+    private var undoExpirationPaused: Bool {
+        phase != .active || !model.didFinishLaunch || model.error != nil
     }
     private var foregroundExpiration: BannerExpirationKey {
         BannerExpirationKey(id: model.foregroundNotice?.id, paused: phase != .active || !model.didFinishLaunch || model.error != nil ||
+            model.activeBanner != .foreground ||
             model.bannerInteraction == model.foregroundNotice?.id.uuidString)
     }
     private var importedExpiration: BannerExpirationKey {
         BannerExpirationKey(id: model.newTNGCount > 0 ? model.newTNGToken : nil,
-            paused: phase != .active || !model.didFinishLaunch || model.error != nil || model.foregroundNotice != nil ||
+            paused: phase != .active || !model.didFinishLaunch || model.error != nil || model.activeBanner != .imported ||
                 model.bannerInteraction == model.newTNGToken.uuidString)
     }
     private var tabs: some View {
@@ -148,7 +152,6 @@ struct MainView: View {
             }
         }
             .task(id: phase) {
-                model.pauseUndoExpiry(phase != .active)
                 if phase != .active { FeedbackSounds.shared.stop() }
                 // The first read must run even before scene activation arrives.
                 // Later background/inactive transitions do not reload the ledger.
@@ -207,6 +210,7 @@ struct MainView: View {
                     Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
                 } } }.ledgerFeedback(modal: true)
             }
+            .task(id: undoExpirationPaused) { model.pauseUndoExpiry(undoExpirationPaused) }
             .task(id: savedExpiration) {
                 guard !savedExpiration.paused, let token = savedExpiration.id else { return }
                 do { try await Task.sleep(for: .seconds(BannerTiming.duration)) } catch { return }
@@ -2808,39 +2812,59 @@ struct MoonBuddy: View {
 }
 
 private struct NotificationBannerCard: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
     let title: String
     var message: String = ""
     var symbol = "checkmark.circle.fill"
     var color = Color.green
     let interaction: BannerInteraction
+    var actionTitle: String? = nil
+    var actionEnabled = true
     var action: (() -> Void)? = nil
     private var label: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: symbol).font(.title3.weight(.semibold)).foregroundStyle(color).accessibilityHidden(true)
+            Image(systemName: symbol).font(.body.weight(.semibold)).foregroundStyle(color)
+                .frame(width: 32, height: 32).background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
-                Text(title).font(.subheadline.weight(.semibold)).lineLimit(2)
-                if !message.isEmpty { Text(message).font(.subheadline).foregroundStyle(.secondary).lineLimit(3) }
+                Text(title).font(.subheadline.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                if !message.isEmpty && message != title {
+                    Text(message).font(.footnote).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.foregroundStyle(.primary).frame(minHeight: 44)
     }
     var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
         HStack(spacing: 4) {
-            if let action {
+            if let action, actionTitle == nil {
                 Button { if interaction.canActivate { action() } } label: { label.contentShape(Rectangle()) }
                     .buttonStyle(.plain).accessibilityLabel(title + (message.isEmpty ? "" : ". " + message))
                     .accessibilityAction { if !interaction.exiting { action() } }
             } else { label.accessibilityElement(children: .ignore).accessibilityLabel(title + (message.isEmpty ? "" : ". " + message)) }
+            if !typeSize.isAccessibilitySize { explicitAction }
             Button { if interaction.canActivate { interaction.dismiss?() } } label: {
-                Image(systemName: "xmark").font(.subheadline.weight(.semibold)).foregroundStyle(.secondary)
+                Image(systemName: "xmark").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
                     .frame(width: 44, height: 44).contentShape(Rectangle())
             }.buttonStyle(.plain).accessibilityLabel(tr("关闭提示", "Dismiss notice", "Tutup notis"))
                 .accessibilityAction { interaction.dismiss?() }
-        }.padding(.leading, 16).padding(.trailing, 4).padding(.vertical, 8)
+        }
+        if typeSize.isAccessibilitySize { explicitAction.padding(.leading, 44) }
+        }.padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 6)
             .modifier(NotificationBannerSurface())
             .accessibilityElement(children: .contain)
             .accessibilityHint(tr("向左、向右或向上滑动可关闭提示。", "Swipe left, right, or up to dismiss.", "Leret ke kiri, kanan atau atas untuk menutup."))
             .accessibilityAction(named: Text(tr("关闭提示", "Dismiss notice", "Tutup notis"))) { interaction.dismiss?() }
             .accessibilityAction(.escape) { interaction.dismiss?() }
+    }
+    @ViewBuilder private var explicitAction: some View {
+        if let actionTitle, let action {
+            Button { if interaction.canActivate { action() } } label: {
+                Text(actionTitle).font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 8).frame(minWidth: 44, minHeight: 44)
+            }.buttonStyle(.plain).foregroundStyle(Color.accentColor).disabled(!actionEnabled)
+                .accessibilityAction { if actionEnabled && !interaction.exiting { action() } }
+        }
     }
 }
 
@@ -2902,6 +2926,7 @@ private struct LedgerFeedbackHost: ViewModifier {
     private var visible: Bool { model.feedbackOwners.isVisible(modal ? owner : nil) }
     private var topIdentity: String? {
         guard visible, model.didFinishLaunch else { return nil }
+        if model.activeBanner == .undo { return model.undoToken.uuidString }
         if let notice = model.foregroundNotice { return notice.id.uuidString }
         if model.newTNGCount > 0 { return model.newTNGToken.uuidString }
         if model.undoEntries.isEmpty { return model.savedNotice?.uuidString }
@@ -2909,23 +2934,6 @@ private struct LedgerFeedbackHost: ViewModifier {
     }
     func body(content: Content) -> some View {
         content
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                if visible && !model.undoEntries.isEmpty {
-                    let token = model.undoToken
-                    SwipeDismissBanner(onDismiss: { model.dismissDeletionFeedback(id: token) },
-                        onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
-                        ViewThatFits(in: .horizontal) {
-                            HStack(spacing: 16) { deletionStatus; undoButton(interaction) }
-                            VStack(spacing: 4) { deletionStatus; undoButton(interaction) }
-                        }
-                        .padding(.horizontal, 18).padding(.vertical, 6).modifier(NotificationBannerSurface())
-                        .accessibilityAction(named: Text(tr("关闭提示", "Dismiss notice", "Tutup notis"))) { interaction.dismiss?() }
-                    }.id(token).frame(maxWidth: 520).padding(.horizontal, 20).padding(.vertical, 8)
-                        .frame(maxWidth: .infinity)
-                        .transition(.opacity)
-                }
-            }
-            .animation(.easeOut(duration: reduceMotion ? 0.14 : 0.18), value: model.undoEntries.isEmpty)
             .overlay(alignment: .top) {
                 // Keep the navigation bar's Back/Close and trailing buttons fully reachable.
                 topBanner.frame(maxWidth: 520).padding(.horizontal, 20).padding(.top, 52)
@@ -2936,7 +2944,16 @@ private struct LedgerFeedbackHost: ViewModifier {
     }
     @ViewBuilder private var topBanner: some View {
         if visible, model.didFinishLaunch {
-            if let notice = model.foregroundNotice {
+            if model.activeBanner == .undo {
+                let token = model.undoToken
+                SwipeDismissBanner(onDismiss: { model.dismissDeletionFeedback(id: token) },
+                    onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
+                    NotificationBannerCard(title: String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"),
+                        symbol: "trash", color: .gray, interaction: interaction,
+                        actionTitle: tr("撤销", "Undo", "Batal padam"), actionEnabled: !model.deletionInFlight,
+                        action: { Task { await model.undoDeletion() } })
+                }.id(token).transition(.opacity)
+            } else if let notice = model.foregroundNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissForegroundNotice(id: notice.id) },
                     onInteraction: { model.setBannerInteraction(id: notice.id.uuidString, active: $0) }) { interaction in
                     NotificationBannerCard(title: notice.title, message: notice.message, symbol: "bell.badge.fill", color: .blue,
@@ -2951,7 +2968,10 @@ private struct LedgerFeedbackHost: ViewModifier {
                 let token = model.newTNGToken
                 SwipeDismissBanner(onDismiss: { model.dismissNewTNG(id: token) },
                     onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
-                    NotificationBannerCard(title: tr("新增 \(model.newTNGCount) 笔银行 / TNG 记录", "\(model.newTNGCount) new bank / TNG records", "\(model.newTNGCount) rekod bank / TNG baharu"),
+                    NotificationBannerCard(title: model.newTNGCount == 1
+                        ? tr("新增 1 笔记录", "1 new record", "1 rekod baharu")
+                        : tr("新增 \(model.newTNGCount) 笔记录", "\(model.newTNGCount) new records", "\(model.newTNGCount) rekod baharu"),
+                        message: tr("银行 · TNG", "Bank · TNG", "Bank · TNG"),
                         symbol: "tray.and.arrow.down", color: .blue, interaction: interaction, action: {
                             guard model.newTNGToken == token, model.newTNGCount > 0 else { return }
                             model.dismissNewTNG(id: token)
@@ -2966,30 +2986,8 @@ private struct LedgerFeedbackHost: ViewModifier {
             }
         }
     }
-    private var deletionStatus: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            if model.savedNotice != nil {
-                Label(model.feedbackMessage, systemImage: "checkmark.circle.fill")
-                    .font(.subheadline.weight(.semibold)).fixedSize(horizontal: false, vertical: true)
-            }
-            deletionLabel
-        }
-    }
-    private var deletionLabel: some View {
-        Label(String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"), systemImage: "trash")
-            .font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
-    }
-    private func undoButton(_ interaction: BannerInteraction) -> some View {
-        Button(tr("撤销", "Undo", "Batal padam")) {
-            guard interaction.canActivate else { return }
-            Task { await model.undoDeletion() }
-        }.font(.subheadline.bold()).frame(minWidth: 44, minHeight: 44).disabled(model.deletionInFlight)
-            .accessibilityAction {
-                guard !interaction.exiting else { return }
-                Task { await model.undoDeletion() }
-            }
-    }
 }
+
 extension View {
     func ledgerFeedback(modal: Bool = false) -> some View { modifier(LedgerFeedbackHost(modal: modal)) }
 }

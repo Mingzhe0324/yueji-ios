@@ -5,6 +5,30 @@ import SwiftUI
 @testable import YueJi
 
 final class NotificationBannerTests: XCTestCase {
+    @MainActor func testWaitingNoticesSurviveHigherPriorityBannerDismissal() throws {
+        let model = LedgerModel(previewLedger: GuideSample.ledger())
+        let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+        let ledgerBefore = try encoder.encode(model.ledger)
+        XCTAssertNil(model.activeBanner)
+        model.showSaved(message: "Saved")
+        let saved = try XCTUnwrap(model.savedNotice)
+        XCTAssertEqual(model.activeBanner, .saved)
+        model.newTNGCount = 2
+        let imported = model.newTNGToken
+        XCTAssertEqual(model.activeBanner, .imported)
+        let notice = ForegroundLedgerNotice(title: "Recorded", message: "RM35.00", userInfo: [:])
+        model.receiveForegroundNotice(notice)
+        XCTAssertEqual(model.activeBanner, .foreground)
+        model.dismissForegroundNotice(id: notice.id)
+        XCTAssertEqual(model.activeBanner, .imported)
+        XCTAssertEqual(model.newTNGCount, 2)
+        model.dismissNewTNG(id: imported)
+        XCTAssertEqual(model.activeBanner, .saved)
+        XCTAssertEqual(model.savedNotice, saved)
+        model.dismissSavedNotice(id: saved)
+        XCTAssertNil(model.activeBanner)
+        XCTAssertEqual(try encoder.encode(model.ledger), ledgerBefore)
+    }
     func testAcceptsLeftRightAndUpButRejectsDownAndAmbiguousDiagonals() {
         for direction in [CGFloat(-1), CGFloat(1)] {
             XCTAssertTrue(BannerSwipePolicy.accepts(translation: CGPoint(x: direction * 20, y: 3), velocity: .zero))

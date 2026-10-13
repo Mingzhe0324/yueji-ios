@@ -27,6 +27,19 @@ struct BannerExpirationKey: Hashable {
     let paused: Bool
 }
 
+enum LedgerBannerKind: Equatable { case undo, foreground, imported, saved }
+
+extension LedgerModel {
+    /// Presentation and expiry use the same priority so hidden messages keep their time.
+    var activeBanner: LedgerBannerKind? {
+        if !undoEntries.isEmpty { return .undo }
+        if foregroundNotice != nil { return .foreground }
+        if newTNGCount > 0 { return .imported }
+        if savedNotice != nil { return .saved }
+        return nil
+    }
+}
+
 @MainActor enum BannerTiming {
     // Give VoiceOver time to read the message and reach its actions.
     static var duration: TimeInterval { UIAccessibility.isVoiceOverRunning ? 12 : 4 }
@@ -331,16 +344,10 @@ enum BannerSwipePolicy {
 struct NotificationBannerSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
-    @ViewBuilder private var surface: some View {
-        if reduceTransparency { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
-        else if #available(iOS 26.0, *) { Color.clear.glassEffect(.regular, in: shape) }
-        else { shape.fill(.regularMaterial) }
-    }
+    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
     func body(content: Content) -> some View {
-        content.background { surface }
+        content.background { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
             .overlay { shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5).allowsHitTesting(false) }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.18 : 0.08), radius: 8, y: 3)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.08), radius: 6, y: 2)
     }
 }
