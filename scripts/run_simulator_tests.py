@@ -12,8 +12,31 @@ import time
 INITIALIZATION_FAILURE = 'Failed to initialize for UI testing:'
 
 
+def stop_process(process, force, emit, process_group=False):
+    """Stop our child without requiring permission to signal simulator services."""
+    if process.poll() is not None:
+        return
+    if process_group and os.name == 'posix':
+        try:
+            os.killpg(process.pid, signal.SIGKILL if force else signal.SIGTERM)
+            return
+        except ProcessLookupError:
+            return
+        except OSError as error:
+            emit(f'Process-group cleanup unavailable ({error}); stopping the owned child instead.\n')
+    try:
+        if force:
+            process.kill()
+        else:
+            process.terminate()
+    except ProcessLookupError:
+        pass
+    except OSError as error:
+        emit(f'Owned-child cleanup unavailable ({error}); retaining the stage failure.\n')
+
+
 def run_stage(command, log, timeout, grace=5):
-    """Stream output; preserve nonzero exits and stop a failed runner's entire process group."""
+    """Stream output and bound execution/cleanup while preserving the stage failure."""
     def emit(line):
         print(line, end='', flush=True)
         log.write(line)
@@ -39,16 +62,9 @@ def run_stage(command, log, timeout, grace=5):
     termination_deadline = None
     output_finished = False
 
-    def stop(sig):
-        try:
-            if os.name == 'posix':
-                os.killpg(process.pid, sig)
-            elif sig == signal.SIGTERM:
-                process.terminate()
-            else:
-                process.kill()
-        except ProcessLookupError:
-            pass
+    def stop(force=False):
+        # simctl talks to OS-managed services; only stop our simctl client.
+        stop_process(process, force, emit, process_group=Path(command[0]).name == 'xcodebuild')
 
     try:
         while True:
@@ -59,10 +75,10 @@ def run_stage(command, log, timeout, grace=5):
                 emit(f'CI stage timed out after {timeout} seconds; native verification did not complete.\n')
                 forced_code = 124
             if forced_code is not None and termination_deadline is None:
-                stop(signal.SIGTERM)
+                stop()
                 termination_deadline = now + grace
             if termination_deadline is not None and now >= termination_deadline:
-                stop(getattr(signal, 'SIGKILL', signal.SIGTERM + 1))
+                stop(force=True)
                 break
             try:
                 line = lines.get(timeout=0.1)
@@ -83,10 +99,15 @@ def run_stage(command, log, timeout, grace=5):
         return forced_code if forced_code is not None else process.returncode
     finally:
         if process.poll() is None:
-            stop(getattr(signal, 'SIGKILL', signal.SIGTERM + 1))
-        process.wait()
+            stop(force=True)
+        try:
+            process.wait(timeout=grace)
+        except subprocess.TimeoutExpired:
+            emit('Cleanup deadline reached; retaining the failed stage without waiting indefinitely.\n')
         reader.join(timeout=1)
-        process.stdout.close()
+        # Closing a pipe held by the reader can block if an OS service inherited it.
+        if not reader.is_alive():
+            process.stdout.close()
 
 
 def main():
@@ -100,7 +121,8 @@ def main():
             '-derivedDataPath', 'build-simulator', '-parallel-testing-enabled', 'NO',
             'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO']
     stages = [
-        (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 180),
+        # A hosted image's first boot may still be migrating LaunchServices data.
+        (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 480),
         (base + ['build-for-testing'], 600),
         (base + ['test-without-building', '-only-testing:YueJiTests',
                  '-resultBundlePath', str(args.artifacts / 'UnitTestResults.xcresult')], 900),
