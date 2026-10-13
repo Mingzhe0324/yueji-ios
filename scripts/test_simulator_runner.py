@@ -138,6 +138,33 @@ while True:
         self.assertEqual(code, 0)
         self.assertIn('native output', log)
 
+    def test_finalization_can_outlast_transition_budget(self):
+        source = "import time; print(\"Test Suite 'All tests' passed at now.\"); time.sleep(0.6)"
+        code, log = self.run_python(source, test_case_timeout=2,
+                                    test_transition_timeout=0.3, test_finalization_timeout=2)
+        self.assertEqual(code, 0)
+        self.assertIn('waiting up to 2 seconds for Xcode', log)
+        self.assertNotIn('timed out', log)
+
+    def test_passed_suite_does_not_override_xcode_failure(self):
+        code, _ = self.run_python("print(\"Test Suite 'All tests' passed at now.\"); raise SystemExit(65)",
+                                  test_case_timeout=2)
+        self.assertEqual(code, 65)
+
+    def test_finalization_is_bounded_and_repeated_summaries_do_not_extend_it(self):
+        source = "import time\nwhile True:\n print(\"Test Suite 'All tests' passed at now.\")\n time.sleep(0.05)"
+        code, log = self.run_python(source, test_case_timeout=2,
+                                    test_transition_timeout=2, test_finalization_timeout=0.3)
+        self.assertEqual(code, 124)
+        self.assertIn('Xcode result finalization exceeded', log)
+
+    def test_whole_stage_limit_still_bounds_finalization(self):
+        source = "import time; print(\"Test Suite 'All tests' failed at now.\"); time.sleep(60)"
+        code, log = self.run_python(source, timeout=0.3, test_case_timeout=2,
+                                    test_finalization_timeout=60)
+        self.assertEqual(code, 124)
+        self.assertIn('CI stage timed out after 0.3 seconds', log)
+
     def test_test_failure_is_not_converted_to_success(self):
         code, _ = self.run_python('raise SystemExit(65)')
         self.assertEqual(code, 65)

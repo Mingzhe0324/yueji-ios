@@ -12,6 +12,7 @@ import time
 
 INITIALIZATION_FAILURE = 'Failed to initialize for UI testing:'
 TEST_CASE_EVENT = re.compile(r"Test Case '-\[([^\]]+)\]' (started|passed|failed)")
+TEST_RUN_FINISHED = re.compile(r"^Test Suite 'All tests' (?:passed|failed) at ")
 
 
 def stop_process(process, force, emit, process_group=False):
@@ -37,7 +38,8 @@ def stop_process(process, force, emit, process_group=False):
         emit(f'Owned-child cleanup unavailable ({error}); retaining the stage failure.\n')
 
 
-def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_transition_timeout=180):
+def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_transition_timeout=180,
+              test_finalization_timeout=600):
     """Stream output and bound execution/cleanup while preserving the stage failure."""
     def emit(line):
         print(line, end='', flush=True)
@@ -62,6 +64,7 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
     started = time.monotonic()
     deadline = started + timeout
     active_test = None
+    finalizing = False
     test_deadline = time.monotonic() + test_transition_timeout if test_case_timeout is not None else None
     forced_code = None
     termination_deadline = None
@@ -80,7 +83,9 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
                 emit(f'CI stage timed out after {timeout} seconds; native verification did not complete.\n')
                 forced_code = 124
             if forced_code is None and test_deadline is not None and now >= test_deadline:
-                if active_test is not None:
+                if finalizing:
+                    detail = f'Xcode result finalization exceeded {test_finalization_timeout} seconds after tests ended'
+                elif active_test is not None:
                     detail = f'UI test {active_test} exceeded {test_case_timeout} seconds'
                 else:
                     detail = f'UI runner made no test transition within {test_transition_timeout} seconds'
@@ -105,11 +110,16 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
                 if event:
                     name, status = event.groups()
                     if status == 'started' and active_test is None:
+                        finalizing = False
                         active_test = name
                         test_deadline = time.monotonic() + test_case_timeout
                     elif status in ('passed', 'failed') and name == active_test:
                         active_test = None
                         test_deadline = time.monotonic() + test_transition_timeout
+                if TEST_RUN_FINISHED.search(line) and active_test is None and not finalizing:
+                    finalizing = True
+                    test_deadline = time.monotonic() + test_finalization_timeout
+                    emit(f'CI tests ended; waiting up to {test_finalization_timeout} seconds for Xcode to finalize results and exit.\n')
             if INITIALIZATION_FAILURE in line and forced_code is None:
                 emit('CI runner initialization failed; stopping instead of waiting for the job timeout.\n')
                 forced_code = 65
