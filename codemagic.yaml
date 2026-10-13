@@ -2,7 +2,9 @@ workflows:
   yueji-unsigned-ipa:
     name: YueJi IPA (unsigned)
     instance_type: mac_mini_m2
-    max_build_duration: 35
+    # Includes cold simulator startup, both required test suites and device packaging.
+    # Stage/case deadlines below stop stalled work before this overall safety limit.
+    max_build_duration: 90
     environment:
       xcode: "27.1"
     scripts:
@@ -48,17 +50,20 @@ workflows:
       - name: Build and test on iPhone simulator
         script: |
           set -euo pipefail
-          xcodebuild test -project YueJi.xcodeproj -scheme YueJi \
-            -destination "platform=iOS Simulator,id=$SIMULATOR_ID" \
-            -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult \
-            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
+          trap 'python3 scripts/report_test_failures.py build-test.log --output test-failures.txt' EXIT
+          python3 -u scripts/run_simulator_tests.py --simulator "$SIMULATOR_ID" --artifacts .
       - name: Build unsigned iPhone app
         script: |
           set -euo pipefail
-          xcodebuild build -project YueJi.xcodeproj -scheme YueJi \
-            -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
-            -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \
-            2>&1 | tee build-device.log
+          python3 -u - <<'PY'
+          from scripts.run_simulator_tests import run_stage
+          command = ['xcodebuild', 'build', '-project', 'YueJi.xcodeproj', '-scheme', 'YueJi',
+                     '-configuration', 'Release', '-sdk', 'iphoneos', '-destination', 'generic/platform=iOS',
+                     '-derivedDataPath', 'build-device', '-showBuildTimingSummary',
+                     'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO']
+          with open('build-device.log', 'w', encoding='utf-8') as log:
+              raise SystemExit(run_stage(command, log, timeout=600))
+          PY
       - name: Verify and package IPA for personal signing
         script: |
           set -euo pipefail
@@ -82,4 +87,6 @@ workflows:
       - BuildInfo.txt
       - build-test.log
       - build-device.log
-      - TestResults.xcresult
+      - test-failures.txt
+      - UnitTestResults.xcresult
+      - UITestResults.xcresult

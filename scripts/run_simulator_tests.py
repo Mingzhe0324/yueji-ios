@@ -59,7 +59,8 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
 
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
-    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    deadline = started + timeout
     active_test = None
     test_deadline = time.monotonic() + test_transition_timeout if test_case_timeout is not None else None
     forced_code = None
@@ -117,7 +118,9 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
             line = lines.get_nowait()
             if line is not None:
                 emit(line)
-        return forced_code if forced_code is not None else process.returncode
+        code = forced_code if forced_code is not None else process.returncode
+        emit(f'CI stage finished after {time.monotonic() - started:.1f} seconds (exit {code}).\n')
+        return code
     finally:
         if process.poll() is None:
             stop(force=True)

@@ -1,0 +1,9 @@
+# Codemagic full-workflow timeout
+
+The supplied screenshot reports a Codemagic build-duration timeout, without the failing stage log. The checked-in workflow still had a 35-minute overall limit and invoked plain `xcodebuild test`. It did not use the simulator runner already adopted by Azure. The screenshot alone does not establish whether compilation, simulator startup, tests or device packaging consumed the time.
+
+Codemagic now uses the same simulator runner: Debug, active destination architecture only, a single build-for-testing followed by unit and UI test-without-building stages, sequential execution and bounded startup/case/cleanup handling. It retains all test cases. Stage logs include elapsed time and exit status. A shell EXIT trap writes the failure summary without changing the test process's failing status. Both native result bundles and the summary are retained as artifacts.
+
+The overall limit is 90 minutes, accommodating the configured native stage ceilings (77 minutes), bounded device compilation (10 minutes) and packaging overhead. This is a failure-containment ceiling, not a predicted or desired build time. The old 35-minute cap could terminate otherwise-progressing tests before device packaging. Compiling only the active simulator architecture removes unnecessary architecture work; the test helper's reduced accessibility queries also apply here. Native measurements are still needed to quantify the improvement. No cache of compiled apps or test results is used, and IPA packaging still requires successful native suites and device compilation.
+
+The Xcode 27.1 toolchain, iOS 27 simulator requirement, M2 instance and manual trigger behavior are unchanged. The workflow budget follows [Codemagic's documented max_build_duration setting](https://docs.codemagic.io/yaml-running-builds/timeout/).
