@@ -78,12 +78,20 @@ final class TransactionFormTests: XCTestCase {
             reveal(editItems, in: app); editItems.tap()
             let editor = app.navigationBars["Edit items"]
             XCTAssertTrue(editor.waitForExistence(timeout: 5), "Saved empty transaction dismissed its item editor")
+            if !shouldSave {
+                editor.swipeDown()
+                waitUntilGone(editor)
+                XCTAssertTrue(app.navigationBars["Entry details"].exists)
+                editItems.tap()
+                XCTAssertTrue(editor.waitForExistence(timeout: 5))
+            }
             reveal(addItem, in: app); addItem.tap()
             reveal(name, in: app); name.tap(); name.typeText("Original item"); finishKeyboard(in: app)
             reveal(itemAmount, in: app); itemAmount.tap(); itemAmount.typeText("35.00"); finishKeyboard(in: app)
             XCTAssertTrue(editor.exists)
             XCTAssertEqual(name.value as? String, "Original item")
             editor.buttons[shouldSave ? "Save" : "Cancel"].tap()
+            if !shouldSave { confirmDiscard(in: app) }
             waitUntilGone(editor)
             XCTAssertTrue(app.navigationBars["Entry details"].exists)
             if !shouldSave {
@@ -109,8 +117,11 @@ final class TransactionFormTests: XCTestCase {
             XCTAssertEqual(itemAmount.value as? String, "35.00")
             reveal(name, in: app); name.tap(); name.typeText(attempt == 1 ? " saved" : " unsaved")
             finishKeyboard(in: app)
-            // A sheet drag must neither close the editor nor discard the draft.
+            // A dirty sheet drag asks for confirmation and retains the draft.
             editor.swipeDown()
+            let keepEditing = app.buttons["Keep editing"].firstMatch
+            XCTAssertTrue(keepEditing.waitForExistence(timeout: 5))
+            keepEditing.tap()
             XCTAssertTrue(editor.exists)
             XCTAssertTrue((name.value as? String)?.contains(attempt == 1 ? " saved" : " unsaved") == true)
             let category = app.descendants(matching: .any)["transaction.item.category"].firstMatch
@@ -146,6 +157,7 @@ final class TransactionFormTests: XCTestCase {
                 editor.buttons["Save"].tap()
             } else {
                 editor.buttons["Cancel"].tap()
+                confirmDiscard(in: app)
             }
             waitUntilGone(editor)
             XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 10), "Save/cancel reset ledger navigation")
@@ -246,6 +258,12 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["New entry"].waitForExistence(timeout: 5))
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch", "Choosing ownership must retain the unsaved item")
         XCTAssertEqual(itemAmount.value as? String, "35.00")
+        app.navigationBars["New entry"].swipeDown()
+        let keepDraft = app.buttons["Keep editing"].firstMatch
+        XCTAssertTrue(keepDraft.waitForExistence(timeout: 5))
+        keepDraft.tap()
+        XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
+        XCTAssertEqual(itemAmount.value as? String, "35.00")
         reveal(add, in: app); add.tap(); reveal(add, in: app); add.tap()
         XCTAssertEqual(names.count, 3)
 
@@ -264,7 +282,20 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Tags"].exists)
         XCTAssertTrue(app.navigationBars["New entry"].exists)
         app.navigationBars.buttons["Cancel"].tap()
+        confirmDiscard(in: app)
         XCTAssertTrue(newEntry.waitForExistence(timeout: 5))
+        newEntry.tap()
+        let cleanEditor = app.navigationBars["New entry"]
+        XCTAssertTrue(cleanEditor.waitForExistence(timeout: 5))
+        cleanEditor.swipeDown()
+        waitUntilGone(cleanEditor)
+        XCTAssertTrue(newEntry.waitForExistence(timeout: 5))
+    }
+
+    private func confirmDiscard(in app: XCUIApplication) {
+        let discard = app.buttons["Discard changes"].firstMatch
+        XCTAssertTrue(discard.waitForExistence(timeout: 5))
+        discard.tap()
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, above: Bool = false) {

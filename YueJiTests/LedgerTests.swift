@@ -5,6 +5,26 @@ import SwiftUI
 @testable import YueJi
 
 final class ItemOwnershipAndQuantityTests: XCTestCase {
+    func testEditorSnapshotPreservesUnsavedInvalidAndOwnershipChanges() {
+        let item = ExpenseItemDraft(name: "Lunch", amount: "12.00", category: "其他")
+        let original = ExpenseEditorSnapshot(text: ["Cafe", "12.00"], flags: [false],
+                                             date: Date(timeIntervalSince1970: 1_700_000_000),
+                                             items: [item], people: [FriendDraft()])
+        var edited = original
+        XCTAssertEqual(edited, original)
+        edited.items[0].amount = "12."
+        XCTAssertNotEqual(edited, original, "Invalid or incomplete input must still count as unsaved")
+        edited = original; edited.items[0].quantity = 2
+        XCTAssertNotEqual(edited, original)
+        edited = original; edited.items[0].ownership = ItemOwnership(includesMe: false, friends: ["Amy"])
+        XCTAssertNotEqual(edited, original)
+        edited = original; edited.people[0].name = "Amy"
+        XCTAssertNotEqual(edited, original)
+        edited = original; edited.date = original.date.addingTimeInterval(60)
+        XCTAssertNotEqual(edited, original)
+        edited = original
+        XCTAssertEqual(edited, original, "Reverting edits should permit a direct dismissal")
+    }
     private let categories = Ledger().categoryNames
     // LocalStore's existing ISO-8601 backup format stores whole seconds.
     // Keep full-record equality meaningful without comparing fractional Date() precision.

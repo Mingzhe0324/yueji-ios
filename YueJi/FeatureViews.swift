@@ -1383,6 +1383,14 @@ struct ExpenseItemsEditor: View {
     @State private var initialized = false
     @State private var saving = false
     @State private var error: String?
+    @State private var initialItems: [ExpenseItemDraft] = []
+    @State private var confirmingDiscard = false
+    private var hasChanges: Bool { initialized && items != initialItems }
+    private func requestClose() {
+        guard !saving else { return }
+        focusedField = nil
+        if hasChanges { confirmingDiscard = true } else { dismiss() }
+    }
     var body: some View {
         let _ = uiLocale.identifier
         NavigationStack {
@@ -1406,18 +1414,18 @@ struct ExpenseItemsEditor: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving)
+                        Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(tr("保存", "Save", "Simpan")) { save() }.disabled(saving || !initialized)
+                        Button(tr("保存", "Save", "Simpan")) { save() }.yuejiPrimaryButton().disabled(saving || !initialized)
                     }
                 }
                 .disabled(saving)
                 .overlay { if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
-                .interactiveDismissDisabled()
                 .onAppear {
                     guard !initialized else { return }
                     items = (original.items ?? []).map(ExpenseItemDraft.init)
+                    initialItems = items
                     initialized = true
                 }
                 .onChange(of: initialized) { _, ready in
@@ -1436,6 +1444,7 @@ struct ExpenseItemsEditor: View {
                 } message: { Text(error ?? "") }
             }
         }.yuejiSheetSurface().ledgerFeedback(modal: true)
+            .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: { dismiss() })
     }
     private func save() {
         guard initialized, !saving else { return }
@@ -3203,7 +3212,7 @@ struct FinancialNoticeReviewView: View {
     }
 }
 
-struct ExpenseItemDraft: Identifiable {
+struct ExpenseItemDraft: Identifiable, Equatable {
     let id: String
     var name = ""
     var amount = ""
@@ -3276,7 +3285,7 @@ struct ExpenseItemsFields: View {
                     }.accessibilityIdentifier("transaction.item.quantity")
                     LabeledContent(tr("小计", "Line total", "Jumlah baris"), value: money((try? draft.savedItem().cents) ?? 0))
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
-                }.padding(.vertical, 6)
+                }.padding(.vertical, 6).id(draft.id)
                 // Native navigation controls must each own a Form row.
                 // Two links inside one VStack can both activate on one tap.
                 Picker(tr("分类", "Category", "Kategori"), selection: item.category) {

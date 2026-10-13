@@ -85,6 +85,16 @@ private struct YueJiTabBarMotion: ViewModifier {
     }
 }
 
+private struct YueJiActionBarSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        content.background {
+            if reduceTransparency { Color(uiColor: .systemGroupedBackground) }
+            else { Rectangle().fill(.bar) }
+        }
+    }
+}
+
 struct MainView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
@@ -433,7 +443,7 @@ struct DashboardView: View {
                 }
                 .padding(.horizontal, 20).padding(.vertical, 12)
                 .frame(maxWidth: .infinity)
-                .background(Color(uiColor: .systemGroupedBackground))
+                .modifier(YueJiActionBarSurface())
             }
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
@@ -1115,7 +1125,7 @@ struct ExpenseDetailView: View {
                     }
                     .padding(.horizontal, 20).padding(.vertical, 12)
                     .frame(maxWidth: .infinity)
-                    .background(Color(uiColor: .systemGroupedBackground))
+                    .modifier(YueJiActionBarSurface())
                 }
             }
             .sheet(item: $editing, onDismiss: {
@@ -1183,7 +1193,93 @@ private struct ExpenseDeletionConfirmation: ViewModifier {
     }
 }
 
-struct FriendDraft: Identifiable {
+struct ExpenseEditorSnapshot: Equatable {
+    var text: [String]
+    var flags: [Bool]
+    var date: Date
+    var items: [ExpenseItemDraft]
+    var people: [FriendDraft]
+}
+
+extension View {
+    func editorDismissal(hasChanges: Bool, saving: Bool, confirming: Binding<Bool>, discard: @escaping () -> Void) -> some View {
+        interactiveDismissDisabled(hasChanges || saving)
+            .background {
+                EditorDismissObserver(blocked: hasChanges || saving) {
+                    if hasChanges && !saving { confirming.wrappedValue = true }
+                }.frame(width: 0, height: 0)
+            }
+            .confirmationDialog(tr("放弃未保存的修改？", "Discard changes?", "Buang perubahan?"), isPresented: confirming, titleVisibility: .visible) {
+                Button(tr("放弃修改", "Discard changes", "Buang perubahan"), role: .destructive, action: discard)
+                Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {}
+            } message: {
+                Text(tr("修改尚未保存。继续编辑可保留当前填写的内容。", "Your changes have not been saved. Keep editing to retain your input.", "Perubahan belum disimpan. Teruskan mengedit untuk mengekalkan input."))
+            }
+    }
+}
+
+/// Observe the system sheet's rejected swipe instead of adding a competing drag
+/// gesture to the Form. Forward dismissal callbacks so SwiftUI retains ownership
+/// of presentation bindings, and restore its delegate when the observer leaves.
+private struct EditorDismissObserver: UIViewControllerRepresentable {
+    var blocked: Bool
+    var attempted: () -> Void
+    func makeUIViewController(context: Context) -> Controller { Controller() }
+    func updateUIViewController(_ controller: Controller, context: Context) {
+        controller.blocked = blocked
+        controller.attempted = attempted
+        controller.install()
+        DispatchQueue.main.async { [weak controller] in controller?.install() }
+    }
+    static func dismantleUIViewController(_ controller: Controller, coordinator: ()) { controller.uninstall() }
+
+    final class Controller: UIViewController, UIAdaptivePresentationControllerDelegate {
+        var blocked = false
+        var attempted: (() -> Void)?
+        private weak var observed: UIPresentationController?
+        private weak var previous: (any UIAdaptivePresentationControllerDelegate)?
+        private var removed = false
+        override func loadView() { view = UIView(); view.isUserInteractionEnabled = false }
+        override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); install() }
+        override func didMove(toParent parent: UIViewController?) { super.didMove(toParent: parent); if parent != nil { install() } }
+        override func viewDidLayoutSubviews() { super.viewDidLayoutSubviews(); install() }
+        func install() {
+            guard !removed else { return }
+            var ancestor: UIViewController? = self
+            while let candidate = ancestor {
+                if candidate.presentingViewController != nil, let presentation = candidate.presentationController {
+                    if observed !== presentation {
+                        if let observed, observed.delegate === self { observed.delegate = previous }
+                        observed = presentation
+                        previous = presentation.delegate
+                    } else if presentation.delegate !== self {
+                        previous = presentation.delegate
+                    }
+                    presentation.delegate = self
+                    return
+                }
+                ancestor = candidate.parent
+            }
+        }
+        func uninstall() {
+            removed = true
+            if let observed, observed.delegate === self { observed.delegate = previous }
+            attempted = nil
+        }
+        func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool { !blocked }
+        func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+            DispatchQueue.main.async { [weak self] in self?.attempted?() }
+        }
+        func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
+            previous?.presentationControllerWillDismiss?(presentationController)
+        }
+        func presentationControllerDidDismiss(_ presentationController: UIPresentationController) {
+            previous?.presentationControllerDidDismiss?(presentationController)
+        }
+    }
+}
+
+struct FriendDraft: Identifiable, Equatable {
     var id: String; var name: String; var amount: String; var repayments: [Repayment]
     init(_ s: Share = Share(name: "", cents: 0)) { id = s.id; name = s.name; amount = Currency.input(s.cents, "MYR"); repayments = s.repayments }
 }
@@ -1226,6 +1322,19 @@ struct ExpenseEditor: View {
     @State private var rateLoading = false
     @State private var rateRequest = UUID()
     @State private var rateNote = ""
+    @State private var initialSnapshot: ExpenseEditorSnapshot?
+    @State private var confirmingDiscard = false
+    private var snapshot: ExpenseEditorSnapshot {
+        ExpenseEditorSnapshot(text: [name, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText],
+                              flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe],
+                              date: date, items: itemDrafts, people: people)
+    }
+    private var hasChanges: Bool { initialSnapshot.map { $0 != snapshot } ?? false }
+    private func requestClose() {
+        guard !saving else { return }
+        finishKeyboard()
+        if hasChanges { confirmingDiscard = true } else { dismiss() }
+    }
     private func foreign() throws -> ForeignAmount? {
         if currency == "MYR" { return nil }
         let value = try parseRate(rate)
@@ -1275,13 +1384,13 @@ struct ExpenseEditor: View {
                     }
                 }
             }.yuejiListSurface().scrollDismissesKeyboard(.interactively)
-                .disabled(saving).interactiveDismissDisabled()
+                .disabled(saving)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
                 .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
                     if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
                     else { Text(tr("保存", "Save", "Simpan")) }
-                }.disabled(rateLoading || saving) } }
+                }.yuejiPrimaryButton().disabled(rateLoading || saving) } }
                 .toolbar {
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
@@ -1309,6 +1418,7 @@ struct ExpenseEditor: View {
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
             }
         }.ledgerFeedback(modal: true)
+            .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: { dismiss() })
     }
     private var paymentSection: some View {
         Section(tr("实际付款", "Payment", "Bayaran")) {
@@ -1434,6 +1544,7 @@ struct ExpenseEditor: View {
     }
     private func load() {
         guard !initialized else { return }; initialized = true
+        defer { initialSnapshot = snapshot }
         if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel

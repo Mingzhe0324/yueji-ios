@@ -1,0 +1,9 @@
+# Native editor dismissal and surfaces
+
+The transaction and item editors previously blocked every interactive dismissal to preserve drafts. They now allow an unchanged editor to close with the native sheet gesture. Changed input prompts Keep editing / Discard changes, including toolbar cancellation. Saving continues to block dismissal. Draft comparisons use unparsed input so incomplete amounts, item quantities, ownership and friend edits cannot silently disappear; reverting to the initial values removes the prompt. No draft is written to the ledger by dismissing a sheet.
+
+A small UIKit presentation delegate observer receives rejected sheet gestures using presentationControllerDidAttemptToDismiss. It does not install a drag recognizer on the Form. SwiftUI keeps presentation ownership; will/did-dismiss callbacks are forwarded to the prior delegate and the delegate is restored on dismantling. API reference: https://developer.apple.com/documentation/uikit/uiadaptivepresentationcontrollerdelegate/presentationcontrollerdidattempttodismiss(_:)
+
+Save actions use the existing system glass-prominent style (with the accessibility fallback). Overview and transaction action bars use system bar material and an opaque background when Reduce Transparency is enabled. Sheets retain the native system transition and system sizing rather than a custom imitation. Existing theme and Reduce Motion behavior are preserved. Item scroll anchors remain on the item input row, with category and ownership navigation on separate rows.
+
+Native regression coverage checks unchanged swipe dismissal, dirty swipe confirmation and retained input, and confirmed cancellation. Snapshot coverage includes incomplete input, quantities, ownership, friends, date edits and reverting changes. Local project and Swift syntax checks are available on Windows; native compile, gesture behavior and light/dark visual review still require the hosted iOS run and device verification.
