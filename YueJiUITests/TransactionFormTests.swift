@@ -268,20 +268,38 @@ final class TransactionFormTests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, above: Bool = false) {
-        // Scrolling this page does not change its fixed navigation/footer controls.
-        // Avoid querying them again for every scroll attempt.
-        let viewport = unobscuredContent(in: app)
-        for _ in 0..<6 {
+        for _ in 0..<8 {
+            // Large navigation titles collapse while scrolling. Measure again
+            // rather than retaining the initial, taller navigation-bar bounds.
+            let viewport = unobscuredContent(in: app)
+            guard viewport.height > 80 else {
+                XCTFail("No usable scroll area: \(viewport)")
+                return
+            }
+            var distance = viewport.height * (above ? 0.35 : -0.35)
             if element.exists {
                 let frame = element.frame
                 // A partly exposed row can be hittable while its tap point lies
                 // beneath Edit/Delete or the tab bar. Reveal the whole target.
                 if !frame.isEmpty && viewport.contains(frame) && element.isHittable { return }
-                if frame.minY < viewport.minY { app.swipeDown() } else { app.swipeUp() }
-            } else if above { app.swipeDown() } else { app.swipeUp() }
+                if !frame.isEmpty {
+                    let correction = viewport.midY - frame.midY
+                    let limit = viewport.height * 0.35
+                    distance = min(limit, max(-limit, correction))
+                    if abs(distance) < 24 { distance = above ? 24 : -24 }
+                }
+            }
+            // Drag within the scrollable content, away from fixed Add/Edit
+            // buttons. Short corrections avoid flinging a row past the top,
+            // then past the footer again on the next attempt.
+            let origin = app.coordinate(withNormalizedOffset: .zero)
+            let start = origin.withOffset(CGVector(dx: viewport.midX, dy: viewport.midY - distance / 2))
+            let end = origin.withOffset(CGVector(dx: viewport.midX, dy: viewport.midY + distance / 2))
+            start.press(forDuration: 0.05, thenDragTo: end)
         }
+        let viewport = unobscuredContent(in: app)
         XCTAssertTrue(element.exists && element.isHittable && viewport.contains(element.frame),
-                      "Could not fully reveal \(element) above the screen controls")
+                      "Could not fully reveal \(element) above the screen controls; viewport=\(viewport), target=\(element.exists ? element.frame : .zero)")
     }
 
     private func unobscuredContent(in app: XCUIApplication) -> CGRect {
