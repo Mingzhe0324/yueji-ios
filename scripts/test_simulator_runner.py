@@ -1,15 +1,40 @@
 import io
 import sys
 import subprocess
+import tempfile
+from pathlib import Path
 import time
 import unittest
 from unittest.mock import Mock, patch
 
-from run_simulator_tests import run_stage, stop_process
+from run_simulator_tests import main, run_stage, stop_process
 from report_test_failures import report
 
 
 class SimulatorRunnerTests(unittest.TestCase):
+    def test_native_pipeline_builds_once_before_boot_and_requires_both_suites(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch('sys.argv', ['runner', '--simulator', 'test-device', '--artifacts', folder]), patch('run_simulator_tests.run_stage', return_value=0) as stage:
+                self.assertEqual(main(), 0)
+            commands = [call.args[0] for call in stage.call_args_list]
+            self.assertIn('build-for-testing', commands[0])
+            self.assertIn('bootstatus', commands[1])
+            self.assertIn('-only-testing:YueJiTests', commands[2])
+            self.assertIn('shutdown', commands[3])
+            self.assertIn('bootstatus', commands[4])
+            self.assertIn('-only-testing:YueJiUITests', commands[5])
+            for command in (commands[0], commands[2], commands[5]):
+                self.assertIn('ONLY_ACTIVE_ARCH=YES', command)
+                self.assertEqual(command[command.index('-configuration') + 1], 'Debug')
+            self.assertIn('** ALL NATIVE SUITES SUCCEEDED **', (Path(folder) / 'build-test.log').read_text())
+
+    def test_build_failure_stops_before_simulator_and_does_not_report_success(self):
+        with tempfile.TemporaryDirectory() as folder:
+            with patch('sys.argv', ['runner', '--simulator', 'test-device', '--artifacts', folder]), patch('run_simulator_tests.run_stage', return_value=124) as stage:
+                self.assertEqual(main(), 124)
+            self.assertEqual(stage.call_count, 1)
+            self.assertNotIn('ALL NATIVE SUITES SUCCEEDED', (Path(folder) / 'build-test.log').read_text())
+
     def test_group_permission_denied_falls_back_to_owned_child(self):
         process = Mock(pid=123)
         process.poll.return_value = None

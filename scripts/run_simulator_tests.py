@@ -117,13 +117,17 @@ def main():
     args = parser.parse_args()
     args.artifacts.mkdir(parents=True, exist_ok=True)
     base = ['xcodebuild', '-project', 'YueJi.xcodeproj', '-scheme', 'YueJi',
+            '-configuration', 'Debug',
             '-destination', f'platform=iOS Simulator,id={args.simulator}',
             '-derivedDataPath', 'build-simulator', '-parallel-testing-enabled', 'NO',
+            'ONLY_ACTIVE_ARCH=YES',
             'CODE_SIGNING_ALLOWED=NO', 'CODE_SIGNING_REQUIRED=NO']
     stages = [
+        # Build for the selected destination before running simulator services.
+        # The project otherwise builds both arm64 and x86_64 on a cold runner.
+        (base + ['build-for-testing', '-showBuildTimingSummary'], 600),
         # A hosted image's first boot may still be migrating LaunchServices data.
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 480),
-        (base + ['build-for-testing'], 600),
         (base + ['test-without-building', '-only-testing:YueJiTests',
                  '-resultBundlePath', str(args.artifacts / 'UnitTestResults.xcresult')], 900),
         # Keep the installed app/data, but give the UI runner a fresh simulator process.
