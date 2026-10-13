@@ -116,7 +116,17 @@ final class TransactionFormTests: XCTestCase {
             let category = app.descendants(matching: .any)["transaction.item.category"].firstMatch
             reveal(category, in: app); category.tap()
             let shopping = app.buttons["Shopping"].firstMatch
-            XCTAssertTrue(shopping.waitForExistence(timeout: 5)); shopping.tap()
+            XCTAssertTrue(shopping.waitForExistence(timeout: 5))
+            let alreadySelected = shopping.isSelected
+            shopping.tap()
+            // On the final reopen Shopping is already saved. The native Picker
+            // can stay on Category when tapping its selected choice; use Back
+            // only for that unchanged selection, then verify the retained draft.
+            let categoryPage = app.navigationBars["Category"]
+            if alreadySelected && categoryPage.exists {
+                XCTAssertTrue(shopping.isSelected)
+                categoryPage.buttons["BackButton"].tap()
+            }
             XCTAssertTrue(editor.waitForExistence(timeout: 5))
             XCTAssertTrue((name.value as? String)?.contains(attempt == 1 ? " saved" : " unsaved") == true)
 

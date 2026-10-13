@@ -133,8 +133,11 @@ def main():
         # Keep the installed app/data, but give the UI runner a fresh simulator process.
         (['xcrun', 'simctl', 'shutdown', args.simulator], 60),
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 180),
+        # Hosted measurements: new-entry cases take 4-5 minutes each and saved
+        # editing takes about 8 minutes per case. Allow the full four-test suite
+        # to finish; initialization failures still stop immediately above.
         (base + ['test-without-building', '-only-testing:YueJiUITests',
-                 '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 1200),
+                 '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 1800),
     ]
     with (args.artifacts / 'build-test.log').open('w', encoding='utf-8') as log:
         for command, timeout in stages:
