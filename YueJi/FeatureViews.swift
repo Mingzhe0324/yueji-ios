@@ -667,8 +667,8 @@ struct AutomationStatusView: View {
                     VStack(alignment: .leading, spacing: 6) {
                         Text(sourceLabel(event.source) + " · " + outcome(event.outcome, source: event.source)).font(.body.weight(.medium))
                         Text(dateLabel(event.date, time: true)).font(.footnote).foregroundStyle(.secondary)
-                        if event.outcome == "failed", !event.detail.isEmpty {
-                            DisclosureGroup(tr("查看原因", "View reason", "Lihat sebab")) {
+                        if !event.detail.isEmpty {
+                            DisclosureGroup(tr("处理详情", "Processing details", "Butiran pemprosesan")) {
                                 Text(localizedError(event.detail)).font(.footnote).textSelection(.enabled)
                             }
                         }

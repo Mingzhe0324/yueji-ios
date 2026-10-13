@@ -1891,7 +1891,7 @@ final class LedgerTests: XCTestCase {
         let body = "You have paid RM11.90 for Apple Services."
         let title = "Auto-Debit Payment"
         XCTAssertEqual(parseTNG(body, title: title)?.party, "Apple Services")
-        for (input, heading) in [(body, title), (title + "\n" + body, ""), (title + " " + body, "TNG eWallet")] {
+        for (input, heading) in [(body, ""), (body, title), (title + "\n" + body, ""), (title + " " + body, "TNG eWallet")] {
             var ledger = Ledger()
             let delivery = AutomationDelivery(kind: "notification", body: input, title: heading,
                                               date: Date(timeIntervalSince1970: 1_700_000_000))
@@ -1901,6 +1901,7 @@ final class LedgerTests: XCTestCase {
             XCTAssertEqual(ledger.expenses.first?.merchant, "Apple Services")
             XCTAssertEqual(ledger.expenses.first?.cents, 1190)
             XCTAssertEqual(ledger.tngNotices.first?.status, "recorded")
+            XCTAssertEqual(ledger.automationEvents.first?.outcome, "saved")
         }
         for invalid in ["Your auto-debit payment of RM11.90 is scheduled for tomorrow.",
                         body + " Payment failed.",
