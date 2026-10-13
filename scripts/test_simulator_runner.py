@@ -23,6 +23,8 @@ class SimulatorRunnerTests(unittest.TestCase):
             self.assertIn('shutdown', commands[3])
             self.assertIn('bootstatus', commands[4])
             self.assertIn('-only-testing:YueJiUITests', commands[5])
+            self.assertEqual(stage.call_args_list[5].kwargs['test_case_timeout'], 900)
+            self.assertEqual(stage.call_args_list[2].kwargs, {})
             for command in (commands[0], commands[2], commands[5]):
                 self.assertIn('ONLY_ACTIVE_ARCH=YES', command)
                 self.assertEqual(command[command.index('-configuration') + 1], 'Debug')
@@ -34,6 +36,13 @@ class SimulatorRunnerTests(unittest.TestCase):
                 self.assertEqual(main(), 124)
             self.assertEqual(stage.call_count, 1)
             self.assertNotIn('ALL NATIVE SUITES SUCCEEDED', (Path(folder) / 'build-test.log').read_text())
+
+    def test_ui_failure_or_timeout_never_reports_native_success(self):
+        for code in (65, 124):
+            with self.subTest(code=code), tempfile.TemporaryDirectory() as folder:
+                with patch('sys.argv', ['runner', '--simulator', 'test-device', '--artifacts', folder]), patch('run_simulator_tests.run_stage', side_effect=[0, 0, 0, 0, 0, code]):
+                    self.assertEqual(main(), code)
+                self.assertNotIn('ALL NATIVE SUITES SUCCEEDED', (Path(folder) / 'build-test.log').read_text())
 
     def test_group_permission_denied_falls_back_to_owned_child(self):
         process = Mock(pid=123)
@@ -77,10 +86,52 @@ class SimulatorRunnerTests(unittest.TestCase):
         process.wait.assert_called_once_with(timeout=0.01)
         self.assertIn('Cleanup deadline reached', log.getvalue())
 
-    def run_python(self, source, timeout=5):
+    def run_python(self, source, timeout=5, **options):
         log = io.StringIO()
-        code = run_stage([sys.executable, '-u', '-c', source], log, timeout, grace=0.2)
+        code = run_stage([sys.executable, '-u', '-c', source], log, timeout, grace=0.2, **options)
         return code, log.getvalue()
+
+    def test_sequential_cases_each_receive_their_own_budget(self):
+        source = """import time
+for name, status in [('testOne', 'passed'), ('testTwo', 'failed')]:
+    print(f"Test Case '-[YueJiUITests.TransactionFormTests {name}]' started.")
+    time.sleep(0.4)
+    print(f"Test Case '-[YueJiUITests.TransactionFormTests {name}]' {status} (0.4 seconds).")
+raise SystemExit(65)
+"""
+        code, log = self.run_python(source, test_case_timeout=0.7, test_transition_timeout=2)
+        self.assertEqual(code, 65)
+        self.assertNotIn('timed out', log)
+
+    def test_noisy_stuck_case_cannot_extend_its_budget(self):
+        source = """import time
+while True:
+    print("Test Case '-[YueJiUITests.TransactionFormTests testStuck]' started.")
+    print('Still checking accessibility')
+    time.sleep(0.05)
+"""
+        code, log = self.run_python(source, test_case_timeout=0.3, test_transition_timeout=2)
+        self.assertEqual(code, 124)
+        self.assertIn('testStuck exceeded 0.3 seconds', report(log))
+
+    def test_ui_startup_and_between_case_waits_are_bounded(self):
+        for prefix in ('', "print(\"Test Case '-[Suite testOne]' started.\"); print(\"Test Case '-[Suite testOne]' passed (0 seconds).\"); "):
+            with self.subTest(prefix=prefix):
+                code, log = self.run_python('import time; ' + prefix + 'time.sleep(60)',
+                                            test_case_timeout=2, test_transition_timeout=0.3)
+                self.assertEqual(code, 124)
+                self.assertIn('UI runner made no test transition', report(log))
+
+    def test_case_transitions_do_not_extend_whole_suite_deadline(self):
+        source = """import time
+while True:
+    print("Test Case '-[Suite testOne]' started.")
+    print("Test Case '-[Suite testOne]' passed (0 seconds).")
+    time.sleep(0.05)
+"""
+        code, log = self.run_python(source, timeout=0.5, test_case_timeout=2, test_transition_timeout=2)
+        self.assertEqual(code, 124)
+        self.assertIn('CI stage timed out after 0.5 seconds', log)
 
     def test_success_and_output_are_preserved(self):
         code, log = self.run_python("print('native output')")

@@ -3,6 +3,7 @@ import argparse
 import os
 from pathlib import Path
 import queue
+import re
 import signal
 import subprocess
 import threading
@@ -10,6 +11,7 @@ import time
 
 
 INITIALIZATION_FAILURE = 'Failed to initialize for UI testing:'
+TEST_CASE_EVENT = re.compile(r"Test Case '-\[([^\]]+)\]' (started|passed|failed)")
 
 
 def stop_process(process, force, emit, process_group=False):
@@ -35,7 +37,7 @@ def stop_process(process, force, emit, process_group=False):
         emit(f'Owned-child cleanup unavailable ({error}); retaining the stage failure.\n')
 
 
-def run_stage(command, log, timeout, grace=5):
+def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_transition_timeout=180):
     """Stream output and bound execution/cleanup while preserving the stage failure."""
     def emit(line):
         print(line, end='', flush=True)
@@ -58,6 +60,8 @@ def run_stage(command, log, timeout, grace=5):
     reader = threading.Thread(target=read_output, daemon=True)
     reader.start()
     deadline = time.monotonic() + timeout
+    active_test = None
+    test_deadline = time.monotonic() + test_transition_timeout if test_case_timeout is not None else None
     forced_code = None
     termination_deadline = None
     output_finished = False
@@ -74,6 +78,13 @@ def run_stage(command, log, timeout, grace=5):
             if forced_code is None and now >= deadline:
                 emit(f'CI stage timed out after {timeout} seconds; native verification did not complete.\n')
                 forced_code = 124
+            if forced_code is None and test_deadline is not None and now >= test_deadline:
+                if active_test is not None:
+                    detail = f'UI test {active_test} exceeded {test_case_timeout} seconds'
+                else:
+                    detail = f'UI runner made no test transition within {test_transition_timeout} seconds'
+                emit(f'CI stage timed out: {detail}; native verification did not complete.\n')
+                forced_code = 124
             if forced_code is not None and termination_deadline is None:
                 stop()
                 termination_deadline = now + grace
@@ -88,6 +99,16 @@ def run_stage(command, log, timeout, grace=5):
                 output_finished = True
                 continue
             emit(line)
+            if test_case_timeout is not None:
+                event = TEST_CASE_EVENT.search(line)
+                if event:
+                    name, status = event.groups()
+                    if status == 'started' and active_test is None:
+                        active_test = name
+                        test_deadline = time.monotonic() + test_case_timeout
+                    elif status in ('passed', 'failed') and name == active_test:
+                        active_test = None
+                        test_deadline = time.monotonic() + test_transition_timeout
             if INITIALIZATION_FAILURE in line and forced_code is None:
                 emit('CI runner initialization failed; stopping instead of waiting for the job timeout.\n')
                 forced_code = 65
@@ -133,15 +154,15 @@ def main():
         # Keep the installed app/data, but give the UI runner a fresh simulator process.
         (['xcrun', 'simctl', 'shutdown', args.simulator], 60),
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 180),
-        # Hosted measurements: new-entry cases take 4-5 minutes each and saved
-        # editing takes about 8 minutes per case. Allow the full four-test suite
-        # to finish; initialization failures still stop immediately above.
+        # Keep one UI runner and all tests. The latest run was still progressing
+        # after 30 minutes; bound individual cases/transitions as well as the suite.
         (base + ['test-without-building', '-only-testing:YueJiUITests',
-                 '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 1800),
+                 '-resultBundlePath', str(args.artifacts / 'UITestResults.xcresult')], 2400),
     ]
     with (args.artifacts / 'build-test.log').open('w', encoding='utf-8') as log:
         for command, timeout in stages:
-            code = run_stage(command, log, timeout)
+            options = {'test_case_timeout': 900} if '-only-testing:YueJiUITests' in command else {}
+            code = run_stage(command, log, timeout, **options)
             if code:
                 return code
         log.write('** ALL NATIVE SUITES SUCCEEDED **\n')

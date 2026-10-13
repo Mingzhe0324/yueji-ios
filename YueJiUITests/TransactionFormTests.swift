@@ -255,8 +255,10 @@ final class TransactionFormTests: XCTestCase {
     }
 
     private func reveal(_ element: XCUIElement, in app: XCUIApplication, above: Bool = false) {
+        // Scrolling this page does not change its fixed navigation/footer controls.
+        // Avoid querying them again for every scroll attempt.
+        let viewport = unobscuredContent(in: app)
         for _ in 0..<6 {
-            let viewport = unobscuredContent(in: app)
             if element.exists {
                 let frame = element.frame
                 // A partly exposed row can be hittable while its tap point lies
@@ -265,12 +267,20 @@ final class TransactionFormTests: XCTestCase {
                 if frame.minY < viewport.minY { app.swipeDown() } else { app.swipeUp() }
             } else if above { app.swipeDown() } else { app.swipeUp() }
         }
-        XCTAssertTrue(element.exists && element.isHittable && unobscuredContent(in: app).contains(element.frame),
+        XCTAssertTrue(element.exists && element.isHittable && viewport.contains(element.frame),
                       "Could not fully reveal \(element) above the screen controls")
     }
 
     private func unobscuredContent(in app: XCUIApplication) -> CGRect {
         let screen = app.frame
+        // An editor sheet covers the underlying tab bar and detail actions.
+        // Query its navigation bar directly instead of probing hidden controls.
+        let editorBar = app.navigationBars.matching(NSPredicate(
+            format: "identifier == 'New entry' OR identifier == 'Edit items'")).firstMatch
+        if editorBar.exists && editorBar.isHittable {
+            let top = editorBar.frame.maxY
+            return CGRect(x: screen.minX, y: top, width: screen.width, height: max(0, screen.maxY - top))
+        }
         var top = screen.minY
         var bottom = screen.maxY
         for bar in app.navigationBars.allElementsBoundByIndex where bar.isHittable {
