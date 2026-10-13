@@ -1887,6 +1887,31 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices.count, 1)
     }
 
+    func testAutoDebitScreenshotRecordsOnceAcrossNotificationLayouts() throws {
+        let body = "You have paid RM11.90 for Apple Services."
+        let title = "Auto-Debit Payment"
+        XCTAssertEqual(parseTNG(body, title: title)?.party, "Apple Services")
+        for (input, heading) in [(body, title), (title + "\n" + body, ""), (title + " " + body, "TNG eWallet")] {
+            var ledger = Ledger()
+            let delivery = AutomationDelivery(kind: "notification", body: input, title: heading,
+                                              date: Date(timeIntervalSince1970: 1_700_000_000))
+            XCTAssertNotNil(try ledger.applyDelivery(delivery).expenseID)
+            _ = try ledger.applyDelivery(delivery)
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.expenses.first?.merchant, "Apple Services")
+            XCTAssertEqual(ledger.expenses.first?.cents, 1190)
+            XCTAssertEqual(ledger.tngNotices.first?.status, "recorded")
+        }
+        for invalid in ["Your auto-debit payment of RM11.90 is scheduled for tomorrow.",
+                        body + " Payment failed.",
+                        "You have paid USD11.90 for Apple Services.",
+                        "You have paid RM11.90 for Apple Services. Balance RM50.00"] {
+            var ledger = Ledger()
+            _ = try ledger.processTNGNotification(body: invalid, title: title, date: nil, eventID: nil)
+            XCTAssertTrue(ledger.expenses.isEmpty)
+        }
+    }
+
     func testScreenshotPaymentTransferAndPoints() throws {
         var ledger = Ledger()
         let payment = try ledger.processTNGNotification(body: "You have paid RM11.00 to HOW HAN ENG.", title: "DuitNow Payment", date: Date(), eventID: nil)
