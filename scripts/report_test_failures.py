@@ -10,12 +10,12 @@ def report(log: str) -> str:
     log = re.sub(r'\x1b\[[0-9;]*m', '', log)
     lines = log.splitlines()
     diagnostic = re.compile(r'(?:\.(?:swift|m|mm|h|c|cpp):\d+(?::\d+)?|<unknown>:0):\s*(?:fatal )?error:|^\s*(?:(?:xcodebuild|clang|swift|swiftc):\s*)?(?:fatal )?error:')
-    test_diagnostic = re.compile(r'Tests[/\\]|XCTAssert|XCTest|error:\s*-\[')
+    test_diagnostic = re.compile(r'error:\s*-\[|XCTAssert\w* failed|XCTest.*failed')
     failures, compilation = [], []
     for index, line in enumerate(lines):
         if not diagnostic.search(line):
             continue
-        if test_diagnostic.search(line):
+        if '** TEST BUILD FAILED **' not in log and test_diagnostic.search(line):
             failures.append(line)
         else:
             # Include the source/caret or module-search context alongside the

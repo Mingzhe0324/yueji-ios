@@ -136,7 +136,8 @@ final class ReimbursementTests: XCTestCase {
                             reimbursement: ReimbursementClaim(recipient: "Company", cents: 1000))
         let notice = TNGNotice(id: "notification", body: "You have paid RM10.00 for Store.", title: "Payment", date: date,
                               usesReceivedDate: false, kind: "payment", status: "recorded", cents: 1000, party: "Store", expenseID: entry.id)
-        var ledger = Ledger(expenses: [entry], tngNotices: [notice])
+        var ledger = Ledger(expenses: [entry])
+        ledger.tngNotices = [notice]
         XCTAssertThrowsError(try ledger.excludeTNG(id: notice.id))
         XCTAssertEqual(ledger.expenses, [entry])
         XCTAssertEqual(ledger.tngNotices, [notice])

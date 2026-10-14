@@ -29,6 +29,13 @@ class FailureReportTests(unittest.TestCase):
         self.assertIn('Native XCTest assertion failures:', result)
         self.assertNotIn('Native build/compiler errors:', result)
 
+    def test_compilation_error_in_test_source_is_a_build_error(self):
+        log = "/Users/builder/clone/YueJiTests/LedgerTests.swift:139:60: error: extra argument 'tngNotices' in call\n** TEST BUILD FAILED **"
+        result = report(log)
+        self.assertIn('Native build/compiler errors:', result)
+        self.assertIn("extra argument 'tngNotices'", result)
+        self.assertNotIn('Native XCTest assertion failures:', result)
+
     def test_compiler_error_cannot_be_reported_as_success(self):
         result = report('error: compilation failed\n** ALL NATIVE SUITES SUCCEEDED **')
         self.assertIn('Native build/compiler errors:', result)
