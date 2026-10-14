@@ -119,7 +119,9 @@ final class TransactionFormTests: XCTestCase {
             finishKeyboard(in: app)
             // A dirty sheet drag asks for confirmation and retains the draft.
             dragSheetToDismiss(in: app)
-            let keepEditing = app.buttons["Keep editing"].firstMatch
+            let discardAlert = app.alerts["Discard changes?"]
+            XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
+            let keepEditing = discardAlert.buttons["Keep editing"]
             XCTAssertTrue(keepEditing.waitForExistence(timeout: 5))
             keepEditing.tap()
             XCTAssertTrue(editor.exists)
@@ -259,7 +261,9 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch", "Choosing ownership must retain the unsaved item")
         XCTAssertEqual(itemAmount.value as? String, "35.00")
         dragSheetToDismiss(in: app)
-        let keepDraft = app.buttons["Keep editing"].firstMatch
+        let discardAlert = app.alerts["Discard changes?"]
+        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
+        let keepDraft = discardAlert.buttons["Keep editing"]
         XCTAssertTrue(keepDraft.waitForExistence(timeout: 5))
         keepDraft.tap()
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
@@ -306,7 +310,10 @@ final class TransactionFormTests: XCTestCase {
     }
 
     private func confirmDiscard(in app: XCUIApplication) {
-        let discard = app.buttons["Discard changes"].firstMatch
+        let alert = app.alerts["Discard changes?"]
+        XCTAssertTrue(alert.waitForExistence(timeout: 5))
+        XCTAssertTrue(alert.buttons["Keep editing"].exists)
+        let discard = alert.buttons["Discard changes"]
         XCTAssertTrue(discard.waitForExistence(timeout: 5))
         discard.tap()
     }

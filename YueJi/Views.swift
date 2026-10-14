@@ -1208,7 +1208,9 @@ extension View {
                     if hasChanges && !saving { confirming.wrappedValue = true }
                 }.frame(width: 0, height: 0)
             }
-            .confirmationDialog(tr("放弃未保存的修改？", "Discard changes?", "Buang perubahan?"), isPresented: confirming, titleVisibility: .visible) {
+            // A confirmationDialog can become a popover that omits its cancel
+            // button. An alert keeps both choices visible in every size class.
+            .alert(tr("放弃未保存的修改？", "Discard changes?", "Buang perubahan?"), isPresented: confirming) {
                 Button(tr("放弃修改", "Discard changes", "Buang perubahan"), role: .destructive, action: discard)
                 Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {}
             } message: {
