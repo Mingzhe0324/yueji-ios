@@ -4,6 +4,48 @@ import AVFoundation
 import SwiftUI
 @testable import YueJi
 
+final class EntryDescriptionTests: XCTestCase {
+    private let date = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func testOptionalDetailsRoundTripWithoutInventingMerchantOrItems() throws {
+        let bare = Expense(merchant: "", cents: 1190, date: date)
+        var described = bare
+        described.id = "description-only"
+        described.entryDescription = "Monthly subscription"
+        described.note = "Original note"
+        let ledger = try Ledger(expenses: [bare, described]).validated()
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.expenses, ledger.expenses)
+        XCTAssertEqual(restored.expenses.map(\.personal), [1190, 1190])
+        XCTAssertEqual(described.displayName, "Monthly subscription")
+        XCTAssertFalse(bare.displayName.isEmpty)
+        XCTAssertEqual(described.merchant, "")
+        XCTAssertNil(described.items)
+    }
+
+    func testLegacyBackupKeepsMerchantAndNoteSeparate() throws {
+        let original = Expense(merchant: "Cafe", cents: 500, date: date, note: "Old note")
+        let data = try LocalStore.encode(Ledger(expenses: [original]))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("entryDescription"))
+        let restored = try LocalStore.decode(data).expenses[0]
+        XCTAssertEqual(restored, original)
+        XCTAssertNil(restored.entryDescription)
+        XCTAssertEqual(restored.displayName, "Cafe")
+    }
+
+    func testDescriptionIsSearchableExportedAndLengthChecked() throws {
+        var entry = Expense(merchant: "Cafe", cents: 500, date: date)
+        entry.entryDescription = "Lunch with Amy"
+        let ledger = Ledger(expenses: [entry])
+        XCTAssertEqual(try ledger.filteredEntries(in: date, search: "with Amy", filter: LedgerFilter()).map(\.id), [entry.id])
+        let csv = String(decoding: ledger.csv(month: nil, splits: false), as: UTF8.self)
+        XCTAssertTrue(csv.contains("entry_description"))
+        XCTAssertTrue(csv.contains("Lunch with Amy"))
+        entry.entryDescription = String(repeating: "a", count: 2001)
+        XCTAssertThrowsError(try Ledger(expenses: [entry]).validated())
+    }
+}
+
 final class ItemOwnershipAndQuantityTests: XCTestCase {
     func testEditorSnapshotPreservesUnsavedInvalidAndOwnershipChanges() {
         let item = ExpenseItemDraft(name: "Lunch", amount: "12.00", category: "其他")

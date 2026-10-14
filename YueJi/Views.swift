@@ -777,9 +777,14 @@ struct ExpenseRow: View {
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 headingLayout {
-                    Text(entry.merchant).font(.body.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                    Text(entry.displayName).font(.body.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                     if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
                     purchaseAmount
+                }
+                if !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   let description = entry.entryDescription, !description.isEmpty {
+                    Text(description).font(.subheadline).foregroundStyle(.secondary)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 }
                 if let preview = entry.itemPreview {
                     ViewThatFits(in: .horizontal) {
@@ -1039,10 +1044,23 @@ struct ExpenseDetailView: View {
                             if entry.paidByFriend != nil {
                                 Text(tr("朋友代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya")).font(.caption).foregroundStyle(.secondary)
                             }
-                            Text(entry.merchant).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+                            Text(entry.displayName).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
                             Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
                             Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 20)
+                    }
+                    if !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(entry.entryDescription ?? "").isEmpty {
+                    Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
+                        if !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            LabeledContent(tr("商户", "Merchant", "Peniaga"), value: entry.merchant)
+                        }
+                        if let description = entry.entryDescription, !description.isEmpty {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(tr("账目名称／描述", "Name / description", "Nama / penerangan")).font(.caption).foregroundStyle(.secondary)
+                                Text(description).textSelection(.enabled)
+                            }.accessibilityIdentifier("transaction.description.detail")
+                        }
+                    }
                     }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
                         LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(entry.source))
@@ -1202,7 +1220,7 @@ private struct ExpenseDeletionConfirmation: ViewModifier {
             }
             Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
         } message: { entry in
-            Text(entry.merchant + " · " + money(entry.cents) + "\n" + tr(
+            Text(entry.displayName + " · " + money(entry.cents) + "\n" + tr(
                 "关联的分账、还款和退款也会删除，统计会同步更新。",
                 "Linked splits, repayments and refunds will also be deleted. Totals will update.",
                 "Pembahagian, bayaran rakan dan bayaran balik berkaitan turut dipadam. Jumlah akan dikemas kini."))
@@ -1342,6 +1360,7 @@ struct ExpenseEditor: View {
     @FocusState private var focusedField: ExpenseInputField?
     @State private var deleting: Expense?
     @State private var name = ""
+    @State private var entryDescription = ""
     @State private var amount = ""
     @State private var currency = "MYR"
     @State private var rate = ""
@@ -1370,7 +1389,7 @@ struct ExpenseEditor: View {
     @State private var initialSnapshot: ExpenseEditorSnapshot?
     @State private var confirmingDiscard = false
     private var snapshot: ExpenseEditorSnapshot {
-        ExpenseEditorSnapshot(text: [name, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText],
+        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText],
                               flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe],
                               date: date, items: itemDrafts, people: people)
     }
@@ -1502,11 +1521,15 @@ struct ExpenseEditor: View {
             .disabled((original?.refunded ?? 0) > 0 || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
     }
     private var merchantSection: some View {
-        Section(tr("商户与分类", "Merchant and category", "Peniaga dan kategori")) {
-            TextField(tr("商户 / 行程", "Merchant / trip", "Peniaga / perjalanan"), text: $name)
+        Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
+            TextField(tr("商户（选填）", "Merchant (optional)", "Peniaga (pilihan)"), text: $name)
                 .accessibilityIdentifier("transaction.merchant")
                 .focused($focusedField, equals: .merchant).submitLabel(.done)
                 .onSubmit { finishKeyboard() }
+            TextField(tr("账目名称／描述（选填）", "Name / description (optional)", "Nama / penerangan (pilihan)"), text: $entryDescription, axis: .vertical)
+                .lineLimit(2...5)
+                .focused($focusedField, equals: .entryDescription)
+                .accessibilityIdentifier("transaction.description")
             // Keep this navigation row mounted when the first item is inserted.
             // Removing it in the same Form update can invalidate native navigation.
             Picker(tr("分类", "Category", "Kategori"), selection: $category) {
@@ -1522,7 +1545,7 @@ struct ExpenseEditor: View {
     private var currencySection: some View {
         Section {
             Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
-                .disabled(!itemDrafts.isEmpty)
+                .disabled(!itemDrafts.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
             DisclosureGroup(isExpanded: $foreignExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
@@ -1593,6 +1616,7 @@ struct ExpenseEditor: View {
         if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
+            entryDescription = e.entryDescription ?? ""
             friendPays = e.paidByFriend != nil; payerName = e.paidByFriend ?? ""
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
             itemDrafts = (e.items ?? []).map(ExpenseItemDraft.init)
@@ -1640,6 +1664,8 @@ struct ExpenseEditor: View {
             if entry.cents != n || currency != "MYR" { entry.receiptSummary = nil }
             if let original, original.date != date { entry.timeSource = "edited" }
             entry.merchant = name.trimmingCharacters(in: .whitespacesAndNewlines); entry.cents = n; entry.date = date; entry.category = category; entry.fuel = fuel
+            let description = entryDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+            entry.entryDescription = description.isEmpty ? nil : description
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }

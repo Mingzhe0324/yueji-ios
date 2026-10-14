@@ -737,7 +737,7 @@ struct FriendSpendingView: View {
                 ForEach(entries) { e in
                     let share = e.shares.filter { friendKey($0.name) == friend }.reduce(0) { $0 + $1.cents - $1.refunded }
                     VStack(alignment: .leading) {
-                        HStack { Text(e.merchant); Spacer(); Text(money(share)) }
+                        HStack { Text(e.displayName); Spacer(); Text(money(share)) }
                         Text(dateLabel(e.date) + " · " + e.categorySummary).font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -1397,7 +1397,7 @@ struct ExpenseItemsEditor: View {
             ScrollViewReader { proxy in
             Form {
                 Section {
-                    Text(original.merchant).font(.headline)
+                    Text(original.displayName).font(.headline)
                     LabeledContent(tr("交易总额", "Transaction total", "Jumlah transaksi")) {
                         TransactionAmount(cents: original.cents, direction: .outgoing)
                     }
@@ -2415,7 +2415,7 @@ struct ReceiptScanView: View {
             if !matching.isEmpty || !existingID.isEmpty {
                 Picker(tr("保存到", "Save to", "Simpan ke"), selection: $existingID) {
                     Text(tr("新增账目", "New expense", "Belanja baharu")).tag("")
-                    ForEach(matching) { entry in Text(entry.merchant + " · " + dateLabel(entry.date)).tag(entry.id) }
+                    ForEach(matching) { entry in Text(entry.displayName + " · " + dateLabel(entry.date)).tag(entry.id) }
                 }
                 Text(tr("这笔付款已入账？选原账目，避免重复。", "Already recorded? Choose the original payment to avoid duplicates.", "Sudah direkod? Pilih bayaran asal supaya tidak berganda.")).font(.caption)
             }
@@ -3091,7 +3091,7 @@ struct NoticeResolutionSection: View {
             Text(tngStatus(notice))
             if let relatedID = notice.relatedRecordID {
                 if let entry = model.expense(id: relatedID) {
-                    Text(entry.merchant + " · " + money(entry.cents))
+                    Text(entry.displayName + " · " + money(entry.cents))
                     NavigationLink(tr("查看关联消费", "View linked expense", "Lihat belanja dipautkan")) { ExpenseDetailView(id: relatedID, embeddedInNavigation: true) }
                 } else if let other = model.ledger.tngNotices.first(where: { $0.id == relatedID }) {
                     Text(sourceLabel(other.provider) + " · " + money(other.cents ?? 0))
@@ -3166,7 +3166,7 @@ struct FinancialNoticeReviewView: View {
                     Section(purpose == "refund" ? tr("选择原消费", "Choose original expense", "Pilih belanja asal") : tr("选择已有账目", "Choose existing entry", "Pilih rekod sedia ada")) {
                         Picker(tr("关联账目", "Linked entry", "Rekod dipautkan"), selection: $relatedID) {
                             Text(tr("请选择", "Please select", "Sila pilih")).tag("")
-                            ForEach(candidates) { entry in Text(entry.merchant + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
+                            ForEach(candidates) { entry in Text(entry.displayName + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
                         }
                         Text(tr("金额相同不代表同一笔，请核对商户和日期。退款会减少原消费，不作为收入。", "Matching amounts do not prove a duplicate. Check the merchant and date. Refunds reduce the original expense and are not income.", "Amaun sama tidak semestinya pendua. Semak peniaga dan tarikh. Bayaran balik mengurangkan belanja asal dan bukan pendapatan.")).font(.caption)
                     }
@@ -3247,7 +3247,7 @@ struct ExpenseItemDraft: Identifiable, Equatable {
     }
 }
 enum ExpenseInputField: Hashable {
-    case amount, merchant, rate
+    case amount, merchant, entryDescription, rate
     case itemName(String), itemAmount(String)
 }
 

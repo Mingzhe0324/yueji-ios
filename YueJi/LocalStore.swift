@@ -241,7 +241,7 @@ actor LedgerRefreshWorker {
                 }
                 ledger.expenses.append(entry)
             }
-            if rememberCategory && (entry.items ?? []).isEmpty,
+            if rememberCategory && (entry.items ?? []).isEmpty && !friendKey(entry.merchant).isEmpty,
                original == nil || original?.category != entry.category {
                 ledger.merchantCategories[friendKey(entry.merchant)] = entry.category
             }

@@ -656,7 +656,7 @@ extension Ledger {
                 }
             }
         } else {
-            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR"]]
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR", "entry_description"]]
             for e in entries {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -667,7 +667,7 @@ extension Ledger {
                     if let owner = item.ownership { text += ":" + owner.label }
                     return text
                 }.joined(separator: "; ")
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR"), itemText])
+                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR"), itemText, e.entryDescription ?? ""])
             }
         }
         return csvData(rows)
@@ -687,7 +687,7 @@ extension Ledger {
                   filter.source.isEmpty || filter.source == e.source else { return false }
             if let low, e.cents < low { return false }
             if let high, e.cents > high { return false }
-            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || e.categorySummary.localizedCaseInsensitiveContains(query) || (e.items ?? []).contains(where: { $0.name.localizedCaseInsensitiveContains(query) }) || (e.note ?? "").localizedCaseInsensitiveContains(query) || (e.tags ?? []).contains(where: { $0.localizedCaseInsensitiveContains(query) })
+            return query.isEmpty || e.merchant.localizedCaseInsensitiveContains(query) || (e.entryDescription ?? "").localizedCaseInsensitiveContains(query) || e.categorySummary.localizedCaseInsensitiveContains(query) || (e.items ?? []).contains(where: { $0.name.localizedCaseInsensitiveContains(query) }) || (e.note ?? "").localizedCaseInsensitiveContains(query) || (e.tags ?? []).contains(where: { $0.localizedCaseInsensitiveContains(query) })
         }.sorted { $0.date > $1.date }
     }
 }

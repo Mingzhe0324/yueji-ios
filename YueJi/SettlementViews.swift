@@ -152,7 +152,7 @@ struct FriendDebtRow: View {
     var body: some View {
         let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 5) {
-            Text(item.expense.merchant).font(.headline)
+            Text(item.expense.displayName).font(.headline)
             Text(dateLabel(item.expense.date) + " · " + item.expense.categorySummary).font(.caption).foregroundStyle(.secondary)
             Text(tr("付款人：", "Paid by: ", "Dibayar oleh: ") + item.expense.payerLabel).font(.caption)
             Text(item.balance == 0 ? tr("已结清", "Settled", "Selesai") :
@@ -323,7 +323,7 @@ struct SettlementReviewView: View {
                     Section(tr("结算明细", "Settlement details", "Butiran penyelesaian")) {
                         ForEach(plan.lines) { line in
                             VStack(alignment: .leading, spacing: 5) {
-                                Text(line.expense.merchant).font(.headline)
+                                Text(line.expense.displayName).font(.headline)
                                 Text(dateLabel(line.expense.date) + " · " + line.expense.categorySummary).font(.caption)
                                 Text(settledDebtLabel(line.applied) + " · " + money(abs(line.applied)))
                                 LabeledContent(tr("保留未结余额", "Left outstanding", "Baki belum selesai"), value: money(abs(line.before - line.applied))).font(.caption)
@@ -395,7 +395,7 @@ struct SettlementDetailView: View {
                     DisclosureGroup(tr("展开计算明细", "Expand calculation", "Kembangkan pengiraan")) {
                         ForEach(record.lines) { line in
                             VStack(alignment: .leading, spacing: 6) {
-                                Text(line.expense.merchant).font(.headline)
+                                Text(line.expense.displayName).font(.headline)
                                 Text(dateLabel(line.expense.date) + " · " + line.expense.categorySummary).font(.caption)
                                 LabeledContent(tr("付款人", "Paid by", "Dibayar oleh"), value: line.expense.payerLabel)
                                 LabeledContent(tr("我的消费", "My spending", "Belanja saya")) { TransactionAmount(cents: line.expense.personal, direction: .outgoing) }

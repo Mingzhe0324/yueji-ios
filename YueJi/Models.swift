@@ -80,6 +80,7 @@ struct Share: Codable, Identifiable, Equatable {
 struct Expense: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var merchant: String
+    var entryDescription: String? = nil
     var cents: Int
     var date: Date = Date()
     var category: String = "其他"
@@ -98,6 +99,12 @@ struct Expense: Codable, Identifiable, Equatable {
     var paidByFriend: String? = nil // Missing in legacy records: paid by me.
     var items: [ExpenseItem]? = nil // Optional: automatic entries are saved before itemization.
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
+    var displayName: String {
+        let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !merchantName.isEmpty { return merchantName }
+        let description = entryDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return description.isEmpty ? tr("未命名账目", "Untitled entry", "Rekod tanpa nama") : description
+    }
     // Purchase presentation is distinct from account movement when a friend pays.
     var purchaseDisplayCents: Int { paidByFriend == nil ? cents : personal }
     var purchaseDirection: AccountDirection { .outgoing }
@@ -191,7 +198,7 @@ struct Ledger: Codable {
                       (e.shares[0].returns ?? []).isEmpty else { throw settlementError("朋友付款请在你和付款人之间分摊，已有还款须先撤销。", "Split friend-paid purchases between you and the payer. Undo existing repayments before changing payer.", "Bahagikan belanja dibayar rakan antara anda dan pembayar. Batalkan bayaran sedia ada sebelum menukar pembayar.") }
             }
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
-            guard !e.id.isEmpty, !e.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+            guard !e.id.isEmpty, (e.entryDescription?.count ?? 0) <= 2000,
                   e.merchant.count <= 200, (e.transactionReference?.count ?? 0) <= 500, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
                   (e.timeSource == nil || ["received", "supplied", "notification", "edited"].contains(e.timeSource!)),
                   e.date.timeIntervalSince1970.isFinite, categoryNames.contains(e.category), e.shares.count <= 100,
@@ -262,7 +269,7 @@ struct Ledger: Codable {
             seenEvents.insert(key)
             return false
         }
-        expenses.append(Expense(merchant: name, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
+        expenses.append(Expense(merchant: name, entryDescription: description.isEmpty ? nil : description, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
         seenEvents.insert(key)
         return true
     }
