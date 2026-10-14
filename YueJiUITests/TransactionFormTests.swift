@@ -381,9 +381,15 @@ final class TransactionFormTests: XCTestCase {
         let done = app.toolbars.buttons["Done"].firstMatch
         if done.exists {
             done.tap()
-            let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate(format: "hittable == false"), object: done)
+            // The toolbar button is removed from the hierarchy on dismissal.
+            // Evaluating hittable via KVC against a missing firstMatch can fail
+            // to resolve instead of returning false. Check existence first,
+            // and separately require the actual keyboard to disappear.
+            let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+                !app.keyboards.firstMatch.exists && (!done.exists || !done.isHittable)
+            }, object: app)
             XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed,
-                           "Keyboard Done remained interactive after dismissal")
+                           "Keyboard or its Done control remained interactive after dismissal")
         }
     }
 }
