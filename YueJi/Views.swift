@@ -1203,8 +1203,7 @@ struct ExpenseEditorSnapshot: Equatable {
 
 extension View {
     func editorDismissal(hasChanges: Bool, saving: Bool, confirming: Binding<Bool>, discard: @escaping () -> Void) -> some View {
-        interactiveDismissDisabled(hasChanges || saving)
-            .background {
+        self.background {
                 EditorDismissObserver(blocked: hasChanges || saving) {
                     if hasChanges && !saving { confirming.wrappedValue = true }
                 }.frame(width: 0, height: 0)
@@ -1238,6 +1237,7 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
         var attempted: (() -> Void)?
         private weak var observed: UIPresentationController?
         private weak var previous: (any UIAdaptivePresentationControllerDelegate)?
+        private var previousModalInPresentation = false
         private var removed = false
         override func loadView() { view = UIView(); view.isUserInteractionEnabled = false }
         override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); install() }
@@ -1247,14 +1247,27 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
             guard !removed else { return }
             var ancestor: UIViewController? = self
             while let candidate = ancestor {
-                if candidate.presentingViewController != nil, let presentation = candidate.presentationController {
+                // Contained navigation controllers can report their ancestor's
+                // presenter. Install only on the actual presented controller.
+                if let presenter = candidate.presentingViewController,
+                   presenter.presentedViewController === candidate,
+                   let presentation = candidate.presentationController,
+                   presentation.presentedViewController === candidate {
                     if observed !== presentation {
-                        if let observed, observed.delegate === self { observed.delegate = previous }
+                        restore()
                         observed = presentation
                         previous = presentation.delegate
+                        previousModalInPresentation = candidate.isModalInPresentation
+                        #if DEBUG
+                        print("Editor dismissal observer attached to presented sheet")
+                        #endif
                     } else if presentation.delegate !== self {
                         previous = presentation.delegate
                     }
+                    // This observer owns both the dismissal restriction and its
+                    // attempted-dismiss callback. A simultaneous SwiftUI
+                    // interactiveDismissDisabled modifier can replace the delegate.
+                    candidate.isModalInPresentation = blocked
                     presentation.delegate = self
                     return
                 }
@@ -1263,11 +1276,20 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
         }
         func uninstall() {
             removed = true
-            if let observed, observed.delegate === self { observed.delegate = previous }
+            restore()
             attempted = nil
+        }
+        private func restore() {
+            if let observed, observed.delegate === self {
+                observed.delegate = previous
+                observed.presentedViewController.isModalInPresentation = previousModalInPresentation
+            }
         }
         func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool { !blocked }
         func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+            #if DEBUG
+            print("Editor dismissal observer received attempted dismissal")
+            #endif
             DispatchQueue.main.async { [weak self] in self?.attempted?() }
         }
         func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
