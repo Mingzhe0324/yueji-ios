@@ -44,6 +44,17 @@ private struct YueJiListSurface: ViewModifier {
             .scrollContentBackground(.hidden)
             .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
             .modifier(YueJiBarAppearance())
+            .modifier(YueJiScrollEdge())
+    }
+}
+private struct YueJiScrollEdge: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            // Let the system dissolve scrolling content beneath floating
+            // controls instead of drawing another rectangular material panel.
+            content.scrollEdgeEffectStyle(.soft, for: .bottom)
+        } else { content }
     }
 }
 extension View {
@@ -90,7 +101,8 @@ private struct YueJiActionBarSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.background {
             if reduceTransparency { Color(uiColor: .systemGroupedBackground) }
-            else { Rectangle().fill(.bar) }
+            // The capsule buttons already provide their own native material.
+            // Keep this safe-area spacer clear during normal scrolling.
         }
     }
 }
