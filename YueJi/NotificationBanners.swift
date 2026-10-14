@@ -344,10 +344,17 @@ enum BannerSwipePolicy {
 struct NotificationBannerSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-    func body(content: Content) -> some View {
-        content.background { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
-            .overlay { shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5).allowsHitTesting(false) }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.08), radius: 6, y: 2)
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency, contrast != .increased {
+            // One system material on the floating notification, without a
+            // second custom border/shadow or an extra interactive transform.
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
+                .overlay { shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5).allowsHitTesting(false) }
+                .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.08), radius: 6, y: 2)
+        }
     }
 }

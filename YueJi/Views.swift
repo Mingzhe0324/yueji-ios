@@ -73,9 +73,13 @@ extension View {
     }
 }
 private struct YueJiSheetSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
+        if #available(iOS 26.0, *), !reduceTransparency {
             // Let the system choose the sheet's curvature and material.
+            content.presentationDragIndicator(.visible)
+                .modifier(YueJiBarAppearance())
+        } else if #available(iOS 26.0, *) {
             content.presentationDragIndicator(.visible)
                 .presentationBackground(Color(uiColor: .systemGroupedBackground))
                 .modifier(YueJiBarAppearance())
@@ -432,7 +436,7 @@ struct DashboardView: View {
                     NavigationLink {
                         OverviewToolsView(month: month).yuejiZoom(id: "overview-tools", namespace: navigationMotion)
                     } label: {
-                        Image(systemName: "ellipsis.circle").yuejiZoomSource(id: "overview-tools", namespace: navigationMotion)
+                        Image(systemName: "ellipsis").yuejiZoomSource(id: "overview-tools", namespace: navigationMotion)
                     }
                         .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
                 }
