@@ -64,6 +64,7 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
     started = time.monotonic()
     deadline = started + timeout
     active_test = None
+    tests_started = False
     finalizing = False
     test_deadline = time.monotonic() + test_transition_timeout if test_case_timeout is not None else None
     forced_code = None
@@ -93,9 +94,11 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
                 if finalizing:
                     detail = f'Xcode result finalization exceeded {test_finalization_timeout} seconds after tests ended'
                 elif active_test is not None:
-                    detail = f'UI test {active_test} exceeded {test_case_timeout} seconds'
+                    detail = f'Native test {active_test} exceeded {test_case_timeout} seconds'
+                elif not tests_started:
+                    detail = f'Native runner did not start tests within {test_transition_timeout} seconds'
                 else:
-                    detail = f'UI runner made no test transition within {test_transition_timeout} seconds'
+                    detail = f'Native runner made no test transition within {test_transition_timeout} seconds'
                 emit(f'CI stage timed out: {detail}; native verification did not complete.\n')
                 forced_code = 124
             if forced_code is not None and termination_deadline is None:
@@ -116,6 +119,7 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
                 if event:
                     name, status = event.groups()
                     if status == 'started' and active_test is None:
+                        tests_started = True
                         finalizing = False
                         active_test = name
                         test_deadline = time.monotonic() + test_case_timeout
@@ -172,7 +176,7 @@ def main():
         # A hosted image's first boot may still be migrating LaunchServices data.
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 480),
         (base + test_options + ['test-without-building', '-only-testing:YueJiTests',
-                 '-resultBundlePath', str(args.artifacts / 'UnitTestResults.xcresult')], 900),
+                 '-resultBundlePath', str(args.artifacts / 'UnitTestResults.xcresult')], 1200),
         # Keep the installed app/data, but give the UI runner a fresh simulator process.
         (['xcrun', 'simctl', 'shutdown', args.simulator], 60),
         (['xcrun', 'simctl', 'bootstatus', args.simulator, '-b'], 180),
@@ -184,6 +188,10 @@ def main():
     with (args.artifacts / 'build-test.log').open('w', encoding='utf-8') as log:
         for command, timeout in stages:
             options = {'test_case_timeout': 900} if '-only-testing:YueJiUITests' in command else {}
+            if '-only-testing:YueJiTests' in command:
+                # Bound Xcode launch separately: a stalled hosted runner must not
+                # consume the whole unit-suite allowance before tests even start.
+                options = {'test_case_timeout': 300, 'test_transition_timeout': 300}
             code = run_stage(command, log, timeout, **options)
             if code:
                 return code

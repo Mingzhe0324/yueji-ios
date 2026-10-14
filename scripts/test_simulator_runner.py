@@ -24,7 +24,9 @@ class SimulatorRunnerTests(unittest.TestCase):
             self.assertIn('bootstatus', commands[4])
             self.assertIn('-only-testing:YueJiUITests', commands[5])
             self.assertEqual(stage.call_args_list[5].kwargs['test_case_timeout'], 900)
-            self.assertEqual(stage.call_args_list[2].kwargs, {})
+            self.assertEqual(stage.call_args_list[2].kwargs,
+                             {'test_case_timeout': 300, 'test_transition_timeout': 300})
+            self.assertEqual(stage.call_args_list[2].args[2], 1200)
             for command in (commands[2], commands[5]):
                 self.assertEqual(command[command.index('-collect-test-diagnostics') + 1], 'never')
                 self.assertIn('-resultBundlePath', command)
@@ -136,13 +138,14 @@ while True:
         self.assertEqual(code, 124)
         self.assertIn('testStuck exceeded 0.3 seconds', report(log))
 
-    def test_ui_startup_and_between_case_waits_are_bounded(self):
+    def test_native_startup_and_between_case_waits_are_bounded(self):
         for prefix in ('', "print(\"Test Case '-[Suite testOne]' started.\"); print(\"Test Case '-[Suite testOne]' passed (0 seconds).\"); "):
             with self.subTest(prefix=prefix):
                 code, log = self.run_python('import time; ' + prefix + 'time.sleep(60)',
                                             test_case_timeout=2, test_transition_timeout=0.3)
                 self.assertEqual(code, 124)
-                self.assertIn('UI runner made no test transition', report(log))
+                expected = 'Native runner made no test transition' if prefix else 'Native runner did not start tests'
+                self.assertIn(expected, report(log))
 
     def test_case_transitions_do_not_extend_whole_suite_deadline(self):
         source = """import time
