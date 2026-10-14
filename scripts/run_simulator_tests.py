@@ -68,7 +68,7 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
     test_deadline = time.monotonic() + test_transition_timeout if test_case_timeout is not None else None
     forced_code = None
     termination_deadline = None
-    output_finished = False
+    exit_observed = False
 
     def stop(force=False):
         # simctl talks to OS-managed services; only stop our simctl client.
@@ -76,13 +76,20 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
 
     try:
         while True:
-            if output_finished and process.poll() is not None:
-                break
+            if process.poll() is not None:
+                # CoreSimulator services can inherit stdout beyond simctl's
+                # lifetime. Drain delivered output without requiring their EOF.
+                # Only the owned command's actual exit code determines success.
+                if not exit_observed:
+                    reader.join(timeout=1)
+                    exit_observed = True
+                if lines.empty():
+                    break
             now = time.monotonic()
-            if forced_code is None and now >= deadline:
+            if not exit_observed and forced_code is None and now >= deadline:
                 emit(f'CI stage timed out after {timeout} seconds; native verification did not complete.\n')
                 forced_code = 124
-            if forced_code is None and test_deadline is not None and now >= test_deadline:
+            if not exit_observed and forced_code is None and test_deadline is not None and now >= test_deadline:
                 if finalizing:
                     detail = f'Xcode result finalization exceeded {test_finalization_timeout} seconds after tests ended'
                 elif active_test is not None:
@@ -102,7 +109,6 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
             except queue.Empty:
                 continue
             if line is None:
-                output_finished = True
                 continue
             emit(line)
             if test_case_timeout is not None:

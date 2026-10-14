@@ -1,0 +1,7 @@
+# Simulator command completion and inherited output pipes
+
+The supplied Azure screenshot shows bootstatus waiting for System App, then reporting a terminal Finished state at simulator elapsed 6:53. The runner subsequently reaches its 480-second stage timeout. This identifies a simulator-startup stage failure, rather than an XCTest assertion or app compilation failure. The screenshot alone does not establish simctl's actual exit code.
+
+The runner previously required both child termination and stdout EOF before leaving a stage. A simulator service inheriting the output pipe can prevent EOF after the owned simctl client exits, causing a completed command to be reported as a timeout. The runner now detects the owned child's real exit status independently, allows a bounded output-drain interval and flushes delivered lines. It never uses the textual Finished message as proof of success. Nonzero exits, live-command timeouts and required native test failures remain failures.
+
+A regression starts a child which exits with either zero or 65 while a descendant holds stdout open; both real exit codes must be retained without a false timeout. Existing tests still cover actual hangs, cleanup failures and required unit/UI suites. If the hosted simctl client itself remains alive, the startup deadline remains enforced. Hosted macOS revalidation is required to establish whether this addresses the supplied run.

@@ -41,6 +41,24 @@ class SimulatorRunnerTests(unittest.TestCase):
             self.assertEqual(stage.call_count, 1)
             self.assertNotIn('ALL NATIVE SUITES SUCCEEDED', (Path(folder) / 'build-test.log').read_text())
 
+    def test_exited_command_preserves_status_when_descendant_holds_output_pipe(self):
+        for status in (0, 65):
+            with self.subTest(status=status):
+                source = f"""import subprocess, sys
+subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(3)'])
+print('Finished', flush=True)
+sys.exit({status})
+"""
+                code, output = self.run_python(source, timeout=0.8)
+                self.assertEqual(code, status)
+                self.assertIn('Finished', output)
+                self.assertNotIn('CI stage timed out', output)
+
+    def test_initialization_failure_in_buffered_output_is_still_failure(self):
+        code, output = self.run_python("print('Failed to initialize for UI testing: startup failed')")
+        self.assertEqual(code, 65)
+        self.assertIn('CI runner initialization failed', output)
+
     def test_ui_failure_or_timeout_never_reports_native_success(self):
         for code in (65, 124):
             with self.subTest(code=code), tempfile.TemporaryDirectory() as folder:
