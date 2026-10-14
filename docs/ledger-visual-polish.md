@@ -1,6 +1,6 @@
 # Ledger visual polish
 
-Overview uses a content-sized Add entry capsule, centred above the native tab bar, with an eight-point vertical inset. Its label can wrap at large text sizes and retains a minimum 44-point target. The shared action surface remains transparent unless Reduce Transparency is enabled.
+Overview uses a plus-only circular Add entry button, centred above the native tab bar, with an eight-point vertical inset. It retains a minimum 44-point target and the localized Add entry accessibility label. The shared action surface remains transparent unless Reduce Transparency is enabled.
 
 The shared transaction row places merchant and purchase amount on the first baseline. Item previews now have the full remaining row width below that heading; category and date use secondary caption text. Accessibility text sizes stack the heading and amount. Both Overview and Ledger use this row, regardless of transaction source. Existing item preview identifiers and amount accessibility labels remain intact.
 

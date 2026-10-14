@@ -445,11 +445,10 @@ struct DashboardView: View {
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 VStack(spacing: 0) {
                     Button { guard !adding else { return }; adding = true } label: {
-                        Label(tr("记一笔", "Add entry", "Tambah rekod"), systemImage: "plus")
-                            .font(.headline).padding(.horizontal, 24).frame(minHeight: 44)
-                            .fixedSize(horizontal: false, vertical: true)
+                        Image(systemName: "plus")
+                            .font(.title2.weight(.semibold)).frame(minWidth: 44, minHeight: 44)
                     }
-                    .yuejiPrimaryButton().buttonBorderShape(.capsule)
+                    .yuejiPrimaryButton().buttonBorderShape(.circle)
                     // The accessible target is the button, not the background that
                     // extends through the bottom safe area behind the tab bar.
                     .accessibilityElement(children: .ignore)
