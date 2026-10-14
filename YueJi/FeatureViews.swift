@@ -1395,7 +1395,8 @@ struct ExpenseItemsEditor: View {
                         TransactionAmount(cents: original.cents, direction: .outgoing)
                     }
                 }
-                ExpenseItemsFields(items: $items, totalCents: original.cents, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField, friendNames: original.shares.map(\.name), payer: original.paidByFriend)
+                ExpenseChargeDetails(entry: original)
+                ExpenseItemsFields(items: $items, totalCents: original.itemSubtotalCents, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField, friendNames: original.shares.map(\.name), payer: original.paidByFriend, charges: original.charges, foreign: original.foreign)
                 if model.ledger.hasActiveSettlement(expenseID: original.id) {
                     Section {
                         Text(tr("修改物品前，请先撤销关联结算。原消费和历史记录会保留。", "Undo linked settlements before changing items. The original expense and history are preserved.", "Batalkan penyelesaian dipautkan sebelum mengubah item. Belanja asal dan sejarah dikekalkan."))
@@ -3243,7 +3244,7 @@ struct ExpenseItemDraft: Identifiable, Equatable {
     }
 }
 enum ExpenseInputField: Hashable {
-    case amount, merchant, entryDescription, rate, reimbursementRecipient, reimbursementAmount
+    case amount, merchant, entryDescription, rate, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent
     case itemName(String), itemAmount(String)
 }
 
@@ -3259,6 +3260,8 @@ struct ExpenseItemsFields: View {
     var sharedFocus: FocusState<ExpenseInputField?>.Binding? = nil
     var friendNames: [String] = []
     var payer: String? = nil
+    var charges: ExpenseCharges? = nil
+    var foreign: ForeignAmount? = nil
     private var focus: FocusState<ExpenseInputField?>.Binding { sharedFocus ?? $localFocus }
     private var itemTotal: Int { items.reduce(0) { $0 + ((try? $1.savedItem().cents) ?? 0) } }
     var body: some View {
@@ -3323,15 +3326,15 @@ struct ExpenseItemsFields: View {
                 .accessibilityIdentifier("transaction.item.add")
                 .disabled(items.count >= 100)
             if !items.isEmpty {
-                LabeledContent(tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi"), value: money(itemTotal) + " / " + money(totalCents))
+                LabeledContent(charges == nil ? tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi") : tr("物品合计 / 税前小计", "Item total / subtotal", "Jumlah item / subtotal"), value: money(itemTotal) + " / " + money(totalCents))
                     .foregroundStyle(itemTotal == totalCents ? Color.secondary : Color.orange)
                 if itemTotal != totalCents {
                     LabeledContent(itemTotal < totalCents
                         ? tr("尚需分配", "Left to allocate", "Baki untuk diagihkan")
-                        : tr("超过交易总额", "Over transaction total", "Melebihi jumlah transaksi"),
+                        : (charges == nil ? tr("超过交易总额", "Over transaction total", "Melebihi jumlah transaksi") : tr("超过税前小计", "Over subtotal", "Melebihi subtotal")),
                         value: money(abs(totalCents - itemTotal)))
                         .font(.subheadline).foregroundStyle(.orange)
-                    Text(tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan."))
+                    Text(charges == nil ? tr("保存前，物品合计须等于交易总额。", "Item amounts must equal the transaction total before saving.", "Jumlah item mesti sama dengan jumlah transaksi sebelum disimpan.") : tr("物品合计须等于税前小计；税费按物品金额比例分摊。", "Items must equal the subtotal; charges are allocated proportionally.", "Jumlah item mesti sama dengan subtotal; caj diagihkan secara berkadar."))
                         .font(.footnote).foregroundStyle(.orange)
                 }
                 if items.contains(where: { $0.ownership != nil }) {
@@ -3339,7 +3342,7 @@ struct ExpenseItemsFields: View {
                         Text(tr("请为每件物品选择归属，才可按物品分账。", "Choose ownership for every item to split by item.", "Pilih pemilik setiap item untuk membahagi mengikut item."))
                             .font(.footnote).foregroundStyle(.orange)
                     } else {
-                        ItemSplitSummary(items: items)
+                        ItemSplitSummary(items: items, charges: charges, foreign: foreign)
                     }
                 }
             } else if savedTransaction {
@@ -3431,27 +3434,51 @@ struct ItemOwnershipPicker: View {
 struct ItemSplitSummary: View {
     @Environment(\.locale) private var uiLocale
     let items: [ExpenseItemDraft]
+    var charges: ExpenseCharges? = nil
+    var foreign: ForeignAmount? = nil
     var body: some View {
         let _ = uiLocale.identifier
-        if let saved = try? items.map({ draft -> ExpenseItem in
-            let item = try draft.savedItem(); try item.ownership?.validate(); return item
-        }) {
-            let entry = Expense(merchant: "", cents: saved.reduce(0) { $0 + $1.cents }, items: saved)
+        if let entry = try? preview() {
+            let saved = entry.items ?? []
             let totals = entry.itemFriendTotals
             let names = saved.flatMap { $0.ownership?.friends ?? [] }.reduce(into: [String: String]()) { $0[friendKey($1)] = $1 }
             VStack(alignment: .leading, spacing: 8) {
                 Text(tr("按物品分账", "Split by item", "Bahagi mengikut item")).font(.subheadline.weight(.semibold))
-                LabeledContent(tr("我", "Me", "Saya"), value: money(saved.reduce(0) { $0 + $1.personalGross }))
+                LabeledContent(tr("我", "Me", "Saya"), value: money(entry.personal))
                 ForEach(totals.keys.sorted(), id: \.self) { key in
                     LabeledContent(names[key] ?? key, value: money(totals[key] ?? 0))
                 }
-                Text(tr("均分精确到分，尾差会自动分配。", "Equal splits keep every cent, with rounding handled automatically.", "Pembahagian mengekalkan setiap sen dengan pembundaran automatik."))
+                Text(charges == nil ? tr("均分精确到分，尾差会自动分配。", "Equal splits keep every cent, with rounding handled automatically.", "Pembahagian mengekalkan setiap sen dengan pembundaran automatik.") : tr("份额包含按物品金额分摊的税费，尾差自动分配。", "Shares include proportional charges, with rounding handled automatically.", "Bahagian termasuk caj berkadar dengan pembundaran automatik."))
                     .font(.caption).foregroundStyle(.secondary)
             }.font(.subheadline).monospacedDigit().padding(.vertical, 4)
         } else {
             Text(tr("请填写有效单价，并为每件物品选择至少一位归属人。", "Enter a valid unit price and choose at least one owner per item.", "Isi harga seunit yang sah dan pilih sekurang-kurangnya seorang pemilik setiap item."))
                 .font(.footnote).foregroundStyle(.orange)
         }
+    }
+    private func preview() throws -> Expense {
+        let saved = try items.map { draft -> ExpenseItem in
+            let item = try draft.savedItem()
+            guard let ownership = item.ownership else { throw LedgerError.invalid("请选择物品归属。") }
+            try ownership.validate()
+            return item
+        }
+        var entry = Expense(merchant: "", cents: saved.reduce(0) { $0 + $1.cents }, items: saved, charges: charges)
+        if let charges {
+            let calculation = try charges.breakdown()
+            if charges.currency == "MYR" {
+                entry.cents = calculation.total
+            } else {
+                guard var fx = foreign else { throw LedgerError.invalid("汇率必须大于零。") }
+                fx.minor = calculation.total
+                entry.foreign = fx
+                entry.cents = try fx.myrCents()
+            }
+        }
+        try entry.validateCharges()
+        entry = try entry.applyingItemOwnership()
+        try entry.validateItems()
+        return entry
     }
 }
 struct ExpenseItemsBreakdown: View {
@@ -3461,20 +3488,21 @@ struct ExpenseItemsBreakdown: View {
     var body: some View {
         let _ = uiLocale.identifier
         let personalAmounts = entry.personalItemAmounts
+        let chargedAmounts = Dictionary(entry.chargedItems.map { ($0.id, $0.cents) }, uniquingKeysWith: { first, _ in first })
         ForEach(entry.items ?? []) { item in
             if let onSelect {
                 Button { onSelect(item.id) } label: {
-                    itemRow(item, personalAmounts: personalAmounts)
+                    itemRow(item, personalAmounts: personalAmounts, chargedAmounts: chargedAmounts)
                         .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                         .contentShape(Rectangle())
                 }.buttonStyle(.borderless).foregroundStyle(.primary)
                     .accessibilityIdentifier("transaction.item.open." + item.id)
             } else {
-                itemRow(item, personalAmounts: personalAmounts)
+                itemRow(item, personalAmounts: personalAmounts, chargedAmounts: chargedAmounts)
             }
         }
     }
-    private func itemRow(_ item: ExpenseItem, personalAmounts: [String: Int]) -> some View {
+    private func itemRow(_ item: ExpenseItem, personalAmounts: [String: Int], chargedAmounts: [String: Int]) -> some View {
             VStack(alignment: .leading, spacing: 6) {
                 LabeledContent {
                     TransactionAmount(cents: item.cents, direction: .outgoing).monospacedDigit()
@@ -3486,6 +3514,10 @@ struct ExpenseItemsBreakdown: View {
                     Spacer(minLength: 8)
                     Text(categoryLabel(item.category))
                 }.font(.caption).foregroundStyle(.secondary)
+                if entry.charges != nil, let charged = chargedAmounts[item.id] {
+                    LabeledContent(tr("税费分摊", "Allocated charges", "Caj diagihkan"), value: money(charged - item.cents))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Label(item.ownership?.label ?? (entry.shares.isEmpty ? tr("我", "Me", "Saya") : tr("沿用整笔分账", "Uses transaction split", "Ikut pembahagian transaksi")), systemImage: "person")
                     .font(.caption).foregroundStyle(.secondary)
                 if !entry.shares.isEmpty || entry.refunded > 0 {

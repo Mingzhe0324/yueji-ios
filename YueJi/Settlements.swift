@@ -70,6 +70,7 @@ extension Expense {
         id == other.id && merchant == other.merchant && cents == other.cents && date == other.date
         && category == other.category && categoryAllocations == other.categoryAllocations && (items ?? []) == (other.items ?? [])
         && paidByFriend == other.paidByFriend && foreign == other.foreign
+        && charges == other.charges
         && (refunds ?? []) == (other.refunds ?? []) && shares.count == other.shares.count
         && zip(shares, other.shares).allSatisfy { pair in
             pair.0.id == pair.1.id && pair.0.name == pair.1.name && pair.0.cents == pair.1.cents && pair.0.refunded == pair.1.refunded
@@ -249,10 +250,10 @@ extension Ledger {
         var copy = self
         if let expenseID = notice.expenseID, let expense = expenses.first(where: { $0.id == expenseID }) {
             guard notice.status == "recorded", expense.paidByFriend == nil, expense.shares.isEmpty,
-                  (expense.items ?? []).isEmpty, expense.reimbursement == nil,
+                  (expense.items ?? []).isEmpty, expense.reimbursement == nil, expense.charges == nil,
                   expense.refunded == 0, expense.recurringKey == nil, expense.cents == abs(record.transfer), expense.source == notice.provider,
                   !hasActiveSettlement(expenseID: expenseID), tngNotices.filter({ $0.expenseID == expenseID }).count == 1 else {
-                throw settlementError("此自动付款已有物品、分账、退款、报销或其他关联。请先处理原账目。", "This automatic payment has items, splits, refunds, reimbursement or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai item, bahagian, pulangan, tuntutan atau pautan lain. Selesaikan rekod asal dahulu.")
+                throw settlementError("此自动付款已有物品、分账、退款、报销、税费或其他关联。请先处理原账目。", "This automatic payment has items, splits, refunds, reimbursement, charges or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai item, bahagian, pulangan, tuntutan, caj atau pautan lain. Selesaikan rekod asal dahulu.")
             }
             copy.settlements[s].convertedPayment = expense
             copy.expenses.removeAll { $0.id == expenseID }
@@ -285,6 +286,7 @@ extension Ledger {
                   record.lines.reduce(0, { $0 + max(0, -$1.applied) }) == min(receivable, payable) + max(0, -record.transfer) else { throw invalidSettlementData() }
             for line in record.lines {
                 let snapshot = line.expense
+                try snapshot.validateCharges()
                 try snapshot.validateItems()
                 guard snapshot.cents > 0, snapshot.cents <= 10_000_000_000, snapshot.shares.count <= 100,
                       snapshot.shares.allSatisfy({ $0.cents >= 0 && $0.cents <= snapshot.cents }),

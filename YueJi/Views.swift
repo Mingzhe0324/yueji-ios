@@ -1134,6 +1134,7 @@ struct ExpenseDetailView: View {
                         editorPresented = true
                         editing = .items(entry, selectedID: selectedID)
                     }
+                    ExpenseChargeDetails(entry: entry)
                     Section(tr("报销", "Reimbursement", "Tuntutan bayaran balik")) {
                         NavigationLink { ReimbursementDetailView(expenseID: entry.id) } label: {
                             Label(entry.reimbursement?.status ?? tr("设置报销", "Set up reimbursement", "Tetapkan tuntutan"), systemImage: "doc.text")
@@ -1416,6 +1417,10 @@ struct ExpenseEditor: View {
     @State private var reimbursementRecipient = ""
     @State private var reimbursementAmount = ""
     @State private var amount = ""
+    @State private var chargesEnabled = false
+    @State private var chargeSubtotal = ""
+    @State private var sstPercent = ""
+    @State private var servicePercent = ""
     @State private var currency = "MYR"
     @State private var rate = ""
     @State private var rateDate = Date()
@@ -1443,8 +1448,8 @@ struct ExpenseEditor: View {
     @State private var initialSnapshot: ExpenseEditorSnapshot?
     @State private var confirmingDiscard = false
     private var snapshot: ExpenseEditorSnapshot {
-        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount],
-                              flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled],
+        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent],
+                              flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled, chargesEnabled],
                               date: date, items: itemDrafts, people: people)
     }
     private var hasChanges: Bool { initialSnapshot.map { $0 != snapshot } ?? false }
@@ -1459,6 +1464,11 @@ struct ExpenseEditor: View {
         return ForeignAmount(currency: currency, minor: try Currency.parse(amount, code: currency), quote: RateQuote(value: value, date: rateDate, source: rateSource))
     }
     private func total() throws -> Int { if let fx = try foreign() { return try fx.myrCents() }; return try toCents(amount) }
+    private var chargesDraft: ExpenseCharges? {
+        guard chargesEnabled else { return nil }
+        return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent)
+    }
+    private var itemBase: Int { chargesDraft.flatMap { try? $0.myrSubtotal(foreign: try? foreign()) } ?? ((try? total()) ?? 0) }
     var body: some View {
         let _ = uiLocale.identifier
         NavigationStack {
@@ -1468,9 +1478,10 @@ struct ExpenseEditor: View {
             Form {
                 if original == nil && initialDraft == nil { ManualEntryTypeSection(selection: $entryType) }
                 paymentSection
+                chargeSection
                 payerSection
                 merchantSection
-                ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil)
+                ExpenseItemsFields(items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
                 currencySection
                 friendSplitSection
                 reimbursementSection
@@ -1560,6 +1571,17 @@ struct ExpenseEditor: View {
                                  amount: $reimbursementAmount,
                                  canRemove: (original?.reimbursement?.receipts.isEmpty ?? true), friendPaid: friendPays,
                                  sharedFocus: $focusedField)
+    }
+    private var chargeSection: some View {
+        ExpenseChargeFields(enabled: $chargesEnabled, subtotal: $chargeSubtotal, sst: $sstPercent, service: $servicePercent,
+                            currency: currency, actualMinor: try? Currency.parse(amount, code: currency), applyTotal: { minor in
+                                amount = Currency.input(minor, currency)
+                                focusedField = nil
+                            }, sharedFocus: $focusedField)
+            .disabled((original?.chargeEditsLocked ?? false) || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
+            .onChange(of: chargesEnabled) { _, enabled in
+                if enabled, original == nil, initialDraft == nil, chargeSubtotal.isEmpty { chargeSubtotal = amount }
+            }
     }
     private var payerSection: some View {
         Section {
@@ -1694,6 +1716,12 @@ struct ExpenseEditor: View {
             splitting = !e.shares.isEmpty; equal = e.shares.isEmpty
             if splitting { people = e.shares.map(FriendDraft.init) }
             currency = e.foreign?.currency ?? "MYR"; amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
+            if let charges = e.charges {
+                chargesEnabled = true
+                chargeSubtotal = Currency.input(charges.subtotal, charges.currency)
+                sstPercent = ExpenseCharges.percentText(charges.sstBasisPoints)
+                servicePercent = ExpenseCharges.percentText(charges.serviceBasisPoints)
+            }
             foreignExpanded = currency != "MYR"
             if let fx = e.foreign { rate = fx.quote.text; rateDate = fx.quote.date; rateSource = fx.quote.source }
         }
@@ -1742,6 +1770,10 @@ struct ExpenseEditor: View {
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
+            let previousCharges = entry.charges
+            entry.charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent) : nil
+            if entry.charges != previousCharges { entry.receiptSummary = nil }
+            try entry.validateCharges()
             entry.paidByFriend = friendPays ? payerName.trimmingCharacters(in: .whitespacesAndNewlines) : nil
             let savedItems = try itemDrafts.map { try $0.savedItem() }
             let byItem = savedItems.contains { $0.ownership != nil }

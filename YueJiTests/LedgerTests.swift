@@ -4,6 +4,154 @@ import AVFoundation
 import SwiftUI
 @testable import YueJi
 
+final class ExpenseChargeTests: XCTestCase {
+    private let date = Date(timeIntervalSince1970: 1_700_000_000)
+    private func purchase() throws -> Expense {
+        let charges = try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6", service: "10")
+        return try Expense(id: "charged", merchant: "Cafe", cents: 11600, date: date, category: "餐饮",
+            items: [ExpenseItem(id: "mine", name: "Lunch", cents: 4000, category: "餐饮", quantity: 2,
+                                ownership: ItemOwnership(includesMe: true, friends: [])),
+                    ExpenseItem(id: "amy", name: "Supplies", cents: 6000, category: "购物", quantity: 3,
+                                ownership: ItemOwnership(includesMe: false, friends: ["Amy"]))],
+            charges: charges).applyingItemOwnership()
+    }
+    func testBothPercentagesUseSubtotalAndRoundSeparately() throws {
+        let charges = try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6%", service: "10")
+        let result = try charges.breakdown()
+        XCTAssertEqual(result.sst, 600)
+        XCTAssertEqual(result.service, 1000)
+        XCTAssertEqual(result.total, 11600)
+        let small = try ExpenseCharges.draft(currency: "MYR", subtotal: "0.05", sst: "10", service: "10").breakdown()
+        XCTAssertEqual(small.sst, 1)
+        XCTAssertEqual(small.service, 1)
+        XCTAssertEqual(small.total, 7)
+        let yen = try ExpenseCharges.draft(currency: "JPY", subtotal: "100", sst: "6", service: "10").breakdown()
+        XCTAssertEqual(yen.total, 116)
+    }
+    func testOptionalPercentagesAndBoundsRejectMalformedMetadata() throws {
+        XCTAssertEqual(try ExpenseCharges.percent(""), 0)
+        XCTAssertEqual(try ExpenseCharges.percent(" 6.25% "), 625)
+        XCTAssertEqual(ExpenseCharges.percentText(625), "6.25")
+        XCTAssertEqual(try ExpenseCharges.percent("100"), 10000)
+        for input in ["-1", "101", "1.234", "%", "6%%", "NaN", "inf", "1e2", "6,25"] {
+            XCTAssertThrowsError(try ExpenseCharges.percent(input), input)
+        }
+        for charges in [ExpenseCharges(subtotal: 0, sstBasisPoints: 0, serviceBasisPoints: 0),
+                        ExpenseCharges(subtotal: Int.max, sstBasisPoints: 0, serviceBasisPoints: 0),
+                        ExpenseCharges(subtotal: 100, sstBasisPoints: -1, serviceBasisPoints: 0),
+                        ExpenseCharges(subtotal: 100, sstBasisPoints: 0, serviceBasisPoints: 10001),
+                        ExpenseCharges(subtotal: 10_000_000_000, sstBasisPoints: 10000, serviceBasisPoints: 10000),
+                        ExpenseCharges(currency: "INVALID", subtotal: 100, sstBasisPoints: 0, serviceBasisPoints: 0)] {
+            XCTAssertThrowsError(try charges.breakdown())
+        }
+    }
+    func testItemPricesAndQuantitiesStayIntactWhileSharesAndReportsIncludeCharges() throws {
+        let entry = try purchase()
+        let ledger = try Ledger(expenses: [entry]).validated()
+        XCTAssertEqual(entry.itemSubtotalCents, 10000)
+        XCTAssertEqual(entry.items?.map(\.cents), [4000, 6000])
+        XCTAssertEqual(entry.items?.map(\.unitCents), [2000, 2000])
+        XCTAssertEqual(entry.items?.map(\.count), [2, 3])
+        XCTAssertEqual(entry.chargedItems.map(\.cents), [4640, 6960])
+        XCTAssertEqual(entry.personal, 4640)
+        XCTAssertEqual(entry.shares.first?.cents, 6960)
+        XCTAssertEqual(entry.personalItemAmounts, ["mine": 4640, "amy": 0])
+        XCTAssertEqual(entry.personalAmount(category: "餐饮"), 4640)
+        XCTAssertEqual(entry.categoryDistribution(total: 6960, friend: "Amy")["购物"], 6960)
+        XCTAssertEqual(ledger.spending(in: date), 4640)
+        XCTAssertEqual(OverviewSnapshot(ledger: ledger, month: date).paid, 11600)
+        XCTAssertEqual(ExpenseCollectionSnapshot(entries: ledger.expenses).personal, 4640)
+        XCTAssertEqual(try entry.replacingItems(entry.items ?? [], allowedCategories: categories), entry)
+    }
+    func testRefundAndReimbursementUseChargedNetShareWithoutChangingBaseItems() throws {
+        var ledger = try Ledger(expenses: [purchase()]).validated()
+        let items = ledger.expenses[0].items
+        try ledger.addRefund(expenseID: "charged", cents: 1160, date: date)
+        XCTAssertEqual(ledger.expenses[0].personal, 4176)
+        XCTAssertEqual(ledger.expenses[0].personalItemAmounts.values.reduce(0, +), 4176)
+        try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 2000))
+        XCTAssertEqual(ledger.spending(in: date), 2176)
+        XCTAssertEqual(ledger.expenses[0].personalAmount(category: "餐饮"), 2176)
+        XCTAssertEqual(ledger.expenses[0].items, items)
+        _ = try ledger.validated()
+    }
+    func testForeignChargesConvertGrossAndSubtotalOnlyOnce() throws {
+        let charges = try ExpenseCharges.draft(currency: "SGD", subtotal: "10", sst: "6", service: "10")
+        let fx = ForeignAmount(currency: "SGD", minor: 1160, quote: RateQuote(value: Decimal(string: "3.2")!, date: date, source: "Manual"))
+        let entry = Expense(merchant: "Cafe", cents: 3712, date: date, shares: [Share(name: "Amy", cents: 1856)], foreign: fx,
+            items: [ExpenseItem(id: "one", name: "Lunch", cents: 1600, category: "餐饮"),
+                    ExpenseItem(id: "two", name: "Paper", cents: 1600, category: "购物")], charges: charges)
+        _ = try Ledger(expenses: [entry]).validated()
+        XCTAssertEqual(entry.itemSubtotalCents, 3200)
+        XCTAssertEqual(entry.chargedItems.map(\.cents), [1856, 1856])
+        XCTAssertEqual(entry.personal, 1856)
+        XCTAssertEqual(entry.personalAmount(category: "餐饮"), 928)
+        XCTAssertEqual(entry.personalAmount(category: "购物"), 928)
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(Ledger(expenses: [entry]))).expenses[0], entry)
+    }
+    func testPaymentMismatchAndGrossItemAmountsAreRejected() throws {
+        var entry = try purchase()
+        entry.cents = 10000
+        XCTAssertThrowsError(try Ledger(expenses: [entry]).validated())
+        entry = try purchase()
+        entry.charges?.currency = "SGD"
+        XCTAssertThrowsError(try entry.validateCharges())
+        entry = try purchase()
+        entry.items?[0].cents = 5600
+        XCTAssertThrowsError(try entry.validateItems())
+        var automatic = Expense(merchant: "Cafe", cents: 11600, date: date, source: "TNG")
+        automatic.charges = try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6", service: "10")
+        let restored = try LocalStore.decode(LocalStore.encode(Ledger(expenses: [automatic]))).expenses[0]
+        XCTAssertEqual(restored.cents, 11600)
+        XCTAssertNil(restored.items)
+        XCTAssertEqual(restored.personalSpending, 11600)
+    }
+    func testBackupExportDeleteUndoAndLegacyCompatibility() throws {
+        var ledger = try Ledger(expenses: [purchase()]).validated()
+        let entry = ledger.expenses[0]
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).expenses[0], entry)
+        let csv = String(decoding: ledger.csv(month: nil, splits: false), as: UTF8.self)
+        let rows = csv.components(separatedBy: "\r\n").filter { !$0.isEmpty }
+        let header = rows[0].components(separatedBy: ",").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{FEFF}")) }
+        let values = rows[1].components(separatedBy: ",").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
+        XCTAssertEqual(header.count, values.count)
+        XCTAssertEqual(Array(header.suffix(6)), ["charges_currency", "subtotal_before_charges", "sst_percent", "service_charge_percent", "sst_amount", "service_charge_amount"])
+        XCTAssertEqual(Array(values.suffix(6)), ["MYR", "100.00", "6", "10", "6.00", "10.00"])
+        XCTAssertEqual(values[5], "116.00")
+        let deleted = try ledger.deleteLedgerExpense(entry)
+        try ledger.restoreDeletedRecords([deleted])
+        XCTAssertEqual(ledger.expenses[0], entry)
+        let legacy = Expense(merchant: "Store", cents: 500, date: date,
+                             items: [ExpenseItem(name: "Lunch", cents: 500, category: "餐饮")])
+        let data = try LocalStore.encode(Ledger(expenses: [legacy]))
+        XCTAssertFalse(String(decoding: data, as: UTF8.self).contains("\"charges\""))
+        XCTAssertEqual(try LocalStore.decode(data).expenses[0], legacy)
+        XCTAssertEqual(legacy.chargedItems, legacy.items ?? [])
+        XCTAssertEqual(legacy.personalSpending, 500)
+    }
+    func testRoundingConservesEveryCentAndFinancialHistoryLocksChargeChanges() throws {
+        XCTAssertEqual(try allocateChargeTotal(5, weights: [1, 1, 1]), [2, 2, 1])
+        XCTAssertEqual(try allocateChargeTotal(10_000_000_000, weights: [9_999_999_999, 1]).reduce(0, +), 10_000_000_000)
+        XCTAssertThrowsError(try allocateChargeTotal(5, weights: []))
+        XCTAssertThrowsError(try allocateChargeTotal(5, weights: [Int.max]))
+        var original = try purchase()
+        var edited = original
+        edited.charges?.sstBasisPoints = 1000
+        edited.charges?.serviceBasisPoints = 600
+        XCTAssertFalse(edited.sameSettlementTerms(as: original))
+        original.shares[0].repayments = [Repayment(cents: 100, date: date)]
+        XCTAssertThrowsError(try edited.validateChargeEdit(replacing: original))
+        XCTAssertNoThrow(try original.validateChargeEdit(replacing: original))
+        var ledger = Ledger(expenses: [Expense(id: "auto", merchant: "Cafe", cents: 11600, date: date, source: "TNG", charges: original.charges)])
+        let notice = TNGNotice(id: "notice", body: "You have paid RM116.00 for Cafe.", title: "Payment", date: date,
+                              usesReceivedDate: false, kind: "payment", status: "recorded", cents: 11600, party: "Cafe", expenseID: "auto")
+        ledger.tngNotices = [notice]
+        let before = ledger.expenses
+        XCTAssertThrowsError(try ledger.excludeTNG(id: "notice"))
+        XCTAssertEqual(ledger.expenses, before)
+    }
+}
+
 final class ReimbursementTests: XCTestCase {
     private let date = Date(timeIntervalSince1970: 1_700_000_000)
     private func purchase() -> Expense {

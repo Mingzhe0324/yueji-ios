@@ -234,6 +234,7 @@ actor LedgerRefreshWorker {
                       let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else {
                     throw reviewError("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")
                 }
+                try entry.validateChargeEdit(replacing: original)
                 ledger.expenses[i] = entry
             } else {
                 guard !ledger.expenses.contains(where: { $0.id == entry.id }) else {

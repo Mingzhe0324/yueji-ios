@@ -99,6 +99,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var paidByFriend: String? = nil // Missing in legacy records: paid by me.
     var items: [ExpenseItem]? = nil // Optional: automatic entries are saved before itemization.
     var reimbursement: ReimbursementClaim? = nil
+    var charges: ExpenseCharges? = nil
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var displayName: String {
         let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -548,8 +549,8 @@ extension Ledger {
             guard tngNotices[i].status == "pending" else { throw LedgerError.invalid("Reopen incoming review before excluding") }
         }
         if let expenseID = tngNotices[i].expenseID, let entry = expenses.first(where: { $0.id == expenseID }) {
-            guard entry.shares.isEmpty, (entry.refunds ?? []).isEmpty, entry.reimbursement == nil else {
-                throw reviewError("此账目已有分账、退款或报销，请先在账本处理，避免丢失记录。", "Resolve existing splits, refunds or reimbursement in the ledger first.", "Selesaikan bahagian, pulangan atau tuntutan dalam lejar dahulu.")
+            guard entry.shares.isEmpty, (entry.refunds ?? []).isEmpty, entry.reimbursement == nil, entry.charges == nil else {
+                throw reviewError("此账目已有分账、退款、报销或税费，请先在账本处理，避免丢失记录。", "Resolve existing splits, refunds, reimbursement or charges in the ledger first.", "Selesaikan bahagian, pulangan, tuntutan atau caj dalam lejar dahulu.")
             }
             expenses.removeAll { $0.id == expenseID }
             tngNotices[i].note = entry.note
@@ -1037,7 +1038,7 @@ extension Expense {
 
     var allocatedCategories: [CategoryAllocation] {
         if let items, !items.isEmpty {
-            return items.map { CategoryAllocation(id: $0.id, category: $0.category, cents: $0.cents) }
+            return chargedItems.map { CategoryAllocation(id: $0.id, category: $0.category, cents: $0.cents) }
         }
         if let parts = categoryAllocations, !parts.isEmpty { return parts }
         return [CategoryAllocation(id: "single", category: category, cents: cents)]
@@ -1048,7 +1049,8 @@ extension Expense {
     }
     var personalItemAmounts: [String: Int] {
         guard let items, !items.isEmpty else { return [:] }
-        let amounts = (try? allocateRefund(personal, capacities: items.map { usesItemOwnership ? $0.personalGross : $0.cents })) ?? Array(repeating: 0, count: items.count)
+        let byItem = usesItemOwnership
+        let amounts = (try? allocateRefund(personal, capacities: chargedItems.map { byItem ? $0.personalGross : $0.cents })) ?? Array(repeating: 0, count: items.count)
         return Dictionary(uniqueKeysWithValues: zip(items, amounts).map { ($0.0.id, $0.1) })
     }
     func validateItems(allowedCategories: [String]? = nil) throws {
@@ -1059,8 +1061,8 @@ extension Expense {
                   && !$0.category.isEmpty && $0.category.count <= 200 && (allowedCategories?.contains($0.category) ?? true)
                   && (1...999).contains($0.count) && $0.cents % $0.count == 0
                   && $0.cents > 0 && $0.cents <= 10_000_000_000 }),
-              items.reduce(0, { $0 + $1.cents }) == cents else {
-            throw reviewError("请填写每件物品的名称、正数金额和分类；物品合计必须等于交易总额。", "Enter a name, positive amount and category for each item. Item amounts must equal the transaction total.", "Isi nama, amaun positif dan kategori setiap item. Jumlah item mesti sama dengan jumlah transaksi.")
+              items.reduce(0, { $0 + $1.cents }) == itemSubtotalCents else {
+            throw reviewError("请填写每件物品的名称、正数金额和分类；物品合计必须等于税前小计（未填税费时为交易总额）。", "Enter a name, positive amount and category for each item. Items must equal the subtotal, or the payment total when no charges are entered.", "Isi nama, amaun positif dan kategori setiap item. Jumlah item mesti sama dengan subtotal, atau jumlah bayaran tanpa caj.")
         }
         if usesItemOwnership {
             guard items.allSatisfy({ $0.ownership != nil }) else {
@@ -1078,7 +1080,7 @@ extension Expense {
     func categoryDistribution(total: Int, friend: String? = nil) -> [String: Int] {
         let parts = allocatedCategories
         guard total >= 0, total <= cents, !parts.isEmpty else { return [:] }
-        let capacities = usesItemOwnership ? (items ?? []).map { item in friend.map { item.friendGross($0) } ?? item.personalGross } : parts.map(\.cents)
+        let capacities = usesItemOwnership ? chargedItems.map { item in friend.map { item.friendGross($0) } ?? item.personalGross } : parts.map(\.cents)
         let amounts = (try? allocateRefund(total, capacities: capacities)) ?? Array(repeating: 0, count: parts.count)
         var result: [String: Int] = [:]
         for (part, amount) in zip(parts, amounts) { result[part.category, default: 0] += amount }
@@ -1090,6 +1092,7 @@ extension Expense {
 extension Ledger {
     func validateBookkeeping() throws {
         for e in expenses {
+            try e.validateCharges()
             try e.validateItems(allowedCategories: categoryNames)
             try e.validateReimbursement()
             guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20,
@@ -1104,7 +1107,7 @@ extension Expense {
     var usesItemOwnership: Bool { (items ?? []).contains { $0.ownership != nil } }
     var itemFriendTotals: [String: Int] {
         var result: [String: Int] = [:]
-        for item in items ?? [] {
+        for item in chargedItems {
             guard let owner = item.ownership else { continue }
             for (name, amount) in zip(owner.friends, owner.friendAmounts(cents: item.cents)) {
                 result[friendKey(name), default: 0] += amount
