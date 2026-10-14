@@ -1,23 +1,42 @@
-"""Surface XCTest assertions near the end of CI output; never mask a test failure."""
+"""Surface native compilation errors and XCTest assertions; never mask failures."""
 import argparse
 from pathlib import Path
 import re
 
 
 def report(log: str) -> str:
-    failures = [line for line in log.splitlines() if re.search(r'(?:\.swift:\d+(?::\d+)?|<unknown>:0): error:', line)]
-    infrastructure = [line for line in log.splitlines() if
+    # Compiler diagnostics can be unlocated (e.g. a missing module), or contain
+    # ANSI colour codes between the source location and diagnostic severity.
+    log = re.sub(r'\x1b\[[0-9;]*m', '', log)
+    lines = log.splitlines()
+    diagnostic = re.compile(r'(?:\.(?:swift|m|mm|h|c|cpp):\d+(?::\d+)?|<unknown>:0):\s*(?:fatal )?error:|^\s*(?:(?:xcodebuild|clang|swift|swiftc):\s*)?(?:fatal )?error:')
+    test_diagnostic = re.compile(r'Tests[/\\]|XCTAssert|XCTest|error:\s*-\[')
+    failures, compilation = [], []
+    for index, line in enumerate(lines):
+        if not diagnostic.search(line):
+            continue
+        if test_diagnostic.search(line):
+            failures.append(line)
+        else:
+            # Include the source/caret or module-search context alongside the
+            # error, so the summary is useful without opening the entire log.
+            compilation.append('\n'.join(lines[index:index + 3]))
+    infrastructure = [line for line in lines if
                       'Failed to initialize for UI testing:' in line or 'CI stage timed out' in line]
     bundles = re.findall(r"Test Suite '([^'\n]+\.xctest)' (passed|failed)[^\n]*\n\s*(Executed[^\n]*)", log)
     sections = []
     if infrastructure:
         sections.append('Native runner/startup failures (UI verification incomplete):\n' + '\n'.join(dict.fromkeys(infrastructure)))
+    if compilation:
+        sections.append('Native build/compiler errors:\n' + '\n'.join(dict.fromkeys(compilation)))
     if failures:
         sections.append('Native XCTest assertion failures:\n' + '\n'.join(dict.fromkeys(failures)))
-    elif not infrastructure and ('** ALL NATIVE SUITES SUCCEEDED **' in log or
+    elif not infrastructure and not compilation and '** TEST BUILD FAILED **' not in log and ('** ALL NATIVE SUITES SUCCEEDED **' in log or
                                  ('build-for-testing' not in log and '** TEST SUCCEEDED **' in log)):
         sections.append('Native tests succeeded; no assertion failures were reported.')
-    elif not infrastructure:
+    elif not infrastructure and not compilation and '** TEST BUILD FAILED **' in log:
+        sections.append('Native test build failed. No compiler diagnostic lines were captured in this summary; inspect the earlier build-test.log output.')
+    elif not infrastructure and not compilation:
         sections.append('No Swift XCTest assertion lines were found. Inspect build-test.log and the .xcresult bundles for build, launch or infrastructure errors.')
     if bundles:
         sections.append('Test bundle summaries:\n' + '\n'.join(f'{name} {status}: {summary}' for name, status, summary in bundles))
