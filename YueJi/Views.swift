@@ -713,7 +713,6 @@ struct SpendingMeter: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
-    @State private var appeared = false
     let value: Int
     let total: Int
     let color: Color
@@ -723,11 +722,9 @@ struct SpendingMeter: View {
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(color.opacity(contrast == .increased ? 0.30 : (colorScheme == .dark ? 0.22 : 0.10)))
-                Capsule().fill(color).frame(width: proxy.size.width * (appeared || reduceMotion ? fraction : 0))
+                Capsule().fill(color).frame(width: proxy.size.width * fraction)
             }
         }.frame(height: 7)
-            .onAppear { appeared = true }
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.35), value: appeared)
             .animation(reduceMotion ? nil : YueJiMotion.month, value: fraction)
             .accessibilityHidden(true)
     }

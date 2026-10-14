@@ -119,7 +119,6 @@ enum BannerSwipePolicy {
     private var initialOffset = CGPoint.zero
     private var axis: BannerSwipePolicy.Axis = .horizontal
     private var touching = false
-    private var entered = false
     private var stopped = false
     init(content: AnyView, interaction: BannerInteraction, reduceMotion: Bool,
          onDismiss: @escaping () -> Void, onInteraction: @escaping (Bool) -> Void) {
@@ -161,15 +160,8 @@ enum BannerSwipePolicy {
         contact.contactEnded = { [weak self] in self?.endContact() }
         view.addGestureRecognizer(contact)
     }
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        guard !entered, !stopped else { return }; entered = true
-        host.view.alpha = 0
-        if !reduceMotion { host.view.transform = CGAffineTransform(translationX: 0, y: -6) }
-        animate(duration: reduceMotion ? 0.14 : 0.24, spring: !reduceMotion) { [weak self] in
-            self?.host.view.alpha = 1; self?.host.view.transform = .identity
-        }
-    }
+    // LedgerFeedbackHost owns insertion/removal fades. The controller only
+    // animates gesture settlement and dismissal, avoiding two entrance layers.
     func update(content: AnyView) { host.rootView = content }
     func fittingSize(width: CGFloat) -> CGSize {
         let size = host.sizeThatFits(in: CGSize(width: width, height: .greatestFiniteMagnitude))
