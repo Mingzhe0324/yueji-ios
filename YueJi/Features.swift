@@ -222,8 +222,11 @@ extension Ledger {
         var amounts: [String: Int] = [:]
         for j in e.shares.indices { amounts[e.shares[j].id] = allocation[j + 1] }
         let record = RefundRecord(cents: cents, date: date, personalCents: allocation[0], shares: amounts, receivedByMe: receivedByMe)
-        expenses[i].refunds = (e.refunds ?? []) + [record]
-        for j in e.shares.indices { expenses[i].shares[j].refundCents = e.shares[j].refunded + allocation[j + 1] }
+        var next = e
+        next.refunds = (e.refunds ?? []) + [record]
+        for j in e.shares.indices { next.shares[j].refundCents = e.shares[j].refunded + allocation[j + 1] }
+        try next.validateReimbursement()
+        expenses[i] = next
     }
     mutating func removeRefund(expenseID: String, refundID: String) throws {
         try requireUnsettledExpense(expenseID)
@@ -603,7 +606,7 @@ extension Ledger {
     }
     func spending(in month: Date, category: String? = nil) -> Int {
         expenses.filter { monthKey($0.date) == monthKey(month) }.reduce(0) { total, entry in
-            total + (category.map { entry.personalAmount(category: $0) } ?? entry.personal)
+            total + (category.map { entry.personalAmount(category: $0) } ?? entry.personalSpending)
         }
     }
 }
@@ -656,7 +659,7 @@ extension Ledger {
                 }
             }
         } else {
-            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR", "entry_description"]]
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR", "entry_description", "reimbursement_recipient", "reimbursement_claimed_MYR", "reimbursement_received_MYR", "reimbursement_outstanding_MYR", "personal_spending_MYR", "reimbursement_receipts"]]
             for e in entries {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -667,7 +670,12 @@ extension Ledger {
                     if let owner = item.ownership { text += ":" + owner.label }
                     return text
                 }.joined(separator: "; ")
-                rows.append([e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR"), itemText, e.entryDescription ?? ""])
+                var row = [e.id, formatter.string(from: e.date), e.merchant, e.categorySummary, sourceLabel(e.source), Currency.input(e.cents, "MYR"), Currency.input(e.refunded, "MYR"), Currency.input(e.personal, "MYR"), currency, amount, e.foreign?.quote.text ?? "1", allocationText, e.note ?? "", (e.tags ?? []).joined(separator: "; "), e.payerLabel, Currency.input(e.paidFromMyAccount, "MYR"), itemText, e.entryDescription ?? ""]
+                let claim = e.reimbursement
+                row += [claim?.recipient ?? "", Currency.input(claim?.cents ?? 0, "MYR"), Currency.input(claim?.received ?? 0, "MYR"),
+                        Currency.input(claim?.outstanding ?? 0, "MYR"), Currency.input(e.personalSpending, "MYR"),
+                        (claim?.receipts ?? []).map { $0.id + ":" + formatter.string(from: $0.date) + ":" + Currency.input($0.cents, "MYR") }.joined(separator: "; ")]
+                rows.append(row)
             }
         }
         return csvData(rows)
@@ -714,6 +722,7 @@ struct LedgerTimelineSnapshot {
     var settlements: [FriendSettlement] = []
     var days: [LedgerDayGroup] = []
     var personal = 0
+    var reimbursementOutstanding = 0
     var sources: [String] = []
     var count: Int { expenses.count + transfers.count + settlements.count }
 
@@ -727,7 +736,8 @@ struct LedgerTimelineSnapshot {
             settlements = try ledger.ledgerSettlements(in: month, search: query.search, filter: query.filter)
         }
         days = LedgerTimelineItem.grouped(expenses: expenses, transfers: transfers, settlements: settlements)
-        personal = expenses.reduce(0) { $0 + $1.personal }
+        personal = expenses.reduce(0) { $0 + $1.personalSpending }
+        reimbursementOutstanding = expenses.reduce(0) { $0 + ($1.reimbursement?.outstanding ?? 0) }
         sources = ledger.availableSources
     }
 }
@@ -747,7 +757,7 @@ struct ExpenseCollectionSnapshot {
     init(entries: [Expense] = []) {
         self.entries = entries
         paid = entries.reduce(0) { $0 + $1.paidFromMyAccount }
-        personal = entries.reduce(0) { $0 + $1.personal }
+        personal = entries.reduce(0) { $0 + $1.personalSpending }
     }
 }
 struct LedgerNavigationIndex {
@@ -908,6 +918,8 @@ actor LedgerProjectionWorker {
 struct OverviewSnapshot {
     var entries: [Expense] = []
     var personal = 0
+    var reimbursementClaimed = 0
+    var reimbursementOutstanding = 0
     var paid = 0
     var refunded = 0
     var incoming = 0
@@ -924,10 +936,12 @@ struct OverviewSnapshot {
         for entry in ledger.expenses {
             guard entry.date >= interval.start && entry.date < interval.end else { continue }
             entries.append(entry)
-            personal += entry.personal
+            personal += entry.personalSpending
+            reimbursementClaimed += entry.reimbursement?.cents ?? 0
+            reimbursementOutstanding += entry.reimbursement?.outstanding ?? 0
             paid += entry.paidFromMyAccount
             refunded += entry.refunded
-            for (category, amount) in entry.categoryDistribution(total: entry.personal) {
+            for (category, amount) in entry.categoryDistribution(total: entry.personalSpending) {
                 categoryTotals[category, default: 0] += amount
             }
         }

@@ -98,6 +98,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var timeSource: String? = nil // received, supplied, notification, edited; nil in older backups
     var paidByFriend: String? = nil // Missing in legacy records: paid by me.
     var items: [ExpenseItem]? = nil // Optional: automatic entries are saved before itemization.
+    var reimbursement: ReimbursementClaim? = nil
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var displayName: String {
         let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -547,8 +548,8 @@ extension Ledger {
             guard tngNotices[i].status == "pending" else { throw LedgerError.invalid("Reopen incoming review before excluding") }
         }
         if let expenseID = tngNotices[i].expenseID, let entry = expenses.first(where: { $0.id == expenseID }) {
-            guard entry.shares.isEmpty, (entry.refunds ?? []).isEmpty else {
-                throw reviewError("此账目已有分账或退款，请先在账本处理，避免丢失记录。", "Resolve existing splits or refunds in the ledger first.", "Selesaikan bahagian atau pulangan dalam lejar dahulu.")
+            guard entry.shares.isEmpty, (entry.refunds ?? []).isEmpty, entry.reimbursement == nil else {
+                throw reviewError("此账目已有分账、退款或报销，请先在账本处理，避免丢失记录。", "Resolve existing splits, refunds or reimbursement in the ledger first.", "Selesaikan bahagian, pulangan atau tuntutan dalam lejar dahulu.")
             }
             expenses.removeAll { $0.id == expenseID }
             tngNotices[i].note = entry.note
@@ -1083,13 +1084,14 @@ extension Expense {
         for (part, amount) in zip(parts, amounts) { result[part.category, default: 0] += amount }
         return result
     }
-    func personalAmount(category name: String) -> Int { categoryDistribution(total: personal)[name] ?? 0 }
+    func personalAmount(category name: String) -> Int { categoryDistribution(total: personalSpending)[name] ?? 0 }
     func hasCategory(_ name: String) -> Bool { allocatedCategories.contains { $0.category == name } }
 }
 extension Ledger {
     func validateBookkeeping() throws {
         for e in expenses {
             try e.validateItems(allowedCategories: categoryNames)
+            try e.validateReimbursement()
             guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20,
                   (e.tags ?? []).allSatisfy({ !friendKey($0).isEmpty && $0.count <= 40 }),
                   Set((e.tags ?? []).map(friendKey)).count == (e.tags?.count ?? 0) else { throw LedgerError.invalid("备注或标签无效。") }

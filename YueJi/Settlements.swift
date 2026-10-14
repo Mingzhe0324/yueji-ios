@@ -249,10 +249,10 @@ extension Ledger {
         var copy = self
         if let expenseID = notice.expenseID, let expense = expenses.first(where: { $0.id == expenseID }) {
             guard notice.status == "recorded", expense.paidByFriend == nil, expense.shares.isEmpty,
-                  (expense.items ?? []).isEmpty,
+                  (expense.items ?? []).isEmpty, expense.reimbursement == nil,
                   expense.refunded == 0, expense.recurringKey == nil, expense.cents == abs(record.transfer), expense.source == notice.provider,
                   !hasActiveSettlement(expenseID: expenseID), tngNotices.filter({ $0.expenseID == expenseID }).count == 1 else {
-                throw settlementError("此自动付款已有物品、分账、退款或其他关联。请先处理原账目。", "This automatic payment has items, splits, refunds or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai item, bahagian, pulangan atau pautan lain. Selesaikan rekod asal dahulu.")
+                throw settlementError("此自动付款已有物品、分账、退款、报销或其他关联。请先处理原账目。", "This automatic payment has items, splits, refunds, reimbursement or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai item, bahagian, pulangan, tuntutan atau pautan lain. Selesaikan rekod asal dahulu.")
             }
             copy.settlements[s].convertedPayment = expense
             copy.expenses.removeAll { $0.id == expenseID }

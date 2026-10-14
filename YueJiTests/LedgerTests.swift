@@ -4,6 +4,145 @@ import AVFoundation
 import SwiftUI
 @testable import YueJi
 
+final class ReimbursementTests: XCTestCase {
+    private let date = Date(timeIntervalSince1970: 1_700_000_000)
+    private func purchase() -> Expense {
+        Expense(id: "purchase", merchant: "Office store", cents: 4000, date: date, category: "购物",
+                shares: [Share(id: "amy", name: "Amy", cents: 1000)],
+                items: [ExpenseItem(id: "food", name: "Lunch", cents: 2000, category: "餐饮"),
+                        ExpenseItem(id: "supplies", name: "Paper", cents: 2000, category: "购物")])
+    }
+    private func claimed() throws -> Ledger {
+        var ledger = Ledger(expenses: [purchase()])
+        try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 2000))
+        return try ledger.validated()
+    }
+
+    func testClaimExcludesPersonalSpendingAndBudgetsWithoutChangingPaymentOrDebt() throws {
+        var ledger = try claimed()
+        ledger.budgets[monthKey(date)] = 1500
+        let entry = ledger.expenses[0]
+        XCTAssertEqual(entry.cents, 4000)
+        XCTAssertEqual(entry.paidFromMyAccount, 4000)
+        XCTAssertEqual(entry.personal, 3000)
+        XCTAssertEqual(entry.personalSpending, 1000)
+        XCTAssertEqual(entry.shares, purchase().shares)
+        XCTAssertEqual(entry.personalItemAmounts.values.reduce(0, +), 3000)
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 1000)
+        XCTAssertEqual(ledger.spending(in: date), 1000)
+        XCTAssertEqual(entry.personalAmount(category: "餐饮"), 500)
+        XCTAssertEqual(entry.personalAmount(category: "购物"), 500)
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: date))
+        let overview = OverviewSnapshot(ledger: ledger, month: date)
+        XCTAssertEqual(overview.personal, 1000)
+        XCTAssertEqual(overview.paid, 4000)
+        XCTAssertEqual(overview.categoryTotals.values.reduce(0, +), 1000)
+        XCTAssertEqual(overview.reimbursementClaimed, 2000)
+        XCTAssertEqual(overview.reimbursementOutstanding, 2000)
+        XCTAssertEqual(ExpenseCollectionSnapshot(entries: ledger.expenses).personal, 1000)
+        let query = LedgerTimelineQuery(revision: 0, month: date, search: "", filter: LedgerFilter(), provider: "all")
+        let timeline = try LedgerTimelineSnapshot(ledger: ledger, month: date, query: query)
+        XCTAssertEqual(timeline.personal, 1000)
+        XCTAssertEqual(timeline.reimbursementOutstanding, 2000)
+    }
+
+    func testPartialFullAndUndoReceiptsDoNotAddIncomeOrDeductSpendingAgain() throws {
+        var ledger = try claimed()
+        let first = ReimbursementReceipt(id: "receipt-1", cents: 1500, date: date.addingTimeInterval(3600))
+        try ledger.receiveReimbursement(expense: ledger.expenses[0], receipt: first)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 1500)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 500)
+        XCTAssertEqual(ledger.spending(in: date), 1000)
+        let second = ReimbursementReceipt(id: "receipt-2", cents: 500, date: date.addingTimeInterval(7200))
+        try ledger.receiveReimbursement(expense: ledger.expenses[0], receipt: second)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 0)
+        XCTAssertEqual(ledger.spending(in: date), 1000)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        try ledger.undoReimbursementReceipt(expense: ledger.expenses[0], receiptID: first.id)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 500)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 1500)
+        XCTAssertEqual(ledger.expenses[0].personalSpending, 1000)
+        _ = try ledger.validated()
+    }
+
+    func testBoundsDuplicatesFutureDatesAndStaleWritesAreRejectedWithoutMutation() throws {
+        var ledger = try claimed()
+        let original = ledger.expenses[0]
+        for cents in [-1, 0, 2001] {
+            XCTAssertThrowsError(try ledger.receiveReimbursement(expense: original,
+                receipt: ReimbursementReceipt(cents: cents, date: date)))
+            XCTAssertEqual(ledger.expenses[0], original)
+        }
+        for timestamp in [date.addingTimeInterval(-1), Date().addingTimeInterval(3600)] {
+            XCTAssertThrowsError(try ledger.receiveReimbursement(expense: original,
+                receipt: ReimbursementReceipt(cents: 100, date: timestamp)))
+            XCTAssertEqual(ledger.expenses[0], original)
+        }
+        let receipt = ReimbursementReceipt(id: "same", cents: 100, date: date)
+        try ledger.receiveReimbursement(expense: original, receipt: receipt)
+        let updated = ledger.expenses[0]
+        XCTAssertThrowsError(try ledger.receiveReimbursement(expense: original, receipt: receipt))
+        XCTAssertThrowsError(try ledger.receiveReimbursement(expense: updated, receipt: receipt))
+        XCTAssertThrowsError(try ledger.setReimbursement(expense: updated, claim: nil))
+        XCTAssertEqual(ledger.expenses[0], updated)
+    }
+
+    func testInvalidClaimsCannotUseFriendsShareOrFriendPaidMoney() throws {
+        var ledger = Ledger(expenses: [purchase()])
+        for claim in [ReimbursementClaim(recipient: "", cents: 100), ReimbursementClaim(recipient: "Company", cents: 3001),
+                      ReimbursementClaim(recipient: "Company", cents: 0), ReimbursementClaim(recipient: "Company", cents: Int.max)] {
+            XCTAssertThrowsError(try ledger.setReimbursement(expense: ledger.expenses[0], claim: claim))
+            XCTAssertEqual(ledger.expenses[0], purchase())
+        }
+        ledger.expenses[0].paidByFriend = "Amy"
+        XCTAssertThrowsError(try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 100)))
+    }
+
+    func testRefundMustLeaveEnoughNetShareForClaimAndCanBeAdjustedSafely() throws {
+        var ledger = try claimed()
+        let original = ledger.expenses[0]
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: original.id, cents: 2000, date: date,
+                                                 custom: ["owner": 2000, "amy": 0]))
+        XCTAssertEqual(ledger.expenses[0], original)
+        try ledger.setReimbursement(expense: original, claim: ReimbursementClaim(recipient: "Company", cents: 1000))
+        try ledger.addRefund(expenseID: original.id, cents: 2000, date: date, custom: ["owner": 2000, "amy": 0])
+        XCTAssertEqual(ledger.expenses[0].personalSpending, 0)
+        XCTAssertEqual(ledger.expenses[0].shares[0].cents, 1000)
+        _ = try ledger.validated()
+    }
+
+    func testBackupCSVAndDeleteUndoKeepReimbursementHistoryAndLegacyRecords() throws {
+        var ledger = try claimed()
+        try ledger.receiveReimbursement(expense: ledger.expenses[0], receipt: ReimbursementReceipt(id: "received", cents: 500, date: date))
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.expenses, ledger.expenses)
+        let csv = String(decoding: ledger.csv(month: nil, splits: false), as: UTF8.self)
+        XCTAssertTrue(csv.contains("reimbursement_outstanding_MYR"))
+        XCTAssertTrue(csv.contains("Company"))
+        XCTAssertTrue(csv.contains("received:"))
+        let entry = ledger.expenses[0]
+        let deleted = try ledger.deleteLedgerExpense(entry)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        try ledger.restoreDeletedRecords([deleted])
+        XCTAssertEqual(ledger.expenses[0], entry)
+        let legacy = purchase()
+        let legacyData = try LocalStore.encode(Ledger(expenses: [legacy]))
+        XCTAssertFalse(String(decoding: legacyData, as: UTF8.self).contains("reimbursement"))
+        XCTAssertNil(try LocalStore.decode(legacyData).expenses[0].reimbursement)
+        XCTAssertEqual(legacy.personalSpending, legacy.personal)
+    }
+    func testExcludingBankNoticeCannotSilentlyDeleteAClaim() throws {
+        let entry = Expense(id: "auto", merchant: "Store", cents: 1000, date: date, source: "TNG",
+                            reimbursement: ReimbursementClaim(recipient: "Company", cents: 1000))
+        let notice = TNGNotice(id: "notification", body: "You have paid RM10.00 for Store.", title: "Payment", date: date,
+                              usesReceivedDate: false, kind: "payment", status: "recorded", cents: 1000, party: "Store", expenseID: entry.id)
+        var ledger = Ledger(expenses: [entry], tngNotices: [notice])
+        XCTAssertThrowsError(try ledger.excludeTNG(id: notice.id))
+        XCTAssertEqual(ledger.expenses, [entry])
+        XCTAssertEqual(ledger.tngNotices, [notice])
+    }
+}
+
 final class EntryDescriptionTests: XCTestCase {
     private let date = Date(timeIntervalSince1970: 1_700_000_000)
 

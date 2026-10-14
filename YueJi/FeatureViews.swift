@@ -3247,7 +3247,7 @@ struct ExpenseItemDraft: Identifiable, Equatable {
     }
 }
 enum ExpenseInputField: Hashable {
-    case amount, merchant, entryDescription, rate
+    case amount, merchant, entryDescription, rate, reimbursementRecipient, reimbursementAmount
     case itemName(String), itemAmount(String)
 }
 
@@ -3493,7 +3493,7 @@ struct ExpenseItemsBreakdown: View {
                 Label(item.ownership?.label ?? (entry.shares.isEmpty ? tr("我", "Me", "Saya") : tr("沿用整笔分账", "Uses transaction split", "Ikut pembahagian transaksi")), systemImage: "person")
                     .font(.caption).foregroundStyle(.secondary)
                 if !entry.shares.isEmpty || entry.refunded > 0 {
-                    LabeledContent(entry.usesItemOwnership ? tr("我的净份额", "My net share", "Bahagian bersih saya") : tr("我的净份额（按比例）", "My net share (proportional)", "Bahagian bersih saya (berkadar)")) {
+                    LabeledContent(entry.reimbursement != nil ? tr("报销前我的净份额", "My net share before reimbursement", "Bahagian bersih sebelum tuntutan") : (entry.usesItemOwnership ? tr("我的净份额", "My net share", "Bahagian bersih saya") : tr("我的净份额（按比例）", "My net share (proportional)", "Bahagian bersih saya (berkadar)"))) {
                         TransactionAmount(cents: personalAmounts[item.id] ?? 0, direction: .outgoing)
                     }.font(.caption)
                 }

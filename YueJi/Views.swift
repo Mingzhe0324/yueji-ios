@@ -527,8 +527,16 @@ struct DashboardView: View {
             AnimatedMoney(cents: personal)
                 .font(.largeTitle.bold())
                 .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
-            Text(tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
+            Text(summary.reimbursementClaimed > 0
+                 ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
+                 : tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
                 .font(.footnote).foregroundStyle(.secondary)
+            if summary.reimbursementClaimed > 0 {
+                NavigationLink { ReimbursementsView() } label: {
+                    LabeledContent(tr("本月账目待报销", "Outstanding claims on this month's entries", "Tuntutan rekod bulan ini belum diterima"), value: money(summary.reimbursementOutstanding))
+                        .font(.subheadline)
+                }
+            }
             Divider().overlay(ink.opacity(0.04))
             if budget > 0 {
                 ViewThatFits(in: .horizontal) {
@@ -694,6 +702,7 @@ struct OverviewToolsView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
+                NavigationLink { ReimbursementsView() } label: { Label(tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), systemImage: "doc.text") }
                 NavigationLink { ReceiptScanView() } label: { Label(tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), systemImage: "doc.viewfinder") }
                     .guideTarget("dashboard.receipt")
                 NavigationLink { AutomationSetupView() } label: { Label(tr("自动记账", "Automatic recording", "Rekod automatik"), systemImage: "bolt.fill") }
@@ -823,6 +832,11 @@ struct ExpenseRow: View {
                         TransactionAmount(cents: entry.personal, direction: .outgoing)
                     }.font(.footnote)
                 }
+                if let claim = entry.reimbursement {
+                    Label(claim.status, systemImage: claim.outstanding == 0 ? "checkmark.circle" : "clock")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .accessibilityIdentifier("transaction.reimbursement.status")
+                }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 10)
     }
@@ -880,6 +894,10 @@ struct ExpensesView: View {
                             .font(.caption).foregroundStyle(.secondary)
                         AnimatedMoney(cents: timeline.personal)
                             .font(.system(.title2, design: .default, weight: .semibold)).foregroundStyle(ink)
+                        if timeline.reimbursementOutstanding > 0 {
+                            Text(tr("待报销垫付款：", "Outstanding advances: ", "Pendahuluan belum diterima: ") + money(timeline.reimbursementOutstanding))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         HStack {
                             Text(String(timeline.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
                             ProgressView().controlSize(.small)
@@ -1085,7 +1103,10 @@ struct ExpenseDetailView: View {
                         if entry.timeSource == "received" {
                             Text(tr("此时间是月记收到自动化的时刻，可能稍晚于付款。若需精确到银行交易时间，可在编辑中调整。", "This is when YueJi received the automation and may be later than payment. Edit it to match the bank transaction time if needed.", "Masa ini ialah ketika YueJi menerima automasi dan mungkin lewat sedikit. Edit mengikut masa transaksi bank jika perlu.")).font(.footnote).foregroundStyle(.secondary)
                         }
-                        LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personal, direction: .outgoing) }
+                        LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personalSpending, direction: .outgoing) }
+                        if entry.reimbursement != nil {
+                            LabeledContent(tr("报销前我的净份额", "My net share before reimbursement", "Bahagian bersih sebelum tuntutan"), value: money(entry.personal))
+                        }
                         if entry.paidByFriend != nil {
                             LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
                             LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(detail.payableToPayer))
@@ -1106,6 +1127,16 @@ struct ExpenseDetailView: View {
                         guard !editorPresented, editing == nil, deleting == nil else { return }
                         editorPresented = true
                         editing = .items(entry, selectedID: selectedID)
+                    }
+                    Section(tr("报销", "Reimbursement", "Tuntutan bayaran balik")) {
+                        NavigationLink { ReimbursementDetailView(expenseID: entry.id) } label: {
+                            Label(entry.reimbursement?.status ?? tr("设置报销", "Set up reimbursement", "Tetapkan tuntutan"), systemImage: "doc.text")
+                        }.accessibilityIdentifier("transaction.reimbursement.open")
+                            .disabled(entry.paidByFriend != nil)
+                        if let claim = entry.reimbursement {
+                            LabeledContent(tr("报销对象", "Reimbursed by", "Dibayar balik oleh"), value: claim.recipient)
+                            LabeledContent(tr("待到账", "Outstanding", "Belum diterima"), value: money(claim.outstanding))
+                        }
                     }
                     ExpenseBookkeepingDetails(entry: entry)
                     ForEach(detail.sourceNotices) { notice in NoticeSourceSection(notice: notice) }
@@ -1375,6 +1406,9 @@ struct ExpenseEditor: View {
     @State private var deleting: Expense?
     @State private var name = ""
     @State private var entryDescription = ""
+    @State private var reimbursementEnabled = false
+    @State private var reimbursementRecipient = ""
+    @State private var reimbursementAmount = ""
     @State private var amount = ""
     @State private var currency = "MYR"
     @State private var rate = ""
@@ -1403,8 +1437,8 @@ struct ExpenseEditor: View {
     @State private var initialSnapshot: ExpenseEditorSnapshot?
     @State private var confirmingDiscard = false
     private var snapshot: ExpenseEditorSnapshot {
-        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText],
-                              flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe],
+        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount],
+                              flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled],
                               date: date, items: itemDrafts, people: people)
     }
     private var hasChanges: Bool { initialSnapshot.map { $0 != snapshot } ?? false }
@@ -1433,6 +1467,7 @@ struct ExpenseEditor: View {
                 ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil)
                 currencySection
                 friendSplitSection
+                reimbursementSection
                 if let original {
                     if model.ledger.hasActiveSettlement(expenseID: original.id) {
                         Section {
@@ -1513,6 +1548,12 @@ struct ExpenseEditor: View {
                     .font(.subheadline)
             }
         }.disabled((original?.refunded ?? 0) > 0)
+    }
+    private var reimbursementSection: some View {
+        ReimbursementDraftFields(enabled: $reimbursementEnabled, recipient: $reimbursementRecipient,
+                                 amount: $reimbursementAmount,
+                                 canRemove: (original?.reimbursement?.receipts.isEmpty ?? true), friendPaid: friendPays,
+                                 sharedFocus: $focusedField)
     }
     private var payerSection: some View {
         Section {
@@ -1636,6 +1677,11 @@ struct ExpenseEditor: View {
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             entryDescription = e.entryDescription ?? ""
+            if let claim = e.reimbursement {
+                reimbursementEnabled = true
+                reimbursementRecipient = claim.recipient
+                reimbursementAmount = Currency.input(claim.cents, "MYR")
+            }
             friendPays = e.paidByFriend != nil; payerName = e.paidByFriend ?? ""
             if friendPays { friendPaidMode = "custom"; friendShareText = Currency.input(e.shares.first?.cents ?? 0, "MYR") }
             itemDrafts = (e.items ?? []).map(ExpenseItemDraft.init)
@@ -1720,6 +1766,17 @@ struct ExpenseEditor: View {
                     throw reviewError("请填写每位朋友的姓名，且姓名不能重复。", "Enter a distinct name for each friend.", "Isi nama berbeza bagi setiap rakan.")
                 }
             }
+            if reimbursementEnabled {
+                entry.reimbursement = ReimbursementClaim(recipient: reimbursementRecipient.trimmingCharacters(in: .whitespacesAndNewlines),
+                    cents: try toCents(reimbursementAmount),
+                    receipts: entry.reimbursement?.receipts ?? [])
+            } else {
+                guard entry.reimbursement?.receipts.isEmpty ?? true else {
+                    throw reviewError("请先撤销到账记录，再取消报销。", "Undo receipts before removing reimbursement.", "Batalkan penerimaan sebelum membuang tuntutan.")
+                }
+                entry.reimbursement = nil
+            }
+            try entry.validateReimbursement()
             try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty)
             await model.refresh(postRecurring: false)
             model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()
