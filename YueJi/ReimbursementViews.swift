@@ -208,7 +208,7 @@ struct ReimbursementDetailView: View {
             do {
                 try await model.mutate({ try $0.undoReimbursementReceipt(expense: expected, receiptID: receipt.id) }, postRecurring: false)
                 model.showSaved(message: tr("到账记录已撤销", "Receipt undone", "Penerimaan dibatalkan"))
-            } catch { error = error.localizedDescription }
+            } catch let failure { self.error = failure.localizedDescription }
         }
     }
 }
@@ -307,8 +307,8 @@ private struct ReimbursementEditor: View {
                     }, postRecurring: false)
                     model.showSaved(message: receiptMode ? tr("到账已记录", "Receipt recorded", "Penerimaan direkod") : tr("报销已保存", "Reimbursement saved", "Tuntutan disimpan"))
                     dismiss()
-                } catch { error = error.localizedDescription; FeedbackHaptics.error() }
+                } catch let failure { self.error = failure.localizedDescription; FeedbackHaptics.error() }
             }
-        } catch { error = error.localizedDescription; FeedbackHaptics.error() }
+        } catch let failure { self.error = failure.localizedDescription; FeedbackHaptics.error() }
     }
 }

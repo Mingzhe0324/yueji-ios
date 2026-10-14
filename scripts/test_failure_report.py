@@ -39,6 +39,27 @@ class FailureReportTests(unittest.TestCase):
         self.assertIn('Native test build failed', result)
         self.assertNotIn('Native tests succeeded', result)
 
+    def test_swift_compiler_assertion_keeps_the_failing_source_context(self):
+        log = '''Assertion failed: (Querying VarDecl type), function evaluate.
+Stack dump:
+0. Program arguments: swift-frontend -frontend -c lots-of-files
+3. While evaluating request TypeCheckPrimaryFileRequest(source_file "ReimbursementViews.swift")
+4. While evaluating request TypeCheckFunctionBodyRequest(ReimbursementDetailView.undoReceipt())
+5. While type-checking expression RangeText="Task {
+    } catch { error = error.localizedDescription }
+}"
+8. While evaluating request InterfaceTypeRequest(error@ReimbursementViews.swift:211:21)
+Stack dump without symbol names:
+** TEST BUILD FAILED **
+** ALL NATIVE SUITES SUCCEEDED **'''
+        result = report(log)
+        self.assertIn('Swift compiler crash:', result)
+        self.assertIn('undoReceipt()', result)
+        self.assertIn('ReimbursementViews.swift:211:21', result)
+        self.assertNotIn('lots-of-files', result)
+        self.assertNotIn('Native tests succeeded', result)
+        self.assertNotIn('No Swift XCTest', result)
+
 
 if __name__ == '__main__':
     unittest.main()

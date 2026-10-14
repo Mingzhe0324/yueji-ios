@@ -23,20 +23,40 @@ def report(log: str) -> str:
             compilation.append('\n'.join(lines[index:index + 3]))
     infrastructure = [line for line in lines if
                       'Failed to initialize for UI testing:' in line or 'CI stage timed out' in line]
+    compiler_crash = []
+    if 'swift-frontend' in log and ('Assertion failed:' in log or 'Stack dump:' in log):
+        # A compiler assertion may abort before it emits a normal error: line.
+        # Preserve the failing declaration/expression, not the huge tool command.
+        start = None
+        for index, line in enumerate(lines):
+            if 'Assertion failed:' in line:
+                compiler_crash.append(line)
+            if re.search(r'While (?:evaluating request|type-checking)', line) and start is None:
+                start = index
+            if start is not None and 'Stack dump without symbol names' in line:
+                compiler_crash.extend(lines[start:index])
+                start = None
+                break
+        if start is not None:
+            compiler_crash.extend(lines[start:start + 40])
+        if not compiler_crash:
+            compiler_crash.append('swift-frontend crashed; inspect the crash backtrace in build-test.log.')
     bundles = re.findall(r"Test Suite '([^'\n]+\.xctest)' (passed|failed)[^\n]*\n\s*(Executed[^\n]*)", log)
     sections = []
     if infrastructure:
         sections.append('Native runner/startup failures (UI verification incomplete):\n' + '\n'.join(dict.fromkeys(infrastructure)))
     if compilation:
         sections.append('Native build/compiler errors:\n' + '\n'.join(dict.fromkeys(compilation)))
+    if compiler_crash:
+        sections.append('Swift compiler crash:\n' + '\n'.join(dict.fromkeys(compiler_crash)))
     if failures:
         sections.append('Native XCTest assertion failures:\n' + '\n'.join(dict.fromkeys(failures)))
-    elif not infrastructure and not compilation and '** TEST BUILD FAILED **' not in log and ('** ALL NATIVE SUITES SUCCEEDED **' in log or
+    elif not infrastructure and not compilation and not compiler_crash and '** TEST BUILD FAILED **' not in log and ('** ALL NATIVE SUITES SUCCEEDED **' in log or
                                  ('build-for-testing' not in log and '** TEST SUCCEEDED **' in log)):
         sections.append('Native tests succeeded; no assertion failures were reported.')
-    elif not infrastructure and not compilation and '** TEST BUILD FAILED **' in log:
+    elif not infrastructure and not compilation and not compiler_crash and '** TEST BUILD FAILED **' in log:
         sections.append('Native test build failed. No compiler diagnostic lines were captured in this summary; inspect the earlier build-test.log output.')
-    elif not infrastructure and not compilation:
+    elif not infrastructure and not compilation and not compiler_crash:
         sections.append('No Swift XCTest assertion lines were found. Inspect build-test.log and the .xcresult bundles for build, launch or infrastructure errors.')
     if bundles:
         sections.append('Test bundle summaries:\n' + '\n'.join(f'{name} {status}: {summary}' for name, status, summary in bundles))
