@@ -34,7 +34,7 @@ struct PageIntroduction: View {
     var body: some View {
         let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 7) {
-            Text(title).font(.largeTitle.weight(.bold)).tracking(-0.7).fixedSize(horizontal: false, vertical: true)
+            Text(title).font(.largeTitle.weight(.bold)).fixedSize(horizontal: false, vertical: true)
             Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             .padding(.horizontal, 20)
@@ -73,6 +73,12 @@ private struct YueJiScrollEdge: ViewModifier {
 }
 extension View {
     func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
+    func yuejiPageSurface() -> some View {
+        scrollDismissesKeyboard(.interactively)
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .modifier(YueJiBarAppearance())
+            .modifier(YueJiScrollEdge())
+    }
     func yuejiUpdating(_ updating: Bool) -> some View {
         overlay(alignment: .topTrailing) {
             if updating {
@@ -237,7 +243,7 @@ struct MainView: View {
                 if finished { openPendingNotification() }
             }
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification(); openPendingInbox() }) {
-                UsageGuideView().ledgerFeedback(modal: true)
+                UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true)
             }
             .onChange(of: selectedTab) { _, _ in
                 FeedbackHaptics.selection()
@@ -262,7 +268,7 @@ struct MainView: View {
             .sheet(isPresented: $showingNewTNG, onDismiss: { openPendingNotification() }) {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
                     Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
-                } } }.ledgerFeedback(modal: true)
+                } } }.yuejiSheetSurface().ledgerFeedback(modal: true)
             }
             .task(id: undoExpirationPaused) { model.pauseUndoExpiry(undoExpirationPaused) }
             .task(id: savedExpiration) {
@@ -1878,12 +1884,12 @@ struct RepaymentView: View {
                 TextField(balance < 0 ? tr("退回金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR") : tr("收到金额 · MYR", "Amount received · MYR", "Amaun diterima · MYR"), text: $amount).keyboardType(.decimalPad)
                 DatePicker(tr("还款日期", "Repayment date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                 Text(tr("还款只减少欠款，不重复计作收入。", "Repayments reduce debt and are not counted as new income.", "Bayaran balik mengurangkan hutang dan bukan pendapatan baharu."))
-            }.navigationTitle(tr("记录还款", "Repayment", "Bayaran balik")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
+            }.yuejiListSurface().navigationTitle(tr("记录还款", "Repayment", "Bayaran balik")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .disabled(saving).interactiveDismissDisabled(saving)
                 .onAppear { if !initialized { initialized = true; amount = Currency.input(abs(balance), "MYR") } }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
-                    ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.yuejiPrimaryButton().disabled(saving) }
                 }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
@@ -1911,8 +1917,7 @@ struct SaveActionLabel: View {
     let saving: Bool
     var body: some View {
         let _ = uiLocale.identifier
-        if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
-        else { Text(tr("保存", "Save", "Simpan")) }
+        EditorSaveLabel(saving: saving)
     }
 }
 struct LedgerDocument: FileDocument {
@@ -1998,7 +2003,7 @@ struct SettingsView: View {
                 .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
                     do { previewBackup(try result.get()) } catch { model.error = error.localizedDescription }
                 }
-                .sheet(isPresented: $showingUsageGuide) { UsageGuideView().ledgerFeedback(modal: true) }
+                .sheet(isPresented: $showingUsageGuide) { UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true) }
                 .sheet(item: $restorePreview) { preview in
                     RestorePreviewView(preview: preview) { loadBackups() }.ledgerFeedback(modal: true)
                 }
@@ -3378,7 +3383,7 @@ struct NotificationDestinationView: View {
                     }.toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
                 }
             }
-        }.ledgerFeedback(modal: true)
+        }.yuejiSheetSurface().ledgerFeedback(modal: true)
     }
 }
 

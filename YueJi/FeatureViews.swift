@@ -220,8 +220,8 @@ struct RecurringEditor: View {
                 DisclosureGroup(tr("周期与修改说明", "Schedule details", "Butiran jadual")) {
                 Text(tr("编辑金额只影响未来未入账项目。更改周期或首次日期请暂停旧项目，再新增。每月 31 日会在短月份落到月底。", "Amount edits affect unrecorded occurrences only. To change cycle or start date, pause this schedule and create another. The 31st uses month-end in shorter months.", "Perubahan amaun hanya untuk tempoh belum direkod. Untuk ubah kitaran atau tarikh mula, jeda jadual ini dan cipta baharu. Tarikh 31 menggunakan hujung bulan bagi bulan pendek.")).font(.footnote)
                 }
-            }.navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.disabled(rateBusy || saving) } }
+            }.yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.yuejiPrimaryButton().disabled(rateBusy || saving) } }
                 .onAppear { guard !initialized else { return }; initialized = true; if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
                 .task(id: currency) {
                 guard !model.isPreview else { return }
@@ -295,7 +295,7 @@ struct DuplicateReviewView: View {
                 }
             }
             Button(tr("重新检查已忽略的项目", "Review dismissed pairs again", "Semak semula pasangan diabaikan")) { model.change { $0.dismissedDuplicates = [] } }
-        }.navigationTitle(tr("重复账目检查", "Duplicate review", "Semakan pendua")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("重复账目检查", "Duplicate review", "Semakan pendua")).navigationBarTitleDisplayMode(.inline)
             .confirmationDialog(tr("删除此账目及其分账、还款和退款？无法自动合并这些资料。", "Delete this entry and its splits, repayments and refunds? These cannot be merged automatically.", "Padam rekod serta pembahagian dan bayaran baliknya? Data ini tidak dapat digabungkan automatik."), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
                 Button(tr("确认删除", "Delete", "Padam"), role: .destructive) { if let e = deleting { model.change { [e] in $0.expenses.removeAll { $0.id == e.id } } }; deleting = nil }
             }
@@ -369,7 +369,7 @@ struct RefundsView: View {
                     }
                 }
             } else { Text(tr("记录已删除", "Entry was deleted", "Rekod telah dipadam")) }
-        }.navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
             .alert(tr("退款", "Refund", "Bayaran balik"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
             .confirmationDialog(tr("撤销退款？若已退钱给朋友，请先核对返款记录。", "Undo refund? Check any money already returned to friends first.", "Batalkan bayaran balik? Semak wang yang sudah dipulangkan kepada rakan dahulu."), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) { if let r = undo { model.perform(key: "refund-" + expenseID, action: { [expenseID, r] in try $0.removeRefund(expenseID: expenseID, refundID: r.id) }, completion: { _ in model.showSaved() }) }; undo = nil }
@@ -432,7 +432,7 @@ struct FriendSummaryView: View {
                     FriendBalanceRow(friend: friend)
                 }
             }
-        }.navigationTitle(tr("朋友欠款汇总", "Friend balances", "Baki rakan")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("朋友欠款汇总", "Friend balances", "Baki rakan")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct FuelCalculatorView: View {
@@ -528,7 +528,7 @@ struct FuelCalculatorView: View {
                 Text(tr("只保存油耗、油价和同行朋友；里程、停车费及过路费每次重新填写。", "Only fuel use, price and companions are saved. Enter distance, parking and tolls for each trip.", "Hanya penggunaan minyak, harga dan rakan disimpan. Isi jarak, parkir dan tol setiap perjalanan.")).font(.caption)
             }
             Text(tr("停车费和过路费留空按零计算。保存到账本会打开确认页面，可修改行程名称、日期、金额并填写朋友姓名。朋友人数为 0 时全部记为个人花费。若加油或行程付款已经入账，请编辑原账目分账，避免重复计费。", "Blank parking and tolls count as zero. Save to ledger opens a review where you can edit the trip, date, amount and friends' names. With zero friends, the full amount is personal spending. If the fuel or trip payment is already recorded, split the existing entry to avoid double counting.", "Parkir dan tol kosong dikira sifar. Simpan ke lejar membuka semakan nama perjalanan, tarikh, amaun dan nama rakan. Dengan sifar rakan, semua kos ialah belanja sendiri. Jika bayaran minyak atau perjalanan sudah direkod, bahagikan rekod sedia ada supaya tidak dikira dua kali.")).font(.footnote)
-        }.navigationTitle(tr("油费计算器", "Fuel calculator", "Kalkulator minyak")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("油费计算器", "Fuel calculator", "Kalkulator minyak")).navigationBarTitleDisplayMode(.inline)
             .onAppear {
                 guard !initialized else { return }; initialized = true
                 if let defaults = model.ledger.tripDefaults {
@@ -773,7 +773,7 @@ struct MerchantRulesView: View {
                     Text(categoryLabel(model.ledger.merchantCategories[merchant] ?? "其他"))
                 }.swipeActions { Button(role: .destructive) { model.change { [merchant] in $0.merchantCategories.removeValue(forKey: merchant) } } label: { Label(tr("不再记住", "Forget category", "Lupakan kategori"), systemImage: "trash") } }
             }
-        }.navigationTitle(tr("记住商户分类", "Remember merchant categories", "Ingat kategori peniaga")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("记住商户分类", "Remember merchant categories", "Ingat kategori peniaga")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct FriendStatementView: View {
@@ -835,7 +835,7 @@ struct RestorePreviewView: View {
                     Text(tr("恢复会替换账本。当前数据另存为「上次导入前的数据」，不受 30 份备份轮换影响；下次恢复时会更新这份副本。通知设置属于本机设置，不随账本恢复。", "Restoring replaces the ledger. Current data is kept separately as data before last restore, outside the 30-snapshot rotation. The next restore replaces that recovery copy. Notification preferences remain on this device.", "Pemulihan menggantikan lejar. Data semasa disimpan berasingan daripada 30 sandaran sebagai data sebelum pemulihan terakhir. Pemulihan seterusnya menggantikan salinan itu. Pilihan notifikasi kekal pada peranti ini."))
                     Button(tr("恢复这份备份", "Restore this backup", "Pulihkan sandaran ini"), role: .destructive) { confirm = true }
                 }
-            }.navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(restoring).interactiveDismissDisabled(restoring)
+            }.yuejiListSurface().navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(restoring).interactiveDismissDisabled(restoring)
                 .overlay { if restoring { ProgressView().accessibilityLabel(tr("正在恢复", "Restoring", "Memulihkan")) } }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(restoring) } }
                 .confirmationDialog(tr("确认替换当前账本？", "Replace the current ledger?", "Ganti lejar semasa?"), isPresented: $confirm, titleVisibility: .visible) {
@@ -1042,7 +1042,7 @@ struct CategoriesView: View {
                 Button(tr("新增分类", "Add category", "Tambah kategori")) { editing = CustomCategory(name: "") }
             }
             Text(tr("改名会同步已有账目、固定消费和商户规则；正在使用的分类不能直接删除。自定义名称保留你输入的语言。", "Renaming updates entries, recurring bills and merchant rules. Categories in use cannot be deleted. Custom names retain the language you enter.", "Penamaan semula mengemas kini rekod, bil berulang dan peraturan peniaga. Kategori yang digunakan tidak boleh dipadam. Nama sendiri kekal dalam bahasa yang diisi.")).font(.footnote)
-        }.navigationTitle(tr("管理分类", "Manage categories", "Urus kategori")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("管理分类", "Manage categories", "Urus kategori")).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $editing) { CategoryEditor(initial: $0).ledgerFeedback(modal: true) }
     }
 }
@@ -1069,7 +1069,7 @@ struct CategoryEditor: View {
                     ForEach(CustomCategory.colors, id: \.self) { value in Label(categoryColorLabel(value), systemImage: "circle.fill").foregroundStyle(categoryColor(value)).tag(value) }
                 }
                 Label(name.isEmpty ? tr("分类预览", "Preview", "Pratonton") : name, systemImage: icon).foregroundStyle(categoryColor(color)).font(.title2).padding()
-            }.navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
+            }.yuejiListSurface().navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
                 .onAppear { if !initialized { initialized = true; name = initial.name; icon = initial.icon; color = initial.color } }
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
@@ -1083,7 +1083,7 @@ struct CategoryEditor: View {
                             do { try await model.mutate { try $0.saveCategory(saved) }; model.showSaved(); dismiss() }
                             catch { self.error = error.localizedDescription }
                         }
-                    } label: { SaveActionLabel(saving: saving) } }
+                    } label: { SaveActionLabel(saving: saving) }.yuejiPrimaryButton().disabled(saving) }
                 }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
@@ -1115,8 +1115,7 @@ struct SpendingComparisonView: View {
                     if current > 0 || prior > 0 { ComparisonRow(name: categoryLabel(category), current: current, previous: prior) }
                 }
             }
-        }.navigationTitle(tr("月度对比", "Monthly comparison", "Perbandingan bulanan")).navigationBarTitleDisplayMode(.inline)
-            .yuejiListSurface()
+        }.yuejiListSurface().navigationTitle(tr("月度对比", "Monthly comparison", "Perbandingan bulanan")).navigationBarTitleDisplayMode(.inline)
             .yuejiUpdating(loadedQuery != query)
             .task(id: query) {
                 guard loadedQuery != query else { return }
@@ -1158,18 +1157,12 @@ private struct ComparisonRow: View {
 struct AnimatedMoney: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
     let cents: Int
-    var animateOnAppear = false
     var body: some View {
         let _ = uiLocale.identifier
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
             .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
-            .opacity(!animateOnAppear || appeared || reduceMotion ? 1 : 0)
-            .scaleEffect(!animateOnAppear || appeared || reduceMotion ? 1 : 0.99, anchor: .leading)
-            .animation(reduceMotion ? nil : YueJiMotion.standard, value: appeared)
-            .onAppear { appeared = true }
     }
 }
 struct LedgerFilterEditor: View {
@@ -1195,10 +1188,10 @@ struct LedgerFilterEditor: View {
                 TextField(tr("最高金额 · MYR（选填）", "Maximum · MYR (optional)", "Maksimum · MYR (pilihan)"), text: $value.maximum).keyboardType(.decimalPad)
                 Text(tr("按当前月份、原入账总金额 MYR 筛选，包含朋友份额，未扣退款。商户和物品可在账本搜索。物品按各自分类筛选，列表金额仍是整笔总额。", "Filters the selected month by original total MYR, including friends' shares and before refunds. Search merchants and items in the ledger. Item categories are included; rows still show the transaction total.", "Menapis bulan dipilih mengikut jumlah asal MYR termasuk bahagian rakan sebelum pulangan. Cari peniaga dan item dalam lejar. Kategori item disertakan; baris masih menunjukkan jumlah transaksi.")).font(.footnote)
                 Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
-            }.navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
+            }.yuejiListSurface().navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
-                    ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna")) { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } } }
+                ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna")) { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } }.yuejiPrimaryButton() }
                 }
                 .alert(tr("筛选条件无效", "Invalid filter", "Penapis tidak sah"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
@@ -1571,7 +1564,7 @@ struct TNGNoticeView: View {
                     }
                 }
             }
-        }.disabled(model.isWorking("notice-" + id))
+        }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(sourceLabel(notice?.provider ?? "TNG"))
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
@@ -1622,7 +1615,7 @@ struct TNGSetupView: View {
                     .font(.footnote).foregroundStyle(.secondary)
             }
             NavigationLink(tr("TNG 详细指南", "Detailed TNG guide", "Panduan TNG terperinci")) { ShortcutSetupGuide(provider: .tng) }
-        }.navigationTitle(tr("银行通知设置", "Bank notification setup", "Persediaan notifikasi bank"))
+        }.yuejiListSurface().navigationTitle(tr("银行通知设置", "Bank notification setup", "Persediaan notifikasi bank"))
     }
 }
 
@@ -2465,7 +2458,7 @@ struct ReceiptScanView: View {
                 itemsSection.id(3)
                 resultSection.id(4)
             }
-        }.navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("收据分账", "Receipt split", "Bahagi resit")).navigationBarTitleDisplayMode(.inline)
             .sheet(item: $comparingItem) { item in
                 if let receiptImage { ReceiptComparisonView(image: receiptImage, item: item).ledgerFeedback(modal: true) }
             }
@@ -2604,7 +2597,7 @@ struct TNGIncomingView: View {
                     }
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
-        }.disabled(model.isWorking("notice-" + id))
+        }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
@@ -2810,10 +2803,12 @@ private struct SavingsGoalEditor: View {
                     Text(tr("从一个月后开始，每月一次；不足一个月的目标按截止日存一次。这里不会新增存款记录。", "One contribution each month starting next month; deadlines under one month use one contribution on the deadline. This does not record deposits.", "Satu simpanan sebulan bermula bulan depan; sasaran bawah sebulan menggunakan tarikh akhir. Ini tidak merekod deposit.")).font(.caption).foregroundStyle(.secondary)
                 }.disabled(requesting)
             }
+            .yuejiListSurface().yuejiSheetSurface()
             .navigationTitle(tr("储蓄目标", "Savings goal", "Matlamat simpanan"))
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(model.isWorking("goal-editor")) }
-                ToolbarItem(placement: .confirmationAction) { Button(tr("确认保存", "Confirm", "Sahkan")) { save() }.disabled(requesting) }
+                ToolbarItem(placement: .confirmationAction) { Button(tr("确认保存", "Confirm", "Sahkan")) { save() }.yuejiPrimaryButton().disabled(requesting) }
             }
             .onAppear {
                 guard !initialized else { return }; initialized = true
@@ -3037,6 +3032,7 @@ private struct ReceiptComparisonView: View {
                     Image(uiImage: image).resizable().scaledToFit().frame(width: 320 * zoom)
                 }.frame(width: 320 * zoom, alignment: .leading).padding(20)
             }
+            .yuejiPageSurface().yuejiSheetSurface()
             .navigationTitle(tr("对照收据", "Compare receipt", "Banding resit")).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup")) { dismiss() } } }
             .task {
@@ -3075,7 +3071,7 @@ struct TNGStatusFeedback: View {
         Label(tngStatus(notice), systemImage: notice.status == "pending" ? "clock" : "checkmark.circle.fill")
             .font(.headline).foregroundStyle(notice.status == "pending" ? Color.orange : Color.green)
             .contentTransition(.opacity)
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: notice.status)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: notice.status)
     }
 }
 
@@ -3183,7 +3179,7 @@ struct FinancialNoticeReviewView: View {
                 Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { confirm = true }
                     .disabled(purpose.isEmpty || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
             } else { Text(tr("通知已删除或清理。", "The notification has been deleted or cleared.", "Notifikasi telah dipadam atau dikosongkan.")) }
-        }.disabled(model.isWorking("notice-" + id))
+        }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(tr("确认通知", "Review notification", "Semak notifikasi"))
             .onAppear {

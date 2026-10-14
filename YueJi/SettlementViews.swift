@@ -343,7 +343,7 @@ struct SettlementReviewView: View {
                     .yuejiListSurface().navigationTitle(tr("预览结算", "Review settlement", "Semak penyelesaian")).navigationBarTitleDisplayMode(.inline)
                     .transition(.opacity)
             }
-        }.animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: savedID)
+        }.animation(reduceMotion ? nil : YueJiMotion.standard, value: savedID)
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
     private func confirm() {
@@ -534,7 +534,7 @@ struct SettlementNoticeSection: View {
                             NavigationLink(record.name + " · " + dateLabel(record.date)) { SettlementPaymentLinkView(settlementID: record.id, initialNoticeID: notice.id) }
                         }
                         Text(tr("先在朋友页面预览并确认结算，再手动选择付款。", "Review and confirm a settlement on the friend's page first, then select its payment manually.", "Semak dan sahkan penyelesaian di halaman rakan dahulu, kemudian pilih bayaran secara manual.")).font(.footnote).foregroundStyle(.secondary)
-                    }.navigationTitle(tr("选择结算", "Choose settlement", "Pilih penyelesaian"))
+                    }.yuejiListSurface().navigationTitle(tr("选择结算", "Choose settlement", "Pilih penyelesaian"))
                 }
             }
         }
