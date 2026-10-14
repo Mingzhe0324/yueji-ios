@@ -9,6 +9,20 @@ enum YueJiMotion {
     static let month = Animation.smooth(duration: 0.28)
 }
 
+struct EditorSaveLabel: View {
+    let saving: Bool
+    var body: some View {
+        Text(tr("保存", "Save", "Simpan"))
+            // Preserve the label's layout while the async save is running.
+            .opacity(saving ? 0 : 1)
+            .overlay {
+                if saving { ProgressView().controlSize(.small).allowsHitTesting(false) }
+            }
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(saving ? tr("正在保存", "Saving", "Menyimpan") : tr("保存", "Save", "Simpan"))
+    }
+}
+
 extension View {
     func ledgerGlass() -> some View { modifier(YueJiGlassSurface()) }
 
@@ -1413,8 +1427,8 @@ struct ExpenseEditor: View {
             } else {
             Form {
                 if original == nil && initialDraft == nil { ManualEntryTypeSection(selection: $entryType) }
-                payerSection
                 paymentSection
+                payerSection
                 merchantSection
                 ExpenseItemsFields(items: $itemDrafts, totalCents: (try? total()) ?? 0, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil)
                 currencySection
@@ -1452,8 +1466,7 @@ struct ExpenseEditor: View {
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
                 .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
-                    if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) }
-                    else { Text(tr("保存", "Save", "Simpan")) }
+                    EditorSaveLabel(saving: saving)
                 }.yuejiPrimaryButton().disabled(rateLoading || saving) } }
                 .toolbar {
                     ToolbarItemGroup(placement: .keyboard) {
@@ -1522,14 +1535,20 @@ struct ExpenseEditor: View {
     }
     private var merchantSection: some View {
         Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
-            TextField(tr("商户（选填）", "Merchant (optional)", "Peniaga (pilihan)"), text: $name)
-                .accessibilityIdentifier("transaction.merchant")
-                .focused($focusedField, equals: .merchant).submitLabel(.done)
-                .onSubmit { finishKeyboard() }
-            TextField(tr("账目名称／描述（选填）", "Name / description (optional)", "Nama / penerangan (pilihan)"), text: $entryDescription, axis: .vertical)
-                .lineLimit(2...5)
-                .focused($focusedField, equals: .entryDescription)
-                .accessibilityIdentifier("transaction.description")
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("商户 · 选填", "Merchant · optional", "Peniaga · pilihan")).font(.caption).foregroundStyle(.secondary)
+                TextField(tr("商户（选填）", "Merchant (optional)", "Peniaga (pilihan)"), text: $name)
+                    .accessibilityIdentifier("transaction.merchant")
+                    .focused($focusedField, equals: .merchant).submitLabel(.done)
+                    .onSubmit { finishKeyboard() }
+            }.padding(.vertical, 4)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(tr("账目名称／描述 · 选填", "Name / description · optional", "Nama / penerangan · pilihan")).font(.caption).foregroundStyle(.secondary)
+                TextField(tr("账目名称／描述（选填）", "Name / description (optional)", "Nama / penerangan (pilihan)"), text: $entryDescription, axis: .vertical)
+                    .lineLimit(1...4)
+                    .focused($focusedField, equals: .entryDescription)
+                    .accessibilityIdentifier("transaction.description")
+            }.padding(.vertical, 4)
             // Keep this navigation row mounted when the first item is inserted.
             // Removing it in the same Form update can invalidate native navigation.
             Picker(tr("分类", "Category", "Kategori"), selection: $category) {

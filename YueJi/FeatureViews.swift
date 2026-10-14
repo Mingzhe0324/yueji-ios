@@ -1417,11 +1417,11 @@ struct ExpenseItemsEditor: View {
                         Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(tr("保存", "Save", "Simpan")) { save() }.yuejiPrimaryButton().disabled(saving || !initialized)
+                        Button { save() } label: { EditorSaveLabel(saving: saving) }
+                            .yuejiPrimaryButton().disabled(saving || !initialized)
                     }
                 }
                 .disabled(saving)
-                .overlay { if saving { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
                 .onAppear {
                     guard !initialized else { return }
                     items = (original.items ?? []).map(ExpenseItemDraft.init)
@@ -3267,9 +3267,9 @@ struct ExpenseItemsFields: View {
     private var itemTotal: Int { items.reduce(0) { $0 + ((try? $1.savedItem().cents) ?? 0) } }
     var body: some View {
         let _ = uiLocale.identifier
-        Section(tr("物品", "Items", "Item")) {
-            ForEach(items) { draft in
-                let item = draft.binding(in: $items)
+        ForEach(items) { draft in
+            let item = draft.binding(in: $items)
+            Section {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
                         .font(.headline)
@@ -3313,7 +3313,11 @@ struct ExpenseItemsFields: View {
                 }.buttonStyle(.borderless)
                     .accessibilityIdentifier("transaction.item.remove")
                     .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
+            } header: {
+                Text(tr("物品", "Item", "Item") + " \((items.firstIndex(where: { $0.id == draft.id }) ?? 0) + 1)")
             }
+        }
+        Section {
             Button {
                 let draft = ExpenseItemDraft(category: defaultCategory)
                 updateRows { items.append(draft) }
@@ -3346,6 +3350,8 @@ struct ExpenseItemsFields: View {
                 Text(tr("交易已保存，可稍后补充物品。取消编辑不会删除交易。", "This transaction is saved. Add items later; cancelling edits keeps the transaction.", "Transaksi ini telah disimpan. Tambah item kemudian; membatalkan edit mengekalkan transaksi."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
+        } header: {
+            Text(items.isEmpty ? tr("物品 · 选填", "Items · optional", "Item · pilihan") : tr("物品汇总", "Item summary", "Ringkasan item"))
         }
     }
     private func updateRows(_ update: () -> Void) {
