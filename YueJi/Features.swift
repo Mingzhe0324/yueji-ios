@@ -731,6 +731,7 @@ struct LedgerTimelineSnapshot {
     var personal = 0
     var reimbursementOutstanding = 0
     var sources: [String] = []
+    var repaymentPreviews: [String: RepaymentPurchasePreview] = [:]
     var count: Int { expenses.count + transfers.count + settlements.count }
 
     init() {}
@@ -739,6 +740,27 @@ struct LedgerTimelineSnapshot {
             .filter { query.provider == "all" || $0.source == query.provider }
         transfers = ledger.ledgerTNGTransfers(in: month, search: query.search)
             .filter { query.provider == "all" || $0.provider == query.provider }
+        let wantedRepayments = Set(transfers.filter { $0.status == "repayment" }.flatMap { $0.repaymentIDs ?? [] })
+        var purchasesByRepayment: [String: Expense] = [:]
+        if !wantedRepayments.isEmpty {
+            for entry in ledger.expenses {
+                for share in entry.shares {
+                    for repayment in share.repayments where wantedRepayments.contains(repayment.id) {
+                        purchasesByRepayment[repayment.id] = entry
+                    }
+                }
+            }
+        }
+        let linkedSettlements = Dictionary(ledger.settlements.filter(\.active).map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        for notice in transfers {
+            let entries: [Expense]
+            if notice.status == "repayment" {
+                entries = (notice.repaymentIDs ?? []).compactMap { purchasesByRepayment[$0] }
+            } else if notice.status == "settlement", let id = notice.settlementID, let settlement = linkedSettlements[id] {
+                entries = settlement.lines.filter { $0.applied != 0 }.map(\.expense)
+            } else { continue }
+            repaymentPreviews[notice.id] = RepaymentPurchasePreview.make(entries)
+        }
         if query.provider == "all" || query.provider == "手动" {
             settlements = try ledger.ledgerSettlements(in: month, search: query.search, filter: query.filter)
         }

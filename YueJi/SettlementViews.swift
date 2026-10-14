@@ -78,6 +78,11 @@ struct SettlementPaymentRow: View {
         layout {
             VStack(alignment: .leading, spacing: 5) {
                 Text(record.paymentTitle + " · " + record.name).font(.headline)
+                if let preview = RepaymentPurchasePreview.make(record.lines.filter { $0.applied != 0 }.map(\.expense)) {
+                    Text(tr("用于：", "For: ", "Untuk: ") + preview.label)
+                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                        .accessibilityIdentifier("ledger.repayment.purchases")
+                }
                 Text(dateLabel(record.date, time: true)).font(.caption).foregroundStyle(.secondary)
                 Text(record.transfer == 0 ? tr("债务抵扣 · 我的账户无收支", "Debt offset · no account movement", "Tolakan hutang · tiada aliran akaun") : tr("手动结算 · 不计消费或收入", "Manual settlement · no spending or income", "Penyelesaian manual · bukan belanja atau pendapatan"))
                     .font(.caption).foregroundStyle(.secondary)

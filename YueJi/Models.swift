@@ -987,6 +987,26 @@ struct ExpenseItemPreview: Equatable {
     let remaining: Int
     var moreLabel: String { tr("另有 \(remaining) 件", "+\(remaining) more", "+\(remaining) lagi") }
 }
+struct RepaymentPurchasePreview: Equatable {
+    let names: String
+    let remaining: Int
+    var label: String {
+        names + (remaining > 0 ? tr(" · 另 \(remaining) 笔", " · +\(remaining) more", " · +\(remaining) lagi") : "")
+    }
+    static func make(_ entries: [Expense]) -> RepaymentPurchasePreview? {
+        var seen = Set<String>()
+        let purchases = entries.filter { seen.insert($0.id).inserted }
+        guard !purchases.isEmpty else { return nil }
+        let names = purchases.prefix(2).map { entry -> String in
+            let description = (entry.entryDescription ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            let detail: String? = !description.isEmpty ? description : entry.itemPreview.map { $0.names + ($0.remaining > 0 ? " · " + $0.moreLabel : "") }
+            guard let detail, detail != entry.displayName else { return entry.displayName }
+            let merchant = entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+            return merchant.isEmpty ? detail : merchant + " · " + detail
+        }.joined(separator: "； ")
+        return RepaymentPurchasePreview(names: names, remaining: max(0, purchases.count - 2))
+    }
+}
 extension Expense {
     /// Only actual saved purchase names belong in the row, never inferred categories.
     var itemPreview: ExpenseItemPreview? {

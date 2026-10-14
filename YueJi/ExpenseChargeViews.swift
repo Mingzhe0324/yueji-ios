@@ -23,7 +23,7 @@ struct ExpenseChargeFields: View {
                         .accessibilityIdentifier("transaction.charges.subtotal")
                 }
                 percentageRow("SST", value: $sst, field: .sstPercent, identifier: "transaction.charges.sst")
-                percentageRow("Service Charge", value: $service, field: .servicePercent, identifier: "transaction.charges.service")
+                percentageRow(tr("服务费", "Service Charge", "Caj perkhidmatan"), value: $service, field: .servicePercent, identifier: "transaction.charges.service")
                 if let draft, let calculation = try? draft.breakdown() {
                     LabeledContent("SST \(ExpenseCharges.percentText(draft.sstBasisPoints))%", value: Currency.display(calculation.sst, currency))
                     LabeledContent("Service Charge \(ExpenseCharges.percentText(draft.serviceBasisPoints))%", value: Currency.display(calculation.service, currency))
@@ -45,7 +45,7 @@ struct ExpenseChargeFields: View {
             }
         } header: { Text("SST & Service Charge · \(currency)") } footer: {
             if enabled {
-                Text(tr("两项都按税前小计计算，各自四舍五入。点“使用计算出的付款总额”可填入含税费金额。物品填写税前单价，税费按比例分摊。", "Both percentages use the subtotal, rounded separately. Use the calculated total to fill the payment amount. Enter items before charges; fees are allocated proportionally.", "Kedua-dua peratus menggunakan subtotal dan dibundarkan berasingan. Gunakan jumlah dikira sebagai bayaran. Isi item sebelum caj; caj diagihkan berkadar."))
+                Text(tr("两项都按税前小计计算。物品填税前单价，税费按比例分摊。", "Both charges use the subtotal. Enter base item prices; charges are allocated proportionally.", "Kedua-dua caj menggunakan subtotal. Isi harga asas item; caj diagihkan berkadar."))
             }
         }
     }
@@ -71,10 +71,8 @@ struct ExpenseChargeDetails: View {
                 LabeledContent(tr("税前小计", "Subtotal before charges", "Subtotal sebelum caj"), value: Currency.display(charges.subtotal, charges.currency))
                 LabeledContent("SST \(ExpenseCharges.percentText(charges.sstBasisPoints))%", value: Currency.display(calculation.sst, charges.currency))
                 LabeledContent("Service Charge \(ExpenseCharges.percentText(charges.serviceBasisPoints))%", value: Currency.display(calculation.service, charges.currency))
-                LabeledContent(tr("含税费总额", "Total with charges", "Jumlah termasuk caj"), value: Currency.display(calculation.total, charges.currency))
-                    .fontWeight(.semibold).monospacedDigit()
             } header: { Text("SST & Service Charge") } footer: {
-                Text(tr("两项均按税前小计计算；物品保留税前单价，分类和分账包含按比例分摊的税费。", "Both charges use the subtotal. Items retain base prices; categories and shares include proportionally allocated fees.", "Kedua-dua caj menggunakan subtotal. Item mengekalkan harga asas; kategori dan bahagian termasuk caj diagih berkadar."))
+                Text(tr("税费已计入付款总额和分账。", "Charges are included in the payment and shares.", "Caj termasuk dalam bayaran dan bahagian."))
             }
         }
     }

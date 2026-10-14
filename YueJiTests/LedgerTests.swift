@@ -15,6 +15,62 @@ final class ExpenseChargeTests: XCTestCase {
                                 ownership: ItemOwnership(includesMe: false, friends: ["Amy"]))],
             charges: charges).applyingItemOwnership()
     }
+    func testItemEditorAddsChargesExplicitlyAndKeepsIdentityBasePricesAndHistory() throws {
+        let charged = try purchase()
+        var original = charged
+        original.charges = nil
+        original.cents = 10000
+        original = try original.applyingItemOwnership()
+        original.receiptSummary = "Old receipt"
+        let updated = try original.replacingItemCharges(charged.charges, paymentMinor: 11600,
+            items: original.items ?? [], allowedCategories: categories)
+        _ = try Ledger(expenses: [updated]).validated()
+        XCTAssertEqual(updated.id, original.id)
+        XCTAssertEqual(updated.date, original.date)
+        XCTAssertEqual(updated.items, original.items)
+        XCTAssertEqual(updated.shares.map(\.id), original.shares.map(\.id))
+        XCTAssertEqual(updated.shares[0].cents, 6960)
+        XCTAssertEqual(updated.personalSpending, 4640)
+        XCTAssertNil(updated.receiptSummary)
+        XCTAssertEqual(try updated.replacingItemCharges(updated.charges, paymentMinor: 11600,
+            items: updated.items ?? [], allowedCategories: categories), updated)
+        XCTAssertThrowsError(try updated.replacingItemCharges(nil, paymentMinor: 11600,
+            items: updated.items ?? [], allowedCategories: categories))
+        original.shares[0].repayments = [Repayment(cents: 100, date: date)]
+        XCTAssertThrowsError(try original.replacingItemCharges(charged.charges, paymentMinor: 11600,
+            items: original.items ?? [], allowedCategories: categories))
+        XCTAssertEqual(original.cents, 10000)
+        XCTAssertEqual(original.shares[0].repaid, 100)
+    }
+    func testItemEditorAddsFeesToAutomaticGrossWithoutAddingThemAgain() throws {
+        let original = Expense(merchant: "Cafe", cents: 11600, date: date, source: "TNG")
+        let charged = try purchase()
+        let updated = try original.replacingItemCharges(charged.charges, paymentMinor: original.cents,
+            items: charged.items ?? [], allowedCategories: categories)
+        XCTAssertEqual(updated.cents, original.cents)
+        XCTAssertEqual(updated.source, original.source)
+        XCTAssertEqual(updated.id, original.id)
+        XCTAssertEqual(updated.personalSpending, 4640)
+        XCTAssertEqual(try LocalStore.decode(LocalStore.encode(Ledger(expenses: [updated]))).expenses[0], updated)
+    }
+    func testItemEditorAppliesForeignGrossWithOriginalQuoteAndBaseItems() throws {
+        let quote = RateQuote(value: Decimal(string: "3.2")!, date: date, source: "Manual")
+        let original = Expense(merchant: "Cafe", cents: 3200, date: date,
+            foreign: ForeignAmount(currency: "SGD", minor: 1000, quote: quote),
+            items: [ExpenseItem(name: "Lunch", cents: 1600, category: "餐饮"),
+                    ExpenseItem(name: "Paper", cents: 1600, category: "购物")])
+        let charges = try ExpenseCharges.draft(currency: "SGD", subtotal: "10", sst: "6", service: "10")
+        let updated = try original.replacingItemCharges(charges, paymentMinor: 1160,
+            items: original.items ?? [], allowedCategories: categories)
+        _ = try Ledger(expenses: [updated]).validated()
+        XCTAssertEqual(updated.cents, 3712)
+        XCTAssertEqual(updated.itemSubtotalCents, 3200)
+        XCTAssertEqual(updated.foreign?.minor, 1160)
+        XCTAssertEqual(updated.foreign?.quote, quote)
+        XCTAssertEqual(updated.items, original.items)
+        XCTAssertEqual(updated.personalAmount(category: "餐饮"), 1856)
+        XCTAssertEqual(updated.personalAmount(category: "购物"), 1856)
+    }
     func testBothPercentagesUseSubtotalAndRoundSeparately() throws {
         let charges = try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6%", service: "10")
         let result = try charges.breakdown()
@@ -289,6 +345,60 @@ final class ReimbursementTests: XCTestCase {
         XCTAssertThrowsError(try ledger.excludeTNG(id: notice.id))
         XCTAssertEqual(ledger.expenses, [entry])
         XCTAssertEqual(ledger.tngNotices, [notice])
+    }
+}
+
+final class RepaymentPurchasePreviewTests: XCTestCase {
+    private let date = Date(timeIntervalSince1970: 1_700_000_000)
+    func testPreviewUsesRealPurchaseDetailsDeduplicatesAndLimitsRows() {
+        let one = Expense(id: "one", merchant: "Cafe", entryDescription: "Lunch", cents: 1000, date: date)
+        let two = Expense(id: "two", merchant: "Store", cents: 1000, date: date,
+                          items: [ExpenseItem(name: "Paper", cents: 1000, category: "购物")])
+        let three = Expense(id: "three", merchant: "Taxi", cents: 500, date: date)
+        let preview = RepaymentPurchasePreview.make([one, one, two, three])
+        XCTAssertEqual(preview?.names, "Cafe · Lunch； Store · Paper")
+        XCTAssertEqual(preview?.remaining, 1)
+        XCTAssertNil(RepaymentPurchasePreview.make([]))
+        XCTAssertEqual(RepaymentPurchasePreview.make([three])?.names, "Taxi")
+    }
+    func testBankRepaymentLinksOlderPurchasesAndDoesNotGuessUnknownIncoming() throws {
+        let purchaseDate = date.addingTimeInterval(-40 * 86400)
+        let entry = Expense(id: "purchase", merchant: "Cafe", entryDescription: "Lunch", cents: 1000, date: purchaseDate,
+                            shares: [Share(id: "share", name: "Amy", cents: 500,
+                                           repayments: [Repayment(id: "repayment", cents: 300, date: date)])])
+        var ledger = Ledger(expenses: [entry])
+        let repayment = TNGNotice(id: "received", body: "Payment", title: "Received", date: date, usesReceivedDate: false,
+                                  kind: "incoming", status: "repayment", cents: 300, party: "Amy", expenseID: nil,
+                                  resolvedFriend: "Amy", repaymentIDs: ["repayment", "repayment"])
+        var unknown = repayment
+        unknown.id = "unlinked"; unknown.repaymentIDs = ["missing"]
+        var income = repayment
+        income.id = "income"; income.status = "income"; income.repaymentIDs = nil
+        ledger.tngNotices = [repayment, unknown, income]
+        let query = LedgerTimelineQuery(revision: 0, month: date, search: "", filter: LedgerFilter(), provider: "all")
+        let snapshot = try LedgerTimelineSnapshot(ledger: ledger, month: date, query: query)
+        XCTAssertEqual(snapshot.repaymentPreviews["received"]?.names, "Cafe · Lunch")
+        XCTAssertNil(snapshot.repaymentPreviews["unlinked"])
+        XCTAssertNil(snapshot.repaymentPreviews["income"])
+        XCTAssertEqual(snapshot.personal, 0)
+        XCTAssertEqual(ledger.expenses[0], entry)
+    }
+    func testLinkedSettlementPreviewUsesOnlyAppliedAuditLines() throws {
+        let entry = Expense(id: "purchase", merchant: "Cafe", cents: 1000, date: date,
+                            shares: [Share(id: "share", name: "Amy", cents: 500)])
+        let unused = Expense(id: "unused", merchant: "Unpaid store", cents: 1000, date: date)
+        let settlement = FriendSettlement(id: "settlement", friend: "amy", name: "Amy", date: date,
+            lines: [SettlementLine(expense: entry, shareID: "share", before: 500, applied: 300),
+                    SettlementLine(expense: unused, shareID: nil, before: 0, applied: 0)], transfer: 300, paymentNoticeID: "notice")
+        var ledger = Ledger(expenses: [entry, unused])
+        ledger.settlements = [settlement]
+        ledger.tngNotices = [TNGNotice(id: "notice", body: "Payment", title: "Received", date: date, usesReceivedDate: false,
+            kind: "incoming", status: "settlement", cents: 300, party: "Amy", expenseID: nil, settlementID: "settlement")]
+        let query = LedgerTimelineQuery(revision: 0, month: date, search: "", filter: LedgerFilter(), provider: "all")
+        let snapshot = try LedgerTimelineSnapshot(ledger: ledger, month: date, query: query)
+        XCTAssertEqual(snapshot.repaymentPreviews["notice"]?.names, "Cafe")
+        XCTAssertEqual(snapshot.repaymentPreviews["notice"]?.remaining, 0)
+        XCTAssertEqual(RepaymentPurchasePreview.make(settlement.lines.filter { $0.applied != 0 }.map(\.expense))?.names, "Cafe")
     }
 }
 

@@ -60,6 +60,25 @@ func allocateChargeTotal(_ total: Int, weights: [Int]) throws -> [Int] {
 }
 
 extension Expense {
+    func replacingItemCharges(_ newCharges: ExpenseCharges?, paymentMinor: Int, items newItems: [ExpenseItem], allowedCategories: [String]) throws -> Expense {
+        guard paymentMinor > 0, paymentMinor <= 10_000_000_000 else { throw chargeTotalMismatch() }
+        var copy = self
+        copy.charges = newCharges
+        if var fx = foreign {
+            fx.minor = paymentMinor
+            copy.foreign = fx
+            copy.cents = try fx.myrCents()
+        } else {
+            copy.cents = paymentMinor
+        }
+        try copy.validateChargeEdit(replacing: self)
+        guard !chargeEditsLocked || (copy.cents == cents && copy.foreign == foreign) else { throw chargeTotalMismatch() }
+        try copy.validateCharges()
+        if copy.charges != charges || copy.cents != cents { copy.receiptSummary = nil }
+        copy = try copy.replacingItems(newItems, allowedCategories: allowedCategories)
+        try copy.validateReimbursement()
+        return copy
+    }
     var chargeEditsLocked: Bool {
         refunded > 0 || shares.contains { !$0.repayments.isEmpty || !($0.returns ?? []).isEmpty }
     }

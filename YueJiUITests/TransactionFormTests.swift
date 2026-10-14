@@ -79,6 +79,8 @@ final class TransactionFormTests: XCTestCase {
             let editor = app.navigationBars["Edit items"]
             XCTAssertTrue(editor.waitForExistence(timeout: 5), "Saved empty transaction dismissed its item editor")
             if !shouldSave {
+                let charges = app.descendants(matching: .any)["transaction.charges.enabled"].firstMatch
+                XCTAssertTrue(charges.waitForExistence(timeout: 5), "Edit items must offer SST / service charge entry even without saved charges")
                 dragSheetToDismiss(in: app)
                 waitUntilGone(editor)
                 XCTAssertTrue(app.navigationBars["Entry details"].exists)
@@ -370,7 +372,9 @@ final class TransactionFormTests: XCTestCase {
         }
         let tabBar = app.tabBars.firstMatch
         if tabBar.exists && tabBar.isHittable { bottom = min(bottom, tabBar.frame.minY) }
-        for id in ["transaction.edit", "transaction.delete", "overview.manualEntry"] {
+        // Overview Add Entry belongs to the top toolbar. Its frame must not
+        // reduce the content viewport as a bottom floating action would.
+        for id in ["transaction.edit", "transaction.delete"] {
             let control = app.buttons[id].firstMatch
             if control.exists && control.isHittable { bottom = min(bottom, control.frame.minY - 12) }
         }

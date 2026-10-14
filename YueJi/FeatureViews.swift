@@ -1377,8 +1377,30 @@ struct ExpenseItemsEditor: View {
     @State private var saving = false
     @State private var error: String?
     @State private var initialItems: [ExpenseItemDraft] = []
+    @State private var chargesEnabled = false
+    @State private var chargeSubtotal = ""
+    @State private var sstPercent = ""
+    @State private var servicePercent = ""
+    @State private var paymentMinor = 0
+    @State private var initialChargeInputs: [String] = []
     @State private var confirmingDiscard = false
-    private var hasChanges: Bool { initialized && items != initialItems }
+    private var currency: String { original.foreign?.currency ?? "MYR" }
+    private var chargeInputs: [String] { [String(chargesEnabled), chargeSubtotal, sstPercent, servicePercent, String(paymentMinor)] }
+    private var hasChanges: Bool { initialized && (items != initialItems || chargeInputs != initialChargeInputs) }
+    private var chargesDraft: ExpenseCharges? {
+        guard chargesEnabled else { return nil }
+        return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent)
+    }
+    private var draftForeign: ForeignAmount? {
+        guard var fx = original.foreign else { return nil }
+        fx.minor = paymentMinor
+        return fx
+    }
+    private var paymentCents: Int { (try? draftForeign?.myrCents()) ?? paymentMinor }
+    private var itemBase: Int {
+        if chargesEnabled { return chargesDraft.flatMap { try? $0.myrSubtotal(foreign: draftForeign) } ?? 0 }
+        return paymentCents
+    }
     private func requestClose() {
         guard !saving else { return }
         focusedField = nil
@@ -1392,11 +1414,13 @@ struct ExpenseItemsEditor: View {
                 Section {
                     Text(original.displayName).font(.headline)
                     LabeledContent(tr("交易总额", "Transaction total", "Jumlah transaksi")) {
-                        TransactionAmount(cents: original.cents, direction: .outgoing)
+                        Text(Currency.display(paymentMinor, currency)).monospacedDigit()
                     }
                 }
-                ExpenseChargeDetails(entry: original)
-                ExpenseItemsFields(items: $items, totalCents: original.itemSubtotalCents, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField, friendNames: original.shares.map(\.name), payer: original.paidByFriend, charges: original.charges, foreign: original.foreign)
+                ExpenseChargeFields(enabled: $chargesEnabled, subtotal: $chargeSubtotal, sst: $sstPercent, service: $servicePercent,
+                    currency: currency, actualMinor: paymentMinor, applyTotal: { paymentMinor = $0; focusedField = nil }, sharedFocus: $focusedField)
+                    .disabled(original.chargeEditsLocked || model.ledger.hasActiveSettlement(expenseID: original.id))
+                ExpenseItemsFields(items: $items, totalCents: itemBase, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField, friendNames: original.shares.map(\.name), payer: original.paidByFriend, charges: chargesDraft, foreign: draftForeign)
                 if model.ledger.hasActiveSettlement(expenseID: original.id) {
                     Section {
                         Text(tr("修改物品前，请先撤销关联结算。原消费和历史记录会保留。", "Undo linked settlements before changing items. The original expense and history are preserved.", "Batalkan penyelesaian dipautkan sebelum mengubah item. Belanja asal dan sejarah dikekalkan."))
@@ -1420,6 +1444,14 @@ struct ExpenseItemsEditor: View {
                     guard !initialized else { return }
                     items = (original.items ?? []).map(ExpenseItemDraft.init)
                     initialItems = items
+                    paymentMinor = original.foreign?.minor ?? original.cents
+                    if let charges = original.charges {
+                        chargesEnabled = true
+                        chargeSubtotal = Currency.input(charges.subtotal, currency)
+                        sstPercent = ExpenseCharges.percentText(charges.sstBasisPoints)
+                        servicePercent = ExpenseCharges.percentText(charges.serviceBasisPoints)
+                    }
+                    initialChargeInputs = chargeInputs
                     initialized = true
                 }
                 .onChange(of: initialized) { _, ready in
@@ -1444,7 +1476,8 @@ struct ExpenseItemsEditor: View {
         guard initialized, !saving else { return }
         focusedField = nil
         do {
-            let entry = try original.replacingItems(try items.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
+            let charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent) : nil
+            let entry = try original.replacingItemCharges(charges, paymentMinor: paymentMinor, items: try items.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
             saving = true
             Task { @MainActor in
                 defer { saving = false }

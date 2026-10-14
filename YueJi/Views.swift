@@ -7,6 +7,7 @@ enum YueJiMotion {
     static let standard = Animation.smooth(duration: 0.24)
     static let detail = Animation.smooth(duration: 0.32)
     static let month = Animation.smooth(duration: 0.28)
+    static let meter = Animation.smooth(duration: 0.45)
 }
 
 struct EditorSaveLabel: View {
@@ -460,27 +461,16 @@ struct DashboardView: View {
                     }
                         .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
                 }
-            }
-            .toolbar(.hidden, for: .bottomBar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
+                ToolbarItem(placement: .topBarTrailing) {
                     Button { guard !adding else { return }; adding = true } label: {
-                        Image(systemName: "plus")
-                            .font(.title2.weight(.semibold)).frame(minWidth: 44, minHeight: 44)
+                        Image(systemName: "plus").frame(minWidth: 44, minHeight: 44)
                     }
-                    .yuejiPrimaryButton().buttonBorderShape(.circle)
-                    // The accessible target is the button, not the background that
-                    // extends through the bottom safe area behind the tab bar.
-                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel(tr("记一笔", "Add entry", "Tambah rekod"))
-                    .accessibilityAddTraits(.isButton)
                     .accessibilityIdentifier("overview.manualEntry")
                     .guideTarget("dashboard.add")
                 }
-                .padding(.horizontal, 20).padding(.vertical, 8)
-                .frame(maxWidth: .infinity)
-                .modifier(YueJiActionBarSurface())
             }
+            .toolbar(.hidden, for: .bottomBar)
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
             }
@@ -745,16 +735,31 @@ struct SpendingMeter: View {
     let value: Int
     let total: Int
     let color: Color
+    @State private var displayedFraction = 0.0
     private var fraction: Double { min(max(Double(value) / Double(max(total, 1)), 0), 1) }
     var body: some View {
         let _ = uiLocale.identifier
         GeometryReader { proxy in
             ZStack(alignment: .leading) {
                 Capsule().fill(color.opacity(contrast == .increased ? 0.30 : (colorScheme == .dark ? 0.22 : 0.10)))
-                Capsule().fill(color).frame(width: proxy.size.width * fraction)
+                Capsule().fill(color).frame(width: proxy.size.width * (reduceMotion ? fraction : displayedFraction))
             }
         }.frame(height: 7)
-            .animation(reduceMotion ? nil : YueJiMotion.month, value: fraction)
+            .task(id: fraction) {
+                guard !reduceMotion else { displayedFraction = fraction; return }
+                // Give a new lazy row one frame at zero before revealing its
+                // share. Later updates animate from the current rendered value.
+                if displayedFraction == 0 {
+                    do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                }
+                guard !Task.isCancelled else { return }
+                withAnimation(YueJiMotion.meter) { displayedFraction = fraction }
+            }
+            .onChange(of: reduceMotion) { _, _ in
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { displayedFraction = fraction }
+            }
             .accessibilityHidden(true)
     }
 }
@@ -941,7 +946,7 @@ struct ExpensesView: View {
                                 }
                             case .transfer(let notice):
                                 NavigationLink { TNGTimelineDetail(notice: notice) } label: {
-                                    TNGTimelineRow(notice: notice)
+                                    TNGTimelineRow(notice: notice, repaymentPreview: timeline.repaymentPreviews[notice.id])
                                 }
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
@@ -1022,18 +1027,32 @@ private struct TNGTimelineDetail: View {
 struct TNGTimelineRow: View {
     @Environment(\.locale) private var uiLocale
     let notice: TNGNotice
+    var repaymentPreview: RepaymentPurchasePreview? = nil
     @Environment(\.dynamicTypeSize) private var textSize
+    private var movementLabel: String {
+        if notice.status == "repayment" { return tr("朋友还款", "Friend repayment", "Bayaran balik rakan") }
+        if notice.status == "settlement" { return tr("还款／结算", "Repayment / settlement", "Bayaran balik / penyelesaian") }
+        switch notice.accountDirection {
+        case .incoming: return tr("转入", "Incoming", "Masuk")
+        case .outgoing: return tr("转出", "Outgoing", "Keluar")
+        case .neutral: return tr("方向待确认", "Direction unconfirmed", "Arah belum disahkan")
+        }
+    }
     var body: some View {
         let _ = uiLocale.identifier
         let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout {
             VStack(alignment: .leading, spacing: 6) {
-                Text(sourceLabel(notice.provider) + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " +
-                             (notice.accountDirection == .incoming ? tr("转入", "Incoming", "Masuk") : (notice.accountDirection == .outgoing ? tr("转出", "Outgoing", "Keluar") : tr("方向待确认", "Direction unconfirmed", "Arah belum disahkan"))))
+                Text(sourceLabel(notice.provider) + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " + movementLabel)
                     .font(.headline).fixedSize(horizontal: false, vertical: true)
                 if let party = notice.party, !party.isEmpty {
                     Text((notice.accountDirection == .incoming ? tr("来自：", "From: ", "Daripada: ") : (notice.accountDirection == .outgoing ? tr("给：", "To: ", "Kepada: ") : tr("交易对象：", "Party: ", "Pihak: "))) + party)
                         .font(.subheadline).fixedSize(horizontal: false, vertical: true)
+                }
+                if let repaymentPreview {
+                    Text(tr("用于：", "For: ", "Untuk: ") + repaymentPreview.label)
+                        .font(.subheadline).foregroundStyle(.secondary).lineLimit(3)
+                        .accessibilityIdentifier("ledger.repayment.purchases")
                 }
                 Text(dateLabel(notice.date, time: true) + (notice.usesReceivedDate ? tr(" · 接收时间", " · received time", " · masa diterima") : ""))
                     .font(.caption).foregroundStyle(.secondary)
@@ -1077,6 +1096,8 @@ struct ExpenseDetailView: View {
                     let entry = detail.entry
                     Section {
                         VStack(spacing: 12) {
+                            Text(entry.paidByFriend == nil ? tr("实付总额", "Payment total", "Jumlah bayaran") : tr("我的份额", "My share", "Bahagian saya"))
+                                .font(.caption).foregroundStyle(.secondary)
                             TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection).font(.largeTitle.bold())
                                 .minimumScaleFactor(0.6).lineLimit(1)
                             if entry.paidByFriend != nil {
@@ -1087,20 +1108,36 @@ struct ExpenseDetailView: View {
                             Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
                         }.frame(maxWidth: .infinity).padding(.vertical, 20)
                     }
-                    if !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !(entry.entryDescription ?? "").isEmpty {
+                    if let description = entry.entryDescription, !description.isEmpty, description != entry.displayName {
                     Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
-                        if !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            LabeledContent(tr("商户", "Merchant", "Peniaga"), value: entry.merchant)
-                        }
-                        if let description = entry.entryDescription, !description.isEmpty {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(tr("账目名称／描述", "Name / description", "Nama / penerangan")).font(.caption).foregroundStyle(.secondary)
                                 Text(description).textSelection(.enabled)
                             }.accessibilityIdentifier("transaction.description.detail")
-                        }
                     }
                     }
+                    SavedTransactionItemsSection(entry: entry, presentationAllowed: !editorPresented && deleting == nil) { selectedID in
+                        guard !editorPresented, editing == nil, deleting == nil else { return }
+                        editorPresented = true
+                        editing = .items(entry, selectedID: selectedID)
+                    }
+                    ExpenseChargeDetails(entry: entry)
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
+                        if entry.personalSpending != entry.purchaseDisplayCents || !entry.shares.isEmpty {
+                            LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personalSpending, direction: .outgoing) }
+                        }
+                        if entry.paidByFriend != nil {
+                            LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
+                            LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(detail.payableToPayer))
+                            if let payer = entry.paidByFriend {
+                                NavigationLink(tr("\(payer) 的余额", "\(payer)'s balance", "Baki \(payer)")) { FriendDetailView(key: friendKey(payer)) }
+                            }
+                        }
+                        if entry.refunded > 0 {
+                            LabeledContent(tr("已退款", "Refunded", "Dipulangkan"), value: money(entry.refunded))
+                        }
+                        NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: id) }
+                        DisclosureGroup(tr("更多付款信息", "More payment information", "Maklumat bayaran lanjut")) {
                         LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(entry.source))
                         LabeledContent(tr("付款人", "Paid by", "Dibayar oleh"), value: entry.payerLabel)
                         LabeledContent {
@@ -1109,32 +1146,18 @@ struct ExpenseDetailView: View {
                         if entry.timeSource == "received" {
                             Text(tr("此时间是月记收到自动化的时刻，可能稍晚于付款。若需精确到银行交易时间，可在编辑中调整。", "This is when YueJi received the automation and may be later than payment. Edit it to match the bank transaction time if needed.", "Masa ini ialah ketika YueJi menerima automasi dan mungkin lewat sedikit. Edit mengikut masa transaksi bank jika perlu.")).font(.footnote).foregroundStyle(.secondary)
                         }
-                        LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personalSpending, direction: .outgoing) }
-                        if entry.reimbursement != nil {
-                            LabeledContent(tr("报销前我的净份额", "My net share before reimbursement", "Bahagian bersih sebelum tuntutan"), value: money(entry.personal))
-                        }
-                        if entry.paidByFriend != nil {
-                            LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
-                            LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(detail.payableToPayer))
-                            if let payer = entry.paidByFriend {
-                                NavigationLink(tr("朋友余额 / 净额结算", "Friend balance / net settlement", "Baki rakan / penyelesaian bersih")) { FriendDetailView(key: friendKey(payer)) }
-                            }
-                        }
                         if let fx = entry.foreign {
                             LabeledContent(tr("原币金额", "Original amount", "Amaun asal"), value: Currency.display(fx.minor, fx.currency))
                             LabeledContent(tr("汇率", "Exchange rate", "Kadar pertukaran"), value: "1 \(fx.currency) = \(fx.quote.text) MYR")
                         }
-                        if entry.refunded > 0 {
-                            LabeledContent(tr("已退款", "Refunded", "Dipulangkan"), value: money(entry.refunded))
+                        ForEach(detail.sourceNotices) { notice in
+                            DisclosureGroup(tr("通知原文", "Original notification", "Notifikasi asal")) {
+                                if !notice.title.isEmpty { Text(notice.title).textSelection(.enabled) }
+                                Text(notice.body).textSelection(.enabled)
+                            }
                         }
-                        NavigationLink(tr("退款记录", "Refunds", "Bayaran balik")) { RefundsView(expenseID: id) }
+                        }
                     }
-                    SavedTransactionItemsSection(entry: entry, presentationAllowed: !editorPresented && deleting == nil) { selectedID in
-                        guard !editorPresented, editing == nil, deleting == nil else { return }
-                        editorPresented = true
-                        editing = .items(entry, selectedID: selectedID)
-                    }
-                    ExpenseChargeDetails(entry: entry)
                     Section(tr("报销", "Reimbursement", "Tuntutan bayaran balik")) {
                         NavigationLink { ReimbursementDetailView(expenseID: entry.id) } label: {
                             Label(entry.reimbursement?.status ?? tr("设置报销", "Set up reimbursement", "Tetapkan tuntutan"), systemImage: "doc.text")
@@ -1145,8 +1168,6 @@ struct ExpenseDetailView: View {
                             LabeledContent(tr("待到账", "Outstanding", "Belum diterima"), value: money(claim.outstanding))
                         }
                     }
-                    ExpenseBookkeepingDetails(entry: entry)
-                    ForEach(detail.sourceNotices) { notice in NoticeSourceSection(notice: notice) }
                     if !entry.shares.isEmpty {
                         Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
                             ForEach(entry.shares) { share in
@@ -1161,10 +1182,12 @@ struct ExpenseDetailView: View {
                             }
                         }
                     }
+                    if !detail.settlements.isEmpty {
                     Section(tr("关联结算", "Linked settlements", "Penyelesaian dipautkan")) {
                         ForEach(detail.settlements) { record in
                             NavigationLink(dateLabel(record.date) + (record.active ? "" : tr(" · 已撤销", " · Undone", " · Dibatalkan"))) { SettlementDetailView(id: record.id) }
                         }
+                    }
                     }
                     if let receipt = entry.receiptSummary {
                         Section(tr("收据明细", "Receipt details", "Butiran resit")) {
