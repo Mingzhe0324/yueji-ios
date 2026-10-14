@@ -79,7 +79,7 @@ final class TransactionFormTests: XCTestCase {
             let editor = app.navigationBars["Edit items"]
             XCTAssertTrue(editor.waitForExistence(timeout: 5), "Saved empty transaction dismissed its item editor")
             if !shouldSave {
-                editor.swipeDown()
+                dragSheetToDismiss(in: app)
                 waitUntilGone(editor)
                 XCTAssertTrue(app.navigationBars["Entry details"].exists)
                 editItems.tap()
@@ -118,7 +118,7 @@ final class TransactionFormTests: XCTestCase {
             reveal(name, in: app); name.tap(); name.typeText(attempt == 1 ? " saved" : " unsaved")
             finishKeyboard(in: app)
             // A dirty sheet drag asks for confirmation and retains the draft.
-            editor.swipeDown()
+            dragSheetToDismiss(in: app)
             let keepEditing = app.buttons["Keep editing"].firstMatch
             XCTAssertTrue(keepEditing.waitForExistence(timeout: 5))
             keepEditing.tap()
@@ -258,7 +258,7 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["New entry"].waitForExistence(timeout: 5))
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch", "Choosing ownership must retain the unsaved item")
         XCTAssertEqual(itemAmount.value as? String, "35.00")
-        app.navigationBars["New entry"].swipeDown()
+        dragSheetToDismiss(in: app)
         let keepDraft = app.buttons["Keep editing"].firstMatch
         XCTAssertTrue(keepDraft.waitForExistence(timeout: 5))
         keepDraft.tap()
@@ -287,9 +287,22 @@ final class TransactionFormTests: XCTestCase {
         newEntry.tap()
         let cleanEditor = app.navigationBars["New entry"]
         XCTAssertTrue(cleanEditor.waitForExistence(timeout: 5))
-        cleanEditor.swipeDown()
+        dragSheetToDismiss(in: app)
         waitUntilGone(cleanEditor)
         XCTAssertTrue(newEntry.waitForExistence(timeout: 5))
+    }
+
+    private func dragSheetToDismiss(in app: XCUIApplication) {
+        // swipeDown() on a 54-point navigation bar does not reliably cross the
+        // sheet's dismissal threshold. Exercise the actual native grabber with
+        // a screen-relative drag, for both unchanged and dirty editors.
+        let grabber = app.buttons["Sheet Grabber"].firstMatch
+        XCTAssertTrue(grabber.waitForExistence(timeout: 5), "Native sheet grabber is missing")
+        XCTAssertTrue(grabber.isHittable, "Native sheet grabber is not interactive")
+        let start = grabber.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
+        print("Dismissing sheet from grabber \(grabber.frame) toward lower screen \(app.frame)")
+        start.press(forDuration: 0.1, thenDragTo: end)
     }
 
     private func confirmDiscard(in app: XCUIApplication) {
