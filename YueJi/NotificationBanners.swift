@@ -166,7 +166,7 @@ enum BannerSwipePolicy {
         guard !entered, !stopped else { return }; entered = true
         host.view.alpha = 0
         if !reduceMotion { host.view.transform = CGAffineTransform(translationX: 0, y: -6) }
-        animate(duration: 0.18, spring: false) { [weak self] in
+        animate(duration: reduceMotion ? 0.14 : 0.24, spring: !reduceMotion) { [weak self] in
             self?.host.view.alpha = 1; self?.host.view.transform = .identity
         }
     }
@@ -238,7 +238,7 @@ enum BannerSwipePolicy {
             } else {
                 if reduceMotion { host.view.transform = .identity; host.view.alpha = 1 }
                 else {
-                    animate(duration: 0.24, spring: true) { [weak self] in
+                    animate(duration: 0.28, spring: true) { [weak self] in
                         self?.host.view.transform = .identity; self?.host.view.alpha = 1
                     }
                 }

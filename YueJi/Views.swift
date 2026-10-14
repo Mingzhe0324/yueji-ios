@@ -442,7 +442,8 @@ struct DashboardView: View {
                 VStack(spacing: 0) {
                     Button { guard !adding else { return }; adding = true } label: {
                         Label(tr("记一笔", "Add entry", "Tambah rekod"), systemImage: "plus")
-                            .font(.headline).frame(maxWidth: .infinity, minHeight: 44)
+                            .font(.headline).padding(.horizontal, 24).frame(minHeight: 44)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                     .yuejiPrimaryButton().buttonBorderShape(.capsule)
                     // The accessible target is the button, not the background that
@@ -453,7 +454,7 @@ struct DashboardView: View {
                     .accessibilityIdentifier("overview.manualEntry")
                     .guideTarget("dashboard.add")
                 }
-                .padding(.horizontal, 20).padding(.vertical, 12)
+                .padding(.horizontal, 20).padding(.vertical, 8)
                 .frame(maxWidth: .infinity)
                 .modifier(YueJiActionBarSurface())
             }
@@ -759,7 +760,13 @@ struct ExpenseRow: View {
     private var categoryColor: Color {
         model.ledger.categoryTint(entry.category)
     }
-    private var rowLayout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .center, spacing: 12)) }
+    private var rowLayout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12)) }
+    private var headingLayout: AnyLayout { typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12)) }
+    private var purchaseAmount: some View {
+        TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection)
+            .accessibilityLabel((entry.paidByFriend == nil ? tr("购买总额 ", "Purchase total ", "Jumlah pembelian ") : tr("我的消费 ", "My spending ", "Belanja saya ")) + entry.purchaseDirection.formattedAmount(entry.purchaseDisplayCents))
+            .font(.body.weight(.semibold)).monospacedDigit().fixedSize(horizontal: true, vertical: false)
+    }
     var body: some View {
         let _ = uiLocale.identifier
         rowLayout {
@@ -769,7 +776,11 @@ struct ExpenseRow: View {
                 .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(categoryColor.opacity(contrast == .increased ? 0.45 : (colorScheme == .dark ? 0.25 : 0.10)), lineWidth: 0.5) }
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
-                Text(entry.merchant).font(.body.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                headingLayout {
+                    Text(entry.merchant).font(.body.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                    if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    purchaseAmount
+                }
                 if let preview = entry.itemPreview {
                     ViewThatFits(in: .horizontal) {
                         HStack(alignment: .firstTextBaseline, spacing: 6) {
@@ -784,7 +795,7 @@ struct ExpenseRow: View {
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("transaction.items.preview")
                 }
-                Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.footnote).foregroundStyle(.secondary).lineLimit(2)
+                Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
                 if !entry.shares.isEmpty {
@@ -793,9 +804,7 @@ struct ExpenseRow: View {
                         TransactionAmount(cents: entry.personal, direction: .outgoing)
                     }.font(.footnote)
                 }
-            }
-            if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-            TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection).accessibilityLabel((entry.paidByFriend == nil ? tr("购买总额 ", "Purchase total ", "Jumlah pembelian ") : tr("我的消费 ", "My spending ", "Belanja saya ")) + entry.purchaseDirection.formattedAmount(entry.purchaseDisplayCents)).font(.subheadline.weight(.semibold)).multilineTextAlignment(.trailing).layoutPriority(1)
+            }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 10)
     }
 }
@@ -2990,8 +2999,8 @@ private struct NotificationBannerCard: View {
     var action: (() -> Void)? = nil
     private var label: some View {
         HStack(alignment: .center, spacing: 12) {
-            Image(systemName: symbol).font(.body.weight(.semibold)).foregroundStyle(color)
-                .frame(width: 32, height: 32).background(color.opacity(0.10), in: RoundedRectangle(cornerRadius: 10))
+            Image(systemName: symbol).font(.title3.weight(.medium)).foregroundStyle(color)
+                .frame(width: 28, height: 32)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
@@ -3016,7 +3025,7 @@ private struct NotificationBannerCard: View {
             }.buttonStyle(.plain).accessibilityLabel(tr("关闭提示", "Dismiss notice", "Tutup notis"))
                 .accessibilityAction { interaction.dismiss?() }
         }
-        if typeSize.isAccessibilitySize { explicitAction.padding(.leading, 44) }
+        if typeSize.isAccessibilitySize { explicitAction.padding(.leading, 40) }
         }.padding(.leading, 12).padding(.trailing, 4).padding(.vertical, 6)
             .modifier(NotificationBannerSurface())
             .accessibilityElement(children: .contain)

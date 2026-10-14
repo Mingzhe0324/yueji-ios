@@ -3252,6 +3252,7 @@ enum ExpenseInputField: Hashable {
 }
 
 struct ExpenseItemsFields: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
     @FocusState private var localFocus: ExpenseInputField?
@@ -3282,9 +3283,14 @@ struct ExpenseItemsFields: View {
                     }
                     Stepper(value: item.quantity, in: 1...999) {
                         LabeledContent(tr("数量", "Quantity", "Kuantiti"), value: "\(draft.quantity)")
+                            .monospacedDigit()
+                            .contentTransition(.numericText())
+                            .animation(reduceMotion ? nil : YueJiMotion.standard, value: draft.quantity)
                     }.accessibilityIdentifier("transaction.item.quantity")
                     LabeledContent(tr("小计", "Line total", "Jumlah baris"), value: money((try? draft.savedItem().cents) ?? 0))
                         .font(.subheadline.weight(.semibold)).monospacedDigit()
+                        .contentTransition(.numericText())
+                        .animation(reduceMotion ? nil : YueJiMotion.standard, value: draft.quantity)
                 }.padding(.vertical, 6).id(draft.id)
                 // Native navigation controls must each own a Form row.
                 // Two links inside one VStack can both activate on one tap.
