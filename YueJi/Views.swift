@@ -187,7 +187,7 @@ struct MainView: View {
     private var tabs: some View {
         TabView(selection: $selectedTab) {
             DashboardView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
+            ExpensesView(isActive: selectedTab == 1).ledgerFeedback().modifier(YueJiBarAppearance()).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
             RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
@@ -403,13 +403,7 @@ struct DashboardView: View {
                     MonthPicker(month: monthBinding)
                         .listRowBackground(Color.clear)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                        .overlay(alignment: .bottom) {
-                            ProgressView().controlSize(.small).offset(y: 8)
-                                .opacity(loadedSummary == summaryQuery ? 0 : 1)
-                                .accessibilityHidden(loadedSummary == summaryQuery)
-                                .accessibilityLabel(tr("正在更新概览", "Updating overview", "Mengemas kini ringkasan"))
-                                .allowsHitTesting(false)
-                        }
+
                 }
                 Section {
                     spendingCard
@@ -634,9 +628,6 @@ private struct SpendingCategoryBreakdown: View {
     let totals: [String: Int]
     let total: Int
     let month: Date
-    @State private var selection: String?
-    private var selected: String? { selection.flatMap { (totals[$0] ?? 0) > 0 ? $0 : nil } }
-    private var displayedAmount: Int { selected.flatMap { totals[$0] } ?? total }
     var body: some View {
         let _ = uiLocale.identifier
         Section(tr("钱花在哪里", "Where it went", "Ke mana belanja")) {
@@ -646,59 +637,31 @@ private struct SpendingCategoryBreakdown: View {
                 Text(tr("记录消费后，这里会显示你的分类占比。", "Your category breakdown will appear here.", "Pecahan kategori anda akan dipaparkan di sini."))
                     .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(selected.map(categoryLabel) ?? tr("全部分类", "All categories", "Semua kategori"))
-                        .font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
-                    AnimatedMoney(cents: displayedAmount).font(.title2.weight(.semibold))
-                    Text(selected == nil
-                         ? tr("点分类查看占比", "Tap a category to focus", "Ketik kategori untuk fokus")
-                         : String(format: "%.1f%%", Double(displayedAmount) / Double(max(total, 1)) * 100))
-                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
-                }.padding(.vertical, 6).accessibilityIdentifier("overview.category.focus")
+                AnimatedMoney(cents: total).font(.title2.weight(.semibold)).padding(.vertical, 6)
             }
             ForEach(model.ledger.categoryNames, id: \.self) { category in
                 let value = totals[category] ?? 0
                 if value > 0 {
-                    Button {
-                        withAnimation(reduceMotion ? nil : YueJiMotion.month) {
-                            selection = selected == category ? nil : category
-                        }
-                        FeedbackHaptics.selection()
+                    NavigationLink {
+                        CategoryPaymentsView(category: category, month: month)
                     } label: {
                         VStack(spacing: 9) {
                             HStack {
                                 CategoryBadge(name: category)
                                 Spacer()
                                 AnimatedMoney(cents: value).fontWeight(.semibold)
-                                Image(systemName: selected == category ? "checkmark.circle.fill" : "circle")
-                                    .foregroundStyle(model.ledger.categoryTint(category))
-                                    .accessibilityHidden(true)
                             }.font(.subheadline)
                             SpendingMeter(value: value, total: max(total, 1), color: model.ledger.categoryTint(category))
-                                .opacity(selected == nil || selected == category ? 1 : 0.3)
                         }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
                     }.buttonStyle(.borderless)
                         .accessibilityIdentifier("overview.category.select." + category)
-                        .accessibilityAddTraits(selected == category ? .isSelected : [])
-                        .listRowBackground(selected == category ? model.ledger.categoryTint(category).opacity(0.10) : Color(uiColor: .secondarySystemGroupedBackground))
                         .transition(reduceMotion ? .identity : .opacity)
                 }
             }
-            if let selected {
-                NavigationLink {
-                    CategoryPaymentsView(category: selected, month: month)
-                } label: {
-                    Label(tr("查看分类账目", "View category entries", "Lihat rekod kategori"), systemImage: "list.bullet.rectangle")
-                }.accessibilityIdentifier("overview.category.entries")
-                    .transition(.opacity)
-            }
-        }
-        .onChange(of: monthKey(month)) { _, _ in selection = nil }
-        .onChange(of: totals) { _, values in
-            if let selection, (values[selection] ?? 0) == 0 { self.selection = nil }
         }
     }
 }
+
 struct CategoryPaymentsView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
@@ -721,6 +684,11 @@ struct CategoryPaymentsView: View {
                     AnimatedMoney(cents: summary.categoryTotals[category] ?? 0)
                         .font(.largeTitle.bold()).foregroundStyle(tint)
                         .lineLimit(1).minimumScaleFactor(0.5)
+                    if loadedQuery == query {
+                        Text(String(format: "%.1f%%", Double(summary.categoryTotals[category] ?? 0) / Double(max(summary.personal, 1)) * 100))
+                            .font(.headline).monospacedDigit().foregroundStyle(tint)
+                            .accessibilityIdentifier("category.spending.percent")
+                    }
                     Text(tr("我的分类消费", "My category spending", "Belanja kategori saya"))
                         .font(.caption).foregroundStyle(.secondary)
                     Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
@@ -1106,6 +1074,7 @@ struct ExpensesView: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
+    var isActive: Bool = true
     @State private var filter = LedgerFilter()
     @State private var filtersExpanded = false
     @State private var providerFilter = "all"
@@ -1131,7 +1100,6 @@ struct ExpensesView: View {
         let requestedMonth = month
         let query = self.query
         let days = timeline.days
-        let updating = loadedQuery != query
         NavigationStack(path: $path) {
             List {
                 Section {
@@ -1147,9 +1115,6 @@ struct ExpensesView: View {
                         }
                         HStack {
                             Text(String(timeline.count) + tr(" 笔记录", " entries", " rekod")).font(.caption).foregroundStyle(.secondary)
-                            ProgressView().controlSize(.small)
-                                .opacity(updating ? 1 : 0).accessibilityHidden(!updating)
-                                .accessibilityLabel(tr("正在更新账本", "Updating ledger", "Mengemas kini lejar"))
                             Spacer()
                             Button {
                                 withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filtersExpanded.toggle() }
@@ -1197,7 +1162,6 @@ struct ExpensesView: View {
                             case .expense(let entry):
                             NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                                 ExpenseRow(entry: entry).foregroundStyle(.primary)
-                                    .expenseCardSource(id: entry.id, namespace: expenseTransition)
                             }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -1215,13 +1179,12 @@ struct ExpensesView: View {
             }.listStyle(.insetGrouped)
                 .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                     ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
-                        .expenseCardDestination(id: destination.id, namespace: expenseTransition)
                 }
-                .task(id: query) {
-                    guard loadedQuery != query else { return }
+                .task(id: isActive ? query : nil) {
+                    guard isActive, loadedQuery != query else { return }
                     do {
                         let fresh = try await model.timeline(month: requestedMonth, query: query)
-                        guard !Task.isCancelled, self.query == query else { return }
+                        guard !Task.isCancelled, isActive, self.query == query else { return }
                         // Commit only the latest completed result. Animate structural
                         // changes, not every search keystroke or background refresh.
                         let changingSelection = loadedQuery.map {
@@ -1239,7 +1202,7 @@ struct ExpensesView: View {
                         }
                     } catch is CancellationError { return }
                     catch {
-                        guard !Task.isCancelled, self.query == query else { return }
+                        guard !Task.isCancelled, isActive, self.query == query else { return }
                         timeline = LedgerTimelineSnapshot(); loadedQuery = query
                         model.error = error.localizedDescription
                     }

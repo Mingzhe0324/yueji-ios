@@ -582,7 +582,7 @@ extension Ledger {
 }
 
 extension Ledger {
-    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false) throws {
+    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].kind == "incoming",
               tngNotices[i].status == "pending", let cents = tngNotices[i].cents,
               ["repayment", "income", "ownTransfer", "ignored"].contains(purpose),
@@ -596,7 +596,7 @@ extension Ledger {
             let key = friendKey(friend)
             guard !key.isEmpty else { throw LedgerError.invalid("Select a friend") }
             let before = Set(copy.expenses.flatMap { $0.shares.flatMap { $0.repayments.map(\.id) } })
-            try copy.batchRepay(friend: key, cents: cents, date: date)
+            try copy.batchRepay(friend: key, cents: cents, date: date, selectedExpenseIDs: selectedExpenseIDs)
             copy.tngNotices[i].repaymentIDs = copy.expenses.flatMap { $0.shares.flatMap { $0.repayments.map(\.id) } }.filter { !before.contains($0) }
             copy.tngNotices[i].resolvedFriend = key
         }

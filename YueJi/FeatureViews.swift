@@ -2598,6 +2598,13 @@ struct TNGIncomingView: View {
     let id: String
     @State private var purpose = ""
     @State private var friend = ""
+    @State private var selectedDebts = Set<String>()
+    private var repaymentItems: [FriendDebtItem] {
+        model.debts(friend: friend).filter { $0.balance > 0 && $0.expense.paidByFriend == nil }
+    }
+    private var selectedBalance: Int {
+        repaymentItems.filter { selectedDebts.contains($0.expense.id) }.reduce(0) { $0 + $1.balance }
+    }
     @State private var date = Date()
     @State private var distinct = false
     @State private var initialized = false
@@ -2638,9 +2645,10 @@ struct TNGIncomingView: View {
             .navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
+            .onChange(of: friend) { _, _ in selectedDebts.removeAll() }
             .confirmationDialog(tr("确认此收款用途？", "Confirm this purpose?", "Sahkan tujuan ini?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认保存", "Confirm and save", "Sahkan dan simpan")) { save() }
-            } message: { Text(tr("朋友还款会抵扣所选朋友最早的欠款；请勿重复确认已手动记录的还款。", "Repayment settles the selected friend's oldest debts. Do not duplicate a repayment already recorded manually.", "Bayaran balik melangsaikan hutang tertua rakan. Jangan gandakan bayaran yang direkod manual.")) }
+            } message: { Text(tr("只抵扣勾选的账目，多笔按日期先后分配。请勿重复记录已手动确认的还款。", "Only selected debts are repaid, oldest selected first. Do not duplicate repayments already recorded manually.", "Hanya hutang dipilih dibayar, yang tertua dahulu. Jangan gandakan bayaran balik manual.")) }
             .confirmationDialog(tr("撤销后将移除此收款生成的还款，恢复待确认；其他还款保留。", "Undo repayments created by this receipt and return it to review? Other repayments stay.", "Batalkan bayaran balik daripada penerimaan ini dan semak semula? Bayaran lain kekal."), isPresented: $reopen, titleVisibility: .visible) {
                 Button(tr("撤销确认", "Undo confirmation", "Batal pengesahan"), role: .destructive) {
                     model.perform(key: "notice-" + id, action: { [id] in try $0.reopenTNGIncoming(id: id) }, completion: { _ in purpose = ""; friend = ""; distinct = false }, failure: { self.error = $0.localizedDescription })
@@ -2665,6 +2673,16 @@ struct TNGIncomingView: View {
                 if let n = notice, let match = friends.first(where: { $0.id == friendKey(n.party ?? "") }) {
                     Button(tr("同名推荐：", "Name match: ", "Nama sepadan: ") + match.name) { friend = match.id }
                 }
+                ForEach(repaymentItems) { item in
+                    Toggle(isOn: Binding(get: { selectedDebts.contains(item.expense.id) }, set: { selected in
+                        if selected { selectedDebts.insert(item.expense.id) } else { selectedDebts.remove(item.expense.id) }
+                    })) { FriendDebtRow(item: item) }
+                    .accessibilityIdentifier("repayment.debt." + item.expense.id)
+                }
+                LabeledContent(tr("所选未还金额", "Selected outstanding", "Baki dipilih"), value: money(selectedBalance))
+                if let cents = notice?.cents, !selectedDebts.isEmpty, cents > selectedBalance {
+                    Text(tr("所选欠款不足以抵扣这笔收款，请核对或选择其他账目。", "Select enough debt to cover this receipt, or review its purpose.", "Pilih hutang mencukupi untuk penerimaan ini atau semak tujuannya.")).foregroundStyle(.orange)
+                }
                 if let selected = friends.first(where: { $0.id == friend }), let cents = notice?.cents {
                     if cents <= selected.owed { LabeledContent(tr("确认后尚欠", "Balance after confirmation", "Baki selepas pengesahan"), value: money(selected.owed - cents)) }
                     else { Text(tr("收款超过此朋友欠款，不能全部记为还款。请先核对用途；本版不支持将一笔收款拆成多种用途。", "Receipt exceeds this friend's debt. Review its purpose; splitting one receipt across purposes is not supported yet.", "Amaun melebihi hutang rakan. Semak tujuan; pemisahan satu penerimaan kepada beberapa tujuan belum disokong.")).foregroundStyle(.orange) }
@@ -2677,12 +2695,12 @@ struct TNGIncomingView: View {
                 Toggle(tr("已核对：这是另一笔真实收款", "Checked: this is a separate receipt", "Disemak: ini penerimaan berasingan"), isOn: $distinct)
             }
             Button(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) { confirm = true }
-                .disabled(purpose.isEmpty || (purpose == "repayment" && friend.isEmpty) || (notice?.possibleDuplicate == true && !distinct && purpose != "ignored"))
+                .disabled(purpose.isEmpty || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || selectedBalance < (notice?.cents ?? 0))) || (notice?.possibleDuplicate == true && !distinct && purpose != "ignored"))
         }
     }
     private func save() {
-        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct] in
-            try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct)
+        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct, selectedDebts] in
+            try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct, selectedExpenseIDs: purpose == "repayment" ? selectedDebts : nil)
         }, completion: { _ in model.showSaved(message: tr("用途已确认", "Purpose confirmed", "Tujuan disahkan")) }, failure: { self.error = $0.localizedDescription })
     }
 }

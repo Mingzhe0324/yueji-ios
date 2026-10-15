@@ -3267,6 +3267,32 @@ final class TNGIncomingTests: XCTestCase {
         XCTAssertEqual(restored.friendBalances.first?.owed, 1767)
         XCTAssertEqual(restored.spending(in: now), ledger.spending(in: now))
     }
+    func testIncomingRepaysOnlyChosenExpenseAndUndoKeepsOtherPayments() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [
+            Expense(id: "old", merchant: "Older meal", cents: 2000, date: now.addingTimeInterval(-172800), shares: [Share(name: "CHONG YONG EN", cents: 1000)]),
+            Expense(id: "chosen", merchant: "New meal", cents: 2000, date: now.addingTimeInterval(-86400), shares: [Share(name: "CHONG YONG EN", cents: 1000)])]
+        _ = try ledger.receiveTNG(body: "RM 4.00 received from CHONG YONG EN for CHONG MING ZHE.", title: title, date: now, eventID: "selected-repayment")
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        let before = ledger
+        let invalidSelections: [Set<String>] = [[], ["missing"], ["chosen", "missing"]]
+        for invalid in invalidSelections {
+            XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "CHONG YONG EN", date: now, selectedExpenseIDs: invalid))
+            XCTAssertEqual(ledger.expenses, before.expenses)
+            XCTAssertEqual(ledger.tngNotices, before.tngNotices)
+        }
+        try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "CHONG YONG EN", date: now, selectedExpenseIDs: ["chosen"])
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 0)
+        XCTAssertEqual(ledger.expenses[1].shares[0].repaid, 400)
+        XCTAssertEqual(ledger.spending(in: now), before.spending(in: now))
+        var restored = try LocalStore.decode(LocalStore.encode(ledger))
+        try restored.batchRepay(friend: "CHONG YONG EN", cents: 100, date: now, selectedExpenseIDs: ["old"])
+        try restored.reopenTNGIncoming(id: id)
+        XCTAssertEqual(restored.expenses[0].shares[0].repaid, 100)
+        XCTAssertEqual(restored.expenses[1].shares[0].repaid, 0)
+        XCTAssertThrowsError(try restored.batchRepay(friend: "CHONG YONG EN", cents: 1001, date: now, selectedExpenseIDs: ["chosen"]))
+    }
     func testOverpaymentAndDuplicateAreNotAppliedSilently() throws {
         let now = Date()
         var ledger = Ledger()

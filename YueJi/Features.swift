@@ -251,14 +251,19 @@ extension Ledger {
         }
         return result.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
-    mutating func batchRepay(friend: String, cents: Int, date: Date) throws {
+    mutating func batchRepay(friend: String, cents: Int, date: Date, selectedExpenseIDs: Set<String>? = nil) throws {
         let key = friendKey(friend)
         guard cents > 0 else { throw reviewError("请输入大于零的还款金额。", "Enter a positive repayment amount.", "Masukkan amaun bayaran balik positif.") }
         guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         let indices = expenses.indices.sorted { expenses[$0].date == expenses[$1].date ? expenses[$0].id < expenses[$1].id : expenses[$0].date < expenses[$1].date }
         let eligible = indices.flatMap { i in expenses[i].shares.indices.compactMap { j -> (Int, Int)? in
-            expenses[i].paidByFriend == nil && friendKey(expenses[i].shares[j].name) == key && outstanding(expense: expenses[i], share: expenses[i].shares[j]) > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
+            (selectedExpenseIDs == nil || selectedExpenseIDs!.contains(expenses[i].id)) && expenses[i].paidByFriend == nil && friendKey(expenses[i].shares[j].name) == key && outstanding(expense: expenses[i], share: expenses[i].shares[j]) > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
         } }
+        if let selectedExpenseIDs {
+            guard !selectedExpenseIDs.isEmpty, selectedExpenseIDs == Set(eligible.map { expenses[$0.0].id }) else {
+                throw reviewError("所选欠款已改变，请重新选择。", "Selected debts changed. Select them again.", "Hutang dipilih telah berubah. Pilih semula.")
+            }
+        }
         let available = eligible.reduce(0, { $0 + outstanding(expense: expenses[$1.0], share: expenses[$1.0].shares[$1.1]) })
         guard cents <= available else {
             throw reviewError("此收款日期可偿还的欠款只有 " + money(available) + "。请检查消费日期；还款不能早于消费。可在下方编辑原账目。", "Only " + money(available) + " is repayable on this date. Check expense dates; repayment cannot precede spending. Edit the original entry below.", "Hanya " + money(available) + " boleh dibayar pada tarikh ini. Semak tarikh belanja; bayaran balik tidak boleh mendahului belanja. Edit rekod asal di bawah.")

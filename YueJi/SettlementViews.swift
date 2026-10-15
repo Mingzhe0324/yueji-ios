@@ -118,6 +118,13 @@ struct FriendDetailView: View {
                 Section(friend.name) {
                     LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya")) { AnimatedMoney(cents: friend.owed) }
                     LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka")) { AnimatedMoney(cents: friend.payable) }
+                    if friend.owed > 0 {
+                        NavigationLink {
+                            SettlementSelectionView(friend: key, repaymentDirection: .incoming)
+                        } label: {
+                            Label(tr("记录朋友还款 · 选择账目", "Record repayment · choose expenses", "Rekod bayaran balik · pilih belanja"), systemImage: "checklist")
+                        }
+                    }
                     LabeledContent(settlementDirection(friend.owed - friend.payable, name: friend.name)) { AnimatedMoney(cents: abs(friend.owed - friend.payable)) }
                     NavigationLink { SettlementSelectionView(friend: key) } label: {
                         Label(tr("结算", "Settle", "Selesaikan"), systemImage: "arrow.left.arrow.right")
@@ -158,6 +165,10 @@ struct FriendDebtRow: View {
         let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 5) {
             Text(item.expense.displayName).font(.headline)
+            if let preview = item.expense.itemPreview {
+                Text(preview.names + (preview.remaining > 0 ? " · " + preview.moreLabel : ""))
+                    .font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
+            }
             Text(dateLabel(item.expense.date) + " · " + item.expense.categorySummary).font(.caption).foregroundStyle(.secondary)
             Text(tr("付款人：", "Paid by: ", "Dibayar oleh: ") + item.expense.payerLabel).font(.caption)
             Text(item.balance == 0 ? tr("已结清", "Settled", "Selesai") :
