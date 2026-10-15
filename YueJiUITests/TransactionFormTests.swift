@@ -385,15 +385,21 @@ final class TransactionFormTests: XCTestCase {
         let done = app.toolbars.buttons["Done"].firstMatch
         if done.exists {
             done.tap()
-            // The toolbar button is removed from the hierarchy on dismissal.
-            // Evaluating hittable via KVC against a missing firstMatch can fail
-            // to resolve instead of returning false. Check existence first,
-            // and separately require the actual keyboard to disappear.
+            // Inspect one coherent snapshot: separate live queries can each
+            // consume seconds on CI and exhaust the polling deadline.
             let dismissed = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                !app.keyboards.firstMatch.exists && (!done.exists || !done.isHittable)
+                guard let snapshot = try? app.snapshot() else { return false }
+                return !self.containsKeyboardControl(snapshot)
             }, object: app)
-            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 5), .completed,
-                           "Keyboard or its Done control remained interactive after dismissal")
+            XCTAssertEqual(XCTWaiter.wait(for: [dismissed], timeout: 15), .completed,
+                           "Keyboard dismissal could not be verified: keyboard or toolbar Done remains, or snapshot unavailable")
         }
+    }
+
+    private func containsKeyboardControl(_ snapshot: any XCUIElementSnapshot, inToolbar: Bool = false) -> Bool {
+        let toolbar = inToolbar || snapshot.elementType == .toolbar
+        if snapshot.elementType == .keyboard { return true }
+        if toolbar && snapshot.elementType == .button && (snapshot.label == "Done" || snapshot.identifier == "Done") { return true }
+        return snapshot.children.contains { containsKeyboardControl($0, inToolbar: toolbar) }
     }
 }

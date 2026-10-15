@@ -5,10 +5,17 @@ struct ExpenseCharges: Codable, Equatable {
     var subtotal: Int
     var sstBasisPoints: Int
     var serviceBasisPoints: Int
+    var roundingMinor: Int? = nil
 
-    static func draft(currency: String, subtotal: String, sst: String, service: String) throws -> ExpenseCharges {
+    static func draft(currency: String, subtotal: String, sst: String, service: String, rounding: String = "") throws -> ExpenseCharges {
+        let text = rounding.trimmingCharacters(in: .whitespacesAndNewlines)
+        let negative = text.hasPrefix("-")
+        let magnitude = text.hasPrefix("-") || text.hasPrefix("+") ? String(text.dropFirst()) : text
+        let zero = magnitude.range(of: #"^0+(?:\.0{1,2})?$"#, options: .regularExpression) != nil
+        let adjustment = text.isEmpty || zero ? 0 : try Currency.parse(magnitude, code: currency) * (negative ? -1 : 1)
         let result = ExpenseCharges(currency: currency, subtotal: try Currency.parse(subtotal, code: currency),
-                                    sstBasisPoints: try percent(sst), serviceBasisPoints: try percent(service))
+                                    sstBasisPoints: try percent(sst), serviceBasisPoints: try percent(service),
+                                    roundingMinor: adjustment == 0 ? nil : adjustment)
         _ = try result.breakdown()
         return result
     }
@@ -32,7 +39,10 @@ struct ExpenseCharges: Codable, Equatable {
         }
         let sst = try ReceiptCalculation.percentCharge(base: subtotal, percent: Decimal(sstBasisPoints) / 100)
         let service = try ReceiptCalculation.percentCharge(base: subtotal, percent: Decimal(serviceBasisPoints) / 100)
-        return (sst, service, try ReceiptCalculation.total(subtotal: subtotal, tax: sst, service: service, discount: 0))
+        let base = try ReceiptCalculation.total(subtotal: subtotal, tax: sst, service: service, discount: 0)
+        let (total, overflow) = base.addingReportingOverflow(roundingMinor ?? 0)
+        guard !overflow, total > 0, total <= 10_000_000_000 else { throw chargeTotalMismatch() }
+        return (sst, service, total)
     }
     func myrSubtotal(foreign: ForeignAmount?) throws -> Int {
         _ = try breakdown()
@@ -111,5 +121,5 @@ extension Expense {
 }
 
 func chargeTotalMismatch() -> LedgerError {
-    reviewError("税前小计加 SST 和服务费必须等于实际付款。请核对金额，或使用计算出的含税总额。", "Subtotal plus SST and service must equal the actual payment. Check the amounts or use the calculated total.", "Subtotal bersama SST dan perkhidmatan mesti sama dengan bayaran sebenar. Semak amaun atau gunakan jumlah dikira.")
+    reviewError("税前小计加 SST、服务费和尾数调整必须等于实际付款。请核对金额，或使用计算出的总额。", "Subtotal plus SST, service and rounding must equal the actual payment. Check the amounts or use the calculated total.", "Subtotal bersama SST, perkhidmatan dan pembundaran mesti sama dengan bayaran sebenar. Semak amaun atau gunakan jumlah dikira.")
 }

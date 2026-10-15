@@ -5,13 +5,14 @@ struct ExpenseChargeFields: View {
     @Binding var subtotal: String
     @Binding var sst: String
     @Binding var service: String
+    @Binding var rounding: String
     let currency: String
     let actualMinor: Int?
     let applyTotal: (Int) -> Void
     var sharedFocus: FocusState<ExpenseInputField?>.Binding? = nil
     @FocusState private var localFocus: ExpenseInputField?
     private var focus: FocusState<ExpenseInputField?>.Binding { sharedFocus ?? $localFocus }
-    private var draft: ExpenseCharges? { try? ExpenseCharges.draft(currency: currency, subtotal: subtotal, sst: sst, service: service) }
+    private var draft: ExpenseCharges? { try? ExpenseCharges.draft(currency: currency, subtotal: subtotal, sst: sst, service: service, rounding: rounding) }
     var body: some View {
         Section {
             Toggle(tr("填写 SST／服务费", "Add SST / service charge", "Isi SST / caj perkhidmatan"), isOn: $enabled)
@@ -24,6 +25,11 @@ struct ExpenseChargeFields: View {
                 }
                 percentageRow("SST", value: $sst, field: .sstPercent, identifier: "transaction.charges.sst")
                 percentageRow(tr("服务费", "Service Charge", "Caj perkhidmatan"), value: $service, field: .servicePercent, identifier: "transaction.charges.service")
+                LabeledContent(tr("尾数调整（±）", "Rounding (+ / −)", "Pembundaran (+ / −)")) {
+                    TextField("0.00", text: $rounding).keyboardType(.numbersAndPunctuation).multilineTextAlignment(.trailing)
+                        .focused(focus, equals: .chargeRounding)
+                        .accessibilityIdentifier("transaction.charges.rounding")
+                }
                 if let draft, let calculation = try? draft.breakdown() {
                     LabeledContent("SST \(ExpenseCharges.percentText(draft.sstBasisPoints))%", value: Currency.display(calculation.sst, currency))
                     LabeledContent("Service Charge \(ExpenseCharges.percentText(draft.serviceBasisPoints))%", value: Currency.display(calculation.service, currency))
@@ -45,7 +51,7 @@ struct ExpenseChargeFields: View {
             }
         } header: { Text("SST & Service Charge · \(currency)") } footer: {
             if enabled {
-                Text(tr("两项都按税前小计计算。物品填税前单价，税费按比例分摊。", "Both charges use the subtotal. Enter base item prices; charges are allocated proportionally.", "Kedua-dua caj menggunakan subtotal. Isi harga asas item; caj diagihkan berkadar."))
+                Text(tr("两项都按税前小计计算，再加收据上的尾数调整（例如 -0.02）。物品填税前单价，税费和尾数按比例分摊。", "Both charges use the subtotal, then receipt rounding is added (for example -0.02). Enter base item prices; charges and rounding are allocated proportionally.", "Kedua-dua caj menggunakan subtotal, kemudian pembundaran resit ditambah (contohnya -0.02). Isi harga asas item; caj dan pembundaran diagihkan berkadar."))
             }
         }
     }
@@ -71,6 +77,9 @@ struct ExpenseChargeDetails: View {
                 LabeledContent(tr("税前小计", "Subtotal before charges", "Subtotal sebelum caj"), value: Currency.display(charges.subtotal, charges.currency))
                 LabeledContent("SST \(ExpenseCharges.percentText(charges.sstBasisPoints))%", value: Currency.display(calculation.sst, charges.currency))
                 LabeledContent("Service Charge \(ExpenseCharges.percentText(charges.serviceBasisPoints))%", value: Currency.display(calculation.service, charges.currency))
+                if let rounding = charges.roundingMinor, rounding != 0 {
+                    LabeledContent(tr("尾数调整", "Rounding", "Pembundaran"), value: Currency.display(rounding, charges.currency))
+                }
             } header: { Text("SST & Service Charge") } footer: {
                 Text(tr("税费已计入付款总额和分账。", "Charges are included in the payment and shares.", "Caj termasuk dalam bayaran dan bahagian."))
             }

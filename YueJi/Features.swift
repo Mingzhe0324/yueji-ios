@@ -659,7 +659,7 @@ extension Ledger {
                 }
             }
         } else {
-            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR", "entry_description", "reimbursement_recipient", "reimbursement_claimed_MYR", "reimbursement_received_MYR", "reimbursement_outstanding_MYR", "personal_spending_MYR", "reimbursement_receipts", "charges_currency", "subtotal_before_charges", "sst_percent", "service_charge_percent", "sst_amount", "service_charge_amount"]]
+            rows = [["expense_id", "date", "merchant", "category", "source", "paid_MYR", "refund_MYR", "personal_net_MYR", "original_currency", "original_amount", "rate_to_MYR", "category_allocations_MYR", "note", "tags", "payer", "paid_from_my_account_MYR", "items_MYR", "entry_description", "reimbursement_recipient", "reimbursement_claimed_MYR", "reimbursement_received_MYR", "reimbursement_outstanding_MYR", "personal_spending_MYR", "reimbursement_receipts", "charges_currency", "subtotal_before_charges", "sst_percent", "service_charge_percent", "sst_amount", "service_charge_amount", "rounding_adjustment"]]
             for e in entries {
                 let currency = e.foreign?.currency ?? "MYR"
                 let amount = Currency.input(e.foreign?.minor ?? e.cents, currency)
@@ -678,9 +678,9 @@ extension Ledger {
                 if let charges = e.charges, let calculation = try? charges.breakdown() {
                     row += [charges.currency, Currency.input(charges.subtotal, charges.currency),
                             ExpenseCharges.percentText(charges.sstBasisPoints), ExpenseCharges.percentText(charges.serviceBasisPoints),
-                            Currency.input(calculation.sst, charges.currency), Currency.input(calculation.service, charges.currency)]
+                            Currency.input(calculation.sst, charges.currency), Currency.input(calculation.service, charges.currency), Currency.input(charges.roundingMinor ?? 0, charges.currency)]
                 } else {
-                    row += Array(repeating: "", count: 6)
+                    row += Array(repeating: "", count: 7)
                 }
                 rows.append(row)
             }

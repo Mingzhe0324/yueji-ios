@@ -5,6 +5,29 @@ import SwiftUI
 @testable import YueJi
 
 final class ExpenseChargeTests: XCTestCase {
+    func testSignedReceiptRoundingAndLegacyCharges() throws {
+        for (text, expected) in [("-0.02", 11598), ("+0.02", 11602), ("0.00", 11600), ("", 11600)] {
+            let charges = try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6", service: "10", rounding: text)
+            XCTAssertEqual(try charges.breakdown().total, expected)
+            let original = try purchase()
+            let updated = try original.replacingItemCharges(charges, paymentMinor: expected,
+                items: original.items ?? [], allowedCategories: categories)
+            XCTAssertEqual(updated.items, original.items)
+            XCTAssertEqual(updated.personalSpending + updated.shares.reduce(0) { $0 + $1.cents }, expected)
+            XCTAssertEqual(try LocalStore.decode(LocalStore.encode(Ledger(expenses: [updated]))).expenses[0], updated)
+        }
+        let legacy = Data(#"{"currency":"MYR","subtotal":10000,"sstBasisPoints":600,"serviceBasisPoints":1000}"#.utf8)
+        let decoded = try JSONDecoder().decode(ExpenseCharges.self, from: legacy)
+        XCTAssertNil(decoded.roundingMinor)
+        XCTAssertEqual(try decoded.breakdown().total, 11600)
+        for invalid in ["-116", "--0.02", "+", "0.001"] {
+            XCTAssertThrowsError(try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6", service: "10", rounding: invalid))
+        }
+        var overflow = decoded
+        overflow.roundingMinor = Int.max
+        XCTAssertThrowsError(try overflow.breakdown())
+        XCTAssertThrowsError(try ExpenseCharges.draft(currency: "JPY", subtotal: "100", sst: "6", service: "10", rounding: "-0.02"))
+    }
     private let date = Date(timeIntervalSince1970: 1_700_000_000)
     private func purchase() throws -> Expense {
         let charges = try ExpenseCharges.draft(currency: "MYR", subtotal: "100", sst: "6", service: "10")
@@ -171,8 +194,8 @@ final class ExpenseChargeTests: XCTestCase {
         let header = rows[0].components(separatedBy: ",").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"\u{FEFF}")) }
         let values = rows[1].components(separatedBy: ",").map { $0.trimmingCharacters(in: CharacterSet(charactersIn: "\"")) }
         XCTAssertEqual(header.count, values.count)
-        XCTAssertEqual(Array(header.suffix(6)), ["charges_currency", "subtotal_before_charges", "sst_percent", "service_charge_percent", "sst_amount", "service_charge_amount"])
-        XCTAssertEqual(Array(values.suffix(6)), ["MYR", "100.00", "6", "10", "6.00", "10.00"])
+        XCTAssertEqual(Array(header.suffix(7)), ["charges_currency", "subtotal_before_charges", "sst_percent", "service_charge_percent", "sst_amount", "service_charge_amount", "rounding_adjustment"])
+        XCTAssertEqual(Array(values.suffix(7)), ["MYR", "100.00", "6", "10", "6.00", "10.00", "0.00"])
         XCTAssertEqual(values[5], "116.00")
         let deleted = try ledger.deleteLedgerExpense(entry)
         try ledger.restoreDeletedRecords([deleted])

@@ -1766,6 +1766,7 @@ struct ExpenseEditor: View {
     @State private var chargeSubtotal = ""
     @State private var sstPercent = ""
     @State private var servicePercent = ""
+    @State private var chargeRounding = ""
     @State private var currency = "MYR"
     @State private var rate = ""
     @State private var rateDate = Date()
@@ -1793,7 +1794,7 @@ struct ExpenseEditor: View {
     @State private var initialSnapshot: ExpenseEditorSnapshot?
     @State private var confirmingDiscard = false
     private var snapshot: ExpenseEditorSnapshot {
-        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent],
+        ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent, chargeRounding],
                               flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled, chargesEnabled],
                               date: date, items: itemDrafts, people: people)
     }
@@ -1811,7 +1812,7 @@ struct ExpenseEditor: View {
     private func total() throws -> Int { if let fx = try foreign() { return try fx.myrCents() }; return try toCents(amount) }
     private var chargesDraft: ExpenseCharges? {
         guard chargesEnabled else { return nil }
-        return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent)
+        return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent, rounding: chargeRounding)
     }
     private var itemBase: Int { chargesDraft.flatMap { try? $0.myrSubtotal(foreign: try? foreign()) } ?? ((try? total()) ?? 0) }
     var body: some View {
@@ -1916,7 +1917,7 @@ struct ExpenseEditor: View {
                                  sharedFocus: $focusedField)
     }
     private var chargeSection: some View {
-        ExpenseChargeFields(enabled: $chargesEnabled, subtotal: $chargeSubtotal, sst: $sstPercent, service: $servicePercent,
+        ExpenseChargeFields(enabled: $chargesEnabled, subtotal: $chargeSubtotal, sst: $sstPercent, service: $servicePercent, rounding: $chargeRounding,
                             currency: currency, actualMinor: try? Currency.parse(amount, code: currency), applyTotal: { minor in
                                 amount = Currency.input(minor, currency)
                                 focusedField = nil
@@ -2064,6 +2065,7 @@ struct ExpenseEditor: View {
                 chargeSubtotal = Currency.input(charges.subtotal, charges.currency)
                 sstPercent = ExpenseCharges.percentText(charges.sstBasisPoints)
                 servicePercent = ExpenseCharges.percentText(charges.serviceBasisPoints)
+                chargeRounding = Currency.input(charges.roundingMinor ?? 0, charges.currency)
             }
             foreignExpanded = currency != "MYR"
             if let fx = e.foreign { rate = fx.quote.text; rateDate = fx.quote.date; rateSource = fx.quote.source }
@@ -2114,7 +2116,7 @@ struct ExpenseEditor: View {
             else if fx != nil { fx?.quote.source = "Manual"; fx?.quote.date = Date() }
             entry.foreign = fx
             let previousCharges = entry.charges
-            entry.charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent) : nil
+            entry.charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent, rounding: chargeRounding) : nil
             if entry.charges != previousCharges { entry.receiptSummary = nil }
             try entry.validateCharges()
             entry.paidByFriend = friendPays ? payerName.trimmingCharacters(in: .whitespacesAndNewlines) : nil

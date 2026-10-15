@@ -1381,15 +1381,16 @@ struct ExpenseItemsEditor: View {
     @State private var chargeSubtotal = ""
     @State private var sstPercent = ""
     @State private var servicePercent = ""
+    @State private var chargeRounding = ""
     @State private var paymentMinor = 0
     @State private var initialChargeInputs: [String] = []
     @State private var confirmingDiscard = false
     private var currency: String { original.foreign?.currency ?? "MYR" }
-    private var chargeInputs: [String] { [String(chargesEnabled), chargeSubtotal, sstPercent, servicePercent, String(paymentMinor)] }
+    private var chargeInputs: [String] { [String(chargesEnabled), chargeSubtotal, sstPercent, servicePercent, chargeRounding, String(paymentMinor)] }
     private var hasChanges: Bool { initialized && (items != initialItems || chargeInputs != initialChargeInputs) }
     private var chargesDraft: ExpenseCharges? {
         guard chargesEnabled else { return nil }
-        return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent)
+        return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent, rounding: chargeRounding)
     }
     private var draftForeign: ForeignAmount? {
         guard var fx = original.foreign else { return nil }
@@ -1417,7 +1418,7 @@ struct ExpenseItemsEditor: View {
                         Text(Currency.display(paymentMinor, currency)).monospacedDigit()
                     }
                 }
-                ExpenseChargeFields(enabled: $chargesEnabled, subtotal: $chargeSubtotal, sst: $sstPercent, service: $servicePercent,
+                ExpenseChargeFields(enabled: $chargesEnabled, subtotal: $chargeSubtotal, sst: $sstPercent, service: $servicePercent, rounding: $chargeRounding,
                     currency: currency, actualMinor: paymentMinor, applyTotal: { paymentMinor = $0; focusedField = nil }, sharedFocus: $focusedField)
                     .disabled(original.chargeEditsLocked || model.ledger.hasActiveSettlement(expenseID: original.id))
                 ExpenseItemsFields(items: $items, totalCents: itemBase, defaultCategory: original.category, savedTransaction: true, sharedFocus: $focusedField, friendNames: original.shares.map(\.name), payer: original.paidByFriend, charges: chargesDraft, foreign: draftForeign)
@@ -1450,6 +1451,7 @@ struct ExpenseItemsEditor: View {
                         chargeSubtotal = Currency.input(charges.subtotal, currency)
                         sstPercent = ExpenseCharges.percentText(charges.sstBasisPoints)
                         servicePercent = ExpenseCharges.percentText(charges.serviceBasisPoints)
+                        chargeRounding = Currency.input(charges.roundingMinor ?? 0, charges.currency)
                     }
                     initialChargeInputs = chargeInputs
                     initialized = true
@@ -1476,7 +1478,7 @@ struct ExpenseItemsEditor: View {
         guard initialized, !saving else { return }
         focusedField = nil
         do {
-            let charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent) : nil
+            let charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent, rounding: chargeRounding) : nil
             let entry = try original.replacingItemCharges(charges, paymentMinor: paymentMinor, items: try items.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
             saving = true
             Task { @MainActor in
@@ -3277,7 +3279,7 @@ struct ExpenseItemDraft: Identifiable, Equatable {
     }
 }
 enum ExpenseInputField: Hashable {
-    case amount, merchant, entryDescription, rate, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent
+    case amount, merchant, entryDescription, rate, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent, chargeRounding
     case itemName(String), itemAmount(String)
 }
 
