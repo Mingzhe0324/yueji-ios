@@ -3337,8 +3337,9 @@ struct ExpenseItemsFields: View {
                 }.accessibilityIdentifier("transaction.item.ownership")
                 Button(role: .destructive) {
                     let id = draft.id
+                    let animate = focus.wrappedValue == nil
                     if focus.wrappedValue == .itemName(id) || focus.wrappedValue == .itemAmount(id) { focus.wrappedValue = nil }
-                    updateRows { items.removeAll { $0.id == id } }
+                    updateRows(animate: animate) { items.removeAll { $0.id == id } }
                     FeedbackHaptics.selection()
                 } label: {
                     Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
@@ -3352,7 +3353,7 @@ struct ExpenseItemsFields: View {
         Section {
             Button {
                 let draft = ExpenseItemDraft(category: defaultCategory)
-                updateRows { items.append(draft) }
+                updateRows(animate: focus.wrappedValue == nil) { items.append(draft) }
                 FeedbackHaptics.selection()
             } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
                 .buttonStyle(.borderless)
@@ -3386,11 +3387,13 @@ struct ExpenseItemsFields: View {
             Text(items.isEmpty ? tr("物品 · 选填", "Items · optional", "Item · pilihan") : tr("物品汇总", "Item summary", "Ringkasan item"))
         }
     }
-    private func updateRows(_ update: () -> Void) {
-        // Form must reconcile row insertion and native pickers
-        // together, without carrying an insertion animation into navigation.
-        var transaction = Transaction(animation: nil)
-        transaction.disablesAnimations = true
+    private func updateRows(animate: Bool, _ update: () -> Void) {
+        // One native Form layout transition, only when the keyboard is idle.
+        // Do not overlap section removal with a focused field's resignation,
+        // and leave category/ownership navigation to its own native transition.
+        let animated = animate && !reduceMotion
+        var transaction = Transaction(animation: animated ? YueJiMotion.rows : nil)
+        transaction.disablesAnimations = !animated
         withTransaction(transaction, update)
     }
 }

@@ -1,5 +1,7 @@
 # Application-wide native style audit
 
+Update: [Visible motion](visible-motion.md) adds an explicit system zoom only for Overview/Ledger expense-card navigation, plus scoped month/item-list and banner entrance animations. Editor sheets retain the interaction ownership described here.
+
 The app uses system navigation stacks, tab bars, menus, pickers, dialogs, keyboard transitions and sheet presentation. These adopt the platform design through the installed OS and build SDK. Keep native interaction ownership rather than adding custom navigation zooms, sheet offsets or global animation transactions. Glass is reserved for floating actions/navigation and foreground notification cards; financial content stays on readable grouped backgrounds.
 
 This audit brings the remaining production List/Form pages onto the shared `yuejiListSurface`: recurring editing, duplicate review, refunds, friend summary, fuel calculation, merchant rules, restore preview, category management/editing, monthly comparison, filtering, bank setup, receipt splitting and the three bank notification/detail/review forms. Existing overview, ledger, settings, friends/settlements, savings lists and reimbursement pages already use that shared surface. Duplicate application of the surface on comparison/export is removed.

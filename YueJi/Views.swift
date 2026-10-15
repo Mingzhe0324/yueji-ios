@@ -6,8 +6,10 @@ private let ink = Color(uiColor: .systemBlue)
 enum YueJiMotion {
     static let standard = Animation.smooth(duration: 0.24)
     static let detail = Animation.smooth(duration: 0.32)
-    static let month = Animation.smooth(duration: 0.28)
+    static let month = Animation.smooth(duration: 0.42)
     static let meter = Animation.smooth(duration: 0.45)
+    static let rows = Animation.smooth(duration: 0.34)
+    static let banner = Animation.spring(duration: 0.42, bounce: 0.12)
 }
 
 struct EditorSaveLabel: View {
@@ -436,13 +438,18 @@ struct DashboardView: View {
             }.yuejiListSurface()
             .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                 ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+                    .expenseCardDestination(id: destination.id, namespace: navigationMotion)
             }
             .task(id: summaryQuery) {
                 guard loadedSummary != summaryQuery else { return }
                 do {
                     let fresh = try await model.preparedOverview(month: requestedMonth, query: summaryQuery)
                     guard !Task.isCancelled, model.overviewQuery(month: month) == summaryQuery else { return }
-                    summary = fresh; loadedSummary = summaryQuery
+                    // Animate the completed snapshot, never a stale/intermediate month.
+                    let changingMonth = loadedSummary.map { $0.month != summaryQuery.month } ?? false
+                    withAnimation(!reduceMotion && changingMonth ? YueJiMotion.month : nil) {
+                        summary = fresh; loadedSummary = summaryQuery
+                    }
                 } catch is CancellationError { return }
                 catch { model.error = error.localizedDescription }
             }
@@ -493,6 +500,7 @@ struct DashboardView: View {
             ForEach(recentEntries) { entry in
                 NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                     ExpenseRow(entry: entry).foregroundStyle(.primary)
+                        .expenseCardSource(id: entry.id, namespace: navigationMotion)
                 }
             }
         } header: {
@@ -866,6 +874,7 @@ private struct LedgerExpenseDestination: Hashable { let id: String }
 
 struct ExpensesView: View {
     @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
@@ -952,6 +961,7 @@ struct ExpensesView: View {
                             case .expense(let entry):
                             NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                                 ExpenseRow(entry: entry).foregroundStyle(.primary)
+                                    .expenseCardSource(id: entry.id, namespace: expenseTransition)
                             }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
@@ -970,14 +980,20 @@ struct ExpensesView: View {
             }.listStyle(.insetGrouped)
                 .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                     ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+                        .expenseCardDestination(id: destination.id, namespace: expenseTransition)
                 }
                 .task(id: query) {
                     guard loadedQuery != query else { return }
                     do {
                         let fresh = try await model.timeline(month: requestedMonth, query: query)
                         guard !Task.isCancelled, self.query == query else { return }
-                        timeline = fresh
-                        loadedQuery = query
+                        // Only month changes animate the list diff. Typing a search,
+                        // refreshing, or saving a record must not restart a page animation.
+                        let changingMonth = loadedQuery.map { $0.month != query.month } ?? false
+                        withAnimation(!reduceMotion && changingMonth ? YueJiMotion.month : nil) {
+                            timeline = fresh
+                            loadedQuery = query
+                        }
                     } catch is CancellationError { return }
                     catch {
                         guard !Task.isCancelled, self.query == query else { return }
@@ -2333,6 +2349,30 @@ private struct YueJiGlassSurface: ViewModifier {
 }
 
 
+// Opt in only the read-only transaction route. Editor sheets retain the system
+// sheet transition and its adaptive-presentation delegate for unsaved drafts.
+private struct ExpenseCardDestination: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let id: String
+    let namespace: Namespace.ID
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), !reduceMotion {
+            content.navigationTransition(.zoom(sourceID: id, in: namespace))
+        } else { content }
+    }
+}
+
+private struct ExpenseCardSource: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let id: String
+    let namespace: Namespace.ID
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), !reduceMotion {
+            content.matchedTransitionSource(id: id, in: namespace)
+        } else { content }
+    }
+}
+
 private struct YueJiZoomDestination: ViewModifier {
     let id: String
     let namespace: Namespace.ID
@@ -2347,6 +2387,12 @@ private struct YueJiZoomSource: ViewModifier {
 // Existing guide/source IDs remain stable; navigation uses the native system transitions.
 
 extension View {
+    func expenseCardDestination(id: String, namespace: Namespace.ID) -> some View {
+        modifier(ExpenseCardDestination(id: id, namespace: namespace))
+    }
+    func expenseCardSource(id: String, namespace: Namespace.ID) -> some View {
+        modifier(ExpenseCardSource(id: id, namespace: namespace))
+    }
     func yuejiZoom(id: String, namespace: Namespace.ID) -> some View {
         modifier(YueJiZoomDestination(id: id, namespace: namespace))
     }
@@ -3262,6 +3308,13 @@ private struct LedgerFeedbackHost: ViewModifier {
     @State private var owner = UUID()
     var modal = false
     private var visible: Bool { model.feedbackOwners.isVisible(modal ? owner : nil) }
+    private var bannerTransition: AnyTransition {
+        reduceMotion ? .opacity : .asymmetric(
+            insertion: .offset(y: -32).combined(with: .opacity),
+            // UIKit has already moved a swiped banner offscreen. Do not run
+            // a second directional exit or make the outgoing card reappear.
+            removal: .opacity.animation(.easeOut(duration: 0.14)))
+    }
     private var topIdentity: String? {
         guard visible, model.didFinishLaunch else { return nil }
         if model.activeBanner == .undo { return model.undoToken.uuidString }
@@ -3275,7 +3328,7 @@ private struct LedgerFeedbackHost: ViewModifier {
             .overlay(alignment: .top) {
                 // Keep the navigation bar's Back/Close and trailing buttons fully reachable.
                 topBanner.frame(maxWidth: 520).padding(.horizontal, 20).padding(.top, 52)
-                    .animation(.easeOut(duration: reduceMotion ? 0.14 : 0.18), value: topIdentity)
+                    .animation(reduceMotion ? .easeOut(duration: 0.14) : YueJiMotion.banner, value: topIdentity)
             }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
             .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
@@ -3290,7 +3343,7 @@ private struct LedgerFeedbackHost: ViewModifier {
                         symbol: "trash", color: .gray, interaction: interaction,
                         actionTitle: tr("撤销", "Undo", "Batal padam"), actionEnabled: !model.deletionInFlight,
                         action: { Task { await model.undoDeletion() } })
-                }.id(token).transition(.opacity)
+                }.id(token).transition(bannerTransition)
             } else if let notice = model.foregroundNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissForegroundNotice(id: notice.id) },
                     onInteraction: { model.setBannerInteraction(id: notice.id.uuidString, active: $0) }) { interaction in
@@ -3301,7 +3354,7 @@ private struct LedgerFeedbackHost: ViewModifier {
                             UserDefaults.standard.set(destination, forKey: "pendingNotificationDestination")
                             NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil)
                         })
-                }.id(notice.id).transition(.opacity)
+                }.id(notice.id).transition(bannerTransition)
             } else if model.newTNGCount > 0 {
                 let token = model.newTNGToken
                 SwipeDismissBanner(onDismiss: { model.dismissNewTNG(id: token) },
@@ -3315,12 +3368,12 @@ private struct LedgerFeedbackHost: ViewModifier {
                             model.dismissNewTNG(id: token)
                             NotificationCenter.default.post(name: .init("YueJiShowInbox"), object: nil)
                         })
-                }.id(token).transition(.opacity)
+                }.id(token).transition(bannerTransition)
             } else if model.undoEntries.isEmpty, let token = model.savedNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissSavedNotice(id: token) },
                     onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
                     NotificationBannerCard(title: model.feedbackMessage, interaction: interaction)
-                }.id(token).transition(.opacity)
+                }.id(token).transition(bannerTransition)
             }
         }
     }

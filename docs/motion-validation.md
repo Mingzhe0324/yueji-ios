@@ -1,5 +1,7 @@
 # Motion ownership and device validation
 
+Update: [Visible motion](visible-motion.md) supersedes the banner entrance and expense-card navigation policy below. [Overview toolbar and meters](overview-toolbar-and-meters.md) describes the subsequent meter entrance. These updates retain one owner per animation and require device validation.
+
 Native navigation, sheet dragging, keyboard movement and glass button press feedback retain system ownership. Do not add matching geometry, animated sheet offsets or a second drag recognizer around these interactions. Dirty-editor dismissal still requires an explicit discard decision.
 
 The notification host owns insertion/removal opacity. Remove the controller's separate viewDidAppear fade/translation so an incoming banner does not run two independent entrance animations. Gesture drag, cancel settlement and directional exit remain in the controller, including the existing touch suppression and final hit-area release. Spending meters render the actual fraction on appearance rather than animating from zero; value changes retain the short existing transition.
