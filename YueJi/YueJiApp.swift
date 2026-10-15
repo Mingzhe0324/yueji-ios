@@ -16,6 +16,13 @@ struct YueJiApp: App {
     init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
     var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
 }
+struct RestoredLedgerFeedback {
+    let id = UUID()
+    let date = Date()
+    let expenseIDs: Set<String>
+    let noticeIDs: Set<String>
+}
+
 @MainActor final class LedgerModel: ObservableObject {
     let isPreview: Bool
     init(previewLedger: Ledger? = nil) {
@@ -164,6 +171,7 @@ struct YueJiApp: App {
     @Published private(set) var bannerInteraction: String?
     @Published private(set) var undoToken = UUID()
     @Published private(set) var undoEntries: [DeletedLedgerRecord] = []
+    @Published private(set) var restoredFeedback: RestoredLedgerFeedback?
     @Published private(set) var deletionInFlight = false
     private var undoExpiry: Task<Void, Never>?
     private var undoExpiryPaused = false
@@ -197,6 +205,9 @@ struct YueJiApp: App {
             let entries = undoEntries
             undoExpiry?.cancel()
             try await mutate({ try $0.restoreDeletedRecords(entries) }, postRecurring: false)
+            restoredFeedback = RestoredLedgerFeedback(
+                expenseIDs: Set(entries.flatMap { $0.before.map(\.id) }),
+                noticeIDs: Set(entries.flatMap { $0.notices.map(\.id) }))
             undoExpiry?.cancel(); undoEntries = []
             showSaved(message: tr("已恢复", "Restored", "Dipulihkan"), sound: .restored)
         } catch { self.error = error.localizedDescription }

@@ -10,6 +10,7 @@ enum YueJiMotion {
     static let meter = Animation.smooth(duration: 0.45)
     static let rows = Animation.smooth(duration: 0.34)
     static let banner = Animation.spring(duration: 0.42, bounce: 0.12)
+    static let tone = Animation.easeInOut(duration: 0.55)
 }
 
 struct EditorSaveLabel: View {
@@ -375,7 +376,7 @@ struct DashboardView: View {
     private var budget: Int { model.ledger.budgets[monthKey(month)] ?? 0 }
     private var budgetTint: Color {
         guard budget > 0 else { return ink }
-        if personal >= budget { return .red }
+        if personal > budget { return .red }
         return Double(personal) / Double(budget) >= 0.8 ? .orange : ink
     }
     private var budgetStatus: String {
@@ -450,7 +451,10 @@ struct DashboardView: View {
                     // Animate the completed snapshot, never a stale/intermediate month.
                     let changingMonth = loadedSummary.map { $0.month != summaryQuery.month } ?? false
                     let changingEmptyState = loadedSummary != nil && (summary.entries.isEmpty != fresh.entries.isEmpty)
-                    withAnimation(!reduceMotion && (changingMonth || changingEmptyState) ? YueJiMotion.month : nil) {
+                    let returningRows = model.restoredFeedback.map {
+                        $0.date.timeIntervalSinceNow > -3 && !$0.expenseIDs.intersection(Set(fresh.entries.map(\.id))).subtracting(Set(summary.entries.map(\.id))).isEmpty
+                    } ?? false
+                    withAnimation(!reduceMotion && (changingMonth || changingEmptyState || returningRows) ? YueJiMotion.month : nil) {
                         summary = fresh; loadedSummary = summaryQuery
                     }
                 } catch is CancellationError { return }
@@ -575,7 +579,7 @@ struct DashboardView: View {
                 }.buttonStyle(.borderless)
             }
         }.padding(.vertical, 8).frame(maxWidth: .infinity, alignment: .leading)
-            .animation(reduceMotion ? nil : YueJiMotion.month, value: budgetTint)
+            .animation(reduceMotion ? nil : YueJiMotion.tone, value: budgetTint)
     }
     private var budgetStatusBadge: some View {
         ViewThatFits(in: .horizontal) {
@@ -591,6 +595,7 @@ struct DashboardView: View {
         }.font(.caption.weight(.medium)).foregroundStyle(.primary)
             .padding(.horizontal, 12).padding(.vertical, 9)
             .background(budgetTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentTransition(.opacity)
     }
     private var balancesCard: some View {
         Section(tr("收支明细", "Payment details", "Butiran bayaran")) {
@@ -790,6 +795,50 @@ struct DashboardLinkLabel: View {
         }.font(.subheadline).padding(.vertical, 5).contentShape(Rectangle())
     }
 }
+struct ReceiptDetailsDisclosure: View {
+    @Environment(\.locale) private var locale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let summary: String
+    @State private var expanded = false
+    var body: some View {
+        let _ = locale.identifier
+        DisclosureGroup(isExpanded: $expanded.animation(reduceMotion ? nil : YueJiMotion.month)) {
+            if expanded { ReceiptPaper(summary: summary) }
+        } label: {
+            Text(tr("查看明细", "View details", "Lihat butiran"))
+        }.accessibilityIdentifier("transaction.receipt.expand")
+    }
+}
+
+private struct ReceiptPaper: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let summary: String
+    @State private var revealed = false
+    // Bound the number of animated views while preserving every character of
+    // long legacy summaries in the final block. No receipt data is reparsed.
+    private var blocks: [String] {
+        let lines = summary.components(separatedBy: "\n")
+        guard lines.count > 40 else { return lines }
+        return Array(lines.prefix(40)) + [lines.dropFirst(40).joined(separator: "\n")]
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { index, line in
+                Text(line.isEmpty ? " " : line).font(.subheadline).monospacedDigit()
+                    .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    .opacity(reduceMotion || revealed ? 1 : 0)
+                    .offset(y: reduceMotion || revealed ? 0 : 8)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.25).delay(Double(min(index, 8)) * 0.025), value: revealed)
+            }
+        }.padding(.vertical, 12)
+            .task {
+                guard !reduceMotion else { revealed = true; return }
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                revealed = true
+            }
+    }
+}
+
 struct SpendingMeter: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -808,6 +857,7 @@ struct SpendingMeter: View {
                 Capsule().fill(color).frame(width: proxy.size.width * (reduceMotion ? fraction : displayedFraction))
             }
         }.frame(height: 7)
+            .animation(reduceMotion ? nil : YueJiMotion.tone, value: color)
             .task(id: fraction) {
                 guard !reduceMotion else { displayedFraction = fraction; return }
                 // Give a new lazy row one frame at zero before revealing its
@@ -907,12 +957,36 @@ struct ExpenseRow: View {
                     }.font(.footnote)
                 }
                 if let claim = entry.reimbursement {
-                    Label(claim.status, systemImage: claim.outstanding == 0 ? "checkmark.circle" : "clock")
-                        .font(.caption).foregroundStyle(.secondary)
+                    ReimbursementStatusBadge(claim: claim)
                         .accessibilityIdentifier("transaction.reimbursement.status")
                 }
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 10)
+            .modifier(RestoredRecordHighlight(recordID: entry.id))
+    }
+}
+
+private struct RestoredRecordHighlight: ViewModifier {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let recordID: String
+    var notice = false
+    @State private var highlighted = false
+    func body(content: Content) -> some View {
+        content.overlay {
+            RoundedRectangle(cornerRadius: 14).fill(Color.accentColor.opacity(highlighted ? 0.14 : 0))
+                .allowsHitTesting(false).accessibilityHidden(true)
+        }
+        .task(id: model.restoredFeedback?.id) {
+            highlighted = false
+            guard let feedback = model.restoredFeedback,
+                  feedback.date.timeIntervalSinceNow > -3,
+                  (notice ? feedback.noticeIDs : feedback.expenseIDs).contains(recordID) else { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { highlighted = true }
+            do { try await Task.sleep(for: .milliseconds(450)) }
+            catch { highlighted = false; return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { highlighted = false }
+        }
     }
 }
 private struct ExpenseContextActions: ViewModifier {
@@ -1117,6 +1191,7 @@ struct ExpensesView: View {
                             case .transfer(let notice):
                                 NavigationLink { TNGTimelineDetail(notice: notice) } label: {
                                     TNGTimelineRow(notice: notice, repaymentPreview: timeline.repaymentPreviews[notice.id])
+                                        .modifier(RestoredRecordHighlight(recordID: notice.id, notice: true))
                                 }
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .expense(let entry):
@@ -1153,7 +1228,12 @@ struct ExpensesView: View {
                             $0.month != query.month || $0.filter != query.filter || $0.provider != query.provider
                         } ?? false
                         let changingEmptyState = loadedQuery != nil && (timeline.count == 0) != (fresh.count == 0)
-                        withAnimation(!reduceMotion && (changingSelection || changingEmptyState) ? YueJiMotion.month : nil) {
+                        let returningRows = model.restoredFeedback.map { feedback in
+                            let expenses = feedback.expenseIDs.intersection(Set(fresh.expenses.map(\.id))).subtracting(Set(timeline.expenses.map(\.id)))
+                            let notices = feedback.noticeIDs.intersection(Set(fresh.transfers.map(\.id))).subtracting(Set(timeline.transfers.map(\.id)))
+                            return feedback.date.timeIntervalSinceNow > -3 && (!expenses.isEmpty || !notices.isEmpty)
+                        } ?? false
+                        withAnimation(!reduceMotion && (changingSelection || changingEmptyState || returningRows) ? YueJiMotion.month : nil) {
                             timeline = fresh
                             loadedQuery = query
                         }
@@ -1363,9 +1443,7 @@ struct ExpenseDetailView: View {
                     }
                     if let receipt = entry.receiptSummary {
                         Section(tr("收据明细", "Receipt details", "Butiran resit")) {
-                            DisclosureGroup(tr("查看明细", "View details", "Lihat butiran")) {
-                                Text(receipt).font(.subheadline).textSelection(.enabled).padding(.vertical, 8)
-                            }
+                            ReceiptDetailsDisclosure(summary: receipt)
                             ShareLink(item: receipt) { Label(tr("分享明细", "Share details", "Kongsi butiran"), systemImage: "square.and.arrow.up") }
                         }
                     }
@@ -1766,10 +1844,8 @@ struct ExpenseEditor: View {
                 }
                 if let summary = (original ?? initialDraft)?.receiptSummary {
                     Section(tr("收据税费", "Receipt charges", "Caj resit")) {
-                        DisclosureGroup(tr("查看明细", "View details", "Lihat butiran")) {
-                            Text(summary).font(.subheadline).textSelection(.enabled)
-                            ShareLink(item: summary) { Label(tr("分享明细", "Share details", "Kongsi butiran"), systemImage: "square.and.arrow.up") }
-                        }
+                        ReceiptDetailsDisclosure(summary: summary)
+                        ShareLink(item: summary) { Label(tr("分享明细", "Share details", "Kongsi butiran"), systemImage: "square.and.arrow.up") }
                     }
                 }
                 if let original {

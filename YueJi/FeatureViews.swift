@@ -3331,7 +3331,7 @@ struct ExpenseItemsFields: View {
                 }.pickerStyle(.navigationLink)
                     .accessibilityIdentifier("transaction.item.category")
                 NavigationLink {
-                    ItemOwnershipPicker(ownership: item.ownership, friendNames: friendNames + items.flatMap { $0.ownership?.friends ?? [] }, payer: payer)
+                    ItemOwnershipPicker(ownership: item.ownership, friendNames: friendNames + items.flatMap { $0.ownership?.friends ?? [] }, payer: payer, lineCents: try? draft.savedItem().cents)
                 } label: {
                     LabeledContent(tr("属于谁", "Belongs to", "Milik siapa"), value: draft.ownership?.label ?? tr("沿用整笔分账", "Use transaction split", "Ikut pembahagian transaksi"))
                 }.accessibilityIdentifier("transaction.item.ownership")
@@ -3399,13 +3399,17 @@ struct ExpenseItemsFields: View {
 }
 struct ItemOwnershipPicker: View {
     @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var selectionMotion
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     @Binding var ownership: ItemOwnership?
     var friendNames: [String]
     var payer: String?
+    var lineCents: Int? = nil
     @State private var addingFriend = false
     @State private var newName = ""
+    private var selectionCount: Int { ownership.map { ($0.includesMe ? 1 : 0) + $0.friends.count } ?? 1 }
     private var choices: [String] {
         let names = payer.map { [$0] } ?? (friendNames + model.friends.map(\.name) + (ownership?.friends ?? []))
         var seen = Set<String>()
@@ -3444,6 +3448,17 @@ struct ItemOwnershipPicker: View {
             } footer: {
                 Text(tr("旧账目保留原分账。要按物品分账，请为每件物品选择归属。", "Existing entries keep their original split. Assign every item to switch to item-based splitting.", "Rekod lama mengekalkan pembahagian asal. Tetapkan pemilik setiap item untuk membahagi mengikut item."))
             }
+            if let ownership, let lineCents, (try? ownership.validate()) != nil {
+                let amounts = ownership.friendAmounts(cents: lineCents)
+                Section(tr("物品小计分配 · 不含税费", "Item subtotal split · before charges", "Bahagian subtotal item · sebelum caj")) {
+                    if ownership.includesMe {
+                        LabeledContent(tr("我", "Me", "Saya")) { AnimatedMoney(cents: lineCents - amounts.reduce(0, +)) }
+                    }
+                    ForEach(ownership.friends.indices, id: \.self) { index in
+                        LabeledContent(ownership.friends[index]) { AnimatedMoney(cents: amounts[index]) }
+                    }
+                }
+            }
         }.yuejiListSurface()
             .navigationTitle(tr("属于谁", "Belongs to", "Milik siapa")).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
@@ -3457,13 +3472,26 @@ struct ItemOwnershipPicker: View {
             }
     }
     private func choice(_ name: String, selected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+        Button {
+            withAnimation(reduceMotion ? nil : YueJiMotion.rows, action)
+            FeedbackHaptics.selection()
+        } label: {
             HStack {
                 Text(name).foregroundStyle(.primary)
                 Spacer()
-                if selected { Image(systemName: "checkmark").foregroundStyle(Color.accentColor) }
-            }.frame(minHeight: 36).contentShape(Rectangle())
-        }.accessibilityLabel(name)
+                Image(systemName: "checkmark").foregroundStyle(Color.accentColor).opacity(selected ? 1 : 0)
+            }.padding(.horizontal, 10).frame(minHeight: 44).contentShape(Rectangle())
+                .background {
+                    if selected {
+                        if selectionCount == 1 && !reduceMotion {
+                            RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.12))
+                                .matchedGeometryEffect(id: "selected-owner", in: selectionMotion)
+                        } else {
+                            RoundedRectangle(cornerRadius: 12).fill(Color.accentColor.opacity(0.12))
+                        }
+                    }
+                }
+        }.buttonStyle(.borderless).accessibilityLabel(name)
             .accessibilityValue(selected ? tr("已选择", "Selected", "Dipilih") : tr("未选择", "Not selected", "Tidak dipilih"))
     }
 }
@@ -3480,9 +3508,9 @@ struct ItemSplitSummary: View {
             let names = saved.flatMap { $0.ownership?.friends ?? [] }.reduce(into: [String: String]()) { $0[friendKey($1)] = $1 }
             VStack(alignment: .leading, spacing: 8) {
                 Text(tr("按物品分账", "Split by item", "Bahagi mengikut item")).font(.subheadline.weight(.semibold))
-                LabeledContent(tr("我", "Me", "Saya"), value: money(entry.personal))
+                LabeledContent(tr("我", "Me", "Saya")) { AnimatedMoney(cents: entry.personal) }
                 ForEach(totals.keys.sorted(), id: \.self) { key in
-                    LabeledContent(names[key] ?? key, value: money(totals[key] ?? 0))
+                    LabeledContent(names[key] ?? key) { AnimatedMoney(cents: totals[key] ?? 0) }
                 }
                 Text(charges == nil ? tr("均分精确到分，尾差会自动分配。", "Equal splits keep every cent, with rounding handled automatically.", "Pembahagian mengekalkan setiap sen dengan pembundaran automatik.") : tr("份额包含按物品金额分摊的税费，尾差自动分配。", "Shares include proportional charges, with rounding handled automatically.", "Bahagian termasuk caj berkadar dengan pembundaran automatik."))
                     .font(.caption).foregroundStyle(.secondary)

@@ -1,5 +1,23 @@
 import SwiftUI
 
+struct ReimbursementStatusBadge: View {
+    @Environment(\.locale) private var locale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let claim: ReimbursementClaim
+    private var complete: Bool { claim.outstanding == 0 }
+    var body: some View {
+        let _ = locale.identifier
+        Label(claim.status, systemImage: complete ? "checkmark.circle.fill" : "clock")
+            .font(.caption.weight(.medium))
+            .foregroundStyle(complete ? Color.green : Color.orange)
+            .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background((complete ? Color.green : Color.orange).opacity(0.12), in: Capsule())
+            .animation(reduceMotion ? nil : YueJiMotion.month, value: complete)
+            .accessibilityIdentifier("reimbursement.status")
+    }
+}
+
 struct ReimbursementDraftFields: View {
     @FocusState private var localFocus: ExpenseInputField?
     @Binding var enabled: Bool
@@ -92,7 +110,8 @@ struct ReimbursementsView: View {
                                 Text(money(claim.cents)).monospacedDigit()
                             }
                             Text(claim.recipient).font(.subheadline).foregroundStyle(.secondary)
-                            Text(claim.status + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary)
+                            ReimbursementStatusBadge(claim: claim)
+                            Text(dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary)
                             if claim.outstanding > 0 {
                                 Text(tr("待到账：", "Outstanding: ", "Belum diterima: ") + money(claim.outstanding))
                                     .font(.caption).foregroundStyle(.secondary)
@@ -140,11 +159,12 @@ struct ReimbursementDetailView: View {
                 }
                 if let claim = entry.reimbursement {
                     Section {
-                        LabeledContent(tr("状态", "Status", "Status"), value: claim.status)
+                        LabeledContent(tr("状态", "Status", "Status")) { ReimbursementStatusBadge(claim: claim) }
                         LabeledContent(tr("报销对象", "Reimbursed by", "Dibayar balik oleh"), value: claim.recipient)
                         LabeledContent(tr("报销金额", "Claim amount", "Amaun tuntutan"), value: money(claim.cents))
-                        LabeledContent(tr("已到账", "Received", "Diterima"), value: money(claim.received))
-                        LabeledContent(tr("待到账", "Outstanding", "Belum diterima"), value: money(claim.outstanding))
+                        LabeledContent(tr("已到账", "Received", "Diterima")) { AnimatedMoney(cents: claim.received) }
+                        LabeledContent(tr("待到账", "Outstanding", "Belum diterima")) { AnimatedMoney(cents: claim.outstanding) }
+                        SpendingMeter(value: claim.received, total: claim.cents, color: .green)
                     } footer: {
                         Text(tr("报销到账只更新进度，不记为收入，也不会再次减少个人消费。", "Receipts update progress without adding income or reducing personal spending again.", "Penerimaan mengemas kini kemajuan tanpa menambah pendapatan atau mengurangkan belanja sekali lagi."))
                     }
