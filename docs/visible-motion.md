@@ -1,5 +1,7 @@
 # Visible, interaction-led motion
 
+Follow-up: [Category, filtering and scroll continuity](focused-ledger-motion.md) adds category selection, inline filters, empty-state transitions, a compact scrolling detail title and native context previews. It extends snapshot animation to completed filter and empty/nonempty changes.
+
 This pass follows the request for visibly flowing transitions, rather than only small button effects.
 
 - Overview and Ledger transaction rows opt into the system zoom navigation transition on iOS 18+. The source is the actual row, keyed by saved expense ID in that screen's namespace. The detail is still a normal NavigationStack destination. This applies equally to manually entered and automatically recorded expenses. iOS 17 and Reduce Motion keep standard navigation.

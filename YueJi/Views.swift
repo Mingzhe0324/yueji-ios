@@ -362,6 +362,8 @@ struct DashboardView: View {
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
     @State private var path = NavigationPath()
     @State private var adding = false
+    @State private var editingExpense: Expense?
+    @State private var deletingExpense: Expense?
     @State private var budgetText = ""
     @State private var budgeting = false
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
@@ -447,7 +449,8 @@ struct DashboardView: View {
                     guard !Task.isCancelled, model.overviewQuery(month: month) == summaryQuery else { return }
                     // Animate the completed snapshot, never a stale/intermediate month.
                     let changingMonth = loadedSummary.map { $0.month != summaryQuery.month } ?? false
-                    withAnimation(!reduceMotion && changingMonth ? YueJiMotion.month : nil) {
+                    let changingEmptyState = loadedSummary != nil && (summary.entries.isEmpty != fresh.entries.isEmpty)
+                    withAnimation(!reduceMotion && (changingMonth || changingEmptyState) ? YueJiMotion.month : nil) {
                         summary = fresh; loadedSummary = summaryQuery
                     }
                 } catch is CancellationError { return }
@@ -481,6 +484,8 @@ struct DashboardView: View {
             .sheet(isPresented: $adding) {
                 ExpenseEditor(original: nil, initialDate: dateForNewExpense(in: month))
             }
+            .sheet(item: $editingExpense) { ExpenseEditor(original: $0) }
+            .modifier(ExpenseDeletionConfirmation(expense: $deletingExpense))
             .alert(tr("月度预算 · MYR", "Monthly budget · MYR", "Bajet bulanan · MYR"), isPresented: $budgeting) {
                 TextField("1500.00", text: $budgetText).keyboardType(.decimalPad)
                 Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); let key = monthKey(month); model.change { $0.budgets[key] = n } } catch { model.error = error.localizedDescription } }
@@ -496,12 +501,16 @@ struct DashboardView: View {
             if recentEntries.isEmpty {
                 Text(tr("这个月还没有账目，记下第一笔吧。", "No entries this month. Add your first expense.", "Tiada rekod bulan ini. Tambah belanja pertama anda."))
                     .foregroundStyle(.secondary)
+                    .transition(.opacity)
             }
             ForEach(recentEntries) { entry in
                 NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                     ExpenseRow(entry: entry).foregroundStyle(.primary)
                         .expenseCardSource(id: entry.id, namespace: navigationMotion)
                 }
+                .modifier(ExpenseContextActions(entry: entry,
+                    edit: { guard !adding, editingExpense == nil else { return }; editingExpense = entry },
+                    delete: { deletingExpense = entry }))
             }
         } header: {
             Text(tr("最近账目", "Recent entries", "Rekod terkini"))
@@ -609,34 +618,80 @@ struct DashboardView: View {
         }
     }
     private var categoriesCard: some View {
+        SpendingCategoryBreakdown(totals: summary.categoryTotals, total: personal, month: month)
+    }
+}
+
+private struct SpendingCategoryBreakdown: View {
+    @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let totals: [String: Int]
+    let total: Int
+    let month: Date
+    @State private var selection: String?
+    private var selected: String? { selection.flatMap { (totals[$0] ?? 0) > 0 ? $0 : nil } }
+    private var displayedAmount: Int { selected.flatMap { totals[$0] } ?? total }
+    var body: some View {
+        let _ = uiLocale.identifier
         Section(tr("钱花在哪里", "Where it went", "Ke mana belanja")) {
-            if personal == 0 {
+            if total == 0 {
                 Label(tr("暂无个人消费", "No personal spending yet", "Belum ada belanja peribadi"), systemImage: "leaf")
                     .foregroundStyle(.secondary)
                 Text(tr("记录消费后，这里会显示你的分类占比。", "Your category breakdown will appear here.", "Pecahan kategori anda akan dipaparkan di sini."))
                     .font(.subheadline).foregroundStyle(.secondary)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(selected.map(categoryLabel) ?? tr("全部分类", "All categories", "Semua kategori"))
+                        .font(.subheadline).foregroundStyle(.secondary).contentTransition(.opacity)
+                    AnimatedMoney(cents: displayedAmount).font(.title2.weight(.semibold))
+                    Text(selected == nil
+                         ? tr("点分类查看占比", "Tap a category to focus", "Ketik kategori untuk fokus")
+                         : String(format: "%.1f%%", Double(displayedAmount) / Double(max(total, 1)) * 100))
+                        .font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                }.padding(.vertical, 6).accessibilityIdentifier("overview.category.focus")
             }
             ForEach(model.ledger.categoryNames, id: \.self) { category in
-                let value = summary.categoryTotals[category] ?? 0
+                let value = totals[category] ?? 0
                 if value > 0 {
-                    NavigationLink {
-                        CategoryPaymentsView(category: category, month: month)
-                            .yuejiZoom(id: "category-\(monthKey(month))-\(category)", namespace: navigationMotion)
+                    Button {
+                        withAnimation(reduceMotion ? nil : YueJiMotion.month) {
+                            selection = selected == category ? nil : category
+                        }
+                        FeedbackHaptics.selection()
                     } label: {
                         VStack(spacing: 9) {
                             HStack {
                                 CategoryBadge(name: category)
                                 Spacer()
                                 AnimatedMoney(cents: value).fontWeight(.semibold)
+                                Image(systemName: selected == category ? "checkmark.circle.fill" : "circle")
+                                    .foregroundStyle(model.ledger.categoryTint(category))
+                                    .accessibilityHidden(true)
                             }.font(.subheadline)
-                            SpendingMeter(value: value, total: max(personal, 1), color: model.ledger.categoryTint(category))
+                            SpendingMeter(value: value, total: max(total, 1), color: model.ledger.categoryTint(category))
+                                .opacity(selected == nil || selected == category ? 1 : 0.3)
                         }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
-                    }
-                        .yuejiZoomSource(id: "category-\(monthKey(month))-\(category)", namespace: navigationMotion)
+                    }.buttonStyle(.borderless)
+                        .accessibilityIdentifier("overview.category.select." + category)
+                        .accessibilityAddTraits(selected == category ? .isSelected : [])
+                        .listRowBackground(selected == category ? model.ledger.categoryTint(category).opacity(0.10) : Color(uiColor: .secondarySystemGroupedBackground))
                         .transition(reduceMotion ? .identity : .opacity)
                 }
             }
-        }.animation(reduceMotion ? nil : YueJiMotion.month, value: monthKey(month))
+            if let selected {
+                NavigationLink {
+                    CategoryPaymentsView(category: selected, month: month)
+                } label: {
+                    Label(tr("查看分类账目", "View category entries", "Lihat rekod kategori"), systemImage: "list.bullet.rectangle")
+                }.accessibilityIdentifier("overview.category.entries")
+                    .transition(.opacity)
+            }
+        }
+        .onChange(of: monthKey(month)) { _, _ in selection = nil }
+        .onChange(of: totals) { _, values in
+            if let selection, (values[selection] ?? 0) == 0 { self.selection = nil }
+        }
     }
 }
 struct CategoryPaymentsView: View {
@@ -860,6 +915,107 @@ struct ExpenseRow: View {
         }.padding(.vertical, 10)
     }
 }
+private struct ExpenseContextActions: ViewModifier {
+    @Environment(\.locale) private var uiLocale
+    let entry: Expense
+    let edit: () -> Void
+    let delete: () -> Void
+    func body(content: Content) -> some View {
+        let _ = uiLocale.identifier
+        content
+            .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .contextMenu {
+                Button(tr("编辑", "Edit", "Edit"), systemImage: "pencil", action: edit)
+                Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive, action: delete)
+            } preview: {
+                ExpenseRow(entry: entry)
+                    .padding(20).frame(idealWidth: 320, maxWidth: 360)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+                    .accessibilityElement(children: .combine)
+            }
+    }
+}
+
+private struct LedgerFilterChip: View {
+    @Environment(\.locale) private var uiLocale
+    let title: String
+    let remove: () -> Void
+    var body: some View {
+        let _ = uiLocale.identifier
+        Button(action: remove) {
+            HStack(spacing: 6) {
+                Text(title)
+                Image(systemName: "xmark.circle.fill").accessibilityHidden(true)
+            }.font(.subheadline).padding(.horizontal, 12).padding(.vertical, 9)
+                .background(Color.accentColor.opacity(0.10), in: Capsule())
+                .frame(minHeight: 44)
+        }.buttonStyle(.borderless)
+            .accessibilityLabel(tr("移除筛选：", "Remove filter: ", "Buang penapis: ") + title)
+    }
+}
+
+private struct LedgerInlineFilters: View {
+    @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @Binding var filter: LedgerFilter
+    @Binding var provider: String
+    @Binding var expanded: Bool
+    let advanced: () -> Void
+    var body: some View {
+        let _ = uiLocale.identifier
+        if expanded {
+            VStack(spacing: 12) {
+                Picker(tr("分类", "Category", "Kategori"), selection: $filter.category) {
+                    Text(tr("全部", "All", "Semua")).tag("")
+                    ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                }.pickerStyle(.menu).accessibilityIdentifier("ledger.filters.category")
+                Picker(tr("来源", "Source", "Sumber"), selection: $provider) {
+                    Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
+                    ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
+                }.pickerStyle(.menu).accessibilityIdentifier("ledger.filters.source")
+                let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout())
+                layout {
+                    Button(tr("金额与更多条件", "Amount & more filters", "Amaun dan penapis lain"), action: advanced)
+                        .accessibilityIdentifier("ledger.filters.advanced")
+                    if !typeSize.isAccessibilitySize { Spacer() }
+                    Button(tr("完成", "Done", "Selesai")) { collapse() }
+                }.buttonStyle(.borderless).font(.subheadline)
+            }.buttonStyle(.borderless).padding(.vertical, 6)
+                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -12)))
+                .onChange(of: filter.category) { _, _ in collapse() }
+                .onChange(of: provider) { _, _ in collapse() }
+        }
+        if filter.active || provider != "all" {
+            ScrollView(.horizontal) {
+                HStack(spacing: 8) {
+                    if !filter.category.isEmpty {
+                        LedgerFilterChip(title: categoryLabel(filter.category)) { filter.category = "" }
+                    }
+                    if provider != "all" {
+                        LedgerFilterChip(title: sourceLabel(provider)) { provider = "all" }
+                    }
+                    if !filter.source.isEmpty {
+                        LedgerFilterChip(title: tr("账目来源：", "Entry source: ", "Sumber rekod: ") + sourceLabel(filter.source)) { filter.source = "" }
+                    }
+                    if !filter.minimum.isEmpty {
+                        LedgerFilterChip(title: "≥ RM " + filter.minimum) { filter.minimum = "" }
+                    }
+                    if !filter.maximum.isEmpty {
+                        LedgerFilterChip(title: "≤ RM " + filter.maximum) { filter.maximum = "" }
+                    }
+                }
+            }.scrollIndicators(.hidden).accessibilityIdentifier("ledger.filters.chips")
+                .transition(.opacity)
+        }
+    }
+    private func collapse() {
+        withAnimation(reduceMotion ? nil : YueJiMotion.rows) { expanded = false }
+    }
+}
+
 private enum LedgerSheetRoute: Identifiable {
     case new(Date), filter, edit(Expense)
     var id: String {
@@ -877,6 +1033,7 @@ struct ExpensesView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
     @State private var filter = LedgerFilter()
+    @State private var filtersExpanded = false
     @State private var providerFilter = "all"
     @State private var deletingNotice: TNGNotice?
     @Namespace private var expenseTransition
@@ -905,10 +1062,6 @@ struct ExpensesView: View {
             List {
                 Section {
                     MonthPicker(month: monthBinding)
-                    Picker(tr("来源", "Source", "Sumber"), selection: $providerFilter) {
-                        Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
-                        ForEach(timeline.sources, id: \.self) { Text(sourceLabel($0)).tag($0) }
-                    }
                     VStack(alignment: .leading, spacing: 8) {
                         Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
                             .font(.caption).foregroundStyle(.secondary)
@@ -924,13 +1077,21 @@ struct ExpensesView: View {
                                 .opacity(updating ? 1 : 0).accessibilityHidden(!updating)
                                 .accessibilityLabel(tr("正在更新账本", "Updating ledger", "Mengemas kini lejar"))
                             Spacer()
-                            Button { if sheet == nil { sheet = .filter } } label: { Label(filter.active ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
+                            Button {
+                                withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filtersExpanded.toggle() }
+                            } label: { Label(filter.active || providerFilter != "all" ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
                                 .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
-                                .yuejiZoomSource(id: "ledger-filter", namespace: expenseTransition)
+                                .accessibilityIdentifier("ledger.filters.toggle")
+                                .accessibilityValue(filtersExpanded ? tr("已展开", "Expanded", "Dikembangkan") : tr("已收起", "Collapsed", "Diruntuhkan"))
                         }
                     }.padding(.vertical, 6)
+                    LedgerInlineFilters(filter: $filter, provider: $providerFilter, expanded: $filtersExpanded) {
+                        if sheet == nil { sheet = .filter }
+                    }
+                    .animation(reduceMotion ? nil : YueJiMotion.rows, value: filter)
+                    .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)
                 }
-                if timeline.count == 0 && !updating {
+                if timeline.count == 0 && loadedQuery != nil {
                     ContentUnavailableView {
                         Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
                     } description: {
@@ -943,7 +1104,7 @@ struct ExpensesView: View {
                         } else {
                             Button(tr("记一笔", "Add entry", "Tambah rekod")) { if sheet == nil { sheet = .new(dateForNewExpense(in: month)) } }.yuejiPrimaryButton()
                         }
-                    }.listRowBackground(Color.clear)
+                    }.listRowBackground(Color.clear).transition(.opacity)
                 }
                 ForEach(days) { day in
                     Section {
@@ -969,10 +1130,9 @@ struct ExpensesView: View {
                                         Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                                     }.tint(.red)
                                 }
-                                .contextMenu {
-                                    Button(tr("编辑", "Edit", "Edit"), systemImage: "pencil") { if sheet == nil { sheet = .edit(entry) } }
-                                    Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive) { deleting = entry }
-                                }
+                                .modifier(ExpenseContextActions(entry: entry,
+                                    edit: { if sheet == nil { sheet = .edit(entry) } },
+                                    delete: { deleting = entry }))
                             }
                         }
                     } header: { Text(dateLabel(day.date)) }
@@ -987,10 +1147,13 @@ struct ExpensesView: View {
                     do {
                         let fresh = try await model.timeline(month: requestedMonth, query: query)
                         guard !Task.isCancelled, self.query == query else { return }
-                        // Only month changes animate the list diff. Typing a search,
-                        // refreshing, or saving a record must not restart a page animation.
-                        let changingMonth = loadedQuery.map { $0.month != query.month } ?? false
-                        withAnimation(!reduceMotion && changingMonth ? YueJiMotion.month : nil) {
+                        // Commit only the latest completed result. Animate structural
+                        // changes, not every search keystroke or background refresh.
+                        let changingSelection = loadedQuery.map {
+                            $0.month != query.month || $0.filter != query.filter || $0.provider != query.provider
+                        } ?? false
+                        let changingEmptyState = loadedQuery != nil && (timeline.count == 0) != (fresh.count == 0)
+                        withAnimation(!reduceMotion && (changingSelection || changingEmptyState) ? YueJiMotion.month : nil) {
                             timeline = fresh
                             loadedQuery = query
                         }
@@ -1005,7 +1168,10 @@ struct ExpensesView: View {
                 .sheet(item: $sheet) { route in
                     switch route {
                     case .filter:
-                        LedgerFilterEditor(value: filter) { filter = $0 }
+                        LedgerFilterEditor(value: filter) { value in
+                            filter = value
+                            withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filtersExpanded = false }
+                        }
                             .presentationDetents([.medium, .large])
                             .ledgerFeedback(modal: true)
                     case .new(let date): ExpenseEditor(original: nil, initialDate: date)
@@ -1094,6 +1260,7 @@ struct ExpenseDetailView: View {
     @State private var editorPresented = false
     @State private var returnedAfterDeletion = false
     @State private var deleting: Expense?
+    @State private var compactTitle = false
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
@@ -1111,18 +1278,7 @@ struct ExpenseDetailView: View {
                 if let detail {
                     let entry = detail.entry
                     Section {
-                        VStack(spacing: 12) {
-                            Text(entry.paidByFriend == nil ? tr("实付总额", "Payment total", "Jumlah bayaran") : tr("我的份额", "My share", "Bahagian saya"))
-                                .font(.caption).foregroundStyle(.secondary)
-                            TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection).font(.largeTitle.bold())
-                                .minimumScaleFactor(0.6).lineLimit(1)
-                            if entry.paidByFriend != nil {
-                                Text(tr("朋友代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya")).font(.caption).foregroundStyle(.secondary)
-                            }
-                            Text(entry.displayName).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
-                            Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
-                            Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity).padding(.vertical, 20)
+                        ExpenseDetailHero(entry: entry, compact: $compactTitle)
                     }
                     if let description = entry.entryDescription, !description.isEmpty, description != entry.displayName {
                     Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
@@ -1220,6 +1376,9 @@ struct ExpenseDetailView: View {
             .yuejiListSurface().navigationTitle(tr("账目详情", "Entry details", "Butiran rekod"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                ToolbarItem(placement: .principal) {
+                    ExpenseDetailTitle(entry: detail?.entry, compact: compactTitle)
+                }
                 if !embeddedInNavigation {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(tr("关闭", "Close", "Tutup")) { dismiss() }
@@ -1287,6 +1446,75 @@ struct ExpenseDetailView: View {
         dismiss()
     }
 
+}
+
+private struct ExpenseDetailHero: View {
+    @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let entry: Expense
+    @Binding var compact: Bool
+    var body: some View {
+        let _ = uiLocale.identifier
+        let motion = !reduceMotion
+        VStack(spacing: 12) {
+            Text(entry.paidByFriend == nil ? tr("实付总额", "Payment total", "Jumlah bayaran") : tr("我的份额", "My share", "Bahagian saya"))
+                .font(.caption).foregroundStyle(.secondary)
+            TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection)
+                .font(.largeTitle.bold()).minimumScaleFactor(0.6).lineLimit(1)
+            if entry.paidByFriend != nil {
+                Text(tr("朋友代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya"))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Text(entry.displayName).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
+            Text(entry.categorySummary).font(.subheadline).foregroundStyle(.secondary)
+            Text(dateLabel(entry.date, time: true) + entry.timeSourceSuffix).font(.subheadline).foregroundStyle(.secondary)
+        }.frame(maxWidth: .infinity).padding(.vertical, 20)
+            // Visual-only interpolation cannot change the List row's height or
+            // trigger financial projections on every scroll frame.
+            .visualEffect { content, geometry in
+                let travel = max(0, -geometry.frame(in: .scrollView(axis: .vertical)).minY)
+                let progress = motion ? min(1, travel / max(1, geometry.size.height)) : 0
+                return content.scaleEffect(1 - progress * 0.08, anchor: .top)
+                    .opacity(Double(1 - progress * 0.65))
+            }
+            .onGeometryChange(for: Bool.self) { geometry in
+                geometry.frame(in: .scrollView(axis: .vertical)).maxY < 52
+            } action: { compact = $0 }
+            .accessibilityIdentifier("transaction.detail.header")
+    }
+}
+
+private struct ExpenseDetailTitle: View {
+    @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let entry: Expense?
+    let compact: Bool
+    var body: some View {
+        let _ = uiLocale.identifier
+        ZStack {
+            Text(tr("账目详情", "Entry details", "Butiran rekod")).font(.headline)
+                .opacity(compact && entry != nil ? 0 : 1)
+                .accessibilityHidden(compact && entry != nil)
+            if let entry {
+                VStack(spacing: 2) {
+                    Text(entry.displayName).font(.subheadline.weight(.semibold)).lineLimit(1)
+                    if !typeSize.isAccessibilitySize {
+                        TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection)
+                            .font(.caption.weight(.medium)).lineLimit(1)
+                    }
+                }.opacity(compact ? 1 : 0)
+                    .offset(y: reduceMotion || compact ? 0 : 6)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(entry.displayName + ", " + entry.purchaseDirection.formattedAmount(entry.purchaseDisplayCents))
+                    .accessibilityHidden(!compact)
+            }
+        }.frame(maxWidth: 240).frame(height: 44)
+            .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: compact)
+            .allowsHitTesting(false)
+            .accessibilityIdentifier("transaction.detail.compactTitle")
+    }
 }
 
 /// A captured presenting value survives the dialog resetting its binding.
