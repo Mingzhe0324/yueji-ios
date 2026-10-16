@@ -6,8 +6,8 @@ pr: none
 name: YueJi-$(Date:yyyyMMdd).$(Rev:r)
 
 jobs:
-  - job: BuildUnsignedIPA
-    displayName: YueJi IPA (unsigned, Xcode 26.6)
+  - job: NativeTests
+    displayName: YueJi native tests (Xcode 26.6)
     timeoutInMinutes: 60
     pool:
       vmImage: macOS-26
@@ -68,6 +68,59 @@ jobs:
         env:
           SIMULATOR_ID: $(SIMULATOR_ID)
       - bash: |
+          python3 scripts/report_test_failures.py "$BUILD_ARTIFACTSTAGINGDIRECTORY/build-test.log" \
+            --output "$BUILD_ARTIFACTSTAGINGDIRECTORY/test-failures.txt"
+        displayName: Show native test assertion failures
+        condition: always()
+      - task: PublishPipelineArtifact@1
+        displayName: Publish native test diagnostics
+        condition: always()
+        inputs:
+          targetPath: $(Build.ArtifactStagingDirectory)
+          # Retries keep BuildId; each stage/job attempt needs a new artifact name.
+          artifact: YueJi-tests-build$(Build.BuildId)-stage$(System.StageAttempt)-attempt$(System.JobAttempt)
+          publishLocation: pipeline
+
+  # A fresh job has its own time budget; a slow test run cannot consume IPA build time.
+  - job: BuildUnsignedIPA
+    displayName: YueJi IPA (unsigned, Xcode 26.6)
+    dependsOn: NativeTests
+    condition: succeeded()
+    timeoutInMinutes: 60
+    pool:
+      vmImage: macOS-26
+    variables:
+      DEVELOPER_DIR: /Applications/Xcode_26.6.app/Contents/Developer
+    steps:
+      - checkout: self
+        persistCredentials: false
+      - bash: |
+          set -euo pipefail
+          mkdir -p "$BUILD_ARTIFACTSTAGINGDIRECTORY"
+          if [ ! -d "$DEVELOPER_DIR" ]; then
+            printf 'Xcode 26.6 is not installed on this build image: %s\n' "$DEVELOPER_DIR" >&2
+            exit 1
+          fi
+          python3 scripts/check_project.py
+          xcodebuild -version
+          python3 - <<'PY'
+          import os, plistlib, subprocess
+          from pathlib import Path
+          info = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+          toolchain = subprocess.check_output(['xcodebuild', '-version'], text=True).strip()
+          if not toolchain.splitlines()[0].startswith('Xcode 26.6'):
+              raise SystemExit(f'This free Azure workflow requires Xcode 26.6; found {toolchain}')
+          sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-version'], text=True).strip()
+          if int(sdk.split('.')[0]) != 26:
+              raise SystemExit(f'This workflow requires an iOS 26 SDK; found {sdk}')
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          label = f"{info['CFBundleShortVersionString']}-build{info['CFBundleVersion']}-{commit[:7]}"
+          print(f'##vso[task.setvariable variable=IPA_LABEL]{label}')
+          output = Path(os.environ['BUILD_ARTIFACTSTAGINGDIRECTORY']) / 'BuildInfo.txt'
+          output.write_text(f'YueJi {label}\nSource commit: {commit}\n{toolchain}\niPhone SDK: {sdk}\nUnsigned IPA for personal signing.\nBuilt with the iOS 26 SDK, not the iOS 27 SDK.\n', encoding='utf-8')
+          PY
+        displayName: Verify project and record source version
+      - bash: |
           set -euo pipefail
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
@@ -94,11 +147,6 @@ jobs:
         displayName: Verify and package IPA for personal signing
         env:
           IPA_LABEL: $(IPA_LABEL)
-      - bash: |
-          python3 scripts/report_test_failures.py "$BUILD_ARTIFACTSTAGINGDIRECTORY/build-test.log" \
-            --output "$BUILD_ARTIFACTSTAGINGDIRECTORY/test-failures.txt"
-        displayName: Show native test assertion failures
-        condition: always()
       - task: PublishPipelineArtifact@1
         displayName: Publish IPA and build diagnostics
         condition: always()
