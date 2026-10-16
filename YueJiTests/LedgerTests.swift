@@ -1020,8 +1020,13 @@ final class TransactionItemsTests: XCTestCase {
             if review {
                 try ledger.resolveNotice(id: notice.id, purpose: "expense", party: "Shop", cents: 3500, date: date, category: "其他", remember: true, items: items)
             } else {
-                try ledger.confirmTNGExpense(id: notice.id, merchant: "Shop", cents: 3500, date: date, category: "其他", remember: true, items: items)
+                XCTAssertThrowsError(try ledger.confirmTNGExpense(id: notice.id, merchant: "Shop", cents: 3500, date: date, category: "其他", items: items, entryDescription: String(repeating: "x", count: 2001)))
+                XCTAssertTrue(ledger.expenses.isEmpty)
+                XCTAssertEqual(ledger.tngNotices[0], notice)
+                try ledger.confirmTNGExpense(id: notice.id, merchant: "Shop", cents: 3500, date: date, category: "其他", remember: true, items: items, entryDescription: "  Lunch and supplies  ")
                 ledger = try ledger.validated()
+                XCTAssertEqual(ledger.expenses[0].entryDescription, "Lunch and supplies")
+                XCTAssertEqual(try LocalStore.decode(LocalStore.encode(ledger)).expenses[0].entryDescription, "Lunch and supplies")
             }
             let entry = try XCTUnwrap(ledger.expenses.first)
             XCTAssertEqual(entry.items, items)

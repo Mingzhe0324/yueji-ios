@@ -1027,8 +1027,6 @@ private struct LedgerInlineFilters: View {
                 }.buttonStyle(.borderless).font(.subheadline)
             }.buttonStyle(.borderless).padding(.vertical, 6)
                 .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -12)))
-                .onChange(of: filter.category) { _, _ in collapse() }
-                .onChange(of: provider) { _, _ in collapse() }
         }
         if filter.active || provider != "all" {
             ScrollView(.horizontal) {
@@ -1213,7 +1211,6 @@ struct ExpensesView: View {
                     case .filter:
                         LedgerFilterEditor(value: filter) { value in
                             filter = value
-                            withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filtersExpanded = false }
                         }
                             .presentationDetents([.medium, .large])
                             .ledgerFeedback(modal: true)
@@ -1323,7 +1320,7 @@ struct ExpenseDetailView: View {
                     Section {
                         ExpenseDetailHero(entry: entry, compact: $compactTitle)
                     }
-                    if let description = entry.entryDescription, !description.isEmpty, description != entry.displayName {
+                    if let description = entry.entryDescription, !description.isEmpty {
                     Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(tr("账目名称／描述", "Name / description", "Nama / penerangan")).font(.caption).foregroundStyle(.secondary)

@@ -530,13 +530,16 @@ extension Ledger {
         if notice.status == "transfer" { return tr("转出已显示在账本，尚未计入消费。", "Outgoing transfer is in your ledger, excluded from spending.", "Pindahan disimpan, tidak dikira sebagai belanja.") }
         return tr("通知已保存到待确认，未计入消费。", "Notification saved for review, excluded from spending.", "Notifikasi disimpan untuk semakan, tidak dikira sebagai belanja.")
     }
-    mutating func confirmTNGExpense(id: String, merchant: String, cents: Int, date: Date, category: String, remember: Bool = false, items: [ExpenseItem] = []) throws {
+    mutating func confirmTNGExpense(id: String, merchant: String, cents: Int, date: Date, category: String, remember: Bool = false, items: [ExpenseItem] = [], entryDescription: String = "") throws {
+        let description = entryDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard description.count <= 2000 else { throw LedgerError.invalid("交易描述过长。") }
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].expenseID == nil, tngNotices[i].kind != "incoming", ["pending", "transfer"].contains(tngNotices[i].status),
               cents > 0, cents <= 10_000_000_000, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               merchant.count <= 200, categoryNames.contains(category), date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("付款或分账数据无效。") }
         var expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference)
         expense.timeSource = date == tngNotices[i].date ? (tngNotices[i].usesReceivedDate ? (tngNotices[i].provider == "Apple Pay" ? "received" : "notification") : "supplied") : "edited"
         expense.note = tngNotices[i].note
+        expense.entryDescription = description.isEmpty ? nil : description
         expense = try expense.replacingItems(items, allowedCategories: categoryNames)
         expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
         if remember && items.isEmpty { merchantCategories[friendKey(expense.merchant)] = category }

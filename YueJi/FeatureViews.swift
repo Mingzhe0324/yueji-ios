@@ -1499,6 +1499,7 @@ struct TNGNoticeView: View {
     @EnvironmentObject var model: LedgerModel
     let id: String
     @State private var merchant = ""
+    @State private var entryDescription = ""
     @State private var amount = ""
     @State private var date = Date()
     @State private var category = "其他"
@@ -1571,6 +1572,11 @@ struct TNGNoticeView: View {
                 if let expenseID = notice.expenseID {
                     if let entry = model.expense(id: expenseID) {
                         ExpenseRow(entry: entry)
+                        if let description = entry.entryDescription, !description.isEmpty {
+                            LabeledContent(tr("账目名称／描述", "Name / description", "Nama / penerangan")) {
+                                Text(description).textSelection(.enabled)
+                            }.accessibilityIdentifier("notice.description.detail")
+                        }
                         NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
                         Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) {
                             guard !itemsEditorPresented, editing == nil else { return }
@@ -1579,7 +1585,9 @@ struct TNGNoticeView: View {
                     } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
                 } else if ["pending", "transfer"].contains(notice.status) {
                     Section(tr("确认记为消费", "Confirm as expense", "Sahkan sebagai belanja")) {
-                        TextField(tr("商户 / 用途", "Merchant / purpose", "Peniaga / tujuan"), text: $merchant)
+                        TextField(tr("商户", "Merchant", "Peniaga"), text: $merchant)
+                        TextField(tr("账目名称／描述（选填）", "Name / description (optional)", "Nama / penerangan (pilihan)"), text: $entryDescription, axis: .vertical)
+                            .accessibilityIdentifier("notice.description")
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date)
                         Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
@@ -1620,8 +1628,8 @@ struct TNGNoticeView: View {
                     do {
                         let cents = try toCents(amount)
                         let items = try itemDrafts.map { try $0.savedItem() }
-                        model.perform(key: "notice-" + id, action: { [id, merchant, date, category, rememberCategory] in
-                            try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory, items: items)
+                        model.perform(key: "notice-" + id, action: { [id, merchant, entryDescription, date, category, rememberCategory] in
+                            try $0.confirmTNGExpense(id: id, merchant: merchant, cents: cents, date: date, category: category, remember: rememberCategory, items: items, entryDescription: entryDescription)
                         }, completion: { _ in model.showSaved(message: tr("已确认消费 ", "Expense confirmed ", "Belanja disahkan ") + money(cents)) }, failure: { self.error = $0.localizedDescription })
                     } catch { self.error = error.localizedDescription }
                 }
