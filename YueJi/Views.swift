@@ -435,7 +435,6 @@ struct DashboardView: View {
             }.yuejiListSurface()
             .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                 ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
-                    .expenseCardDestination(id: destination.id, namespace: navigationMotion)
             }
             .task(id: summaryQuery) {
                 guard loadedSummary != summaryQuery else { return }
@@ -504,7 +503,6 @@ struct DashboardView: View {
             ForEach(recentEntries) { entry in
                 NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                     ExpenseRow(entry: entry).foregroundStyle(.primary)
-                        .expenseCardSource(id: entry.id, namespace: navigationMotion)
                 }
                 .modifier(ExpenseContextActions(entry: entry,
                     edit: { guard !adding, editingExpense == nil else { return }; editingExpense = entry },
@@ -2615,30 +2613,7 @@ private struct YueJiGlassSurface: ViewModifier {
 }
 
 
-// Opt in only the read-only transaction route. Editor sheets retain the system
-// sheet transition and its adaptive-presentation delegate for unsaved drafts.
-private struct ExpenseCardDestination: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let id: String
-    let namespace: Namespace.ID
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 18.0, *), !reduceMotion {
-            content.navigationTransition(.zoom(sourceID: id, in: namespace))
-        } else { content }
-    }
-}
-
-private struct ExpenseCardSource: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let id: String
-    let namespace: Namespace.ID
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 18.0, *), !reduceMotion {
-            content.matchedTransitionSource(id: id, in: namespace)
-        } else { content }
-    }
-}
-
+// Transaction details use standard push/pop from every entry point, including Overview.
 private struct YueJiZoomDestination: ViewModifier {
     let id: String
     let namespace: Namespace.ID
@@ -2653,12 +2628,6 @@ private struct YueJiZoomSource: ViewModifier {
 // Existing guide/source IDs remain stable; navigation uses the native system transitions.
 
 extension View {
-    func expenseCardDestination(id: String, namespace: Namespace.ID) -> some View {
-        modifier(ExpenseCardDestination(id: id, namespace: namespace))
-    }
-    func expenseCardSource(id: String, namespace: Namespace.ID) -> some View {
-        modifier(ExpenseCardSource(id: id, namespace: namespace))
-    }
     func yuejiZoom(id: String, namespace: Namespace.ID) -> some View {
         modifier(YueJiZoomDestination(id: id, namespace: namespace))
     }
