@@ -24,6 +24,7 @@ class SimulatorRunnerTests(unittest.TestCase):
             self.assertIn('bootstatus', commands[4])
             self.assertIn('-only-testing:YueJiUITests', commands[5])
             self.assertEqual(stage.call_args_list[5].kwargs['test_case_timeout'], 900)
+            self.assertEqual(stage.call_args_list[5].kwargs['test_startup_timeout'], 360)
             self.assertEqual(stage.call_args_list[2].kwargs,
                              {'test_case_timeout': 300, 'test_transition_timeout': 300})
             self.assertEqual(stage.call_args_list[2].args[2], 1200)
@@ -126,6 +127,27 @@ raise SystemExit(65)
         code, log = self.run_python(source, test_case_timeout=0.7, test_transition_timeout=2)
         self.assertEqual(code, 65)
         self.assertNotIn('timed out', log)
+
+    def test_startup_has_separate_budget_but_between_cases_remain_bounded(self):
+        source = """import time
+print('Running tests...')
+time.sleep(0.7)
+print("Test Case '-[Suite testOne]' started.")
+print("Test Case '-[Suite testOne]' passed (0 seconds).")
+time.sleep(2)
+"""
+        code, log = self.run_python(source, test_case_timeout=2,
+                                    test_startup_timeout=2, test_transition_timeout=0.3)
+        self.assertEqual(code, 124)
+        self.assertIn('Native runner made no test transition', log)
+        self.assertNotIn('did not start tests', log)
+
+    def test_runner_output_cannot_reset_startup_deadline(self):
+        source = "import time\nwhile True:\n print('Running tests...'); time.sleep(0.05)"
+        code, log = self.run_python(source, test_case_timeout=2,
+                                    test_startup_timeout=0.4, test_transition_timeout=2)
+        self.assertEqual(code, 124)
+        self.assertIn('did not start tests within 0.4 seconds', log)
 
     def test_noisy_stuck_case_cannot_extend_its_budget(self):
         source = """import time

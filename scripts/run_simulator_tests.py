@@ -39,7 +39,7 @@ def stop_process(process, force, emit, process_group=False):
 
 
 def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_transition_timeout=180,
-              test_finalization_timeout=600):
+              test_finalization_timeout=600, test_startup_timeout=None):
     """Stream output and bound execution/cleanup while preserving the stage failure."""
     def emit(line):
         print(line, end='', flush=True)
@@ -66,7 +66,8 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
     active_test = None
     tests_started = False
     finalizing = False
-    test_deadline = time.monotonic() + test_transition_timeout if test_case_timeout is not None else None
+    startup_timeout = test_transition_timeout if test_startup_timeout is None else test_startup_timeout
+    test_deadline = started + startup_timeout if test_case_timeout is not None else None
     forced_code = None
     termination_deadline = None
     exit_observed = False
@@ -96,7 +97,7 @@ def run_stage(command, log, timeout, grace=5, test_case_timeout=None, test_trans
                 elif active_test is not None:
                     detail = f'Native test {active_test} exceeded {test_case_timeout} seconds'
                 elif not tests_started:
-                    detail = f'Native runner did not start tests within {test_transition_timeout} seconds'
+                    detail = f'Native runner did not start tests within {startup_timeout} seconds'
                 else:
                     detail = f'Native runner made no test transition within {test_transition_timeout} seconds'
                 emit(f'CI stage timed out: {detail}; native verification did not complete.\n')
@@ -187,7 +188,10 @@ def main():
     ]
     with (args.artifacts / 'build-test.log').open('w', encoding='utf-8') as log:
         for command, timeout in stages:
-            options = {'test_case_timeout': 900} if '-only-testing:YueJiUITests' in command else {}
+            # UI runner launch includes installation and the XCTest handshake.
+            # Hosted startup can consume most of the between-case allowance;
+            # give it a separate fixed budget, never reset by noisy runner logs.
+            options = {'test_case_timeout': 900, 'test_startup_timeout': 360} if '-only-testing:YueJiUITests' in command else {}
             if '-only-testing:YueJiTests' in command:
                 # Bound Xcode launch separately: a stalled hosted runner must not
                 # consume the whole unit-suite allowance before tests even start.
