@@ -13,6 +13,34 @@ enum YueJiMotion {
     static let tone = Animation.easeInOut(duration: 0.55)
 }
 
+/// Move only the completed monthly summary, keeping navigation and row identity stable.
+private struct MonthSummaryMotion: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let month: String?
+    @State private var previousMonth: String?
+    @State private var offset: CGFloat = 0
+    @State private var opacity = 1.0
+    func body(content: Content) -> some View {
+        content.offset(x: reduceMotion ? 0 : offset).opacity(reduceMotion ? 1 : opacity)
+            .task(id: month) {
+                let previous = previousMonth
+                previousMonth = month
+                guard !reduceMotion, let previous, let month, previous != month else { return }
+                var immediate = Transaction(animation: nil)
+                immediate.disablesAnimations = true
+                withTransaction(immediate) {
+                    offset = month > previous ? 12 : -12
+                    opacity = 0.75
+                }
+                do { try await Task.sleep(for: .milliseconds(16)) } catch {
+                    withTransaction(immediate) { offset = 0; opacity = 1 }
+                    return
+                }
+                withAnimation(YueJiMotion.standard) { offset = 0; opacity = 1 }
+            }
+    }
+}
+
 struct EditorSaveLabel: View {
     let saving: Bool
     var body: some View {
@@ -407,6 +435,7 @@ struct DashboardView: View {
                 }
                 Section {
                     spendingCard
+                        .modifier(MonthSummaryMotion(month: loadedSummary?.month))
                 }
                 PendingBookkeepingCard()
                 quickActions
@@ -444,10 +473,12 @@ struct DashboardView: View {
                     // Animate the completed snapshot, never a stale/intermediate month.
                     let changingMonth = loadedSummary.map { $0.month != summaryQuery.month } ?? false
                     let changingEmptyState = loadedSummary != nil && (summary.entries.isEmpty != fresh.entries.isEmpty)
+                    let removingRows = loadedSummary?.month == summaryQuery.month &&
+                        !Set(summary.entries.map(\.id)).subtracting(Set(fresh.entries.map(\.id))).isEmpty
                     let returningRows = model.restoredFeedback.map {
                         $0.date.timeIntervalSinceNow > -3 && !$0.expenseIDs.intersection(Set(fresh.entries.map(\.id))).subtracting(Set(summary.entries.map(\.id))).isEmpty
                     } ?? false
-                    withAnimation(!reduceMotion && (changingMonth || changingEmptyState || returningRows) ? YueJiMotion.month : nil) {
+                    withAnimation(!reduceMotion && (changingMonth || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
                         summary = fresh; loadedSummary = summaryQuery
                     }
                 } catch is CancellationError { return }
@@ -780,7 +811,7 @@ private struct ReceiptPaper: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let summary: String
     @State private var revealed = false
-    // Bound the number of animated views while preserving every character of
+    // Bound the number of text views while preserving every character of
     // long legacy summaries in the final block. No receipt data is reparsed.
     private var blocks: [String] {
         let lines = summary.components(separatedBy: "\n")
@@ -789,14 +820,14 @@ private struct ReceiptPaper: View {
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
-            ForEach(Array(blocks.enumerated()), id: \.offset) { index, line in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, line in
                 Text(line.isEmpty ? " " : line).font(.subheadline).monospacedDigit()
                     .textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
-                    .opacity(reduceMotion || revealed ? 1 : 0)
-                    .offset(y: reduceMotion || revealed ? 0 : 8)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.25).delay(Double(min(index, 8)) * 0.025), value: revealed)
             }
         }.padding(.vertical, 12)
+            .opacity(reduceMotion || revealed ? 1 : 0)
+            .offset(y: reduceMotion || revealed ? 0 : 6)
+            .animation(reduceMotion ? nil : YueJiMotion.standard, value: revealed)
             .task {
                 guard !reduceMotion else { revealed = true; return }
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
@@ -1120,6 +1151,7 @@ struct ExpensesView: View {
                                 .accessibilityValue(filtersExpanded ? tr("已展开", "Expanded", "Dikembangkan") : tr("已收起", "Collapsed", "Diruntuhkan"))
                         }
                     }.padding(.vertical, 6)
+                    .modifier(MonthSummaryMotion(month: loadedQuery?.month))
                     LedgerInlineFilters(filter: $filter, provider: $providerFilter, expanded: $filtersExpanded) {
                         if sheet == nil { sheet = .filter }
                     }
@@ -1187,12 +1219,16 @@ struct ExpensesView: View {
                             $0.month != query.month || $0.filter != query.filter || $0.provider != query.provider
                         } ?? false
                         let changingEmptyState = loadedQuery != nil && (timeline.count == 0) != (fresh.count == 0)
+                        let removingRows = loadedQuery?.month == query.month && !changingSelection && loadedQuery?.search == query.search && (
+                            !Set(timeline.expenses.map(\.id)).subtracting(Set(fresh.expenses.map(\.id))).isEmpty ||
+                            !Set(timeline.transfers.map(\.id)).subtracting(Set(fresh.transfers.map(\.id))).isEmpty ||
+                            timeline.count > fresh.count)
                         let returningRows = model.restoredFeedback.map { feedback in
                             let expenses = feedback.expenseIDs.intersection(Set(fresh.expenses.map(\.id))).subtracting(Set(timeline.expenses.map(\.id)))
                             let notices = feedback.noticeIDs.intersection(Set(fresh.transfers.map(\.id))).subtracting(Set(timeline.transfers.map(\.id)))
                             return feedback.date.timeIntervalSinceNow > -3 && (!expenses.isEmpty || !notices.isEmpty)
                         } ?? false
-                        withAnimation(!reduceMotion && (changingSelection || changingEmptyState || returningRows) ? YueJiMotion.month : nil) {
+                        withAnimation(!reduceMotion && (changingSelection || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
                             timeline = fresh
                             loadedQuery = query
                         }
