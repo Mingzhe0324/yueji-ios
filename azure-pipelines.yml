@@ -104,5 +104,6 @@ jobs:
         condition: always()
         inputs:
           targetPath: $(Build.ArtifactStagingDirectory)
-          artifact: YueJi-build$(Build.BuildId)
+          # Retries keep BuildId; each stage/job attempt needs a new artifact name.
+          artifact: YueJi-build$(Build.BuildId)-stage$(System.StageAttempt)-attempt$(System.JobAttempt)
           publishLocation: pipeline
