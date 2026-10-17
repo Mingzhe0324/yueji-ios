@@ -225,11 +225,11 @@ struct MainView: View {
         let _ = uiLocale.identifier
         ZStack {
             Color("LaunchBackground").ignoresSafeArea()
-            // Prepare the real screens beneath the opaque logo, before fading it away.
-            if model.loaded || model.didFinishLaunch {
+            // Mount native navigation/toolbars in their interactive state. Mounting
+            // them under allowsHitTesting(false), then flipping it at logo removal,
+            // can leave the first toolbar button non-hittable on a cold launch.
+            if model.didFinishLaunch {
                 tabs
-                    .allowsHitTesting(model.didFinishLaunch)
-                    .accessibilityHidden(!model.didFinishLaunch)
                     .transition(.identity)
             } else if !openingEnabled {
                 ProgressView(tr("正在读取账本", "Loading ledger", "Memuatkan lejar"))
@@ -240,6 +240,8 @@ struct MainView: View {
                     logoFinished = true
                     finishLaunchIfReady()
                 }
+                // The departing visual layer must not intercept the ready toolbar.
+                .allowsHitTesting(false)
                 .transition(.opacity).zIndex(1)
             }
         }
