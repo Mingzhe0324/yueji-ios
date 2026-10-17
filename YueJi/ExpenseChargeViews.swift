@@ -2,6 +2,98 @@ import SwiftUI
 import CoreLocation
 import MapKit
 
+struct MerchantMatchInput: Equatable {
+    var name: String
+    var address: String
+    var latitude: Double?
+    var longitude: Double?
+}
+
+@MainActor
+final class ExpenseMerchantMatcher: ObservableObject {
+    @Published var loading = false
+    @Published var message: String?
+    @Published var candidates: [ExpensePlace] = []
+    @Published var automatic: ExpensePlace?
+    private var generation = UUID()
+    private let geocoder = CLGeocoder()
+    private var search: MKLocalSearch?
+
+    func cancel() {
+        generation = UUID()
+        geocoder.cancelGeocode(); search?.cancel(); search = nil
+        loading = false; message = nil; candidates = []; automatic = nil
+    }
+
+    func find(_ input: MerchantMatchInput) async {
+        guard #available(iOS 18.0, *) else { return }
+        let token = generation
+        let name = input.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let address = input.address.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty || !address.isEmpty || input.latitude != nil else { return }
+        do {
+            try await Task.sleep(for: .milliseconds(700))
+            guard !Task.isCancelled, generation == token else { return }
+            loading = true
+            var anchor: CLLocation?
+            var precise = false
+            if let lat = input.latitude, let lon = input.longitude,
+               CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
+                anchor = CLLocation(latitude: lat, longitude: lon); precise = true
+            } else if !address.isEmpty {
+                let marks = try await geocoder.geocodeAddressString(address)
+                guard !Task.isCancelled, generation == token else { return }
+                // A city or ambiguous address can suggest places, but cannot auto-link one.
+                if marks.count == 1 {
+                    anchor = marks.first?.location
+                    precise = marks.first?.thoroughfare != nil
+                }
+            }
+            let operation: MKLocalSearch
+            if name.isEmpty, let anchor {
+                operation = MKLocalSearch(request: MKLocalPointsOfInterestRequest(center: anchor.coordinate, radius: 500))
+            } else {
+                let request = MKLocalSearch.Request()
+                request.naturalLanguageQuery = [name, address].filter { !$0.isEmpty }.joined(separator: " ")
+                request.resultTypes = .pointOfInterest
+                if let anchor {
+                    request.region = MKCoordinateRegion(center: anchor.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
+                }
+                operation = MKLocalSearch(request: request)
+            }
+            search = operation
+            let response = try await operation.start()
+            guard !Task.isCancelled, generation == token else { return }
+            var places: [ExpensePlace] = []
+            var ranked: [MerchantMatchCandidate] = []
+            var seen = Set<String>()
+            for item in response.mapItems {
+                guard let id = item.identifier?.rawValue, let title = item.name,
+                      seen.insert(id).inserted else { continue }
+                let coordinate = item.placemark.coordinate
+                let distance = anchor?.distance(from: CLLocation(latitude: coordinate.latitude, longitude: coordinate.longitude)) ?? .infinity
+                if anchor != nil && distance > 500 { continue }
+                places.append(ExpensePlace(name: title, address: item.placemark.title ?? "",
+                    latitude: coordinate.latitude, longitude: coordinate.longitude, applePlaceID: id))
+                ranked.append(MerchantMatchCandidate(id: id, name: title, distance: distance))
+            }
+            loading = false; search = nil
+            if precise, let id = MerchantMatching.automaticID(name: name, candidates: ranked) {
+                automatic = places.first { $0.applePlaceID == id }
+            } else {
+                candidates = Array(places.prefix(6))
+                message = places.isEmpty
+                    ? tr("没有找到对应店铺，可保留地点或搜索店名。", "No matching place found. Keep this location or search by name.", "Tiada tempat sepadan. Kekalkan lokasi atau cari nama kedai.")
+                    : tr("请选择正确店铺，避免关联到附近其他商户。", "Choose the correct place from nearby matches.", "Pilih kedai yang betul daripada padanan berdekatan.")
+            }
+        } catch {
+            guard !Task.isCancelled, generation == token else { return }
+            loading = false; search = nil
+            message = tr("暂时无法匹配店铺，仍可保存地点或搜索店名。", "Matching unavailable. You can still save the location or search by name.", "Padanan tidak tersedia. Anda masih boleh simpan lokasi atau cari nama kedai.")
+        }
+    }
+}
+
 @MainActor
 final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDelegate {
     @Published var result: ExpensePlace?
@@ -143,6 +235,7 @@ struct ExpensePlaceDetails: View {
 /// the ledger; only Done in an editor returns a selected place to its parent.
 struct ExpensePlaceMapSheet: View {
     let initial: ExpensePlace?
+    var merchantHint: String = ""
     var onSave: ((ExpensePlace) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -164,6 +257,16 @@ struct ExpensePlaceMapSheet: View {
     @StateObject private var mapLocator = ExpensePlaceLocator()
     @State private var movingMap = false
     @State private var visible = false
+    @StateObject private var merchantMatcher = ExpenseMerchantMatcher()
+    private var matchInput: MerchantMatchInput? {
+        guard visible, initialized, editing, draft.applePlaceID == nil else { return nil }
+        let generic = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
+        let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let expected = typedName != selected?.name && !generic.contains(typedName) ? typedName : merchantHint
+        let sameAddress = address.trimmingCharacters(in: .whitespacesAndNewlines) == selected?.address
+        return MerchantMatchInput(name: expected, address: address, latitude: sameAddress ? selected?.latitude : nil,
+                                  longitude: sameAddress ? selected?.longitude : nil)
+    }
     private var editing: Bool { onSave != nil }
     private var hasChanges: Bool { editing && initialized && draft != (initial ?? ExpensePlace(name: "")) }
     private var coordinate: CLLocationCoordinate2D? {
@@ -185,6 +288,7 @@ struct ExpensePlaceMapSheet: View {
             ScrollView {
                 VStack(spacing: 18) {
                     mapCard
+                    if editing { merchantSuggestions }
                     if #available(iOS 18.0, *) {
                         AppleMerchantCard(placeID: draft.applePlaceID)
                     }
@@ -234,7 +338,14 @@ struct ExpensePlaceMapSheet: View {
                 query = [initial?.name, initial?.address].compactMap { $0 }.joined(separator: " ")
                 initialized = true
             }
-            .onDisappear { visible = false; cancelSearch(); mapLocator.cancel(); movingMap = false }
+            .onDisappear { visible = false; cancelSearch(); merchantMatcher.cancel(); mapLocator.cancel(); movingMap = false }
+            .task(id: matchInput) {
+                merchantMatcher.cancel()
+                guard let input = matchInput else { return }
+                await merchantMatcher.find(input)
+                guard !Task.isCancelled, visible, matchInput == input, let matched = merchantMatcher.automatic else { return }
+                select(matched, animated: true)
+            }
             .onChange(of: mapLocator.result) { _, value in
                 guard visible, let value else { return }
                 cancelSearch(); results = []; searchFocused = false
@@ -255,7 +366,7 @@ struct ExpensePlaceMapSheet: View {
             .mapControls { MapCompass(); MapScaleView() }
             .onMapCameraChange(frequency: .continuous) { _ in
                 guard editing, position.positionedByUser, !movingMap else { return }
-                mapLocator.cancel()
+                mapLocator.cancel(); merchantMatcher.cancel()
                 movingMap = true
             }
             .onMapCameraChange(frequency: .onEnd) { context in
@@ -291,7 +402,7 @@ struct ExpensePlaceMapSheet: View {
                 }.disabled(center == nil || movingMap).accessibilityIdentifier("place.useCenter")
                 Divider()
                 Button {
-                    cancelSearch(); searchFocused = false; mapLocator.start()
+                    merchantMatcher.cancel(); cancelSearch(); searchFocused = false; mapLocator.start()
                 } label: {
                     HStack(spacing: 8) {
                         if mapLocator.busy { ProgressView().controlSize(.small) }
@@ -305,6 +416,26 @@ struct ExpensePlaceMapSheet: View {
             }
         }.background(.background, in: RoundedRectangle(cornerRadius: 24))
             .clipShape(RoundedRectangle(cornerRadius: 24))
+    }
+    private var merchantSuggestions: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            if merchantMatcher.loading {
+                HStack { ProgressView().controlSize(.small); Text(tr("正在匹配附近店铺…", "Matching nearby places…", "Memadankan tempat berdekatan…")).font(.subheadline) }
+            }
+            if let message = merchantMatcher.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            ForEach(merchantMatcher.candidates.indices, id: \.self) { index in
+                let place = merchantMatcher.candidates[index]
+                Button {
+                    merchantMatcher.cancel(); cancelSearch(); mapLocator.cancel(); select(place, animated: true)
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(place.name).font(.subheadline.weight(.medium))
+                        Text(place.address).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 6)
+                }.buttonStyle(.plain)
+            }
+        }.padding(merchantMatcher.loading || merchantMatcher.message != nil || !merchantMatcher.candidates.isEmpty ? 16 : 0)
+            .background(.background, in: RoundedRectangle(cornerRadius: 22))
     }
     private var searchPanel: some View {
         VStack(spacing: 12) {
@@ -323,7 +454,7 @@ struct ExpensePlaceMapSheet: View {
                 let item = results[index]
                 Divider()
                 Button {
-                    cancelSearch(); mapLocator.cancel(); searchFocused = false
+                    merchantMatcher.cancel(); cancelSearch(); mapLocator.cancel(); searchFocused = false
                     var chosen = ExpensePlace(name: item.name ?? tr("所选地点", "Selected place", "Tempat dipilih"),
                         address: item.placemark.title ?? "", latitude: item.placemark.coordinate.latitude,
                         longitude: item.placemark.coordinate.longitude)
@@ -353,7 +484,7 @@ struct ExpensePlaceMapSheet: View {
     private func runSearch() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        cancelSearch(); mapLocator.cancel(); searchFocused = false; message = nil; searching = true
+        merchantMatcher.cancel(); cancelSearch(); mapLocator.cancel(); searchFocused = false; message = nil; searching = true
         let token = searchID
         let request = MKLocalSearch.Request(); request.naturalLanguageQuery = text
         if let center { request.region = MKCoordinateRegion(center: center, latitudinalMeters: 10_000, longitudinalMeters: 10_000) }

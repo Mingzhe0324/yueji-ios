@@ -5,6 +5,20 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testMerchantMatchingRequiresUniqueNearbyExactName() {
+        let near = MerchantMatchCandidate(id: "a", name: "Café ABC", distance: 40)
+        XCTAssertEqual(MerchantMatching.automaticID(name: "CAFE-ABC", candidates: [near]), "a")
+        XCTAssertNil(MerchantMatching.automaticID(name: "Cafe", candidates: [near]))
+        XCTAssertNil(MerchantMatching.automaticID(name: "", candidates: [near]))
+        XCTAssertNil(MerchantMatching.automaticID(name: "Cafe ABC", candidates: [near,
+            MerchantMatchCandidate(id: "b", name: "Cafe ABC", distance: 220)]))
+        XCTAssertNil(MerchantMatching.automaticID(name: "Cafe ABC", candidates: [
+            MerchantMatchCandidate(id: "a", name: "Cafe ABC", distance: 101)]))
+        XCTAssertNil(MerchantMatching.automaticID(name: "Cafe ABC", candidates: [
+            MerchantMatchCandidate(id: "a", name: "Cafe ABC", distance: .nan)]))
+        XCTAssertEqual(MerchantMatching.automaticID(name: "Cafe ABC", candidates: [near, near]), "a")
+    }
+
     func testAutomaticPlaceTimeAndAccuracyRemainOptional() throws {
         let now = Date()
         let automatic = ExpensePlace(name: "Approximate", latitude: 3, longitude: 101,

@@ -10,7 +10,16 @@ The chosen MKMapItem identifier is stored as optional applePlaceID with the
 expense location and therefore survives drafts/backups. Old data decodes without
 it. Manual name/address changes, map-center choices and fresh GPS fixes do not
 retain a previous merchant identifier. Coordinates alone are never converted
-into a guessed merchant. Viewing a search result in a read-only map is a preview;
+into a guessed merchant. Editing an address or choosing a map point now searches
+Apple POIs using the transaction merchant name (or a manually edited place name).
+Requests debounce for 700 ms and discard stale results. A unique normalized exact
+name within 100 m can auto-link, provided no other same-name result exists within
+500 m. Address geocoding must resolve to a single street-level result before it
+can auto-link. Otherwise up to six candidates are offered; a coordinate alone
+only offers candidates. Missing results or network errors never block saving.
+The map camera moves gently to a match and respects Reduce Motion. Matching does
+not guarantee that Apple has photos, and photos still appear inside its card.
+Viewing a search result in a read-only map is a preview;
 persisting a new merchant selection requires editing and saving the location.
 
 The native card requests the specific saved identifier using MKMapItemRequest.

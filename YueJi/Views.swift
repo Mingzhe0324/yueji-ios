@@ -2024,7 +2024,7 @@ struct ExpenseEditor: View {
                 }
             }
             .sheet(isPresented: $editingPlace) {
-                ExpensePlaceMapSheet(initial: place) { value in
+                ExpensePlaceMapSheet(initial: place, merchantHint: name) { value in
                     placeNotice = nil
                     var chosen = value
                     chosen.capturedAt = nil // An explicit map choice is not an automatic recording-time guess.

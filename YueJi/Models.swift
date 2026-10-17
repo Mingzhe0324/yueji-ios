@@ -77,6 +77,25 @@ struct Share: Codable, Identifiable, Equatable {
     var repaid: Int { repayments.reduce(0) { $0 + $1.cents } }
     var owed: Int { cents - refunded - repaid + returned }
 }
+struct MerchantMatchCandidate {
+    var id: String
+    var name: String
+    var distance: Double
+}
+enum MerchantMatching {
+    static func key(_ name: String) -> String {
+        String(String.UnicodeScalarView(name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+            .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }))
+    }
+    static func automaticID(name: String, candidates: [MerchantMatchCandidate]) -> String? {
+        let expected = key(name)
+        guard expected.count >= 3 else { return nil }
+        let matches = candidates.filter { !$0.id.isEmpty && $0.distance.isFinite && $0.distance >= 0 && $0.distance <= 500 && key($0.name) == expected }
+        guard Set(matches.map(\.id)).count == 1, let closest = matches.min(by: { $0.distance < $1.distance }), closest.distance <= 100 else { return nil }
+        return closest.id
+    }
+}
+
 struct ExpensePlace: Codable, Equatable {
     var name: String
     var address: String = ""
