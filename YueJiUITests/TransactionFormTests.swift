@@ -50,7 +50,7 @@ final class TransactionFormTests: XCTestCase {
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
-        let addEntry = app.descendants(matching: .any)["overview.manualEntry"].firstMatch
+        let addEntry = app.buttons["overview.manualEntry"].firstMatch
         XCTAssertTrue(addEntry.waitForExistence(timeout: 20))
         addEntry.tap()
         let merchantName = "Item regression " + UUID().uuidString.prefix(8)
@@ -202,9 +202,9 @@ final class TransactionFormTests: XCTestCase {
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
-        // Identify the actual control independently of the accessibility role
-        // chosen by the system's SwiftUI button style/container.
-        let newEntry = app.descendants(matching: .any).matching(identifier: "overview.manualEntry").firstMatch
+        // The native toolbar exposes this identifier on both an Other wrapper
+        // and its Button. Check and tap the actionable Button, not the wrapper.
+        let newEntry = app.buttons["overview.manualEntry"].firstMatch
         XCTAssertTrue(newEntry.waitForExistence(timeout: 20), "Overview Add Entry is absent after launch; app state = \(app.state)")
         XCTAssertTrue(newEntry.isHittable, "Overview Add Entry exists but cannot be tapped after launch")
         let tabBar = app.tabBars.firstMatch
