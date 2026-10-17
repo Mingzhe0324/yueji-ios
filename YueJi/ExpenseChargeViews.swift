@@ -11,6 +11,7 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDe
     private let geocoder = CLGeocoder()
     private var timeout: Task<Void, Never>?
     private var requestID = UUID()
+    private var automaticRequest = false
     override init() {
         super.init()
         manager.delegate = self
@@ -23,12 +24,14 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDe
               let location = manager.location, location.horizontalAccuracy >= 0,
               location.horizontalAccuracy <= 100, abs(location.timestamp.timeIntervalSinceNow) < 30 else { return nil }
         return ExpensePlace(name: tr("记录时的位置", "Location at recording", "Lokasi ketika direkod"),
-            latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
+            latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
+            accuracyMeters: location.horizontalAccuracy, capturedAt: location.timestamp)
     }
     func start(automatic: Bool = false) {
         // New-entry presentation requests permission once through the system.
         // A denied permission never prevents entering or saving an expense.
         cancel()
+        automaticRequest = automatic
         busy = true; message = nil; result = nil
         if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
         else { requestIfAllowed() }
@@ -72,7 +75,8 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDe
                 let address = [mark?.thoroughfare, mark?.locality, mark?.administrativeArea, mark?.country]
                     .compactMap { $0 }.joined(separator: ", ")
                 let place = ExpensePlace(name: mark?.name ?? tr("当前位置", "Current location", "Lokasi semasa"), address: address,
-                    latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
+                    latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
+                    accuracyMeters: location.horizontalAccuracy, capturedAt: self.automaticRequest ? location.timestamp : nil)
                 self.cancel(); self.result = place
             }
         }
@@ -82,6 +86,7 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDe
 struct ExpensePlaceField: View {
     @Binding var place: ExpensePlace?
     @ObservedObject var locator: ExpensePlaceLocator
+    var notice: String? = nil
     let edit: () -> Void
     var body: some View {
         Section {
@@ -93,6 +98,10 @@ struct ExpensePlaceField: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(place?.name ?? tr("添加消费地点", "Add spending location", "Tambah lokasi belanja"))
                         if let place, !place.address.isEmpty { Text(place.address).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                        Text(locator.busy ? tr("正在获取地点…", "Finding location…", "Mencari lokasi…") :
+                            (place == nil ? tr("未记录地点", "No location recorded", "Tiada lokasi direkod") :
+                                ((place?.accuracyMeters ?? 0) > 100 ? tr("大约位置 · 可修改", "Approximate location · editable", "Lokasi anggaran · boleh diubah") : tr("已记录地点 · 可修改", "Location recorded · editable", "Lokasi direkod · boleh diubah"))))
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
                     if locator.busy { ProgressView().controlSize(.small) }
@@ -100,9 +109,10 @@ struct ExpensePlaceField: View {
                 }.contentTransition(.opacity)
             }.buttonStyle(.plain).accessibilityIdentifier("transaction.place.edit")
             Button { locator.start() } label: {
-                Label(tr("使用当前位置", "Use current location", "Gunakan lokasi semasa"), systemImage: "location")
+                Label(tr("重新定位", "Locate again", "Cari lokasi semula"), systemImage: "location")
             }.disabled(locator.busy).accessibilityIdentifier("transaction.place.locate")
             if let message = locator.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+            if let notice { Text(notice).font(.caption).foregroundStyle(.secondary) }
             if place != nil {
                 Button(tr("移除地点", "Remove location", "Buang lokasi"), role: .destructive) { locator.cancel(); place = nil }
             }
@@ -153,6 +163,7 @@ struct ExpensePlaceMapSheet: View {
     @State private var confirmingDiscard = false
     @StateObject private var mapLocator = ExpensePlaceLocator()
     @State private var movingMap = false
+    @State private var visible = false
     private var editing: Bool { onSave != nil }
     private var hasChanges: Bool { editing && initialized && draft != (initial ?? ExpensePlace(name: "")) }
     private var coordinate: CLLocationCoordinate2D? {
@@ -164,7 +175,9 @@ struct ExpensePlaceMapSheet: View {
         let a = address.trimmingCharacters(in: .whitespacesAndNewlines)
         let unchanged = n == selected?.name && a == selected?.address
         return ExpensePlace(name: n.isEmpty ? a : n, address: a,
-            latitude: unchanged ? selected?.latitude : nil, longitude: unchanged ? selected?.longitude : nil)
+            latitude: unchanged ? selected?.latitude : nil, longitude: unchanged ? selected?.longitude : nil,
+            accuracyMeters: unchanged ? selected?.accuracyMeters : nil,
+            capturedAt: unchanged ? selected?.capturedAt : nil)
     }
     var body: some View {
         NavigationStack {
@@ -211,14 +224,15 @@ struct ExpensePlaceMapSheet: View {
                 }
             }
             .onAppear {
+                visible = true
                 guard !initialized else { return }
                 select(initial, animated: false)
                 query = [initial?.name, initial?.address].compactMap { $0 }.joined(separator: " ")
                 initialized = true
             }
-            .onDisappear { cancelSearch(); mapLocator.cancel(); movingMap = false }
+            .onDisappear { visible = false; cancelSearch(); mapLocator.cancel(); movingMap = false }
             .onChange(of: mapLocator.result) { _, value in
-                guard let value else { return }
+                guard visible, let value else { return }
                 cancelSearch(); results = []; searchFocused = false
                 select(value, animated: true)
                 FeedbackHaptics.selection()
@@ -341,11 +355,11 @@ struct ExpensePlaceMapSheet: View {
         searchTask = Task { @MainActor in
             do {
                 let response = try await operation.start()
-                guard !Task.isCancelled, token == searchID else { return }
+                guard visible, !Task.isCancelled, token == searchID else { return }
                 results = Array(response.mapItems.prefix(6)); searching = false
                 if results.isEmpty { message = tr("没有找到地点，可修改搜索或手动填写。", "No places found. Try another search or enter the address.", "Tiada tempat ditemui. Cuba carian lain atau isi alamat.") }
             } catch {
-                guard !Task.isCancelled, token == searchID else { return }
+                guard visible, !Task.isCancelled, token == searchID else { return }
                 searching = false
                 message = tr("搜索暂时不可用，仍可手动填写或在地图选点。", "Search unavailable. You can still enter a place or select a map point.", "Carian tidak tersedia. Isi tempat atau pilih titik pada peta.")
             }
@@ -439,12 +453,18 @@ struct ExpenseChargeDetails: View {
                 LabeledContent(tr("税前小计", "Subtotal before charges", "Subtotal sebelum caj"), value: Currency.display(charges.subtotal, charges.currency))
                 LabeledContent("SST \(ExpenseCharges.percentText(charges.sstBasisPoints))%", value: Currency.display(calculation.sst, charges.currency))
                 LabeledContent("Service Charge \(ExpenseCharges.percentText(charges.serviceBasisPoints))%", value: Currency.display(calculation.service, charges.currency))
-                if let rounding = charges.roundingMinor, rounding != 0 {
-                    LabeledContent(tr("尾数调整", "Rounding", "Pembundaran"), value: Currency.display(rounding, charges.currency))
+                LabeledContent(tr("尾数调整", "Rounding", "Pembundaran"), value: Currency.display(charges.roundingMinor ?? 0, charges.currency))
+                Divider()
+                LabeledContent(tr("含税费合计", "Calculated total", "Jumlah dikira"), value: Currency.display(calculation.total, charges.currency))
+                let actual = entry.foreign?.minor ?? entry.cents
+                LabeledContent(tr("实付金额", "Amount paid", "Amaun dibayar"), value: Currency.display(actual, charges.currency)).fontWeight(.semibold)
+                if actual != calculation.total {
+                    LabeledContent(tr("差额（实付 − 合计）", "Difference (paid − total)", "Perbezaan (dibayar − jumlah)"),
+                        value: Currency.display(actual - calculation.total, charges.currency)).foregroundStyle(.orange)
                 }
             } header: { Text("SST & Service Charge") } footer: {
                 Text(tr("税费已计入付款总额和分账。", "Charges are included in the payment and shares.", "Caj termasuk dalam bayaran dan bahagian."))
-            }
+            }.monospacedDigit()
         }
     }
 }

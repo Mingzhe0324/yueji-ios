@@ -248,6 +248,14 @@ final class TransactionFormTests: XCTestCase {
             waitUntilGone(mapPage)
             XCTAssertTrue(app.navigationBars["New entry"].exists, "Saving a place must not dismiss the transaction")
             XCTAssertTrue(location.exists)
+            // Repeated native presentation/return must retain the parent draft.
+            for _ in 0..<2 {
+                location.tap()
+                XCTAssertTrue(mapPage.waitForExistence(timeout: 5))
+                mapPage.buttons["Cancel"].tap()
+                waitUntilGone(mapPage)
+                XCTAssertTrue(app.navigationBars["New entry"].exists)
+            }
         }
 
         let category = app.descendants(matching: .any)["transaction.category"].firstMatch

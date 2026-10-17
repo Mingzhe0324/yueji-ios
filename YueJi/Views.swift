@@ -1833,6 +1833,7 @@ struct ExpenseEditor: View {
     @StateObject private var placeLocator = ExpensePlaceLocator()
     @State private var editingPlace = false
     @State private var startedLocation = false
+    @State private var placeNotice: String?
     @State private var reimbursementEnabled = false
     @State private var reimbursementRecipient = ""
     @State private var reimbursementAmount = ""
@@ -1921,7 +1922,7 @@ struct ExpenseEditor: View {
                 chargeSection
                 payerSection
                 merchantSection
-                ExpensePlaceField(place: $place, locator: placeLocator) {
+                ExpensePlaceField(place: $place, locator: placeLocator, notice: placeNotice) {
                     finishKeyboard(); editingPlace = true
                 }
                 ExpenseItemsFields(items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
@@ -1993,7 +1994,10 @@ struct ExpenseEditor: View {
             .task(id: initialized && recoverable == nil) {
                 guard initialized, recoverable == nil, !startedLocation, original == nil,
                       !resumedDraft, !model.isPreview else { return }
-                guard initialDraft == nil || abs(date.timeIntervalSinceNow) < 300 else { return }
+                guard abs(date.timeIntervalSinceNow) < 300 else {
+                    placeNotice = tr("补记账目不会使用当前位置，请按需选择消费地点。", "Past entries do not use your current location. Choose a place if needed.", "Rekod lama tidak menggunakan lokasi semasa. Pilih tempat jika perlu.")
+                    return
+                }
                 startedLocation = true
                 if place == nil { placeLocator.start(automatic: true) }
             }
@@ -2003,13 +2007,26 @@ struct ExpenseEditor: View {
             }
             .onChange(of: placeLocator.result) { _, value in
                 guard let value, !editingPlace, !saving, !draftFinished else { return }
+                guard original != nil || value.belongsToRecordingTime(date) else { return }
+                placeNotice = nil
                 // Automatic metadata alone must not make an untouched form dirty.
-                initialSnapshot?.place = value
+                if value.capturedAt != nil { initialSnapshot?.place = value }
                 withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
+            }
+            .onChange(of: date) { _, value in
+                guard initialized, original == nil else { return }
+                if abs(value.timeIntervalSinceNow) > 300 { placeLocator.cancel() }
+                if let place, !place.belongsToRecordingTime(value) {
+                    self.place = nil; initialSnapshot?.place = nil
+                    placeNotice = tr("日期已改变，已移除当前自动定位，避免记错消费地点。可手动选择地点。", "Date changed. The automatic location was removed; you can select the purchase location.", "Tarikh berubah. Lokasi automatik dibuang; anda boleh memilih lokasi belanja.")
+                }
             }
             .sheet(isPresented: $editingPlace) {
                 ExpensePlaceMapSheet(initial: place) { value in
-                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
+                    placeNotice = nil
+                    var chosen = value
+                    chosen.capturedAt = nil // An explicit map choice is not an automatic recording-time guess.
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = chosen }
                 }
             }
             .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: {

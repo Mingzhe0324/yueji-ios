@@ -1,5 +1,13 @@
 # Optional transaction locations
 
+## Usability follow-up
+
+- Location rows distinguish acquiring, not recorded, recorded, and approximate fixes (>100 m), with a Locate again action. Accuracy and automatic capture time are optional, backward-compatible metadata.
+- New entries dated more than five minutes away from the capture time do not retain an automatic current-location guess. Changing a new entry's date removes a mismatched automatic fix with an explanation. Existing saved entries and explicitly chosen locations remain intact. Explicit relocation is a manual choice, not an automatic guess.
+- Map save updates the existing form binding with the short transition; neither the form nor its scroll identity is replaced. Visibility checks also reject location/search completions after map dismissal.
+- Charge details align numeric digits and show subtotal, both charges, rounding (including zero), calculated total, amount paid and a signed difference when applicable. No money calculation is changed.
+- Regression coverage includes old metadata decoding, capture-time matching and repeated map open/cancel while retaining the parent form. Windows static/project parsing passes; native tests, actual scroll preservation and frame-rate verification still require CI/device runs.
+
 Opening a new manual entry starts a one-shot location request automatically, including the first system When In Use permission prompt. No separate location-button tap, app-launch permission prompt or background tracking is required. Existing entries and restored drafts keep their saved location; old seeded entries do not receive current coordinates. Failure does not block saving; retry and manual name/address entry remain available. Automatic metadata alone does not mark an otherwise untouched form as edited.
 
 Location is optional Codable data on expenses, pending notices, delivery inputs and editor snapshots. Older records decode without it. Backups preserve it. Duplicating a purchase intentionally drops the old location. Changing a manually entered name/address clears the previous coordinate.

@@ -5,6 +5,19 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testAutomaticPlaceTimeAndAccuracyRemainOptional() throws {
+        let now = Date()
+        let automatic = ExpensePlace(name: "Approximate", latitude: 3, longitude: 101,
+                                     accuracyMeters: 350, capturedAt: now)
+        XCTAssertTrue(automatic.valid)
+        XCTAssertTrue(automatic.belongsToRecordingTime(now.addingTimeInterval(299)))
+        XCTAssertFalse(automatic.belongsToRecordingTime(now.addingTimeInterval(-3600)))
+        XCTAssertEqual(try JSONDecoder().decode(ExpensePlace.self, from: JSONEncoder().encode(automatic)), automatic)
+        let legacy = try JSONDecoder().decode(ExpensePlace.self, from: Data(#"{"name":"Old place","address":""}"#.utf8))
+        XCTAssertTrue(legacy.belongsToRecordingTime(now.addingTimeInterval(-86400)))
+        XCTAssertNil(legacy.accuracyMeters)
+        XCTAssertFalse(ExpensePlace(name: "Invalid", accuracyMeters: -1).valid)
+    }
     func testAutomaticPlaceIsSavedAndRetryDoesNotOverwriteIt() throws {
         var delivery = AutomationDelivery(kind: "applePay", amount: 12, merchant: "Cafe")
         delivery.useTransactionDate = false
