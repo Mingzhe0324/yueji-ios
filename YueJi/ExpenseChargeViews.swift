@@ -151,6 +151,8 @@ struct ExpensePlaceMapSheet: View {
     @FocusState private var searchFocused: Bool
     @State private var initialized = false
     @State private var confirmingDiscard = false
+    @StateObject private var mapLocator = ExpensePlaceLocator()
+    @State private var movingMap = false
     private var editing: Bool { onSave != nil }
     private var hasChanges: Bool { editing && initialized && draft != (initial ?? ExpensePlace(name: "")) }
     private var coordinate: CLLocationCoordinate2D? {
@@ -214,7 +216,15 @@ struct ExpensePlaceMapSheet: View {
                 query = [initial?.name, initial?.address].compactMap { $0 }.joined(separator: " ")
                 initialized = true
             }
-            .onDisappear { cancelSearch() }
+            .onDisappear { cancelSearch(); mapLocator.cancel(); movingMap = false }
+            .onChange(of: mapLocator.result) { _, value in
+                guard let value else { return }
+                cancelSearch(); results = []; searchFocused = false
+                select(value, animated: true)
+                FeedbackHaptics.selection()
+            }
+            .onChange(of: name) { _, _ in if mapLocator.busy { mapLocator.cancel() } }
+            .onChange(of: address) { _, _ in if mapLocator.busy { mapLocator.cancel() } }
             .editorDismissal(hasChanges: hasChanges, saving: false, confirming: $confirmingDiscard) { dismiss() }
         }.presentationDragIndicator(.visible)
     }
@@ -225,12 +235,28 @@ struct ExpensePlaceMapSheet: View {
             }
             .mapStyle(.standard(elevation: .flat))
             .mapControls { MapCompass(); MapScaleView() }
-            .onMapCameraChange(frequency: .onEnd) { context in center = context.region.center }
+            .onMapCameraChange(frequency: .continuous) { _ in
+                guard editing, position.positionedByUser, !movingMap else { return }
+                mapLocator.cancel()
+                movingMap = true
+            }
+            .onMapCameraChange(frequency: .onEnd) { context in
+                center = context.region.center
+                if movingMap { movingMap = false; FeedbackHaptics.selection() }
+            }
             .overlay {
                 if editing {
-                    Image(systemName: "plus").font(.title2.weight(.light))
-                        .foregroundStyle(.primary).padding(8).background(.regularMaterial, in: Circle())
-                        .allowsHitTesting(false).accessibilityHidden(true)
+                    ZStack {
+                        Circle().fill(.primary.opacity(0.15)).frame(width: 10, height: 5)
+                            .scaleEffect(movingMap && !reduceMotion ? 0.7 : 1)
+                        Image(systemName: "mappin.circle.fill")
+                            .font(.system(size: 36)).symbolRenderingMode(.palette)
+                            .foregroundStyle(.white, .blue)
+                            .shadow(color: .black.opacity(0.15), radius: 4, y: 2)
+                            .offset(y: movingMap && !reduceMotion ? -31 : -23)
+                    }
+                    .animation(reduceMotion ? nil : .spring(response: 0.28, dampingFraction: 0.82), value: movingMap)
+                    .allowsHitTesting(false).accessibilityHidden(true)
                 }
             }
             .frame(height: 300)
@@ -238,13 +264,26 @@ struct ExpensePlaceMapSheet: View {
             if editing {
                 Button {
                     guard let center else { return }
-                    cancelSearch(); results = []
+                    cancelSearch(); mapLocator.cancel(); results = []
                     select(ExpensePlace(name: tr("地图选点", "Selected on map", "Dipilih pada peta"),
                         latitude: center.latitude, longitude: center.longitude), animated: false)
                 } label: {
                     Label(tr("移动地图后，使用中心位置", "Use map center", "Gunakan pusat peta"), systemImage: "mappin.and.ellipse")
                         .font(.subheadline.weight(.medium)).frame(maxWidth: .infinity).padding(16)
-                }.disabled(center == nil).accessibilityIdentifier("place.useCenter")
+                }.disabled(center == nil || movingMap).accessibilityIdentifier("place.useCenter")
+                Divider()
+                Button {
+                    cancelSearch(); searchFocused = false; mapLocator.start()
+                } label: {
+                    HStack(spacing: 8) {
+                        if mapLocator.busy { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "location.fill") }
+                        Text(tr("重新定位", "Locate again", "Cari lokasi semula"))
+                    }.font(.subheadline.weight(.medium)).frame(maxWidth: .infinity).padding(14)
+                }.disabled(mapLocator.busy).accessibilityIdentifier("place.relocate")
+                if let message = mapLocator.message {
+                    Text(message).font(.caption).foregroundStyle(.secondary).padding(.horizontal, 16).padding(.bottom, 12)
+                }
             }
         }.background(.background, in: RoundedRectangle(cornerRadius: 24))
             .clipShape(RoundedRectangle(cornerRadius: 24))
@@ -266,7 +305,7 @@ struct ExpensePlaceMapSheet: View {
                 let item = results[index]
                 Divider()
                 Button {
-                    cancelSearch(); searchFocused = false
+                    cancelSearch(); mapLocator.cancel(); searchFocused = false
                     select(ExpensePlace(name: item.name ?? tr("所选地点", "Selected place", "Tempat dipilih"),
                         address: item.placemark.title ?? "", latitude: item.placemark.coordinate.latitude,
                         longitude: item.placemark.coordinate.longitude), animated: true)
@@ -294,7 +333,7 @@ struct ExpensePlaceMapSheet: View {
     private func runSearch() {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { return }
-        cancelSearch(); searchFocused = false; message = nil; searching = true
+        cancelSearch(); mapLocator.cancel(); searchFocused = false; message = nil; searching = true
         let token = searchID
         let request = MKLocalSearch.Request(); request.naturalLanguageQuery = text
         if let center { request.region = MKCoordinateRegion(center: center, latitudinalMeters: 10_000, longitudinalMeters: 10_000) }
