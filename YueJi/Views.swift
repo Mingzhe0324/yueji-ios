@@ -1392,6 +1392,7 @@ struct ExpenseDetailView: View {
                         editing = .items(entry, selectedID: selectedID)
                     }
                     ExpenseChargeDetails(entry: entry)
+                    if let place = entry.place { ExpensePlaceDetails(place: place) }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
                         if entry.personalSpending != entry.purchaseDisplayCents || !entry.shares.isEmpty {
                             LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personalSpending, direction: .outgoing) }
@@ -1662,6 +1663,7 @@ struct ExpenseEditorSnapshot: Codable, Equatable {
     var date: Date
     var items: [ExpenseItemDraft]
     var people: [FriendDraft]
+    var place: ExpensePlace? = nil
 }
 
 struct SavedExpenseDraft: Codable {
@@ -1809,6 +1811,7 @@ struct ExpenseEditor: View {
     @State private var deleting: Expense?
     @State private var name = ""
     @State private var entryDescription = ""
+    @State private var place: ExpensePlace?
     @State private var reimbursementEnabled = false
     @State private var reimbursementRecipient = ""
     @State private var reimbursementAmount = ""
@@ -1852,7 +1855,7 @@ struct ExpenseEditor: View {
     private var snapshot: ExpenseEditorSnapshot {
         ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent, chargeRounding],
                               flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled, chargesEnabled],
-                              date: date, items: itemDrafts, people: people)
+                              date: date, items: itemDrafts, people: people, place: place)
     }
     private var hasChanges: Bool { initialSnapshot.map { $0 != snapshot } ?? false }
     private func requestClose() {
@@ -1897,6 +1900,7 @@ struct ExpenseEditor: View {
                 chargeSection
                 payerSection
                 merchantSection
+                ExpensePlaceField(place: $place, automatic: initialized && original == nil && initialDraft == nil && recoverable == nil && !resumedDraft && !model.isPreview)
                 ExpenseItemsFields(items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
                 currencySection
                 friendSplitSection
@@ -1978,6 +1982,7 @@ struct ExpenseEditor: View {
         if !model.isPreview { ExpenseDraftStorage.remove(original?.id) }
     }
     private func restoreDraft(_ draft: SavedExpenseDraft) {
+        place = draft.fields.place
         guard draft.supported, draft.base == original else { return }
         let t = draft.fields.text, f = draft.fields.flags
         name = t[0]; entryDescription = t[1]; amount = t[2]; currency = t[3]; rate = t[4]
@@ -2148,6 +2153,7 @@ struct ExpenseEditor: View {
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             entryDescription = e.entryDescription ?? ""
+            place = e.place
             if let claim = e.reimbursement {
                 reimbursementEnabled = true
                 reimbursementRecipient = claim.recipient
@@ -2209,6 +2215,7 @@ struct ExpenseEditor: View {
             entry.merchant = name.trimmingCharacters(in: .whitespacesAndNewlines); entry.cents = n; entry.date = date; entry.category = category; entry.fuel = fuel
             let description = entryDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             entry.entryDescription = description.isEmpty ? nil : description
+            entry.place = place
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }

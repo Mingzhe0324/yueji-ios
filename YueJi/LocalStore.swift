@@ -18,13 +18,14 @@ struct AutomationDelivery: Codable, Identifiable {
     var lastAttempt: Date? = nil
     var sourceApp: String? = nil
     var useTransactionDate: Bool? = nil // nil preserves deliveries queued by older versions
+    var place: ExpensePlace? = nil
     var source: String { kind == "applePay" ? "Apple Pay" : notificationProvider(sourceApp: sourceApp, title: title, body: body) }
     var applePayDate: Date { useTransactionDate == false ? receivedAt : (date ?? receivedAt) }
     var applePayTimeSource: String { useTransactionDate == false || date == nil ? "received" : "supplied" }
     var marker: String { "delivery:" + id }
     func validate() throws {
         guard UUID(uuidString: id) != nil, ["notification", "applePay"].contains(kind),
-              body.count <= 8000, title.count <= 500, merchant.count <= 200,
+              body.count <= 8000, title.count <= 500, merchant.count <= 200, (place?.valid ?? true),
               description.count <= 2000, currency.count <= 10, (eventID?.count ?? 0) <= 500,
               (sourceApp == nil || sourceApp!.isEmpty || validFinancialSource(sourceApp!)),
               !(kind == "applePay" && useTransactionDate == true && date == nil),
@@ -98,6 +99,12 @@ extension Ledger {
                                       message: detail, expenseID: entry?.id, noticeID: pending?.id, sound: saved ? .outgoing : .neutral)
         }
         // The marker and money are committed in the same atomic ledger file replacement.
+        if let place = delivery.place {
+            if let id = result.expenseID, !expenses.contains(where: { $0.id == id }),
+               let index = copy.expenses.firstIndex(where: { $0.id == id }) { copy.expenses[index].place = place }
+            if let id = result.noticeID, !tngNotices.contains(where: { $0.id == id }),
+               let index = copy.tngNotices.firstIndex(where: { $0.id == id }) { copy.tngNotices[index].place = place }
+        }
         copy.seenEvents.insert(delivery.marker)
         self = try copy.validated()
         return result

@@ -77,6 +77,19 @@ struct Share: Codable, Identifiable, Equatable {
     var repaid: Int { repayments.reduce(0) { $0 + $1.cents } }
     var owed: Int { cents - refunded - repaid + returned }
 }
+struct ExpensePlace: Codable, Equatable {
+    var name: String
+    var address: String = ""
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+    var valid: Bool {
+        guard name.count <= 500, address.count <= 2000 else { return false }
+        if latitude == nil && longitude == nil { return true }
+        guard let latitude, let longitude else { return false }
+        return latitude.isFinite && longitude.isFinite && (-90...90).contains(latitude) && (-180...180).contains(longitude)
+    }
+}
+
 struct Expense: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var merchant: String
@@ -100,6 +113,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var items: [ExpenseItem]? = nil // Optional: automatic entries are saved before itemization.
     var reimbursement: ReimbursementClaim? = nil
     var charges: ExpenseCharges? = nil
+    var place: ExpensePlace? = nil
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var displayName: String {
         let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -180,6 +194,7 @@ struct Ledger: Codable {
         for goal in savingsGoals { try goal.validate() }
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for n in tngNotices {
+            guard n.place?.valid ?? true else { throw LedgerError.invalid("Invalid notification location") }
             guard (n.resolution == nil || ["ownTransfer", "refund", "duplicate"].contains(n.resolution!)), (n.relatedRecordID?.count ?? 0) <= 200, (n.relatedRefundID?.count ?? 0) <= 200, (n.reviewReason?.count ?? 0) <= 1000, (n.aiSuggestion?.count ?? 0) <= 1000, validFinancialSource(n.provider),
                   (n.accountSuffix?.count ?? 0) <= 4, (n.bankReference?.count ?? 0) <= 500 else { throw LedgerError.invalid("Invalid notification source") }
             guard (n.recipient?.count ?? 0) <= 200, (n.resolvedFriend?.count ?? 0) <= 200,
@@ -214,7 +229,7 @@ struct Ledger: Codable {
                       (e.shares[0].returns ?? []).isEmpty else { throw settlementError("朋友付款请在你和付款人之间分摊，已有还款须先撤销。", "Split friend-paid purchases between you and the payer. Undo existing repayments before changing payer.", "Bahagikan belanja dibayar rakan antara anda dan pembayar. Batalkan bayaran sedia ada sebelum menukar pembayar.") }
             }
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
-            guard !e.id.isEmpty, (e.entryDescription?.count ?? 0) <= 2000,
+            guard !e.id.isEmpty, (e.place?.valid ?? true), (e.entryDescription?.count ?? 0) <= 2000,
                   e.merchant.count <= 200, (e.transactionReference?.count ?? 0) <= 500, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
                   (e.timeSource == nil || ["received", "supplied", "notification", "edited"].contains(e.timeSource!)),
                   e.date.timeIntervalSince1970.isFinite, categoryNames.contains(e.category), e.shares.count <= 100,
@@ -304,6 +319,7 @@ func equalShares(total: Int, count: Int, includeMe: Bool) -> [Int] {
 }
 
 struct TNGNotice: Codable, Identifiable, Equatable {
+    var place: ExpensePlace? = nil
     var id = UUID().uuidString
     var body: String
     var title: String
@@ -554,6 +570,7 @@ extension Ledger {
         expense.timeSource = date == tngNotices[i].date ? (tngNotices[i].usesReceivedDate ? (tngNotices[i].provider == "Apple Pay" ? "received" : "notification") : "supplied") : "edited"
         expense.note = tngNotices[i].note
         expense.entryDescription = description.isEmpty ? nil : description
+        expense.place = tngNotices.first(where: { $0.id == id })?.place
         expense = try expense.replacingItems(items, allowedCategories: categoryNames)
         expenses.append(expense); tngNotices[i].expenseID = expense.id; tngNotices[i].status = "recorded"
         if remember && items.isEmpty { merchantCategories[friendKey(expense.merchant)] = category }

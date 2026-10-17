@@ -19,6 +19,7 @@ struct RecordApplePayIntent: AppIntent {
         var delivery = AutomationDelivery(kind: "applePay", date: transactionDate, eventID: transactionID,
                                           amount: amount, merchant: merchant, currency: currency, description: transactionDescription ?? "")
         delivery.useTransactionDate = useTransactionDate
+        if !useTransactionDate { delivery.place = await ExpensePlaceLocator.recentPlace() }
         do {
             let result = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
@@ -71,6 +72,9 @@ struct RecordTNGIntent: AppIntent {
         var delivery = AutomationDelivery(kind: "notification", body: body, title: notificationTitle ?? "",
                                           date: notificationDate, eventID: transactionID)
         delivery.sourceApp = sourceApp
+        if notificationDate == nil || abs(notificationDate!.timeIntervalSinceNow) < 60 {
+            delivery.place = await ExpensePlaceLocator.recentPlace()
+        }
         do {
             _ = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()

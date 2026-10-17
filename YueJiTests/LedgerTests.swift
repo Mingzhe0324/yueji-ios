@@ -5,6 +5,33 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testAutomaticPlaceIsSavedAndRetryDoesNotOverwriteIt() throws {
+        var delivery = AutomationDelivery(kind: "applePay", amount: 12, merchant: "Cafe")
+        delivery.useTransactionDate = false
+        delivery.place = ExpensePlace(name: "Recorded here", latitude: 3, longitude: 101)
+        var ledger = Ledger()
+        let result = try ledger.applyDelivery(delivery)
+        let id = try XCTUnwrap(result.expenseID)
+        XCTAssertEqual(ledger.expenses.first(where: { $0.id == id })?.place, delivery.place)
+        delivery.place = ExpensePlace(name: "Different place")
+        _ = try ledger.applyDelivery(delivery)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.place?.name, "Recorded here")
+    }
+    func testExpensePlaceRoundTripAndLegacyCompatibility() throws {
+        var entry = Expense(merchant: "Cafe", cents: 1200)
+        let legacy = try JSONEncoder().encode(entry)
+        XCTAssertNil(try JSONDecoder().decode(Expense.self, from: legacy).place)
+        entry.place = ExpensePlace(name: "Cafe", address: "Kuala Lumpur", latitude: 3.139, longitude: 101.687)
+        var ledger = Ledger(); ledger.expenses = [entry]
+        let restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+        XCTAssertEqual(restored.expenses.first?.place, entry.place)
+        XCTAssertNil(entry.duplicateDraft().place, "A copied payment must not claim the original purchase's location")
+        ledger.expenses[0].place?.latitude = 91
+        XCTAssertThrowsError(try ledger.validated())
+        XCTAssertFalse(ExpensePlace(name: "Bad", latitude: 1).valid)
+        XCTAssertTrue(ExpensePlace(name: "Manual address").valid)
+    }
     func testDuplicateResetsPaymentHistoryAndIdentities() throws {
         let now = Date()
         var source = Expense(merchant: "Cafe", entryDescription: "Lunch", cents: 2000,
@@ -37,6 +64,7 @@ final class EverydayFlowTests: XCTestCase {
             items: [ExpenseItemDraft(name: "Unfinished", amount: "1.", category: "其他", quantity: 2)], people: [FriendDraft()])
         fields.text[2] = "12."
         fields.text[15] = "-0.02"
+        fields.place = ExpensePlace(name: "Draft place", latitude: 3, longitude: 101)
         let draft = SavedExpenseDraft(base: nil, seed: nil, fields: fields, rateDate: Date(), rateSource: "Manual")
         ExpenseDraftStorage.write(draft, id: nil, defaults: defaults)
         XCTAssertEqual(try XCTUnwrap(ExpenseDraftStorage.read(nil, defaults: defaults)).fields, fields)
