@@ -2,7 +2,11 @@
 
 New manual entries obtain a one-shot location after the user has granted When In Use permission through Use current location. No launch permission prompt or background tracking is added. Existing entries and restored drafts keep their saved location. Failure does not block saving; retry and manual name/address entry remain available.
 
-Location is optional Codable data on expenses, pending notices, delivery inputs and editor snapshots. Older records decode without it. Backups preserve it. Duplicating a purchase intentionally drops the old location. Changing a manually entered name/address clears the previous coordinate; Maps can search the edited text instead.
+Location is optional Codable data on expenses, pending notices, delivery inputs and editor snapshots. Older records decode without it. Backups preserve it. Duplicating a purchase intentionally drops the old location. Changing a manually entered name/address clears the previous coordinate.
+
+The detail row opens a native MapKit sheet inside YueJi, with no external Maps URL. The editor shares that sheet and offers submitted place/address searches (up to six results), native pan/zoom/rotation, explicit use of the map center and manual text fields. Panning alone never changes the location. A center selection uses a neutral name rather than inventing a merchant/address. Text-only saved locations can be searched for preview; viewing does not rewrite the ledger. Changes are committed to the parent form only with Done, with the existing discard confirmation on Cancel or an attempted sheet swipe. Search requests cancel when replaced or dismissed, and stale responses are ignored.
+
+The map loads only when its sheet opens, not in every ledger row. Rounded cards use semantic system backgrounds and native map styling for dark/light mode. Selecting a search result uses a 0.35-second camera transition, disabled with Reduce Motion. No perpetual decorative animation or synthetic loading delay is added.
 
 Automatic payment intents only attach an already available fix less than 30 seconds old with accuracy at most 100 metres, after authorization. They do not request permission or wait for GPS. Supplied old transaction times do not receive current coordinates. Delivery retries preserve the original metadata and do not overwrite previously recorded entries. A recording location is not proof of the merchant's physical location.
 

@@ -1,5 +1,6 @@
 import SwiftUI
 import CoreLocation
+import MapKit
 
 @MainActor
 final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDelegate {
@@ -86,12 +87,10 @@ struct ExpensePlaceField: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var started = false
     @State private var editing = false
-    @State private var name = ""
-    @State private var address = ""
     var body: some View {
         Section {
             Button {
-                locator.cancel(); name = place?.name ?? ""; address = place?.address ?? ""; editing = true
+                locator.cancel(); editing = true
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "mappin.and.ellipse").foregroundStyle(.tint)
@@ -127,25 +126,8 @@ struct ExpensePlaceField: View {
             withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
         }
         .sheet(isPresented: $editing) {
-            NavigationStack {
-                Form {
-                    TextField(tr("地点名称", "Place name", "Nama tempat"), text: $name)
-                    TextField(tr("地址", "Address", "Alamat"), text: $address, axis: .vertical)
-                }.navigationTitle(tr("消费地点", "Spending location", "Lokasi belanja"))
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { editing = false } }
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(tr("完成", "Done", "Selesai")) {
-                            let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
-                            let a = address.trimmingCharacters(in: .whitespacesAndNewlines)
-                            // A manually changed address must not retain an unrelated GPS pin.
-                            place = ExpensePlace(name: n.isEmpty ? a : n, address: a,
-                                latitude: a == place?.address && n == place?.name ? place?.latitude : nil,
-                                longitude: a == place?.address && n == place?.name ? place?.longitude : nil)
-                            editing = false
-                        }.disabled((name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) || name.count > 500 || address.count > 2000)
-                    }
-                }
+            ExpensePlaceMapSheet(initial: place) { value in
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
             }
         }
     }
@@ -153,18 +135,10 @@ struct ExpensePlaceField: View {
 
 struct ExpensePlaceDetails: View {
     let place: ExpensePlace
-    private var mapURL: URL? {
-        var url = URLComponents(string: "https://maps.apple.com/")!
-        url.queryItems = [URLQueryItem(name: "q", value: place.name + " " + place.address)]
-        if let lat = place.latitude, let lon = place.longitude {
-            url.queryItems?.append(URLQueryItem(name: "ll", value: "\(lat),\(lon)"))
-        }
-        return url.url
-    }
+    @State private var showingMap = false
     var body: some View {
         Section(tr("消费地点", "Spending location", "Lokasi belanja")) {
-            if let url = mapURL {
-                Link(destination: url) {
+                Button { showingMap = true } label: {
                     Label {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(place.name)
@@ -172,6 +146,191 @@ struct ExpensePlaceDetails: View {
                         }
                     } icon: { Image(systemName: "mappin.and.ellipse") }
                 }.accessibilityIdentifier("transaction.place.detail")
+        }
+        .sheet(isPresented: $showingMap) { ExpensePlaceMapSheet(initial: place, onSave: nil) }
+    }
+}
+
+/// The map owns a local draft. Panning, searching and cancellation never write
+/// the ledger; only Done in an editor returns a selected place to its parent.
+struct ExpensePlaceMapSheet: View {
+    let initial: ExpensePlace?
+    var onSave: ((ExpensePlace) -> Void)?
+    @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var position: MapCameraPosition = .automatic
+    @State private var center: CLLocationCoordinate2D?
+    @State private var selected: ExpensePlace?
+    @State private var name = ""
+    @State private var address = ""
+    @State private var query = ""
+    @State private var results: [MKMapItem] = []
+    @State private var search: MKLocalSearch?
+    @State private var searchTask: Task<Void, Never>?
+    @State private var searchID = UUID()
+    @State private var searching = false
+    @State private var message: String?
+    @FocusState private var searchFocused: Bool
+    @State private var initialized = false
+    @State private var confirmingDiscard = false
+    private var editing: Bool { onSave != nil }
+    private var hasChanges: Bool { editing && initialized && draft != (initial ?? ExpensePlace(name: "")) }
+    private var coordinate: CLLocationCoordinate2D? {
+        guard let lat = draft.latitude, let lon = draft.longitude else { return nil }
+        return CLLocationCoordinate2D(latitude: lat, longitude: lon)
+    }
+    private var draft: ExpensePlace {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let a = address.trimmingCharacters(in: .whitespacesAndNewlines)
+        let unchanged = n == selected?.name && a == selected?.address
+        return ExpensePlace(name: n.isEmpty ? a : n, address: a,
+            latitude: unchanged ? selected?.latitude : nil, longitude: unchanged ? selected?.longitude : nil)
+    }
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(spacing: 18) {
+                    mapCard
+                    if editing || coordinate == nil { searchPanel }
+                    if editing {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text(tr("地点信息", "Place details", "Butiran tempat")).font(.headline)
+                            TextField(tr("地点名称", "Place name", "Nama tempat"), text: $name)
+                                .accessibilityIdentifier("place.name")
+                            Divider()
+                            TextField(tr("地址", "Address", "Alamat"), text: $address, axis: .vertical)
+                                .lineLimit(2...4).accessibilityIdentifier("place.address")
+                        }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
+                    } else {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(initial?.name ?? "").font(.title3.weight(.semibold))
+                            Text(initial?.address ?? "").font(.subheadline).foregroundStyle(.secondary)
+                            if initial?.latitude == nil {
+                                Text(tr("此地点没有坐标，可搜索查看；不会更改原账目。", "This place has no saved pin. Search to preview without changing the entry.", "Tempat ini tiada pin. Cari untuk pratonton tanpa mengubah rekod."))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
+                    }
+                }.padding(16)
+            }
+            .background(Color(uiColor: .systemGroupedBackground))
+            .scrollDismissesKeyboard(.interactively)
+            .navigationTitle(tr("消费地点", "Spending location", "Lokasi belanja"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(editing ? tr("取消", "Cancel", "Batal") : tr("完成", "Done", "Selesai")) {
+                        if hasChanges { confirmingDiscard = true } else { dismiss() }
+                    }
+                }
+                if editing {
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(tr("完成", "Done", "Selesai")) { onSave?(draft); dismiss() }
+                            .disabled(draft.name.isEmpty || !draft.valid).accessibilityIdentifier("place.save")
+                    }
+                }
+            }
+            .onAppear {
+                guard !initialized else { return }
+                select(initial, animated: false)
+                query = [initial?.name, initial?.address].compactMap { $0 }.joined(separator: " ")
+                initialized = true
+            }
+            .onDisappear { cancelSearch() }
+            .editorDismissal(hasChanges: hasChanges, saving: false, confirming: $confirmingDiscard) { dismiss() }
+        }.presentationDragIndicator(.visible)
+    }
+    private var mapCard: some View {
+        VStack(spacing: 0) {
+            Map(position: $position, interactionModes: [.pan, .zoom, .rotate]) {
+                if let coordinate { Marker(selected?.name ?? "", coordinate: coordinate).tint(.blue) }
+            }
+            .mapStyle(.standard(elevation: .flat))
+            .mapControls { MapCompass(); MapScaleView() }
+            .onMapCameraChange(frequency: .onEnd) { context in center = context.region.center }
+            .overlay {
+                if editing {
+                    Image(systemName: "plus").font(.title2.weight(.light))
+                        .foregroundStyle(.primary).padding(8).background(.regularMaterial, in: Circle())
+                        .allowsHitTesting(false).accessibilityHidden(true)
+                }
+            }
+            .frame(height: 300)
+            .accessibilityIdentifier("place.map")
+            if editing {
+                Button {
+                    guard let center else { return }
+                    cancelSearch(); results = []
+                    select(ExpensePlace(name: tr("地图选点", "Selected on map", "Dipilih pada peta"),
+                        latitude: center.latitude, longitude: center.longitude), animated: false)
+                } label: {
+                    Label(tr("移动地图后，使用中心位置", "Use map center", "Gunakan pusat peta"), systemImage: "mappin.and.ellipse")
+                        .font(.subheadline.weight(.medium)).frame(maxWidth: .infinity).padding(16)
+                }.disabled(center == nil).accessibilityIdentifier("place.useCenter")
+            }
+        }.background(.background, in: RoundedRectangle(cornerRadius: 24))
+            .clipShape(RoundedRectangle(cornerRadius: 24))
+    }
+    private var searchPanel: some View {
+        VStack(spacing: 12) {
+            HStack {
+                Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
+                TextField(tr("搜索商户或地址", "Search places or addresses", "Cari tempat atau alamat"), text: $query)
+                    .focused($searchFocused).submitLabel(.search).onSubmit { runSearch() }
+                    .accessibilityIdentifier("place.search")
+                Button { runSearch() } label: {
+                    if searching { ProgressView() } else { Image(systemName: "arrow.right.circle.fill").font(.title2) }
+                }.accessibilityLabel(tr("搜索", "Search", "Cari"))
+                    .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || searching)
+            }
+            if let message { Text(message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
+            ForEach(results.indices, id: \.self) { index in
+                let item = results[index]
+                Divider()
+                Button {
+                    cancelSearch(); searchFocused = false
+                    select(ExpensePlace(name: item.name ?? tr("所选地点", "Selected place", "Tempat dipilih"),
+                        address: item.placemark.title ?? "", latitude: item.placemark.coordinate.latitude,
+                        longitude: item.placemark.coordinate.longitude), animated: true)
+                    results = []
+                } label: {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(item.name ?? "").font(.subheadline.weight(.medium))
+                        Text(item.placemark.title ?? "").font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4)
+                }.buttonStyle(.plain)
+            }
+        }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
+            .onChange(of: query) { _, _ in cancelSearch(); results = []; message = nil }
+    }
+    private func select(_ place: ExpensePlace?, animated: Bool) {
+        selected = place; name = place?.name ?? ""; address = place?.address ?? ""
+        if let coordinate {
+            let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 800, longitudinalMeters: 800)
+            withAnimation(animated && !reduceMotion ? .easeInOut(duration: 0.35) : nil) { position = .region(region) }
+        }
+    }
+    private func cancelSearch() {
+        searchID = UUID(); search?.cancel(); searchTask?.cancel(); search = nil; searchTask = nil; searching = false
+    }
+    private func runSearch() {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        cancelSearch(); searchFocused = false; message = nil; searching = true
+        let token = searchID
+        let request = MKLocalSearch.Request(); request.naturalLanguageQuery = text
+        if let center { request.region = MKCoordinateRegion(center: center, latitudinalMeters: 10_000, longitudinalMeters: 10_000) }
+        let operation = MKLocalSearch(request: request); search = operation
+        searchTask = Task { @MainActor in
+            do {
+                let response = try await operation.start()
+                guard !Task.isCancelled, token == searchID else { return }
+                results = Array(response.mapItems.prefix(6)); searching = false
+                if results.isEmpty { message = tr("没有找到地点，可修改搜索或手动填写。", "No places found. Try another search or enter the address.", "Tiada tempat ditemui. Cuba carian lain atau isi alamat.") }
+            } catch {
+                guard !Task.isCancelled, token == searchID else { return }
+                searching = false
+                message = tr("搜索暂时不可用，仍可手动填写或在地图选点。", "Search unavailable. You can still enter a place or select a map point.", "Carian tidak tersedia. Isi tempat atau pilih titik pada peta.")
             }
         }
     }
