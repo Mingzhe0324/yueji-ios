@@ -35,7 +35,8 @@ final class EverydayFlowTests: XCTestCase {
         var entry = Expense(merchant: "Cafe", cents: 1200)
         let legacy = try JSONEncoder().encode(entry)
         XCTAssertNil(try JSONDecoder().decode(Expense.self, from: legacy).place)
-        entry.place = ExpensePlace(name: "Cafe", address: "Kuala Lumpur", latitude: 3.139, longitude: 101.687)
+        entry.place = ExpensePlace(name: "Cafe", address: "Kuala Lumpur", latitude: 3.139, longitude: 101.687,
+                                   applePlaceID: "test-apple-place")
         var ledger = Ledger(); ledger.expenses = [entry]
         let restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
         XCTAssertEqual(restored.expenses.first?.place, entry.place)
@@ -43,6 +44,8 @@ final class EverydayFlowTests: XCTestCase {
         ledger.expenses[0].place?.latitude = 91
         XCTAssertThrowsError(try ledger.validated())
         XCTAssertFalse(ExpensePlace(name: "Bad", latitude: 1).valid)
+        XCTAssertFalse(ExpensePlace(name: "Bad", applePlaceID: "").valid)
+        XCTAssertFalse(ExpensePlace(name: "Bad", applePlaceID: String(repeating: "a", count: 501)).valid)
         XCTAssertTrue(ExpensePlace(name: "Manual address").valid)
     }
     func testDuplicateResetsPaymentHistoryAndIdentities() throws {

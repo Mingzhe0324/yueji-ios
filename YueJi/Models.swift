@@ -84,12 +84,14 @@ struct ExpensePlace: Codable, Equatable {
     var longitude: Double? = nil
     var accuracyMeters: Double? = nil
     var capturedAt: Date? = nil
+    var applePlaceID: String? = nil
     func belongsToRecordingTime(_ date: Date) -> Bool {
         guard let capturedAt else { return true }
         return abs(date.timeIntervalSince(capturedAt)) <= 300
     }
     var valid: Bool {
         guard name.count <= 500, address.count <= 2000 else { return false }
+        guard applePlaceID.map({ !$0.isEmpty && $0.count <= 500 }) ?? true else { return false }
         guard accuracyMeters.map({ $0.isFinite && $0 >= 0 }) ?? true,
               capturedAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { return false }
         if latitude == nil && longitude == nil { return true }

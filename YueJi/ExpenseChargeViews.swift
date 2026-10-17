@@ -177,14 +177,18 @@ struct ExpensePlaceMapSheet: View {
         return ExpensePlace(name: n.isEmpty ? a : n, address: a,
             latitude: unchanged ? selected?.latitude : nil, longitude: unchanged ? selected?.longitude : nil,
             accuracyMeters: unchanged ? selected?.accuracyMeters : nil,
-            capturedAt: unchanged ? selected?.capturedAt : nil)
+            capturedAt: unchanged ? selected?.capturedAt : nil,
+            applePlaceID: unchanged ? selected?.applePlaceID : nil)
     }
     var body: some View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
                     mapCard
-                    if editing || coordinate == nil { searchPanel }
+                    if #available(iOS 18.0, *) {
+                        AppleMerchantCard(placeID: draft.applePlaceID)
+                    }
+                    if editing || draft.applePlaceID == nil { searchPanel }
                     if editing {
                         VStack(alignment: .leading, spacing: 14) {
                             Text(tr("地点信息", "Place details", "Butiran tempat")).font(.headline)
@@ -320,9 +324,11 @@ struct ExpensePlaceMapSheet: View {
                 Divider()
                 Button {
                     cancelSearch(); mapLocator.cancel(); searchFocused = false
-                    select(ExpensePlace(name: item.name ?? tr("所选地点", "Selected place", "Tempat dipilih"),
+                    var chosen = ExpensePlace(name: item.name ?? tr("所选地点", "Selected place", "Tempat dipilih"),
                         address: item.placemark.title ?? "", latitude: item.placemark.coordinate.latitude,
-                        longitude: item.placemark.coordinate.longitude), animated: true)
+                        longitude: item.placemark.coordinate.longitude)
+                    if #available(iOS 18.0, *) { chosen.applePlaceID = item.identifier?.rawValue }
+                    select(chosen, animated: true)
                     results = []
                 } label: {
                     VStack(alignment: .leading, spacing: 4) {
@@ -362,6 +368,64 @@ struct ExpensePlaceMapSheet: View {
                 guard visible, !Task.isCancelled, token == searchID else { return }
                 searching = false
                 message = tr("搜索暂时不可用，仍可手动填写或在地图选点。", "Search unavailable. You can still enter a place or select a map point.", "Carian tidak tersedia. Isi tempat atau pilih titik pada peta.")
+            }
+        }
+    }
+}
+
+@available(iOS 18.0, *)
+private struct AppleMerchantCard: View {
+    let placeID: String?
+    @State private var presentedItem: MKMapItem?
+    @State private var request: MKMapItemRequest?
+    @State private var generation = UUID()
+    @State private var loading = false
+    @State private var message: String?
+    @State private var task: Task<Void, Never>?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if placeID != nil {
+                Button(action: open) {
+                    HStack(spacing: 12) {
+                        Image(systemName: "storefront").font(.title2).foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(tr("店铺资料与照片", "Place details & photos", "Butiran & foto tempat")).font(.headline)
+                            Text(tr("由 Apple 提供 · 照片视店铺收录情况而定", "Provided by Apple · photos when available", "Disediakan Apple · foto jika tersedia"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if loading { ProgressView().controlSize(.small) }
+                        else { Image(systemName: "chevron.right").font(.caption).foregroundStyle(.secondary) }
+                    }.frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+                }.buttonStyle(.plain).disabled(loading).accessibilityIdentifier("place.appleDetails")
+            } else {
+                Label(tr("搜索并选择具体店铺，可查看 Apple 提供的资料与可用照片。", "Search and choose a specific place to view Apple's details and available photos.", "Cari dan pilih tempat untuk melihat butiran Apple dan foto yang tersedia."), systemImage: "storefront")
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
+            if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
+        }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
+            .mapItemDetailSheet(item: $presentedItem, displaysMap: true)
+            .onChange(of: placeID) { _, _ in cancel(); presentedItem = nil; message = nil }
+            .onDisappear { cancel() }
+    }
+    private func cancel() {
+        generation = UUID(); request?.cancel(); task?.cancel(); request = nil; task = nil; loading = false
+    }
+    private func open() {
+        guard let placeID, let identifier = MKMapItem.Identifier(rawValue: placeID) else { return }
+        cancel(); message = nil; loading = true
+        let token = generation
+        let operation = MKMapItemRequest(mapItemIdentifier: identifier)
+        request = operation
+        task = Task { @MainActor in
+            do {
+                let item = try await operation.mapItem
+                guard !Task.isCancelled, token == generation else { return }
+                loading = false; presentedItem = item
+            } catch {
+                guard !Task.isCancelled, token == generation else { return }
+                loading = false
+                message = tr("暂时无法加载店铺资料，请重试。账目不会受到影响。", "Place details are unavailable. Try again; your entry is unchanged.", "Butiran tempat tidak tersedia. Cuba lagi; rekod tidak berubah.")
             }
         }
     }
