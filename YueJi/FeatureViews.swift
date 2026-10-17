@@ -3375,11 +3375,13 @@ struct ExpenseItemsFields: View {
         let _ = uiLocale.identifier
         ForEach(items) { draft in
             let item = draft.binding(in: $items)
+            let ordinal = (items.firstIndex(where: { $0.id == draft.id }) ?? 0) + 1
             Section {
                 VStack(alignment: .leading, spacing: 10) {
                     TextField(tr("物品名称", "Item name", "Nama item"), text: item.name)
                         .font(.headline)
                         .accessibilityIdentifier("transaction.item.name")
+                        .accessibilityLabel(tr("物品名称", "Item name", "Nama item") + " \(ordinal)")
                         .focused(focus, equals: .itemName(draft.id)).submitLabel(.next)
                         .onSubmit { focus.wrappedValue = .itemAmount(draft.id) }
                     LabeledContent(tr("单价（MYR）", "Unit price (MYR)", "Harga seunit (MYR)")) {
@@ -3419,6 +3421,7 @@ struct ExpenseItemsFields: View {
                     Label(tr("删除物品", "Remove item", "Buang item"), systemImage: "minus.circle")
                 }.buttonStyle(.borderless)
                     .accessibilityIdentifier("transaction.item.remove")
+                    .accessibilityValue("\(ordinal)")
                     .accessibilityLabel(tr("删除物品：", "Remove item: ", "Buang item: ") + item.wrappedValue.name)
             } header: {
                 Text(tr("物品", "Item", "Item") + " \((items.firstIndex(where: { $0.id == draft.id }) ?? 0) + 1)")
@@ -3432,6 +3435,7 @@ struct ExpenseItemsFields: View {
             } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("transaction.item.add")
+                .accessibilityValue(tr("共 \(items.count) 件物品", "\(items.count) items", "\(items.count) item"))
                 .disabled(items.count >= 100)
             if !items.isEmpty {
                 LabeledContent(charges == nil ? tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi") : tr("物品合计 / 税前小计", "Item total / subtotal", "Jumlah item / subtotal"), value: money(itemTotal) + " / " + money(totalCents))

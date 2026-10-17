@@ -170,11 +170,11 @@ final class TransactionFormTests: XCTestCase {
                 editor.buttons["Save"].tap()
                 XCTAssertTrue(app.alerts["Unable to save"].waitForExistence(timeout: 5))
                 app.alerts.buttons["OK"].tap()
-                let names = app.textFields.matching(identifier: "transaction.item.name")
-                XCTAssertEqual(names.count, 2)
-                let remove = app.buttons.matching(identifier: "transaction.item.remove").element(boundBy: 1)
+                assertItemCount(2, in: app)
+                let remove = app.buttons.matching(identifier: "transaction.item.remove")
+                    .matching(NSPredicate(format: "value == %@", "2")).firstMatch
                 reveal(remove, in: app); remove.tap()
-                XCTAssertEqual(names.count, 1)
+                assertItemCount(1, in: app)
                 editor.buttons["Save"].tap()
             } else {
                 editor.buttons["Cancel"].tap()
@@ -308,17 +308,24 @@ final class TransactionFormTests: XCTestCase {
         keepDraft.tap()
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
         XCTAssertEqual(itemAmount.value as? String, "35.00")
-        reveal(add, in: app); add.tap(); reveal(add, in: app); add.tap()
-        XCTAssertEqual(names.count, 3)
+        reveal(add, in: app); add.tap()
+        assertItemCount(2, in: app)
+        reveal(add, in: app); add.tap()
+        assertItemCount(3, in: app)
 
         // Removing rows must not redirect retained field/picker bindings.
-        let remove = app.buttons.matching(identifier: "transaction.item.remove").firstMatch
+        let originalName = names.matching(NSPredicate(format: "label == %@", "Item name 1")).firstMatch
+        reveal(originalName, in: app, above: true)
+        XCTAssertEqual(originalName.value as? String, "Lunch", "Adding rows must retain the original offscreen item")
+        let remove = app.buttons.matching(identifier: "transaction.item.remove")
+            .matching(NSPredicate(format: "value == %@", "1")).firstMatch
         reveal(remove, in: app); remove.tap()
-        XCTAssertEqual(names.count, 2)
-        reveal(names.firstMatch, in: app)
-        names.firstMatch.tap(); names.firstMatch.typeText("Supplies")
+        assertItemCount(2, in: app)
+        let remainingName = names.matching(NSPredicate(format: "label == %@", "Item name 1")).firstMatch
+        reveal(remainingName, in: app, above: true)
+        remainingName.tap(); remainingName.typeText("Supplies")
         finishKeyboard(in: app)
-        XCTAssertEqual(names.firstMatch.value as? String, "Supplies")
+        XCTAssertEqual(remainingName.value as? String, "Supplies")
         reveal(merchant, in: app, above: true)
         XCTAssertEqual(merchant.value as? String, "Unsaved purchase")
         reveal(amount, in: app, above: true)
@@ -347,6 +354,14 @@ final class TransactionFormTests: XCTestCase {
         let end = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.85))
         print("Dismissing sheet from grabber \(grabber.frame) toward lower screen \(app.frame)")
         start.press(forDuration: 0.1, thenDragTo: end)
+    }
+
+    private func assertItemCount(_ expected: Int, in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) {
+        // Native Forms virtualize offscreen fields. Count the full draft via the
+        // user-facing accessibility value, not instantiated TextField elements.
+        let add = app.buttons["transaction.item.add"]
+        reveal(add, in: app)
+        XCTAssertEqual(add.value as? String, "\(expected) items", file: file, line: line)
     }
 
     private func confirmDiscard(in app: XCUIApplication) {
