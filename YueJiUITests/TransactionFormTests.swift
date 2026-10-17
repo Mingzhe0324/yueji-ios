@@ -2,7 +2,15 @@ import XCTest
 
 final class TransactionFormTests: XCTestCase {
     private var runningApp: XCUIApplication?
-    override func setUpWithError() throws { continueAfterFailure = false }
+    override func setUpWithError() throws {
+        continueAfterFailure = false
+        addUIInterruptionMonitor(withDescription: "Location permission") { alert in
+            let allow = alert.buttons["Allow While Using App"]
+            guard allow.exists else { return false }
+            allow.tap()
+            return true
+        }
+    }
 
     override func tearDownWithError() throws {
         if let app = runningApp {
@@ -59,6 +67,11 @@ final class TransactionFormTests: XCTestCase {
         amount.tap(); amount.typeText("35.00"); finishKeyboard(in: app)
         let merchant = app.textFields["transaction.merchant"]
         reveal(merchant, in: app); merchant.tap(); merchant.typeText(merchantName); finishKeyboard(in: app)
+        if !opening {
+            let description = app.textViews["transaction.description"].exists
+                ? app.textViews["transaction.description"] : app.textFields["transaction.description"]
+            reveal(description, in: app); description.tap(); description.typeText("Lunch description regression"); finishKeyboard(in: app)
+        }
         let addItem = app.buttons["transaction.item.add"]
         let name = app.textFields["transaction.item.name"].firstMatch
         let itemAmount = app.textFields["transaction.item.amount"].firstMatch
@@ -73,6 +86,10 @@ final class TransactionFormTests: XCTestCase {
         // Match the recording: Overview -> saved purchase without items -> Add items.
         reveal(purchase, in: app); purchase.tap()
         XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 5))
+        if !opening {
+            XCTAssertTrue(app.staticTexts["Lunch description regression"].waitForExistence(timeout: 5),
+                          "Saved description must be visible without opening the editor")
+        }
         let editItems = app.buttons["transaction.items.edit"]
         for shouldSave in [false, true] {
             reveal(editItems, in: app); editItems.tap()
@@ -219,6 +236,19 @@ final class TransactionFormTests: XCTestCase {
         let merchant = app.textFields["transaction.merchant"]
         reveal(merchant, in: app); merchant.tap(); merchant.typeText("Unsaved purchase")
         finishKeyboard(in: app)
+
+        if !opening {
+            let location = app.buttons["transaction.place.edit"]
+            reveal(location, in: app); location.tap()
+            let mapPage = app.navigationBars["Spending location"]
+            XCTAssertTrue(mapPage.waitForExistence(timeout: 5), "Location editor must stay presented")
+            let placeName = app.textFields["place.name"]
+            reveal(placeName, in: app); placeName.tap(); placeName.typeText("Location regression")
+            app.buttons["place.save"].tap()
+            waitUntilGone(mapPage)
+            XCTAssertTrue(app.navigationBars["New entry"].exists, "Saving a place must not dismiss the transaction")
+            XCTAssertTrue(location.exists)
+        }
 
         let category = app.descendants(matching: .any)["transaction.category"].firstMatch
         reveal(category, in: app); category.tap()

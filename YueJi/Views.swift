@@ -1344,6 +1344,24 @@ struct TNGTimelineRow: View {
         }.padding(.vertical, 8)
     }
 }
+struct ExpenseDescriptionDetails: View {
+    let entry: Expense
+    var identifier = "transaction.description.detail"
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(tr("账目名称／描述", "Name / description", "Nama / penerangan")).font(.caption).foregroundStyle(.secondary)
+            let description = (entry.entryDescription ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            Text(description.isEmpty ? tr("未填写", "Not entered", "Belum diisi") : description)
+                .foregroundStyle(description.isEmpty ? Color.secondary : Color.primary)
+                .fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            if let note = entry.note, !note.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                Text(tr("备注", "Note", "Nota")).font(.caption).foregroundStyle(.secondary)
+                Text(note).fixedSize(horizontal: false, vertical: true).textSelection(.enabled)
+            }
+        }.frame(maxWidth: .infinity, alignment: .leading).accessibilityIdentifier(identifier)
+    }
+}
+
 struct ExpenseDetailView: View {
     @Environment(\.locale) private var uiLocale
     let id: String
@@ -1359,6 +1377,8 @@ struct ExpenseDetailView: View {
     @State private var deleting: Expense?
     @State private var compactTitle = false
     @State private var copiedDraft: Expense?
+    @State private var viewingPlace = false
+    @State private var mapPlace: ExpensePlace?
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
@@ -1378,13 +1398,8 @@ struct ExpenseDetailView: View {
                     Section {
                         ExpenseDetailHero(entry: entry, compact: $compactTitle)
                     }
-                    if let description = entry.entryDescription, !description.isEmpty {
                     Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(tr("账目名称／描述", "Name / description", "Nama / penerangan")).font(.caption).foregroundStyle(.secondary)
-                                Text(description).textSelection(.enabled)
-                            }.accessibilityIdentifier("transaction.description.detail")
-                    }
+                        ExpenseDescriptionDetails(entry: entry)
                     }
                     SavedTransactionItemsSection(entry: entry, presentationAllowed: !editorPresented && deleting == nil) { selectedID in
                         guard !editorPresented, editing == nil, deleting == nil else { return }
@@ -1392,7 +1407,9 @@ struct ExpenseDetailView: View {
                         editing = .items(entry, selectedID: selectedID)
                     }
                     ExpenseChargeDetails(entry: entry)
-                    if let place = entry.place { ExpensePlaceDetails(place: place) }
+                    if let place = entry.place {
+                        ExpensePlaceDetails(place: place) { mapPlace = place; viewingPlace = true }
+                    }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
                         if entry.personalSpending != entry.purchaseDisplayCents || !entry.shares.isEmpty {
                             LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { TransactionAmount(cents: entry.personalSpending, direction: .outgoing) }
@@ -1536,6 +1553,7 @@ struct ExpenseDetailView: View {
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
             .sheet(item: $copiedDraft) { entry in ExpenseEditor(original: nil, initialDraft: entry) }
+            .sheet(isPresented: $viewingPlace) { ExpensePlaceMapSheet(initial: mapPlace, onSave: nil) }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
             .onAppear { if let liveDetail, lastVisibleDetail?.entry.id != liveDetail.entry.id { lastVisibleDetail = liveDetail } }
             .onChange(of: model.ledgerRevision) { _, _ in
@@ -1812,6 +1830,9 @@ struct ExpenseEditor: View {
     @State private var name = ""
     @State private var entryDescription = ""
     @State private var place: ExpensePlace?
+    @StateObject private var placeLocator = ExpensePlaceLocator()
+    @State private var editingPlace = false
+    @State private var startedLocation = false
     @State private var reimbursementEnabled = false
     @State private var reimbursementRecipient = ""
     @State private var reimbursementAmount = ""
@@ -1900,7 +1921,9 @@ struct ExpenseEditor: View {
                 chargeSection
                 payerSection
                 merchantSection
-                ExpensePlaceField(place: $place, automatic: initialized && original == nil && initialDraft == nil && recoverable == nil && !resumedDraft && !model.isPreview)
+                ExpensePlaceField(place: $place, locator: placeLocator) {
+                    finishKeyboard(); editingPlace = true
+                }
                 ExpenseItemsFields(items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
                 currencySection
                 friendSplitSection
@@ -1967,6 +1990,28 @@ struct ExpenseEditor: View {
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
             }
         }.ledgerFeedback(modal: true)
+            .task(id: initialized && recoverable == nil) {
+                guard initialized, recoverable == nil, !startedLocation, original == nil,
+                      !resumedDraft, !model.isPreview else { return }
+                guard initialDraft == nil || abs(date.timeIntervalSinceNow) < 300 else { return }
+                startedLocation = true
+                if place == nil { placeLocator.start(automatic: true) }
+            }
+            .onDisappear { placeLocator.cancel() }
+            .onChange(of: place) { _, value in
+                if value != placeLocator.result { placeLocator.cancel() }
+            }
+            .onChange(of: placeLocator.result) { _, value in
+                guard let value, !editingPlace, !saving, !draftFinished else { return }
+                // Automatic metadata alone must not make an untouched form dirty.
+                initialSnapshot?.place = value
+                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
+            }
+            .sheet(isPresented: $editingPlace) {
+                ExpensePlaceMapSheet(initial: place) { value in
+                    withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
+                }
+            }
             .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: {
                 finishDraft(); dismiss()
             })

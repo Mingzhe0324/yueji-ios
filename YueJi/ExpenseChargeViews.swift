@@ -26,9 +26,8 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDe
             latitude: location.coordinate.latitude, longitude: location.coordinate.longitude)
     }
     func start(automatic: Bool = false) {
-        // First permission is requested by the visible location action. Once
-        // granted, new forms locate automatically without another confirmation.
-        if automatic && manager.authorizationStatus != .authorizedWhenInUse && manager.authorizationStatus != .authorizedAlways { return }
+        // New-entry presentation requests permission once through the system.
+        // A denied permission never prevents entering or saving an expense.
         cancel()
         busy = true; message = nil; result = nil
         if manager.authorizationStatus == .notDetermined { manager.requestWhenInUseAuthorization() }
@@ -82,15 +81,12 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDe
 
 struct ExpensePlaceField: View {
     @Binding var place: ExpensePlace?
-    var automatic: Bool
-    @StateObject private var locator = ExpensePlaceLocator()
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var started = false
-    @State private var editing = false
+    @ObservedObject var locator: ExpensePlaceLocator
+    let edit: () -> Void
     var body: some View {
         Section {
             Button {
-                locator.cancel(); editing = true
+                locator.cancel(); edit()
             } label: {
                 HStack(spacing: 12) {
                     Image(systemName: "mappin.and.ellipse").foregroundStyle(.tint)
@@ -113,32 +109,15 @@ struct ExpensePlaceField: View {
         } header: { Text(tr("消费地点 · 选填", "Spending location · optional", "Lokasi belanja · pilihan")) } footer: {
             Text(tr("授权后，新账目会自动获取当前位置；地点不对可修改。", "After permission, new entries use your current location automatically. You can edit it.", "Selepas kebenaran, rekod baharu menggunakan lokasi semasa secara automatik. Anda boleh mengubahnya."))
         }
-        .task(id: automatic) {
-            guard automatic, !started else { return }; started = true
-            if place == nil { locator.start(automatic: true) }
-        }
-        .onDisappear { locator.cancel() }
-        .onChange(of: place) { _, value in
-            if value != locator.result { locator.cancel() }
-        }
-        .onChange(of: locator.result) { _, value in
-            guard let value else { return }
-            withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
-        }
-        .sheet(isPresented: $editing) {
-            ExpensePlaceMapSheet(initial: place) { value in
-                withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = value }
-            }
-        }
     }
 }
 
 struct ExpensePlaceDetails: View {
     let place: ExpensePlace
-    @State private var showingMap = false
+    let open: () -> Void
     var body: some View {
         Section(tr("消费地点", "Spending location", "Lokasi belanja")) {
-                Button { showingMap = true } label: {
+                Button(action: open) {
                     Label {
                         VStack(alignment: .leading, spacing: 4) {
                             Text(place.name)
@@ -147,7 +126,6 @@ struct ExpensePlaceDetails: View {
                     } icon: { Image(systemName: "mappin.and.ellipse") }
                 }.accessibilityIdentifier("transaction.place.detail")
         }
-        .sheet(isPresented: $showingMap) { ExpensePlaceMapSheet(initial: place, onSave: nil) }
     }
 }
 

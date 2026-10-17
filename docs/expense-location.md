@@ -1,6 +1,6 @@
 # Optional transaction locations
 
-New manual entries obtain a one-shot location after the user has granted When In Use permission through Use current location. No launch permission prompt or background tracking is added. Existing entries and restored drafts keep their saved location. Failure does not block saving; retry and manual name/address entry remain available.
+Opening a new manual entry starts a one-shot location request automatically, including the first system When In Use permission prompt. No separate location-button tap, app-launch permission prompt or background tracking is required. Existing entries and restored drafts keep their saved location; old seeded entries do not receive current coordinates. Failure does not block saving; retry and manual name/address entry remain available. Automatic metadata alone does not mark an otherwise untouched form as edited.
 
 Location is optional Codable data on expenses, pending notices, delivery inputs and editor snapshots. Older records decode without it. Backups preserve it. Duplicating a purchase intentionally drops the old location. Changing a manually entered name/address clears the previous coordinate.
 
@@ -10,6 +10,8 @@ The map loads only when its sheet opens, not in every ledger row. Rounded cards 
 
 Automatic payment intents only attach an already available fix less than 30 seconds old with accuracy at most 100 metres, after authorization. They do not request permission or wait for GPS. Supplied old transaction times do not receive current coordinates. Delivery retries preserve the original metadata and do not overwrite previously recorded entries. A recording location is not proof of the merchant's physical location.
 
-The form uses a small progress indicator and a 0.25-second content transition, respecting Reduce Motion. Location requests cancel when the field disappears, is edited, or removed. Requests time out after 20 seconds; canceled geocoding callbacks cannot overwrite a newer choice.
+The form uses a small progress indicator and a 0.25-second content transition, respecting Reduce Motion. The whole editor owns the location request and map sheet, rather than a lazy Form row; scrolling the location row offscreen cannot cancel acquisition or remove its sheet presenter. The transaction detail likewise owns its map sheet. Requests cancel when the editor disappears or the location is edited/removed. Requests time out after 20 seconds; canceled geocoding callbacks cannot overwrite a newer choice.
+
+Transaction details and linked notification details share the same always-visible description component, with a Not entered placeholder for missing descriptions and a separate note when present. The existing UI suite now checks a saved description after cold launch and a map-editor round trip back to the unsaved transaction. Its system interruption monitor handles the first location permission prompt.
 
 Validation: project checks and Swift tree-sitter parsing passed on Windows. Native XCTest cases cover legacy/backup round trips, coordinate bounds, draft preservation, duplicate purchase behavior and delivery retry behavior. Xcode compilation, native tests, permission denial, approximate location and device animation checks still require macOS/iPhone validation.

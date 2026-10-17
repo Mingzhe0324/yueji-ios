@@ -1585,11 +1585,7 @@ struct TNGNoticeView: View {
                 if let expenseID = notice.expenseID {
                     if let entry = model.expense(id: expenseID) {
                         ExpenseRow(entry: entry)
-                        if let description = entry.entryDescription, !description.isEmpty {
-                            LabeledContent(tr("账目名称／描述", "Name / description", "Nama / penerangan")) {
-                                Text(description).textSelection(.enabled)
-                            }.accessibilityIdentifier("notice.description.detail")
-                        }
+                        ExpenseDescriptionDetails(entry: entry, identifier: "notice.description.detail")
                         NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
                         Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) {
                             guard !itemsEditorPresented, editing == nil else { return }
