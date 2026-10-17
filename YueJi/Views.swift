@@ -335,6 +335,8 @@ struct MonthPicker: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Binding var month: Date
     @State private var direction = 1
+    @State private var choosingMonth = false
+    @State private var selectedDate = Date()
     private var monthLabel: String { month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))) }
     private var labelTransition: AnyTransition {
         reduceMotion ? .identity : .asymmetric(
@@ -363,6 +365,9 @@ struct MonthPicker: View {
             }.animation(reduceMotion ? nil : YueJiMotion.month, value: monthKey(month))
                 .frame(maxWidth: .infinity, minHeight: 44).clipped().contentShape(Rectangle())
                 .accessibilityElement(children: .ignore).accessibilityLabel(monthLabel)
+                .onTapGesture { selectedDate = month; choosingMonth = true }
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { selectedDate = month; choosingMonth = true }
                 .simultaneousGesture(DragGesture(minimumDistance: 25).onEnded { value in
                     let dx = value.translation.width, dy = value.translation.height
                     guard abs(dx) > 45, abs(dx) > abs(dy) * 1.5 else { return }
@@ -374,6 +379,24 @@ struct MonthPicker: View {
                 .frame(minWidth: 44, minHeight: 44)
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
         }
+        .sheet(isPresented: $choosingMonth) {
+            NavigationStack {
+                Form {
+                    DatePicker(tr("选择月份", "Choose month", "Pilih bulan"), selection: $selectedDate, displayedComponents: .date)
+                        .datePickerStyle(.graphical)
+                    Button(tr("回到本月", "Back to this month", "Kembali ke bulan ini")) { choose(Date()) }
+                }.navigationTitle(tr("月份", "Month", "Bulan")).navigationBarTitleDisplayMode(.inline)
+                    .toolbar {
+                        ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { choosingMonth = false } }
+                        ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { choose(selectedDate) } }
+                    }
+            }.presentationDetents([.large])
+        }
+    }
+    private func choose(_ value: Date) {
+        direction = value >= month ? 1 : -1
+        month = value; choosingMonth = false
+        FeedbackHaptics.selection()
     }
     private func shift(_ n: Int) {
         direction = n
@@ -1335,6 +1358,7 @@ struct ExpenseDetailView: View {
     @State private var returnedAfterDeletion = false
     @State private var deleting: Expense?
     @State private var compactTitle = false
+    @State private var copiedDraft: Expense?
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
@@ -1451,6 +1475,14 @@ struct ExpenseDetailView: View {
                 ToolbarItem(placement: .principal) {
                     ExpenseDetailTitle(entry: detail?.entry, compact: compactTitle)
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    if let entry = liveDetail?.entry {
+                        Button { copiedDraft = entry.duplicateDraft() } label: {
+                            Label(tr("复制账目", "Duplicate entry", "Salin rekod"), systemImage: "doc.on.doc")
+                        }.disabled(editorPresented || model.deletionInFlight)
+                            .accessibilityIdentifier("transaction.duplicate")
+                    }
+                }
                 if !embeddedInNavigation {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(tr("关闭", "Close", "Tutup")) { dismiss() }
@@ -1502,6 +1534,7 @@ struct ExpenseDetailView: View {
                 }
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
+            .sheet(item: $copiedDraft) { entry in ExpenseEditor(original: nil, initialDraft: entry) }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
             .onAppear { if let liveDetail, lastVisibleDetail?.entry.id != liveDetail.entry.id { lastVisibleDetail = liveDetail } }
             .onChange(of: model.ledgerRevision) { _, _ in
@@ -1623,12 +1656,36 @@ private struct ExpenseDeletionConfirmation: ViewModifier {
     }
 }
 
-struct ExpenseEditorSnapshot: Equatable {
+struct ExpenseEditorSnapshot: Codable, Equatable {
     var text: [String]
     var flags: [Bool]
     var date: Date
     var items: [ExpenseItemDraft]
     var people: [FriendDraft]
+}
+
+struct SavedExpenseDraft: Codable {
+    var version = 1
+    var base: Expense?
+    var seed: Expense?
+    var fields: ExpenseEditorSnapshot
+    var rateDate: Date
+    var rateSource: String
+    var updated = Date()
+    var supported: Bool { version == 1 && fields.text.count == 16 && fields.flags.count == 8 && fields.items.count <= 100 && fields.people.count <= 100 }
+}
+
+enum ExpenseDraftStorage {
+    static func key(_ id: String?) -> String { "expense-draft-v1." + (id ?? "new") }
+    static func read(_ id: String?, defaults: UserDefaults = .standard) -> SavedExpenseDraft? {
+        guard let data = defaults.data(forKey: key(id)), let draft = try? JSONDecoder().decode(SavedExpenseDraft.self, from: data), draft.supported else { return nil }
+        return draft
+    }
+    static func write(_ draft: SavedExpenseDraft, id: String?, defaults: UserDefaults = .standard) {
+        guard draft.supported, let data = try? JSONEncoder().encode(draft) else { return }
+        defaults.set(data, forKey: key(id))
+    }
+    static func remove(_ id: String?, defaults: UserDefaults = .standard) { defaults.removeObject(forKey: key(id)) }
 }
 
 extension View {
@@ -1733,7 +1790,7 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
     }
 }
 
-struct FriendDraft: Identifiable, Equatable {
+struct FriendDraft: Codable, Identifiable, Equatable {
     var id: String; var name: String; var amount: String; var repayments: [Repayment]
     init(_ s: Share = Share(name: "", cents: 0)) { id = s.id; name = s.name; amount = Currency.input(s.cents, "MYR"); repayments = s.repayments }
 }
@@ -1787,6 +1844,11 @@ struct ExpenseEditor: View {
     @State private var rateNote = ""
     @State private var initialSnapshot: ExpenseEditorSnapshot?
     @State private var confirmingDiscard = false
+    @Environment(\.scenePhase) private var phase
+    @State private var recoverable: SavedExpenseDraft?
+    @State private var draftSeed: Expense?
+    @State private var resumedDraft = false
+    @State private var draftFinished = false
     private var snapshot: ExpenseEditorSnapshot {
         ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent, chargeRounding],
                               flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled, chargesEnabled],
@@ -1816,6 +1878,20 @@ struct ExpenseEditor: View {
                 ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
             } else {
             Form {
+                if let saved = recoverable {
+                    Section(tr("未保存的草稿", "Unsaved draft", "Draf belum disimpan")) {
+                        Text(dateLabel(saved.updated, time: true)).font(.caption).foregroundStyle(.secondary)
+                        if saved.base == original {
+                            Button(tr("继续填写", "Resume draft", "Sambung draf")) { restoreDraft(saved) }
+                                .accessibilityIdentifier("transaction.draft.resume")
+                        } else {
+                            Text(tr("原账目已更新，旧草稿不能覆盖新记录。", "This entry has changed; the old draft cannot overwrite it.", "Rekod telah berubah; draf lama tidak boleh menimpanya."))
+                        }
+                        Button(tr("放弃旧草稿", "Discard old draft", "Buang draf lama"), role: .destructive) {
+                            ExpenseDraftStorage.remove(original?.id); recoverable = nil
+                        }
+                    }
+                }
                 if original == nil && initialDraft == nil { ManualEntryTypeSection(selection: $entryType) }
                 paymentSection
                 chargeSection
@@ -1857,7 +1933,7 @@ struct ExpenseEditor: View {
                 .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
                     EditorSaveLabel(saving: saving)
-                }.yuejiPrimaryButton().disabled(rateLoading || saving) } }
+                }.yuejiPrimaryButton().disabled(rateLoading || saving || recoverable != nil) } }
                 .toolbar {
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
@@ -1865,16 +1941,18 @@ struct ExpenseEditor: View {
                     }
                 }
                 .onAppear { load() }
+                .onChange(of: snapshot) { _, _ in persistDraft() }
+                .onChange(of: phase) { _, value in if value != .active { persistDraft() } }
                 .task(id: currency) {
                     guard !model.isPreview else { return }
                     let request = UUID(), code = currency, submittedRate = rate
                     rateRequest = request
-                    guard original == nil, code != "MYR" else { rateLoading = false; return }
+                    guard original == nil, !resumedDraft, code != "MYR" else { rateLoading = false; return }
                     rateLoading = true; defer { if rateRequest == request { rateLoading = false } }
                     do {
                         if let q = try await AutomaticRates.shared.refresh(code) {
                             try Task.checkCancellation()
-                            guard currency == code, rateRequest == request else { return }
+                            guard !resumedDraft, currency == code, rateRequest == request else { return }
                             if rate == submittedRate { rate = q.text; rateDate = q.date; rateSource = q.source }
                             rateNote = q.source + " · " + dateLabel(q.date)
                         }
@@ -1885,7 +1963,32 @@ struct ExpenseEditor: View {
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
             }
         }.ledgerFeedback(modal: true)
-            .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: { dismiss() })
+            .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: {
+                finishDraft(); dismiss()
+            })
+    }
+    private func persistDraft() {
+        guard initialized, !model.isPreview, !draftFinished, recoverable == nil else { return }
+        guard hasChanges else { ExpenseDraftStorage.remove(original?.id); return }
+        ExpenseDraftStorage.write(SavedExpenseDraft(base: original, seed: draftSeed,
+            fields: snapshot, rateDate: rateDate, rateSource: rateSource), id: original?.id)
+    }
+    private func finishDraft() {
+        draftFinished = true
+        if !model.isPreview { ExpenseDraftStorage.remove(original?.id) }
+    }
+    private func restoreDraft(_ draft: SavedExpenseDraft) {
+        guard draft.supported, draft.base == original else { return }
+        let t = draft.fields.text, f = draft.fields.flags
+        name = t[0]; entryDescription = t[1]; amount = t[2]; currency = t[3]; rate = t[4]
+        category = t[5]; entryType = t[6]; payerName = t[7]; friendPaidMode = t[8]; friendShareText = t[9]
+        reimbursementRecipient = t[10]; reimbursementAmount = t[11]; chargeSubtotal = t[12]
+        sstPercent = t[13]; servicePercent = t[14]; chargeRounding = t[15]
+        rememberCategory = f[0]; splitting = f[1]; friendPays = f[2]; fuel = f[3]; equal = f[4]
+        includeMe = f[5]; reimbursementEnabled = f[6]; chargesEnabled = f[7]
+        date = draft.fields.date; itemDrafts = draft.fields.items; people = draft.fields.people
+        rateDate = draft.rateDate; rateSource = draft.rateSource; foreignExpanded = currency != "MYR"
+        draftSeed = draft.seed; resumedDraft = true; recoverable = nil
     }
     private var paymentSection: some View {
         Section(tr("实际付款", "Payment", "Bayaran")) {
@@ -2039,6 +2142,8 @@ struct ExpenseEditor: View {
     private func load() {
         guard !initialized else { return }; initialized = true
         defer { initialSnapshot = snapshot }
+        draftSeed = initialDraft
+        if !model.isPreview { recoverable = ExpenseDraftStorage.read(original?.id) }
         if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
@@ -2098,7 +2203,7 @@ struct ExpenseEditor: View {
     }
     private func commit() async {
         do {
-            let n = try total(); var entry = original ?? initialDraft ?? Expense(merchant: "", cents: n)
+            let n = try total(); var entry = original ?? draftSeed ?? Expense(merchant: "", cents: n)
             if entry.cents != n || currency != "MYR" { entry.receiptSummary = nil }
             if let original, original.date != date { entry.timeSource = "edited" }
             entry.merchant = name.trimmingCharacters(in: .whitespacesAndNewlines); entry.cents = n; entry.date = date; entry.category = category; entry.fuel = fuel
@@ -2137,7 +2242,7 @@ struct ExpenseEditor: View {
                 guard entry.shares.map(\.id) == original.shares.map(\.id), zip(entry.shares, original.shares).allSatisfy({ pair in pair.0.cents == pair.1.cents && pair.0.name == pair.1.name }) else { throw reviewError("已有退款，请先撤销退款再修改分账。", "Undo refunds before changing splits.", "Batalkan bayaran balik sebelum mengubah pembahagian.") }
                 entry.shares = original.shares
             }
-            if initialDraft != nil && splitting {
+            if draftSeed != nil && splitting {
                 let names = entry.shares.map { friendKey($0.name) }
                 guard !names.contains(""), Set(names).count == names.count else {
                     throw reviewError("请填写每位朋友的姓名，且姓名不能重复。", "Enter a distinct name for each friend.", "Isi nama berbeza bagi setiap rakan.")
@@ -2156,6 +2261,7 @@ struct ExpenseEditor: View {
             try entry.validateReimbursement()
             try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty)
             await model.refresh(postRecurring: false)
+            finishDraft()
             model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil); dismiss(); onSaved?()
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }

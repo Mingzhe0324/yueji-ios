@@ -117,6 +117,20 @@ struct Expense: Codable, Identifiable, Equatable {
     // A refund paid into my account must still be forwarded to the friend who funded it.
     var owingToPayer: Int { personal + (paidByFriend == nil ? 0 : (refunds ?? []).filter { $0.receivedByMe == true }.reduce(0) { $0 + $1.cents }) }
 }
+extension Expense {
+    /// New purchase template, never a replay of the original payment or settlements.
+    func duplicateDraft(date: Date = Date()) -> Expense {
+        let copiedItems = items?.map { item in
+            ExpenseItem(name: item.name, cents: item.cents, category: item.category,
+                        quantity: item.quantity, ownership: item.ownership)
+        }
+        return Expense(merchant: merchant, entryDescription: entryDescription, cents: cents, date: date,
+            category: category, fuel: fuel,
+            shares: shares.map { Share(name: $0.name, cents: $0.cents) }, foreign: foreign,
+            note: note, paidByFriend: paidByFriend, items: copiedItems, charges: charges)
+    }
+}
+
 struct Ledger: Codable {
     var version = 6
     var expenses: [Expense] = []

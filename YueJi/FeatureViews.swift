@@ -619,6 +619,23 @@ struct AutomationStatusView: View {
         List {
             if pendingCount > 0 {
                 Section(tr("需要你确认", "Needs your review", "Perlu semakan anda")) {
+                    ForEach(model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.prefix(10)) { notice in
+                        NavigationLink {
+                            if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+                            else { TNGNoticeView(id: notice.id) }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(notice.party ?? sourceLabel(notice.provider)).font(.headline)
+                                Text(dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                                Text(notice.possibleDuplicate
+                                    ? tr("疑似重复，请先核对", "Possible duplicate — review first", "Mungkin pendua — semak dahulu")
+                                    : (notice.reviewReason.map(localizedError) ?? (notice.cents == nil
+                                        ? tr("金额未识别，点此补充", "Amount not recognised — add details", "Amaun tidak dikenal pasti — isi butiran")
+                                        : tr("用途待确认，点此处理", "Confirm the purpose", "Sahkan tujuan"))))
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
                     NavigationLink { TNGInboxView(pendingOnly: true) } label: {
                         LabeledContent(tr("确认交易用途", "Review transactions", "Semak transaksi"), value: String(pendingCount))
                     }
@@ -634,9 +651,7 @@ struct AutomationStatusView: View {
                             .font(.footnote).foregroundStyle(.secondary)
                     }
                     if let recoveryError {
-                        DisclosureGroup(tr("查看未完成的原因", "Why it could not finish", "Sebab tidak selesai")) {
-                            Text(localizedError(recoveryError)).font(.footnote).textSelection(.enabled)
-                        }
+                        Text(localizedError(recoveryError)).font(.footnote).textSelection(.enabled)
                     }
                     Button(retrying ? tr("正在重试…", "Retrying…", "Sedang mencuba…") : tr("再试一次", "Try again", "Cuba lagi")) {
                         retrying = true
@@ -668,9 +683,7 @@ struct AutomationStatusView: View {
                         Text(sourceLabel(event.source) + " · " + outcome(event.outcome, source: event.source)).font(.body.weight(.medium))
                         Text(dateLabel(event.date, time: true)).font(.footnote).foregroundStyle(.secondary)
                         if !event.detail.isEmpty {
-                            DisclosureGroup(tr("处理详情", "Processing details", "Butiran pemprosesan")) {
-                                Text(localizedError(event.detail)).font(.footnote).textSelection(.enabled)
-                            }
+                            Text(localizedError(event.detail)).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
                         }
                     }.padding(.vertical, 4)
                 }
@@ -2607,6 +2620,8 @@ struct TNGIncomingView: View {
     @State private var purpose = ""
     @State private var friend = ""
     @State private var selectedDebts = Set<String>()
+    @State private var repaymentPreview: [IncomingRepaymentLine] = []
+    @State private var reviewingRepayment = false
     private var repaymentItems: [FriendDebtItem] {
         model.debts(friend: friend).filter { $0.balance > 0 && $0.expense.paidByFriend == nil }
     }
@@ -2654,6 +2669,28 @@ struct TNGIncomingView: View {
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
             .onChange(of: friend) { _, _ in selectedDebts.removeAll() }
+            .sheet(isPresented: $reviewingRepayment) {
+                NavigationStack {
+                    Form {
+                        Section {
+                            LabeledContent(tr("本次还款", "This repayment", "Bayaran balik ini"), value: money(repaymentPreview.reduce(0) { $0 + $1.applied }))
+                            Text(dateLabel(date, time: true))
+                        }
+                        ForEach(repaymentPreview) { line in
+                            Section(line.expense.displayName) {
+                                Text(dateLabel(line.expense.date)).font(.caption).foregroundStyle(.secondary)
+                                LabeledContent(tr("本次抵扣", "Applied now", "Dibayar sekarang"), value: money(line.applied))
+                                LabeledContent(tr("还后剩余", "Left outstanding", "Baki selepas bayaran"), value: money(line.before - line.applied))
+                            }
+                        }
+                        Button(tr("确认还款", "Confirm repayment", "Sahkan bayaran balik")) { save() }
+                            .disabled(model.isWorking("notice-" + id))
+                    }.navigationTitle(tr("核对还款分配", "Review repayment", "Semak bayaran balik"))
+                        .navigationBarTitleDisplayMode(.inline)
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("返回修改", "Back to edit", "Kembali untuk edit")) { reviewingRepayment = false }.disabled(model.isWorking("notice-" + id)) } }
+                        .interactiveDismissDisabled(model.isWorking("notice-" + id))
+                }
+            }
             .confirmationDialog(tr("确认此收款用途？", "Confirm this purpose?", "Sahkan tujuan ini?"), isPresented: $confirm, titleVisibility: .visible) {
                 Button(tr("确认保存", "Confirm and save", "Sahkan dan simpan")) { save() }
             } message: { Text(tr("只抵扣勾选的账目，多笔按日期先后分配。请勿重复记录已手动确认的还款。", "Only selected debts are repaid, oldest selected first. Do not duplicate repayments already recorded manually.", "Hanya hutang dipilih dibayar, yang tertua dahulu. Jangan gandakan bayaran balik manual.")) }
@@ -2702,14 +2739,27 @@ struct TNGIncomingView: View {
             if notice?.possibleDuplicate == true {
                 Toggle(tr("已核对：这是另一笔真实收款", "Checked: this is a separate receipt", "Disemak: ini penerimaan berasingan"), isOn: $distinct)
             }
-            Button(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) { confirm = true }
+            Button(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) {
+                if purpose == "repayment" {
+                    do {
+                        repaymentPreview = try model.ledger.previewIncomingRepayment(friend: friend, cents: notice?.cents ?? 0, date: date, selected: selectedDebts)
+                        reviewingRepayment = true
+                    } catch { self.error = error.localizedDescription }
+                } else { confirm = true }
+            }
                 .disabled(purpose.isEmpty || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || selectedBalance < (notice?.cents ?? 0))) || (notice?.possibleDuplicate == true && !distinct && purpose != "ignored"))
         }
     }
     private func save() {
-        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct, selectedDebts] in
+        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct, selectedDebts, repaymentPreview] in
+            if purpose == "repayment" {
+                guard let notice = $0.tngNotices.first(where: { $0.id == id }),
+                      try $0.previewIncomingRepayment(friend: friend, cents: notice.cents ?? 0, date: date, selected: selectedDebts) == repaymentPreview else {
+                    throw reviewError("欠款已改变，请返回重新预览。", "Debts changed. Go back and review again.", "Hutang berubah. Kembali dan semak semula.")
+                }
+            }
             try $0.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct, selectedExpenseIDs: purpose == "repayment" ? selectedDebts : nil)
-        }, completion: { _ in model.showSaved(message: tr("用途已确认", "Purpose confirmed", "Tujuan disahkan")) }, failure: { self.error = $0.localizedDescription })
+        }, completion: { _ in reviewingRepayment = false; model.showSaved(message: tr("用途已确认", "Purpose confirmed", "Tujuan disahkan")) }, failure: { reviewingRepayment = false; self.error = $0.localizedDescription })
     }
 }
 
@@ -3270,7 +3320,7 @@ struct FinancialNoticeReviewView: View {
     }
 }
 
-struct ExpenseItemDraft: Identifiable, Equatable {
+struct ExpenseItemDraft: Codable, Identifiable, Equatable {
     let id: String
     var name = ""
     var amount = ""

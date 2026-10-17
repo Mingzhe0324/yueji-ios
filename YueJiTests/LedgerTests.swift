@@ -4,6 +4,66 @@ import AVFoundation
 import SwiftUI
 @testable import YueJi
 
+final class EverydayFlowTests: XCTestCase {
+    func testDuplicateResetsPaymentHistoryAndIdentities() throws {
+        let now = Date()
+        var source = Expense(merchant: "Cafe", entryDescription: "Lunch", cents: 2000,
+            shares: [Share(name: "Amy", cents: 1000, repayments: [Repayment(cents: 200, date: now)])],
+            items: [ExpenseItem(name: "Meal", cents: 2000, category: "其他")])
+        source.source = "TNG"; source.transactionReference = "bank-ref"; source.recurringKey = "old-month"
+        source.receiptSummary = "Old receipt"; source.timeSource = "notification"
+        source.reimbursement = ReimbursementClaim(recipient: "Office", cents: 500)
+        let copy = source.duplicateDraft(date: now)
+        XCTAssertNotEqual(copy.id, source.id)
+        XCTAssertNotEqual(copy.items?.first?.id, source.items?.first?.id)
+        XCTAssertNotEqual(copy.shares.first?.id, source.shares.first?.id)
+        XCTAssertEqual(copy.date, now)
+        XCTAssertEqual(copy.merchant, source.merchant)
+        XCTAssertEqual(copy.entryDescription, "Lunch")
+        XCTAssertEqual(copy.cents, source.cents)
+        XCTAssertTrue(copy.shares[0].repayments.isEmpty)
+        XCTAssertNil(copy.refunds); XCTAssertNil(copy.reimbursement)
+        XCTAssertNil(copy.transactionReference); XCTAssertNil(copy.recurringKey); XCTAssertNil(copy.receiptSummary)
+        XCTAssertEqual(source.shares[0].repaid, 200)
+        _ = try Ledger(expenses: [copy]).validated()
+    }
+
+    func testIncompleteDraftRoundTripIsolationAndRemoval() throws {
+        let suite = "draft-test-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var fields = ExpenseEditorSnapshot(text: Array(repeating: "", count: 16),
+            flags: Array(repeating: false, count: 8), date: Date(),
+            items: [ExpenseItemDraft(name: "Unfinished", amount: "1.", category: "其他", quantity: 2)], people: [FriendDraft()])
+        fields.text[2] = "12."
+        fields.text[15] = "-0.02"
+        let draft = SavedExpenseDraft(base: nil, seed: nil, fields: fields, rateDate: Date(), rateSource: "Manual")
+        ExpenseDraftStorage.write(draft, id: nil, defaults: defaults)
+        XCTAssertEqual(try XCTUnwrap(ExpenseDraftStorage.read(nil, defaults: defaults)).fields, fields)
+        XCTAssertNil(ExpenseDraftStorage.read("other-entry", defaults: defaults))
+        var future = draft; future.version = 99
+        defaults.set(try JSONEncoder().encode(future), forKey: ExpenseDraftStorage.key("future"))
+        XCTAssertNil(ExpenseDraftStorage.read("future", defaults: defaults))
+        ExpenseDraftStorage.remove(nil, defaults: defaults)
+        XCTAssertNil(ExpenseDraftStorage.read(nil, defaults: defaults))
+    }
+
+    func testIncomingPreviewMatchesExactAllocationWithoutMutation() throws {
+        let now = Date()
+        var ledger = Ledger(expenses: [
+            Expense(id: "first", merchant: "Lunch", cents: 1000, date: now.addingTimeInterval(-172800), shares: [Share(name: "Amy", cents: 500)]),
+            Expense(id: "second", merchant: "Dinner", cents: 1000, date: now.addingTimeInterval(-86400), shares: [Share(name: "Amy", cents: 500)])])
+        let before = ledger.expenses
+        let lines = try ledger.previewIncomingRepayment(friend: "Amy", cents: 700, date: now, selected: ["first", "second"])
+        XCTAssertEqual(lines.map(\.applied), [500, 200])
+        XCTAssertEqual(lines.map { $0.before - $0.applied }, [0, 300])
+        XCTAssertEqual(ledger.expenses, before)
+        try ledger.batchRepay(friend: "Amy", cents: 700, date: now, selectedExpenseIDs: ["first", "second"])
+        XCTAssertEqual(ledger.expenses.map { $0.shares[0].repaid }, lines.map(\.applied))
+        XCTAssertThrowsError(try ledger.previewIncomingRepayment(friend: "Amy", cents: 700, date: now, selected: ["first", "second"]))
+    }
+}
+
 final class ExpenseChargeTests: XCTestCase {
     func testSignedReceiptRoundingAndLegacyCharges() throws {
         for (text, expected) in [("-0.02", 11598), ("+0.02", 11602), ("0.00", 11600), ("", 11600)] {

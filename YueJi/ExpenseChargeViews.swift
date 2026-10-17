@@ -41,6 +41,15 @@ struct ExpenseChargeFields: View {
                     }.disabled(actualMinor == calculation.total)
                         .accessibilityIdentifier("transaction.charges.apply")
                     if let actualMinor, actualMinor != calculation.total {
+                        LabeledContent(actualMinor > calculation.total
+                            ? tr("实付比计算总额多", "Payment exceeds calculated total", "Bayaran melebihi jumlah dikira")
+                            : tr("实付比计算总额少", "Payment is below calculated total", "Bayaran kurang daripada jumlah dikira"),
+                            value: Currency.display(abs(actualMinor - calculation.total), currency))
+                            .foregroundStyle(.orange).monospacedDigit()
+                            .accessibilityIdentifier("transaction.charges.difference")
+                        Button(tr("检查尾数调整", "Check rounding", "Semak pembundaran")) {
+                            focus.wrappedValue = .chargeRounding
+                        }.buttonStyle(.borderless)
                         Text(tr("请核对实际付款与含税费总额。", "Check the actual payment against the total with charges.", "Semak bayaran sebenar dengan jumlah termasuk caj."))
                             .font(.footnote).foregroundStyle(.orange)
                     }

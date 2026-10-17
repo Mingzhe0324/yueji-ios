@@ -168,6 +168,27 @@ struct DuplicatePair: Identifiable {
 struct FriendBalance: Identifiable {
     let id: String; var name: String; var owed: Int = 0; var payable: Int = 0; var count: Int = 0
 }
+struct IncomingRepaymentLine: Identifiable, Equatable {
+    var id: String { expense.id + "|" + shareID }
+    let expense: Expense
+    let shareID: String
+    let before: Int
+    let applied: Int
+}
+
+extension Ledger {
+    func previewIncomingRepayment(friend: String, cents: Int, date: Date, selected: Set<String>) throws -> [IncomingRepaymentLine] {
+        var preview = self
+        try preview.batchRepay(friend: friend, cents: cents, date: date, selectedExpenseIDs: selected)
+        let changed = Dictionary(uniqueKeysWithValues: preview.expenses.map { ($0.id, $0) })
+        return expenses.filter { selected.contains($0.id) }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }.flatMap { entry in
+            entry.shares.compactMap { share -> IncomingRepaymentLine? in
+                guard friendKey(share.name) == friendKey(friend), let updated = changed[entry.id]?.shares.first(where: { $0.id == share.id }) else { return nil }
+                return IncomingRepaymentLine(expense: entry, shareID: share.id, before: outstanding(expense: entry, share: share), applied: updated.repaid - share.repaid)
+            }
+        }
+    }
+}
 func friendKey(_ name: String) -> String { name.split(whereSeparator: { $0.isWhitespace }).joined(separator: " ").lowercased() }
 func reviewError(_ zh: String, _ en: String, _ ms: String) -> LedgerError { .invalid(tr(zh, en, ms)) }
 
