@@ -143,6 +143,7 @@ struct Expense: Codable, Identifiable, Equatable {
     var reimbursement: ReimbursementClaim? = nil
     var charges: ExpenseCharges? = nil
     var place: ExpensePlace? = nil
+    var tripID: String? = nil
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var displayName: String {
         let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -175,6 +176,7 @@ extension Expense {
 }
 
 struct Ledger: Codable {
+    var trips: [TravelBook] = []
     var version = 6
     var expenses: [Expense] = []
     var budgets: [String: Int] = [:]
@@ -195,7 +197,7 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -213,11 +215,13 @@ struct Ledger: Codable {
         backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
         customCategories = try c.decodeIfPresent([CustomCategory].self, forKey: .customCategories) ?? []
         tripDefaults = try c.decodeIfPresent(TripDefaults.self, forKey: .tripDefaults)
+        trips = try c.decodeIfPresent([TravelBook].self, forKey: .trips) ?? []
         savingsGoals = try c.decodeIfPresent([SavingsGoal].self, forKey: .savingsGoals) ?? []
         tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
         settlements = try c.decodeIfPresent([FriendSettlement].self, forKey: .settlements) ?? []
     }
     func validated() throws -> Ledger {
+        try validateTrips()
         try validateBookkeeping()
         guard savingsGoals.count <= 100, Set(savingsGoals.map(\.id)).count == savingsGoals.count else { throw LedgerError.invalid("储蓄目标无效 / Invalid savings goals") }
         for goal in savingsGoals { try goal.validate() }

@@ -1,5 +1,227 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import MapKit
+
+struct TravelBooksView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var creating = false
+    var body: some View {
+        List {
+            if model.ledger.trips.isEmpty {
+                ContentUnavailableView(tr("第一趟旅行", "Your first trip", "Perjalanan pertama"), systemImage: "suitcase.rolling",
+                    description: Text(tr("独立预算，账目与分账集中查看。", "A separate budget with expenses and splits in one place.", "Bajet berasingan dengan belanja dan pembahagian bersama.")))
+            }
+            ForEach(model.ledger.trips.sorted { $0.start > $1.start }) { trip in
+                NavigationLink { TravelBookDetail(id: trip.id) } label: {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Label(trip.name, systemImage: "suitcase.rolling").font(.headline)
+                        Text(trip.destination).font(.subheadline).foregroundStyle(.secondary)
+                        Text(dateLabel(trip.start) + " – " + dateLabel(trip.end)).font(.caption).foregroundStyle(.secondary)
+                        LabeledContent(tr("我的消费", "My spending", "Belanja saya"), value: money(model.ledger.tripSpending(trip.id)))
+                        if trip.budget > 0 { SpendingMeter(value: model.ledger.tripSpending(trip.id), total: trip.budget, color: .blue) }
+                    }.padding(.vertical, 8)
+                }
+            }
+        }.navigationTitle(tr("旅行账本", "Travel books", "Buku perjalanan"))
+            .toolbar { Button { creating = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("新增旅行", "New trip", "Perjalanan baharu")) }
+            .sheet(isPresented: $creating) { TravelBookEditor(original: nil) }
+    }
+}
+
+struct TravelBookDetail: View {
+    let id: String
+    @EnvironmentObject private var model: LedgerModel
+    @State private var editing = false
+    @State private var choosing = false
+    @State private var newEntry: Expense?
+    private var entries: [Expense] { model.ledger.expenses.filter { $0.tripID == id }.sorted { $0.date > $1.date } }
+    var body: some View {
+        List {
+            if let trip = model.ledger.trips.first(where: { $0.id == id }) {
+                Section {
+                    Text(trip.destination).font(.headline)
+                    Text(dateLabel(trip.start) + " – " + dateLabel(trip.end)).foregroundStyle(.secondary)
+                    if !trip.companions.isEmpty { Text(trip.companions.joined(separator: " · ")).font(.subheadline) }
+                    LabeledContent(tr("账目总额 · 扣除退款", "Purchase total after refunds", "Jumlah pembelian selepas pulangan"), value: money(entries.reduce(0) { $0 + $1.cents - $1.refunded }))
+                    LabeledContent(tr("我的实际消费", "My spending", "Belanja saya")) { AnimatedMoney(cents: model.ledger.tripSpending(id)) }
+                    LabeledContent(tr("独立预算", "Separate budget", "Bajet berasingan"), value: money(trip.budget))
+                    LabeledContent(tr("预算余额", "Budget balance", "Baki bajet"), value: money(trip.budget - model.ledger.tripSpending(id)))
+                    if trip.budget > 0 { SpendingMeter(value: model.ledger.tripSpending(id), total: trip.budget, color: model.ledger.tripSpending(id) > trip.budget ? .orange : .blue) }
+                    Text(tr("不占日常月预算；退款和报销沿用账本规则。", "Excluded from daily monthly budgets; refunds and claims follow ledger rules.", "Tidak menggunakan bajet bulanan harian; pulangan dan tuntutan mengikut lejar."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section {
+                    Button(tr("记一笔旅行消费", "Add trip expense", "Tambah belanja perjalanan")) {
+                        var draft = Expense(merchant: "", cents: 0)
+                        draft.tripID = id
+                        newEntry = draft
+                    }
+                    Button(tr("批量添加／移出账目", "Add or remove entries", "Tambah atau keluarkan rekod")) { choosing = true }
+                    NavigationLink(tr("消费地图", "Spending map", "Peta belanja")) { TravelSpendingMap(entries: entries) }
+                }
+                Section(tr("钱花在哪里", "Spending by category", "Belanja mengikut kategori")) {
+                    ForEach(model.ledger.categoryNames, id: \.self) { category in
+                        let amount = entries.reduce(0) { $0 + $1.personalAmount(category: category) }
+                        if amount != 0 { LabeledContent(categoryLabel(category), value: money(amount)) }
+                    }
+                }
+                Section(tr("同行分账 · 未结清", "Outstanding splits", "Pembahagian belum selesai")) {
+                    ForEach(model.ledger.friendDebtItems.filter { $0.expense.tripID == id && $0.balance != 0 }) { debt in
+                        NavigationLink { ExpenseDetailView(id: debt.expense.id, embeddedInNavigation: true) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(debt.friend + " · " + debt.expense.displayName)
+                                Text((debt.balance > 0 ? tr("朋友欠我：", "Owed to me: ", "Hutang kepada saya: ") : tr("我欠朋友：", "I owe: ", "Saya berhutang: ")) + money(abs(debt.balance)))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                Section(tr("旅行账目", "Trip entries", "Rekod perjalanan")) {
+                    ForEach(entries) { entry in
+                        NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                LabeledContent(entry.displayName, value: money(entry.personalSpending))
+                                Text(dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+            }
+        }.navigationTitle(model.ledger.trips.first(where: { $0.id == id })?.name ?? "")
+            .toolbar { Button(tr("编辑", "Edit", "Edit")) { editing = true } }
+            .sheet(isPresented: $editing) {
+                if let trip = model.ledger.trips.first(where: { $0.id == id }) { TravelBookEditor(original: trip) }
+            }
+            .sheet(isPresented: $choosing) { TravelEntrySelection(tripID: id) }
+            .sheet(item: $newEntry) { ExpenseEditor(original: nil, initialDraft: $0) }
+    }
+}
+
+private struct TravelBookEditor: View {
+    let original: TravelBook?
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var destination = ""
+    @State private var start = Date()
+    @State private var end = Date()
+    @State private var budget = ""
+    @State private var companions = ""
+    @State private var error: String?
+    @State private var loaded = false
+    @State private var confirming = false
+    @State private var initialFields: [String] = []
+    private var fields: [String] { [name, destination, String(start.timeIntervalSince1970), String(end.timeIntervalSince1970), budget, companions] }
+    private var hasChanges: Bool { loaded && fields != initialFields }
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(tr("旅行名称", "Trip name", "Nama perjalanan"), text: $name)
+                TextField(tr("目的地", "Destination", "Destinasi"), text: $destination)
+                DatePicker(tr("开始", "Start", "Mula"), selection: $start, displayedComponents: .date)
+                DatePicker(tr("结束", "End", "Tamat"), selection: $end, in: start..., displayedComponents: .date)
+                TextField(tr("独立预算 · MYR", "Separate budget · MYR", "Bajet berasingan · MYR"), text: $budget).keyboardType(.decimalPad)
+                TextField(tr("同行人，以逗号分隔", "Companions, separated by commas", "Teman, dipisahkan koma"), text: $companions)
+                if let error { Text(error).foregroundStyle(.red) }
+            }.navigationTitle(tr("旅行资料", "Trip details", "Butiran perjalanan"))
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { if hasChanges { confirming = true } else { dismiss() } } }
+                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() } }
+                }
+                .onAppear {
+                    guard !loaded else { return }; loaded = true
+                    if let trip = original {
+                        name = trip.name; destination = trip.destination; start = trip.start; end = trip.end
+                        budget = Currency.input(trip.budget, "MYR"); companions = trip.companions.joined(separator: ", ")
+                    }
+                    initialFields = fields
+                }
+                .onChange(of: start) { _, value in if end < value { end = value } }
+                .editorDismissal(hasChanges: hasChanges, saving: false, confirming: $confirming) { dismiss() }
+        }
+    }
+    private func save() {
+        do {
+            var trip = original ?? TravelBook(name: "")
+            trip.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            trip.destination = destination.trimmingCharacters(in: .whitespacesAndNewlines)
+            trip.start = start; trip.end = end; trip.budget = try (budget.isEmpty ? 0 : nonnegativeCents(budget))
+            trip.companions = companions.replacingOccurrences(of: "，", with: ",").components(separatedBy: ",")
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            try trip.validate()
+            let saved = trip
+            model.change { try $0.saveTrip(saved) }
+            dismiss()
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct TravelEntrySelection: View {
+    let tripID: String
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var selected = Set<String>()
+    @State private var initial = Set<String>()
+    @State private var loaded = false
+    @State private var search = ""
+    @State private var confirming = false
+    var body: some View {
+        NavigationStack {
+            List {
+                Text(tr("仅显示日常账目与本次旅行；取消勾选会移回日常预算。", "Daily entries and this trip only. Uncheck to return to the daily budget.", "Rekod harian dan perjalanan ini sahaja. Nyahpilih untuk kembali ke bajet harian."))
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(model.ledger.expenses.filter { ($0.tripID == nil || $0.tripID == tripID) && (search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search)) }.sorted { $0.date > $1.date }) { entry in
+                    Toggle(isOn: Binding(get: { selected.contains(entry.id) }, set: { if $0 { selected.insert(entry.id) } else { selected.remove(entry.id) } })) {
+                        VStack(alignment: .leading) {
+                            Text(entry.displayName)
+                            Text(dateLabel(entry.date) + " · " + money(entry.personalSpending)).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }.searchable(text: $search).navigationTitle(tr("选择账目", "Select entries", "Pilih rekod"))
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { if selected != initial { confirming = true } else { dismiss() } } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(tr("完成", "Done", "Selesai")) {
+                            let added = selected.subtracting(initial), removed = initial.subtracting(selected), id = tripID
+                            model.change { ledger in
+                                guard ledger.expenses.filter({ added.contains($0.id) }).allSatisfy({ $0.tripID == nil }),
+                                      ledger.expenses.filter({ removed.contains($0.id) }).allSatisfy({ $0.tripID == id }) else { throw LedgerError.invalid("Entry changed. Reopen it.") }
+                                try ledger.assignTrip(id, expenseIDs: added)
+                                try ledger.assignTrip(nil, expenseIDs: removed)
+                            }
+                            dismiss()
+                        }
+                    }
+                }.onAppear {
+                    guard !loaded else { return }; loaded = true
+                    initial = Set(model.ledger.expenses.filter { $0.tripID == tripID }.map(\.id)); selected = initial
+                }
+                .editorDismissal(hasChanges: selected != initial, saving: false, confirming: $confirming) { dismiss() }
+        }
+    }
+}
+
+private struct TravelSpendingMap: View {
+    let entries: [Expense]
+    private var located: [Expense] { entries.filter { $0.place?.latitude != nil && $0.place?.longitude != nil } }
+    var body: some View {
+        Map {
+            ForEach(located) { entry in
+                if let place = entry.place, let latitude = place.latitude, let longitude = place.longitude {
+                    Annotation(entry.displayName, coordinate: CLLocationCoordinate2D(latitude: latitude, longitude: longitude)) {
+                        NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                            Text(money(entry.personalSpending)).font(.caption.bold()).padding(8).background(.regularMaterial, in: Capsule())
+                        }
+                    }
+                }
+            }
+        }.navigationTitle(tr("消费地图", "Spending map", "Peta belanja"))
+            .overlay {
+                if located.isEmpty { ContentUnavailableView(tr("暂无地点", "No locations", "Tiada lokasi"), systemImage: "map") }
+            }
+    }
+}
 
 struct RatesView: View {
     @Environment(\.locale) private var uiLocale

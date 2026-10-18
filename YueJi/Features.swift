@@ -597,6 +597,48 @@ struct TripDefaults: Codable, Equatable {
         }
     }
 }
+struct TravelBook: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var name: String
+    var destination: String = ""
+    var start: Date = Date()
+    var end: Date = Date()
+    var budget: Int = 0
+    var companions: [String] = []
+    func validate() throws {
+        guard !id.isEmpty, id.count <= 200, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              name.count <= 100, destination.count <= 500, start.timeIntervalSince1970.isFinite,
+              end.timeIntervalSince1970.isFinite, start <= end, (0...10_000_000_000).contains(budget),
+              companions.count <= 50, companions.allSatisfy({ !$0.isEmpty && $0.count <= 80 }),
+              Set(companions.map(friendKey)).count == companions.count else {
+            throw LedgerError.invalid(tr("请检查旅行名称、日期、预算与同行人。", "Check trip name, dates, budget and companions.", "Semak nama, tarikh, bajet dan teman perjalanan."))
+        }
+    }
+}
+extension Ledger {
+    func validateTrips() throws {
+        guard trips.count <= 500, Set(trips.map(\.id)).count == trips.count else { throw LedgerError.invalid("Invalid trips") }
+        for trip in trips { try trip.validate() }
+        let ids = Set(trips.map(\.id))
+        guard expenses.allSatisfy({ $0.tripID == nil || ids.contains($0.tripID!) }) else { throw LedgerError.invalid("Unknown trip") }
+    }
+    func dailyBudgetSpending(in month: Date) -> Int {
+        expenses.filter { $0.tripID == nil && monthKey($0.date) == monthKey(month) }.reduce(0) { $0 + $1.personalSpending }
+    }
+    func tripSpending(_ id: String) -> Int {
+        expenses.filter { $0.tripID == id }.reduce(0) { $0 + $1.personalSpending }
+    }
+    mutating func saveTrip(_ trip: TravelBook) throws {
+        try trip.validate()
+        if let index = trips.firstIndex(where: { $0.id == trip.id }) { trips[index] = trip }
+        else { trips.append(trip) }
+    }
+    mutating func assignTrip(_ tripID: String?, expenseIDs: Set<String>) throws {
+        guard tripID == nil || trips.contains(where: { $0.id == tripID }) else { throw LedgerError.invalid("Unknown trip") }
+        guard expenseIDs.isSubset(of: Set(expenses.map(\.id))) else { throw LedgerError.invalid("Entry changed. Reopen it.") }
+        for index in expenses.indices where expenseIDs.contains(expenses[index].id) { expenses[index].tripID = tripID }
+    }
+}
 extension Ledger {
     var categoryNames: [String] { categories + customCategories.map(\.name) }
     mutating func saveCategory(_ category: CustomCategory) throws {
@@ -1019,7 +1061,7 @@ struct BudgetAlertCandidate {
     static func make(ledger: Ledger, now: Date = Date(), percent: Int = 100) -> BudgetAlertCandidate? {
         let key = monthKey(now)
         guard let budget = ledger.budgets[key], budget > 0 else { return nil }
-        let spent = ledger.spending(in: now)
+        let spent = ledger.dailyBudgetSpending(in: now)
         guard (1...200).contains(percent), spent * 100 >= budget * percent else { return nil }
         return BudgetAlertCandidate(month: key, spent: spent, budget: budget)
     }

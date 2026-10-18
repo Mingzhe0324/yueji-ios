@@ -5,6 +5,66 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testTravelBudgetUsesPersonalShareWithoutDoubleCountingOrRepaymentIncome() throws {
+        let now = Date()
+        let trip = TravelBook(name: "Penang", start: now, end: now, budget: 100000)
+        var entry = Expense(merchant: "Lunch", cents: 10000, date: now, shares: [Share(name: "Amy", cents: 6000)])
+        var ledger = Ledger(expenses: [entry], budgets: [monthKey(now): 3000])
+        try ledger.saveTrip(trip)
+        XCTAssertNotNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+        try ledger.assignTrip(trip.id, expenseIDs: [entry.id])
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.spending(in: now), 4000)
+        XCTAssertEqual(ledger.tripSpending(trip.id), 4000)
+        XCTAssertEqual(ledger.dailyBudgetSpending(in: now), 0)
+        XCTAssertNil(BudgetAlertCandidate.make(ledger: ledger, now: now))
+        XCTAssertEqual(trip.budget - ledger.tripSpending(trip.id), 96000)
+        ledger.expenses[0].shares[0].repayments = [Repayment(cents: 6000)]
+        XCTAssertEqual(ledger.tripSpending(trip.id), 4000)
+        XCTAssertEqual(ledger.friendDebtItems.first?.balance, 0)
+        try ledger.assignTrip(nil, expenseIDs: [entry.id])
+        XCTAssertEqual(ledger.dailyBudgetSpending(in: now), 4000)
+        XCTAssertEqual(ledger.tripSpending(trip.id), 0)
+        entry.tripID = trip.id
+        XCTAssertNil(entry.duplicateDraft().tripID)
+    }
+
+    func testTravelBackupCompatibilityAndInvalidReferences() throws {
+        var ledger = Ledger(expenses: [Expense(merchant: "Cafe", cents: 1200)])
+        let legacy = try JSONEncoder().encode(ledger)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: legacy) as? [String: Any])
+        object.removeValue(forKey: "trips")
+        let decoded = try JSONDecoder().decode(Ledger.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertTrue(decoded.trips.isEmpty)
+        XCTAssertNil(decoded.expenses.first?.tripID)
+        let trip = TravelBook(name: "Holiday")
+        try ledger.saveTrip(trip)
+        try ledger.assignTrip(trip.id, expenseIDs: [ledger.expenses[0].id])
+        let restored = try LocalStore.decode(LocalStore.exportData(ledger))
+        XCTAssertEqual(restored.trips.map(\.id), [trip.id])
+        XCTAssertEqual(restored.expenses.first?.tripID, trip.id)
+        XCTAssertThrowsError(try ledger.assignTrip("missing", expenseIDs: [ledger.expenses[0].id]))
+        XCTAssertThrowsError(try ledger.assignTrip(nil, expenseIDs: ["missing"]))
+        ledger.expenses[0].tripID = "missing"
+        XCTAssertThrowsError(try ledger.validated())
+        var invalid = trip; invalid.end = invalid.start.addingTimeInterval(-1)
+        XCTAssertThrowsError(try invalid.validate())
+    }
+
+    func testTravelRefundAndClaimReduceOnlyPersonalBudget() throws {
+        let trip = TravelBook(name: "Work trip")
+        var entry = Expense(merchant: "Hotel", cents: 10000)
+        entry.tripID = trip.id
+        entry.refunds = [RefundRecord(cents: 1000, date: Date(), personalCents: 1000, shares: [:])]
+        entry.reimbursement = ReimbursementClaim(recipient: "Company", cents: 5000)
+        var ledger = Ledger(expenses: [entry])
+        try ledger.saveTrip(trip)
+        XCTAssertEqual(ledger.tripSpending(trip.id), 4000)
+        XCTAssertEqual(ledger.dailyBudgetSpending(in: Date()), 0)
+        ledger.expenses[0].reimbursement?.receipts = [ReimbursementReceipt(cents: 5000, date: Date())]
+        XCTAssertEqual(ledger.tripSpending(trip.id), 4000)
+    }
+
     func testMerchantMatchingRequiresUniqueNearbyExactName() {
         let near = MerchantMatchCandidate(id: "a", name: "Café ABC", distance: 40)
         XCTAssertEqual(MerchantMatching.automaticID(name: "CAFE-ABC", candidates: [near]), "a")

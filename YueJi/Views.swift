@@ -426,23 +426,24 @@ struct DashboardView: View {
     @State private var loadedSummary: LedgerTimelineQuery?
     private var entries: [Expense] { summary.entries }
     private var personal: Int { summary.personal }
+    private var budgetSpent: Int { entries.filter { $0.tripID == nil }.reduce(0) { $0 + $1.personalSpending } }
     private var budget: Int { model.ledger.budgets[monthKey(month)] ?? 0 }
     private var budgetTint: Color {
         guard budget > 0 else { return ink }
-        if personal > budget { return .red }
-        return Double(personal) / Double(budget) >= 0.8 ? .orange : ink
+        if budgetSpent > budget { return .red }
+        return Double(budgetSpent) / Double(budget) >= 0.8 ? .orange : ink
     }
     private var budgetStatus: String {
-        if personal > budget { return tr("超出预算", "Over budget", "Melebihi bajet") }
-        if personal == budget { return tr("已达预算", "Budget reached", "Bajet dicapai") }
-        if Double(personal) / Double(max(budget, 1)) >= 0.8 { return tr("接近预算", "Approaching limit", "Menghampiri had") }
+        if budgetSpent > budget { return tr("超出预算", "Over budget", "Melebihi bajet") }
+        if budgetSpent == budget { return tr("已达预算", "Budget reached", "Bajet dicapai") }
+        if Double(budgetSpent) / Double(max(budget, 1)) >= 0.8 { return tr("接近预算", "Approaching limit", "Menghampiri had") }
         return tr("预算充足", "On track", "Dalam bajet")
     }
     private var budgetSymbol: String {
-        personal >= budget ? "exclamationmark.circle.fill" : (Double(personal) / Double(max(budget, 1)) >= 0.8 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+        budgetSpent >= budget ? "exclamationmark.circle.fill" : (Double(budgetSpent) / Double(max(budget, 1)) >= 0.8 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
     }
     private var budgetUsageText: String {
-        String(budget > 0 ? personal * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
+        String(budget > 0 ? budgetSpent * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
     }
     private var owed: Int { summary.owed }
     var body: some View {
@@ -603,19 +604,23 @@ struct DashboardView: View {
                 }
             }
             Divider().overlay(ink.opacity(0.04))
+            if personal != budgetSpent {
+                LabeledContent(tr("旅行消费 · 独立预算", "Travel · separate budget", "Perjalanan · bajet berasingan"), value: money(personal - budgetSpent))
+                    .font(.subheadline).foregroundStyle(.secondary)
+            }
             if budget > 0 {
                 ViewThatFits(in: .horizontal) {
                     HStack {
-                        Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
+                        Text(budgetSpent > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
                         Spacer(minLength: 16)
-                        AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
+                        AnimatedMoney(cents: abs(budget - budgetSpent)).fontWeight(.semibold)
                     }
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(personal > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
-                        AnimatedMoney(cents: abs(budget - personal)).fontWeight(.semibold)
+                        Text(budgetSpent > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
+                        AnimatedMoney(cents: abs(budget - budgetSpent)).fontWeight(.semibold)
                     }
                 }.font(.subheadline).foregroundStyle(budgetTint)
-                SpendingMeter(value: personal, total: budget, color: budgetTint)
+                SpendingMeter(value: budgetSpent, total: budget, color: budgetTint)
                 budgetStatusBadge
             }
             HStack {
@@ -1155,6 +1160,11 @@ struct ExpensesView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
+                    NavigationLink { TravelBooksView() } label: {
+                        Label(tr("旅行账本 · 独立预算", "Travel books · separate budgets", "Buku perjalanan · bajet berasingan"), systemImage: "suitcase.rolling")
+                    }
+                }
+                Section {
                     MonthPicker(month: monthBinding)
                     VStack(alignment: .leading, spacing: 8) {
                         Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
@@ -1408,6 +1418,11 @@ struct ExpenseDetailView: View {
                         editing = .items(entry, selectedID: selectedID)
                     }
                     ExpenseChargeDetails(entry: entry)
+                    if let trip = model.ledger.trips.first(where: { $0.id == entry.tripID }) {
+                        Section(tr("旅行账本", "Travel book", "Buku perjalanan")) {
+                            NavigationLink(trip.name) { TravelBookDetail(id: trip.id) }
+                        }
+                    }
                     if let place = entry.place {
                         ExpensePlaceDetails(place: place) {
                             mapDestination = ExpensePlaceDestination(place: place, merchant: entry.merchant)
@@ -1687,6 +1702,7 @@ struct ExpenseEditorSnapshot: Codable, Equatable {
     var items: [ExpenseItemDraft]
     var people: [FriendDraft]
     var place: ExpensePlace? = nil
+    var tripID: String? = nil
 }
 
 struct SavedExpenseDraft: Codable {
@@ -1835,6 +1851,7 @@ struct ExpenseEditor: View {
     @State private var name = ""
     @State private var entryDescription = ""
     @State private var place: ExpensePlace?
+    @State private var tripID: String?
     @StateObject private var placeLocator = ExpensePlaceLocator()
     @State private var editingPlace = false
     @State private var startedLocation = false
@@ -1882,7 +1899,7 @@ struct ExpenseEditor: View {
     private var snapshot: ExpenseEditorSnapshot {
         ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent, chargeRounding],
                               flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled, chargesEnabled],
-                              date: date, items: itemDrafts, people: people, place: place)
+                              date: date, items: itemDrafts, people: people, place: place, tripID: tripID)
     }
     private var hasChanges: Bool { initialSnapshot.map { $0 != snapshot } ?? false }
     private func requestClose() {
@@ -1927,6 +1944,16 @@ struct ExpenseEditor: View {
                 chargeSection
                 payerSection
                 merchantSection
+                if !model.ledger.trips.isEmpty {
+                    Section(tr("旅行账本", "Travel book", "Buku perjalanan")) {
+                        Picker(tr("预算归属", "Budget", "Bajet"), selection: $tripID) {
+                            Text(tr("日常月预算", "Daily monthly budget", "Bajet bulanan harian")).tag(String?.none)
+                            ForEach(model.ledger.trips) { trip in Text(trip.name).tag(Optional(trip.id)) }
+                        }
+                        Text(tr("旅行只扣独立预算，个人总支出仍会保留。", "Travel uses its own budget and remains in total spending.", "Perjalanan menggunakan bajet sendiri dan kekal dalam jumlah belanja."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 ExpensePlaceField(place: $place, locator: placeLocator, notice: placeNotice) {
                     finishKeyboard(); editingPlace = true
                 }
@@ -2050,6 +2077,7 @@ struct ExpenseEditor: View {
     }
     private func restoreDraft(_ draft: SavedExpenseDraft) {
         place = draft.fields.place
+        tripID = draft.fields.tripID
         guard draft.supported, draft.base == original else { return }
         let t = draft.fields.text, f = draft.fields.flags
         name = t[0]; entryDescription = t[1]; amount = t[2]; currency = t[3]; rate = t[4]
@@ -2221,6 +2249,7 @@ struct ExpenseEditor: View {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             entryDescription = e.entryDescription ?? ""
             place = e.place
+            tripID = e.tripID
             if let claim = e.reimbursement {
                 reimbursementEnabled = true
                 reimbursementRecipient = claim.recipient
@@ -2283,6 +2312,7 @@ struct ExpenseEditor: View {
             let description = entryDescription.trimmingCharacters(in: .whitespacesAndNewlines)
             entry.entryDescription = description.isEmpty ? nil : description
             entry.place = place
+            entry.tripID = tripID
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }
