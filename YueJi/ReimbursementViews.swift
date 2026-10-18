@@ -200,7 +200,8 @@ struct ReimbursementDetailView: View {
                     }
                 }
             } else {
-                ContentUnavailableView(tr("账目已删除", "Entry deleted", "Rekod dipadam"), systemImage: "tray")
+                IslandEmptyState(title: tr("账目已删除", "Entry deleted", "Rekod dipadam"), mood: .sad)
+                    .listRowBackground(Color.clear)
             }
         }.yuejiListSurface().disabled(busy)
             .navigationTitle(tr("报销详情", "Reimbursement details", "Butiran tuntutan"))

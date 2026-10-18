@@ -22,13 +22,47 @@ enum IslandTheme {
     static let ledge = accent.opacity(0.28)
 }
 
+/// Icon and category colours from the island's world, tuned to sit together on cream
+/// paper and dark teal. Financial meaning (income green, spending red) stays separate.
+enum IslandPalette {
+    static let leaf = IslandTheme.accent
+    static let mint = Color(red: 0.24, green: 0.66, blue: 0.48)
+    static let lagoon = Color(red: 0.13, green: 0.58, blue: 0.62)
+    static let sky = Color(red: 0.28, green: 0.56, blue: 0.88)
+    static let lavender = Color(red: 0.55, green: 0.46, blue: 0.88)
+    static let berry = Color(red: 0.86, green: 0.38, blue: 0.58)
+    static let coral = Color(red: 0.92, green: 0.44, blue: 0.38)
+    static let pumpkin = Color(red: 0.95, green: 0.56, blue: 0.20)
+    static let pebble = Color(red: 0.47, green: 0.53, blue: 0.56)
+}
+
+/// Every list, page and sheet sits on the same paper with a few soft, static clouds and
+/// sparkles, so each screen belongs to the island. Nothing here moves or takes touches.
 struct IslandBackdrop: View {
+    @Environment(\.colorScheme) private var scheme
     var body: some View {
         IslandTheme.paper.overlay(alignment: .topTrailing) {
             Circle().fill(IslandTheme.accent.opacity(0.055)).frame(width: 280, height: 280).offset(x: 90, y: -110)
         }.overlay(alignment: .bottomLeading) {
             Ellipse().fill(IslandTheme.sun.opacity(0.07)).frame(width: 370, height: 240).offset(x: -170, y: 140)
+        }.overlay(alignment: .topLeading) {
+            cloud(120).offset(x: -26, y: 150)
+        }.overlay(alignment: .trailing) {
+            cloud(90).offset(x: 30, y: 60)
+        }.overlay(alignment: .topTrailing) {
+            Image(systemName: "sparkle").font(.system(size: 14)).foregroundStyle(IslandTheme.sun.opacity(0.5)).offset(x: -28, y: 120)
+        }.overlay(alignment: .bottomTrailing) {
+            Image(systemName: "sparkle").font(.system(size: 10)).foregroundStyle(IslandTheme.accent.opacity(0.25)).offset(x: -60, y: -150)
         }.ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
+    }
+    private func cloud(_ width: CGFloat) -> some View {
+        ZStack {
+            Capsule().frame(width: width, height: width * 0.36).offset(y: width * 0.08)
+            Circle().frame(width: width * 0.46, height: width * 0.46).offset(x: -width * 0.14, y: -width * 0.04)
+            Circle().frame(width: width * 0.56, height: width * 0.56).offset(x: width * 0.10, y: -width * 0.08)
+        }
+        .foregroundStyle(Color.white.opacity(scheme == .dark ? 0.04 : 0.55))
+        .frame(width: width, height: width * 0.6)
     }
 }
 
@@ -52,7 +86,7 @@ struct IslandButtonStyle: ButtonStyle {
             .padding(.bottom, 4)
             .contentShape(shape)
             .opacity(enabled ? 1 : 0.45)
-            .animation(reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.5), value: pressed)
+            .animation(reduceMotion ? nil : YueJiMotion.press, value: pressed)
             .onChange(of: configuration.isPressed) { _, down in if down && enabled { FeedbackHaptics.tap() } }
     }
     @ViewBuilder private func label(_ configuration: Configuration) -> some View {
@@ -61,14 +95,28 @@ struct IslandButtonStyle: ButtonStyle {
         else { configuration.label.foregroundStyle(.tint) }
     }
 }
+/// The app's one motion language. Layout and content use bounce-free springs so lists and
+/// screens never jump; feedback, cards and the companion use the same spring family with a
+/// playful bounce. Prefer these over one-off timings so movements feel connected.
 enum YueJiMotion {
+    // Layout: rows, months, detail panels. No overshoot.
     static let standard = Animation.smooth(duration: 0.24)
     static let detail = Animation.smooth(duration: 0.32)
     static let month = Animation.smooth(duration: 0.42)
-    static let meter = Animation.smooth(duration: 0.45)
     static let rows = Animation.smooth(duration: 0.34)
-    static let banner = Animation.spring(duration: 0.5, bounce: 0.4)
     static let tone = Animation.easeInOut(duration: 0.55)
+    /// Text and labels that change in place.
+    static let content = Animation.spring(duration: 0.4, bounce: 0.2)
+    // Feedback and character.
+    /// Button and control presses.
+    static let press = Animation.spring(duration: 0.24, bounce: 0.5)
+    /// Chips, badges and small reveals.
+    static let pop = Animation.spring(duration: 0.4, bounce: 0.35)
+    /// Cards, empty states and the companion arriving on a page.
+    static let entrance = Animation.spring(duration: 0.5, bounce: 0.3)
+    static let banner = Animation.spring(duration: 0.5, bounce: 0.4)
+    /// Progress bars filling, like a game XP bar.
+    static let meter = Animation.spring(duration: 0.6, bounce: 0.25)
 }
 
 /// Move only the completed monthly summary, keeping navigation and row identity stable.
@@ -298,7 +346,7 @@ struct MainView: View {
                     .accessibilityIdentifier("launch.loading")
             }
             if !model.didFinishLaunch && openingEnabled {
-                OpeningAnimationView(sound: !model.isPreview) {
+                OpeningAnimationView(sound: !model.isPreview, ready: model.loaded) {
                     logoFinished = true
                     finishLaunchIfReady()
                 }
@@ -449,12 +497,13 @@ struct MonthPicker: View {
                     DatePicker(tr("选择月份", "Choose month", "Pilih bulan"), selection: $selectedDate, displayedComponents: .date)
                         .datePickerStyle(.graphical)
                     Button(tr("回到本月", "Back to this month", "Kembali ke bulan ini")) { choose(Date()) }
-                }.navigationTitle(tr("月份", "Month", "Bulan")).navigationBarTitleDisplayMode(.inline)
+                }.yuejiListSurface()
+                    .navigationTitle(tr("月份", "Month", "Bulan")).navigationBarTitleDisplayMode(.inline)
                     .toolbar {
                         ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { choosingMonth = false } }
                         ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { choose(selectedDate) } }
                     }
-            }.presentationDetents([.large])
+            }.presentationDetents([.large]).yuejiSheetSurface()
         }
     }
     private func choose(_ value: Date) {
@@ -676,10 +725,10 @@ struct DashboardView: View {
     private var quickActions: some View {
         Section {
             NavigationLink { AutomationSetupView() } label: {
-                SimpleSettingsRow(title: tr("自动记账", "Automation", "Automasi"), subtitle: "TNG · Bank · Apple Pay", symbol: "bolt.fill", color: .blue)
+                SimpleSettingsRow(title: tr("自动记账", "Automation", "Automasi"), subtitle: "TNG · Bank · Apple Pay", symbol: "bolt.fill", color: IslandPalette.sky)
             }
             NavigationLink { ReceiptScanView() } label: {
-                SimpleSettingsRow(title: tr("扫描收据", "Scan receipt", "Imbas resit"), subtitle: tr("拍下，核对，记好", "Scan, review, save", "Imbas, semak, simpan"), symbol: "doc.viewfinder", color: .teal)
+                SimpleSettingsRow(title: tr("扫描收据", "Scan receipt", "Imbas resit"), subtitle: tr("拍下，核对，记好", "Scan, review, save", "Imbas, semak, simpan"), symbol: "doc.viewfinder", color: IslandPalette.lagoon)
             }.guideTarget("dashboard.receipt")
         }
     }
@@ -1002,7 +1051,7 @@ struct SpendingMeter: View {
                 }
                 guard !Task.isCancelled else { return }
                 // A springy fill that overshoots slightly, like a game XP bar.
-                withAnimation(.spring(duration: 0.6, bounce: 0.3)) { displayedFraction = fraction }
+                withAnimation(YueJiMotion.meter) { displayedFraction = fraction }
             }
             .onChange(of: reduceMotion) { _, _ in
                 var transaction = Transaction()
@@ -1611,7 +1660,8 @@ struct ExpenseDetailView: View {
                         }
                     }
                 } else {
-                    ContentUnavailableView(tr("账目已删除", "Entry deleted", "Rekod dipadam"), systemImage: "tray")
+                    IslandEmptyState(title: tr("账目已删除", "Entry deleted", "Rekod dipadam"), mood: .sad)
+                        .listRowBackground(Color.clear)
                 }
             }
             .yuejiListSurface().navigationTitle(tr("账目详情", "Entry details", "Butiran rekod"))
@@ -2524,7 +2574,7 @@ struct FriendsView: View {
                     }
                 }
                 Section {
-                    NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: .teal) }
+                    NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: IslandPalette.lagoon) }
                     NavigationLink { SplitHistoryView() } label: { Label(tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), systemImage: "list.bullet.rectangle") }
                 }
             }.yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
@@ -2672,35 +2722,35 @@ struct SettingsView: View {
 
                 Section {
                     NavigationLink { appearancePage } label: {
-                        SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: .indigo)
+                        SimpleSettingsRow(title: tr("外观与语言", "Appearance & language", "Paparan & bahasa"), subtitle: tr("让月记更适合你", "Make YueJi feel like yours", "Sesuaikan YueJi untuk anda"), symbol: "circle.lefthalf.filled", color: IslandPalette.lavender)
                     }.guideTarget("settings.appearance")
                     NavigationLink { NotificationSettingsView() } label: {
-                        SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("记账结果、每日提醒和预算", "Saved entries, daily reminders and budget", "Rekod, peringatan harian dan bajet"), symbol: "bell.fill", color: .orange)
+                        SimpleSettingsRow(title: tr("提醒与通知", "Reminders & notifications", "Peringatan & notifikasi"), subtitle: tr("记账结果、每日提醒和预算", "Saved entries, daily reminders and budget", "Rekod, peringatan harian dan bajet"), symbol: "bell.fill", color: IslandPalette.pumpkin)
                     }
                 } header: { Text(tr("使用习惯", "Your preferences", "Pilihan anda")) }
                 Section {
                     NavigationLink { AutomationSetupView() } label: {
-                        SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: .teal)
+                        SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: IslandPalette.lagoon)
                     }
                     NavigationLink { categoriesPage } label: {
-                        SimpleSettingsRow(title: tr("消费分类", "Spending categories", "Kategori belanja"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: .blue)
+                        SimpleSettingsRow(title: tr("消费分类", "Spending categories", "Kategori belanja"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
                     }
                     NavigationLink { RatesView() } label: {
-                        SimpleSettingsRow(title: tr("外币记账", "Foreign currency", "Mata wang asing"), subtitle: tr("把外币消费换算成马币", "Convert spending to ringgit", "Tukar belanja kepada ringgit"), symbol: "globe", color: .green)
+                        SimpleSettingsRow(title: tr("外币记账", "Foreign currency", "Mata wang asing"), subtitle: tr("把外币消费换算成马币", "Convert spending to ringgit", "Tukar belanja kepada ringgit"), symbol: "globe", color: IslandPalette.mint)
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
                     NavigationLink { backupPage } label: {
-                        SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: .indigo)
+                        SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: IslandPalette.lavender)
                     }.guideTarget("settings.backup")
                     NavigationLink { aboutPage } label: {
-                        SimpleSettingsRow(title: tr("关于月记", "About YueJi", "Tentang YueJi"), subtitle: installedVersionLabel, symbol: "info.circle.fill", color: .gray)
+                        SimpleSettingsRow(title: tr("关于月记", "About YueJi", "Tentang YueJi"), subtitle: installedVersionLabel, symbol: "info.circle.fill", color: IslandPalette.pebble)
                     }
                     NavigationLink { OverviewToolsView() } label: {
-                        SimpleSettingsRow(title: tr("更多工具", "More tools", "Alat lain"), subtitle: tr("月度对比、消费预览与查重", "Comparisons, upcoming bills & duplicates", "Perbandingan, bil & pendua"), symbol: "square.grid.2x2.fill", color: .blue)
+                        SimpleSettingsRow(title: tr("更多工具", "More tools", "Alat lain"), subtitle: tr("月度对比、消费预览与查重", "Comparisons, upcoming bills & duplicates", "Perbandingan, bil & pendua"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
                     }
                     Button { showingUsageGuide = true } label: {
-                        SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("一步步学会使用月记", "Learn YueJi step by step", "Belajar YueJi langkah demi langkah"), symbol: "book.fill", color: .green)
+                        SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("一步步学会使用月记", "Learn YueJi step by step", "Belajar YueJi langkah demi langkah"), symbol: "book.fill", color: IslandPalette.mint)
                     }
                 } header: { Text(tr("备份与帮助", "Backups & help", "Sandaran & bantuan")) }
             }.yuejiListSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.large)
@@ -2846,7 +2896,9 @@ struct ShortcutSetupGuide: View {
         let _ = uiLocale.identifier
         Group {
             if unavailable {
-                ContentUnavailableView(tr("需要通知触发器", "Notification trigger required", "Pencetus notifikasi diperlukan"), systemImage: "bell.badge", description: Text(tr("此演示使用 iOS 27 的通知自动化。当前系统没有这个入口时，可继续手动记账。", "This walkthrough uses iOS 27 notification automations. If your system does not have this trigger, use manual recording.", "Panduan ini menggunakan automasi notifikasi iOS 27. Jika pencetus tiada, guna rekod manual.")))
+                IslandEmptyState(title: tr("需要通知触发器", "Notification trigger required", "Pencetus notifikasi diperlukan"),
+                                 message: tr("此演示使用 iOS 27 的通知自动化。当前系统没有这个入口时，可继续手动记账。", "This walkthrough uses iOS 27 notification automations. If your system does not have this trigger, use manual recording.", "Panduan ini menggunakan automasi notifikasi iOS 27. Jika pencetus tiada, guna rekod manual."),
+                                 mood: .worried)
             } else {
                 GeometryReader { geometry in
                     TabView(selection: selection) {
@@ -2944,10 +2996,10 @@ struct AutomationSetupView: View {
         List {
             Section {
                 NavigationLink { ShortcutHelpView() } label: {
-                    SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: .blue)
+                    SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: IslandPalette.sky)
                 }.guideTarget("automation.apple")
                 NavigationLink { TNGInboxView() } label: {
-                    SimpleSettingsRow(title: tr("银行与 TNG", "Banks and TNG", "Bank dan TNG"), subtitle: tr("设置付款记录，确认收到的交易", "Set up recording and review transactions", "Sediakan rekod dan semak transaksi"), symbol: "bell.badge.fill", color: .teal)
+                    SimpleSettingsRow(title: tr("银行与 TNG", "Banks and TNG", "Bank dan TNG"), subtitle: tr("设置付款记录，确认收到的交易", "Set up recording and review transactions", "Sediakan rekod dan semak transaksi"), symbol: "bell.badge.fill", color: IslandPalette.lagoon)
                 }.guideTarget("automation.tng")
             } footer: { Text(tr("跟着说明在「快捷指令」设置一次。之后收到的付款资料会交给月记处理。", "Follow the steps in Shortcuts once. Payment details it receives can then be sent to YueJi.", "Ikut langkah dalam Pintasan sekali. Butiran bayaran yang diterima kemudian boleh dihantar ke YueJi.")) }
             Section {
@@ -3052,6 +3104,7 @@ struct UsageGuideView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.dynamicTypeSize) private var typeSize
     @State private var page = 0
     @State private var stage = 0
     @State private var gesturePhase = 0
@@ -3079,7 +3132,13 @@ struct UsageGuideView: View {
                                     Color.clear.frame(height: min(480, max(280, geometry.size.height * 0.65)))
                                 }
                                 VStack(spacing: 10) {
-                                    Text(chapter.title).font(.title2.bold())
+                                    HStack(spacing: 10) {
+                                        // The companion guides each chapter and hops in as its page arrives.
+                                        if !typeSize.isAccessibilitySize {
+                                            InteractiveCompanion(mood: index == chapters.count - 1 ? .excited : .happy, size: 46, greeting: .hop)
+                                        }
+                                        Text(chapter.title).font(.title2.bold())
+                                    }
                                     Text(stepLabel(index: index, count: chapter.screens.count))
                                         .font(.caption).foregroundStyle(.secondary)
                                     Text(GuideCue.text(chapter.screens[min(index == page ? stage : 0, chapter.screens.count - 1)])).font(.headline).foregroundStyle(.secondary)
@@ -3096,7 +3155,7 @@ struct UsageGuideView: View {
                 .tabViewStyle(.page(indexDisplayMode: .always))
                 .indexViewStyle(.page(backgroundDisplayMode: .always))
             }
-            .background(Color(uiColor: .systemBackground))
+            .background(IslandBackdrop())
             .navigationTitle(tr("认识月记", "Meet YueJi", "Kenali YueJi")).navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -3862,6 +3921,8 @@ private struct NotificationBannerCard: View {
 private struct OpeningAnimationView: View {
     @Environment(\.locale) private var uiLocale
     var sound = true
+    /// Whether the ledger has loaded. The iris waits for it, so it never opens onto a blank screen.
+    var ready = true
     var onFinished: () -> Void
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -3885,6 +3946,8 @@ private struct OpeningAnimationView: View {
     @State private var iris: CGFloat = 0
     @State private var cheer: UUID?
     @State private var finished = false
+    /// Mirrors `ready` so the running sequence sees updates while it waits.
+    @State private var ledgerReady = false
     private var animates: Bool { playful && !reduceMotion }
     private var titleLetters: [String] { tr("月记", "YueJi", "YueJi").map(String.init) }
     private static let focus: CGFloat = 0.40 // Vertical position of the companion; the iris opens here.
@@ -3928,6 +3991,7 @@ private struct OpeningAnimationView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { finish() } // Tap anywhere to skip.
+        .onChange(of: ready, initial: true) { _, value in ledgerReady = value }
         .task {
             // Finishing the optional opening must not depend on scene callbacks.
             // Give the initial frame time to appear without blocking the UI.
@@ -3961,6 +4025,9 @@ private struct OpeningAnimationView: View {
                 }
                 withAnimation(.spring(duration: 0.5, bounce: 0.45)) { ribbonIn = true }
                 try await Task.sleep(for: .milliseconds(360))
+                // Hold on the title screen while the ledger loads: the iris only opens onto
+                // real content, never a blank background.
+                while !ledgerReady { try await Task.sleep(for: .milliseconds(50)) }
                 withAnimation(.easeIn(duration: 0.38)) { iris = 1500 }
                 try await Task.sleep(for: .milliseconds(380))
                 finish()

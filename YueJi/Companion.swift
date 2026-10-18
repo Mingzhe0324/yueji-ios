@@ -771,21 +771,26 @@ struct IslandPageBanner: View {
                     .transition(reduceMotion ? .opacity : .scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
                 if let badge { badge }
             }.frame(maxWidth: .infinity, alignment: .leading)
-                .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.3), value: shownLine)
+                .animation(reduceMotion ? nil : YueJiMotion.content, value: shownLine)
             if !typeSize.isAccessibilitySize {
-                InteractiveCompanion(mood: mood, size: 76, cheer: cheer, onSpeak: speak)
+                // Waves hello on the first visit to each page in a launch.
+                InteractiveCompanion(mood: mood, size: 76, cheer: cheer, greeting: .wave, greetKey: "banner-" + title, onSpeak: speak)
                     .rotationEffect(.degrees(entered || reduceMotion || !playful ? -7 : 8))
-                    .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.85)
+                    .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.8, anchor: .bottom)
             }
         }.padding(18)
             .background(IslandTheme.sun.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
             .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(IslandTheme.line, lineWidth: 1.5))
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
             .task {
-                guard !entered else { return }
+                // Every arrival on the page, including tab switches, pops the companion in.
+                // Only this small view moves, so switching tabs stays fast.
                 guard !reduceMotion, playful else { entered = true; return }
-                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                withAnimation(.spring(duration: 0.5, bounce: 0.22)) { entered = true }
+                var instant = Transaction()
+                instant.disablesAnimations = true
+                withTransaction(instant) { entered = false }
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { entered = true; return }
+                withAnimation(YueJiMotion.entrance) { entered = true }
             }
             .task(id: spokenID) {
                 guard spoken != nil else { return }

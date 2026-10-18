@@ -233,7 +233,7 @@ struct IslandEmptyState<Actions: View>: View {
             guard !shown else { return }
             guard !reduceMotion, IslandPlayful.enabled else { shown = true; return }
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-            withAnimation(.spring(duration: 0.5, bounce: 0.4)) { shown = true }
+            withAnimation(YueJiMotion.entrance) { shown = true }
         }
     }
 }
@@ -264,7 +264,7 @@ struct IslandStreakChip: View {
         .padding(.horizontal, 10).padding(.vertical, 6)
         .background(IslandTheme.sun.opacity(0.22), in: Capsule())
         .overlay(Capsule().strokeBorder(IslandTheme.line, lineWidth: 1.5))
-        .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.35), value: days)
+        .animation(reduceMotion ? nil : YueJiMotion.pop, value: days)
         .onChange(of: days) { old, new in
             guard new > old, !reduceMotion, IslandPlayful.enabled else { return }
             bump += 1; FeedbackHaptics.pop()

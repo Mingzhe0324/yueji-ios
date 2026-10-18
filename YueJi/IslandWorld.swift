@@ -142,7 +142,7 @@ struct IslandWorldCard: View {
             }
         }
         .padding(16)
-        .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.3), value: shownLine)
+        .animation(reduceMotion ? nil : YueJiMotion.content, value: shownLine)
     }
 
     /// Days recorded within the current level, out of the days it takes; full when complete.

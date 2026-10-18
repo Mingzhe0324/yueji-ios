@@ -16,6 +16,34 @@ downloaded art assets or photo permissions. Decorative art is hidden from
 VoiceOver; text, VoiceOver labels and transaction control identifiers are
 retained. Large accessibility text sizes omit the page-banner companion.
 
+## One visual and motion language
+
+- Colour: `IslandTheme` (paper, card, accent, sun) for surfaces and controls, and
+  `IslandPalette` (leaf, mint, lagoon, sky, lavender, berry, coral, pumpkin,
+  pebble) for icons and categories. Built-in and custom category colours map to
+  the palette; settings-style rows use it too. Income green and spending red
+  keep their financial meaning.
+- Surfaces: every list, page, sheet and the onboarding guide sits on
+  `IslandBackdrop` (paper with static clouds and sparkles). Chunky cards, buttons,
+  icon tiles and banners share the solid-ledge look.
+- Type: rounded design throughout, with heavy rounded navigation titles and bold
+  rounded tab labels.
+- Motion (`YueJiMotion`): layout and content use bounce-free springs (`standard`,
+  `detail`, `month`, `rows`) so lists never jump; text changes use `content`;
+  presses use `press`; chips and badges `pop`; cards, empty states and the
+  companion arriving on a page `entrance`; banners `banner`; progress bars
+  `meter`. New code should use these rather than one-off timings. The companion's
+  own acting keeps its choreography inside `Companion.swift`.
+- States: loading, empty, success, deleted and error-like empty screens all use
+  the companion with a fitting mood. Blocking errors and confirmations remain
+  system alerts and dialogs (UI tests and VoiceOver rely on them).
+- Tab changes: arriving on a tab pops that page's companion in (and it waves on
+  the first visit per launch). Only the small companion animates; the tab itself
+  is never scaled or faded, which keeps switching fast.
+- Opening: the iris waits on the title screen until the ledger has loaded, so it
+  never opens onto a blank background. Skipping keeps the title screen visible
+  until the app is ready.
+
 ## The companion (`Companion.swift`)
 
 Moods set by the screen: happy, excited, worried, sad, sleepy. Momentary

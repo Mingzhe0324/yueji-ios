@@ -223,7 +223,14 @@ private struct TravelSpendingMap: View {
             }
         }.navigationTitle(tr("消费地图", "Spending map", "Peta belanja"))
             .overlay {
-                if located.isEmpty { ContentUnavailableView(tr("暂无地点", "No locations", "Tiada lokasi"), systemImage: "map") }
+                if located.isEmpty {
+                    IslandEmptyState(title: tr("暂无地点", "No locations", "Tiada lokasi"),
+                                     message: tr("记账时加上地点，就会出现在这里。", "Add a place to an entry and it will appear here.", "Tambah lokasi pada rekod dan ia akan muncul di sini."),
+                                     mood: .sleepy)
+                        .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(IslandTheme.line, lineWidth: 2))
+                        .padding(24)
+                }
             }
     }
 }
@@ -326,7 +333,7 @@ struct RecurringView: View {
                 }
                 Section {
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
-                        SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: .teal)
+                        SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: IslandPalette.lagoon)
                     }
                 } footer: { Text(tr("这里只记账，不会替你付款。", "Records expenses; never makes payments.", "Merekod belanja; tidak membuat bayaran.")) }
                 Section {
@@ -1238,18 +1245,27 @@ extension Ledger {
     }
     func categoryTint(_ name: String) -> Color {
         if let custom = customCategories.first(where: { $0.name == name }) { return categoryColor(custom.color) }
+        // Island palette, so categories match the rest of the cartoon world.
         switch name {
-        case "餐饮": return .orange
-        case "交通": return .blue
-        case "购物": return .purple
-        case "账单": return .teal
-        case "娱乐": return .pink
-        default: return .indigo
+        case "餐饮": return IslandPalette.pumpkin
+        case "交通": return IslandPalette.sky
+        case "购物": return IslandPalette.lavender
+        case "账单": return IslandPalette.lagoon
+        case "娱乐": return IslandPalette.berry
+        default: return IslandPalette.coral
         }
     }
 }
+/// Custom category colours keep their stored names; only the shades follow the island palette.
 func categoryColor(_ name: String) -> Color {
-    switch name { case "blue": return .blue; case "purple": return .purple; case "pink": return .pink; case "orange": return .orange; case "green": return .green; default: return .teal }
+    switch name {
+    case "blue": return IslandPalette.sky
+    case "purple": return IslandPalette.lavender
+    case "pink": return IslandPalette.berry
+    case "orange": return IslandPalette.pumpkin
+    case "green": return IslandPalette.mint
+    default: return IslandPalette.lagoon
+    }
 }
 func categoryColorLabel(_ name: String) -> String {
     switch name {
