@@ -340,7 +340,7 @@ struct ExpensePlaceMapSheet: View {
                     }
                 }.padding(16)
             }
-            .background(Color(uiColor: .systemGroupedBackground))
+            .background(IslandTheme.paper)
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle(tr("消费地点", "Spending location", "Lokasi belanja"))
             .navigationBarTitleDisplayMode(.inline)

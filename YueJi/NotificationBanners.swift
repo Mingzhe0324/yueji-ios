@@ -344,7 +344,7 @@ struct NotificationBannerSurface: ViewModifier {
             // second custom border/shadow or an extra interactive transform.
             content.glassEffect(.regular, in: shape)
         } else {
-            content.background { shape.fill(Color(uiColor: .secondarySystemGroupedBackground)) }
+            content.background { shape.fill(IslandTheme.card) }
                 .overlay { shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5).allowsHitTesting(false) }
                 .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.08), radius: 6, y: 2)
         }

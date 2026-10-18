@@ -7,6 +7,10 @@ struct TravelBooksView: View {
     @State private var creating = false
     var body: some View {
         List {
+            Section {
+                IslandPageBanner(title: tr("下一站，去哪里？", "Where to next?", "Ke mana seterusnya?"),
+                    subtitle: tr("带上心愿，也带上清楚的预算。", "Pack your dreams and a clear budget.", "Bawa impian dan bajet yang jelas."), symbol: "suitcase.rolling.fill")
+            }
             if model.ledger.trips.isEmpty {
                 ContentUnavailableView(tr("第一趟旅行", "Your first trip", "Perjalanan pertama"), systemImage: "suitcase.rolling",
                     description: Text(tr("独立预算，账目与分账集中查看。", "A separate budget with expenses and splits in one place.", "Bajet berasingan dengan belanja dan pembahagian bersama.")))
@@ -22,7 +26,7 @@ struct TravelBooksView: View {
                     }.padding(.vertical, 8)
                 }
             }
-        }.navigationTitle(tr("旅行账本", "Travel books", "Buku perjalanan"))
+        }.yuejiListSurface().navigationTitle(tr("旅行账本", "Travel books", "Buku perjalanan"))
             .toolbar { Button { creating = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("新增旅行", "New trip", "Perjalanan baharu")) }
             .sheet(isPresented: $creating) { TravelBookEditor(original: nil) }
     }
@@ -87,7 +91,7 @@ struct TravelBookDetail: View {
                     }
                 }
             }
-        }.navigationTitle(model.ledger.trips.first(where: { $0.id == id })?.name ?? "")
+        }.yuejiListSurface().navigationTitle(model.ledger.trips.first(where: { $0.id == id })?.name ?? "")
             .toolbar { Button(tr("编辑", "Edit", "Edit")) { editing = true } }
             .sheet(isPresented: $editing) {
                 if let trip = model.ledger.trips.first(where: { $0.id == id }) { TravelBookEditor(original: trip) }
@@ -123,7 +127,7 @@ private struct TravelBookEditor: View {
                 TextField(tr("独立预算 · MYR", "Separate budget · MYR", "Bajet berasingan · MYR"), text: $budget).keyboardType(.decimalPad)
                 TextField(tr("同行人，以逗号分隔", "Companions, separated by commas", "Teman, dipisahkan koma"), text: $companions)
                 if let error { Text(error).foregroundStyle(.red) }
-            }.navigationTitle(tr("旅行资料", "Trip details", "Butiran perjalanan"))
+            }.yuejiListSurface().navigationTitle(tr("旅行资料", "Trip details", "Butiran perjalanan"))
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { if hasChanges { confirming = true } else { dismiss() } } }
                     ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() } }
@@ -178,7 +182,7 @@ private struct TravelEntrySelection: View {
                         }
                     }
                 }
-            }.searchable(text: $search).navigationTitle(tr("选择账目", "Select entries", "Pilih rekod"))
+            }.yuejiListSurface().searchable(text: $search).navigationTitle(tr("选择账目", "Select entries", "Pilih rekod"))
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { if selected != initial { confirming = true } else { dismiss() } } }
                     ToolbarItem(placement: .confirmationAction) {
@@ -315,6 +319,10 @@ struct RecurringView: View {
         let _ = uiLocale.identifier
         NavigationStack {
             List {
+                Section {
+                    IslandPageBanner(title: tr("生活的节奏", "Your everyday rhythm", "Rentak harian anda"),
+                        subtitle: tr("把固定开销安排好，心里更有底。", "A clear plan for the bills ahead.", "Rancangan jelas untuk bil akan datang."), symbol: "calendar")
+                }
                 Section {
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
                         SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: .teal)
@@ -2990,8 +2998,8 @@ struct SavingsGoalsView: View {
         let _ = uiLocale.identifier
         List {
             Section {
-                Text(tr("为想做的事，慢慢存起来。", "Save for something that matters to you.", "Simpan untuk sesuatu yang bermakna."))
-                    .font(.title2.bold()).padding(.vertical, 12)
+                IslandPageBanner(title: tr("心愿慢慢长大", "Let your dreams grow", "Biarkan impian berkembang"),
+                    subtitle: tr("为想做的事，慢慢存起来。", "Save for something that matters to you.", "Simpan untuk sesuatu yang bermakna."), symbol: "leaf.fill")
             }.listRowBackground(Color.clear)
             if model.ledger.savingsGoals.isEmpty {
                 ContentUnavailableView(tr("第一个储蓄目标", "Your first savings goal", "Matlamat simpanan pertama"), systemImage: "target", description: Text(tr("例如新电脑、旅行或学习用品。", "For a computer, a trip or school supplies.", "Untuk komputer, perjalanan atau alat belajar.")))

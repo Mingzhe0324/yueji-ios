@@ -14,7 +14,7 @@ struct YueJiApp: App {
         Locale(identifier: language == "zh" ? "zh_Hans_MY" : language == "ms" ? "ms_MY" : language == "en" ? "en_MY" : AppLanguage.localeID)
     }
     init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
-    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.default).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
+    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.rounded).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
 }
 struct RestoredLedgerFeedback {
     let id = UUID()

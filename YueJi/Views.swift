@@ -2,7 +2,116 @@ import SwiftUI
 import UniformTypeIdentifiers
 import UIKit
 
-private let ink = Color(uiColor: .systemBlue)
+private let ink = IslandTheme.accent
+
+/// Original Moon Island artwork uses native shapes, with no network assets.
+enum IslandTheme {
+    static let accent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0.48, green: 0.86, blue: 0.69, alpha: 1)
+        : UIColor(red: 0.12, green: 0.40, blue: 0.31, alpha: 1) })
+    static let paper = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0.08, green: 0.15, blue: 0.17, alpha: 1)
+        : UIColor(red: 0.97, green: 0.95, blue: 0.87, alpha: 1) })
+    static let card = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
+        ? UIColor(red: 0.14, green: 0.22, blue: 0.24, alpha: 1)
+        : UIColor(red: 1, green: 0.99, blue: 0.95, alpha: 1) })
+    static let line = accent.opacity(0.20)
+    static let sun = Color(red: 1, green: 0.78, blue: 0.32)
+}
+
+struct IslandBackdrop: View {
+    var body: some View {
+        IslandTheme.paper.overlay(alignment: .topTrailing) {
+            Circle().fill(IslandTheme.accent.opacity(0.055)).frame(width: 280, height: 280).offset(x: 90, y: -110)
+        }.overlay(alignment: .bottomLeading) {
+            Ellipse().fill(IslandTheme.sun.opacity(0.07)).frame(width: 370, height: 240).offset(x: -170, y: 140)
+        }.ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
+    }
+}
+
+struct MoonIslandMascot: View {
+    var body: some View {
+        GeometryReader { geometry in
+            let s = min(geometry.size.width, geometry.size.height)
+            ZStack {
+                Ellipse().fill(IslandTheme.accent.opacity(0.15)).frame(width: s * 0.7, height: s * 0.12).offset(y: s * 0.39)
+                Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24).rotationEffect(.degrees(25)).offset(x: -s * 0.23, y: s * 0.30)
+                Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24).rotationEffect(.degrees(-25)).offset(x: s * 0.23, y: s * 0.30)
+                RoundedRectangle(cornerRadius: s * 0.34).fill(IslandTheme.sun)
+                    .frame(width: s * 0.76, height: s * 0.78)
+                    .overlay(RoundedRectangle(cornerRadius: s * 0.34).strokeBorder(Color.brown.opacity(0.25), lineWidth: 2))
+                Ellipse().fill(.white.opacity(0.38)).frame(width: s * 0.28, height: s * 0.10).rotationEffect(.degrees(-30)).offset(x: -s * 0.13, y: -s * 0.23)
+                HStack(spacing: s * 0.18) {
+                    Capsule().fill(Color(red: 0.16, green: 0.23, blue: 0.22)).frame(width: s * 0.055, height: s * 0.10)
+                    Capsule().fill(Color(red: 0.16, green: 0.23, blue: 0.22)).frame(width: s * 0.055, height: s * 0.10)
+                }
+                HStack(spacing: s * 0.37) {
+                    Ellipse().fill(.pink.opacity(0.35)).frame(width: s * 0.12, height: s * 0.055)
+                    Ellipse().fill(.pink.opacity(0.35)).frame(width: s * 0.12, height: s * 0.055)
+                }.offset(y: s * 0.08)
+                Path { path in
+                    path.move(to: CGPoint(x: s * 0.44, y: s * 0.59))
+                    path.addQuadCurve(to: CGPoint(x: s * 0.56, y: s * 0.59), control: CGPoint(x: s * 0.5, y: s * 0.69))
+                }.stroke(Color(red: 0.16, green: 0.23, blue: 0.22), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                Image(systemName: "leaf.fill").font(.system(size: s * 0.25)).foregroundStyle(IslandTheme.accent)
+                    .rotationEffect(.degrees(-20)).offset(x: s * 0.16, y: -s * 0.38)
+            }.frame(width: s, height: s)
+        }.aspectRatio(1, contentMode: .fit).accessibilityHidden(true).allowsHitTesting(false)
+    }
+}
+
+struct IslandPageBanner: View {
+    let title: String
+    let subtitle: String
+    var symbol: String = "sparkles"
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var entered = false
+    var body: some View {
+        HStack(spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(title, systemImage: symbol).font(.headline).foregroundStyle(IslandTheme.accent)
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+            if !typeSize.isAccessibilitySize {
+                MoonIslandMascot().frame(width: 76, height: 76)
+                    .rotationEffect(.degrees(entered || reduceMotion || !playful ? -7 : 8))
+                    .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.85)
+            }
+        }.padding(18)
+            .background(IslandTheme.sun.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
+            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(IslandTheme.line, lineWidth: 1.5))
+            .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+            .task {
+                guard !entered else { return }
+                guard !reduceMotion, playful else { entered = true; return }
+                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
+                withAnimation(.spring(duration: 0.5, bounce: 0.22)) { entered = true }
+            }
+    }
+}
+
+struct IslandButtonStyle: ButtonStyle {
+    var prominent = true
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        label(configuration).fontWeight(.semibold).padding(.horizontal, 16).padding(.vertical, 10)
+            .background(prominent ? IslandTheme.sun : IslandTheme.card, in: RoundedRectangle(cornerRadius: 18))
+            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(IslandTheme.line, lineWidth: 1.5))
+            .shadow(color: IslandTheme.accent.opacity(enabled ? 0.23 : 0.06), radius: 0, y: configuration.isPressed ? 0 : 3)
+            .offset(y: !reduceMotion && configuration.isPressed ? 2 : 0)
+            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.98 : 1)
+            .opacity(enabled ? 1 : 0.45)
+            .animation(reduceMotion ? nil : .spring(duration: 0.2, bounce: 0.12), value: configuration.isPressed)
+    }
+    @ViewBuilder private func label(_ configuration: Configuration) -> some View {
+        if configuration.role == .destructive { configuration.label.foregroundStyle(.red) }
+        else if prominent { configuration.label.foregroundStyle(Color(red: 0.12, green: 0.22, blue: 0.18)) }
+        else { configuration.label.foregroundStyle(.tint) }
+    }
+}
 enum YueJiMotion {
     static let standard = Animation.smooth(duration: 0.24)
     static let detail = Animation.smooth(duration: 0.32)
@@ -80,15 +189,18 @@ private struct YueJiBarAppearance: ViewModifier {
             // visible background keeps the requested bar scheme in effect at
             // scroll edges as well as when content is beneath the bar.
             .toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
+            .toolbarBackground(IslandTheme.paper, for: .navigationBar, .tabBar)
             .toolbarBackground(.visible, for: .navigationBar, .tabBar)
     }
 }
 private struct YueJiListSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.listStyle(.insetGrouped)
+            .listSectionSpacing(18)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .background(IslandBackdrop())
+            .tint(IslandTheme.accent).fontDesign(.rounded)
             .modifier(YueJiBarAppearance())
             .modifier(YueJiScrollEdge())
     }
@@ -107,7 +219,8 @@ extension View {
     func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
     func yuejiPageSurface() -> some View {
         scrollDismissesKeyboard(.interactively)
-            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+            .background(IslandBackdrop())
+            .tint(IslandTheme.accent).fontDesign(.rounded)
             .modifier(YueJiBarAppearance())
             .modifier(YueJiScrollEdge())
     }
@@ -133,12 +246,12 @@ private struct YueJiSheetSurface: ViewModifier {
                 .modifier(YueJiBarAppearance())
         } else if #available(iOS 26.0, *) {
             content.presentationDragIndicator(.visible)
-                .presentationBackground(Color(uiColor: .systemGroupedBackground))
+                .presentationBackground(IslandTheme.paper)
                 .modifier(YueJiBarAppearance())
         } else {
             content.presentationDragIndicator(.visible)
                 .presentationCornerRadius(28)
-                .presentationBackground(Color(uiColor: .systemGroupedBackground))
+                .presentationBackground(IslandTheme.paper)
                 .modifier(YueJiBarAppearance())
         }
     }
@@ -156,7 +269,7 @@ private struct YueJiActionBarSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     func body(content: Content) -> some View {
         content.background {
-            if reduceTransparency { Color(uiColor: .systemGroupedBackground) }
+            if reduceTransparency { IslandTheme.paper }
             // The capsule buttons already provide their own native material.
             // Keep this safe-area spacer clear during normal scrolling.
         }
@@ -453,6 +566,10 @@ struct DashboardView: View {
         NavigationStack(path: $path) {
             ScrollViewReader { guideScroll in
             List {
+                Section {
+                    IslandPageBanner(title: tr("欢迎回到月记小岛", "Welcome to Moon Island", "Selamat kembali ke Pulau YueJi"),
+                        subtitle: tr("把生活记清楚，给心愿留一点空间。", "A little clarity. A little room for your dreams.", "Rekod yang jelas, ruang untuk impian anda."))
+                }
                 Section {
                     MonthPicker(month: monthBinding)
                         .listRowBackground(Color.clear)
@@ -883,7 +1000,8 @@ struct SpendingMeter: View {
                 Capsule().fill(color.opacity(contrast == .increased ? 0.30 : (colorScheme == .dark ? 0.22 : 0.10)))
                 Capsule().fill(color).frame(width: proxy.size.width * (reduceMotion ? fraction : displayedFraction))
             }
-        }.frame(height: 7)
+        }.frame(height: 10)
+            .overlay(Capsule().strokeBorder(IslandTheme.line, lineWidth: 1))
             .animation(reduceMotion ? nil : YueJiMotion.tone, value: color)
             .task(id: fraction) {
                 guard !reduceMotion else { displayedFraction = fraction; return }
@@ -1032,7 +1150,7 @@ private struct ExpenseContextActions: ViewModifier {
                 ExpenseRow(entry: entry)
                     .padding(20).frame(idealWidth: 320, maxWidth: 360)
                     .fixedSize(horizontal: false, vertical: true)
-                    .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+                    .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 20))
                     .accessibilityElement(children: .combine)
             }
     }
@@ -1160,6 +1278,10 @@ struct ExpensesView: View {
         NavigationStack(path: $path) {
             List {
                 Section {
+                    IslandPageBanner(title: tr("生活收集册", "Your everyday collection", "Koleksi harian anda"),
+                        subtitle: tr("每一笔，都有自己的故事。", "Every entry has a story.", "Setiap rekod ada ceritanya."), symbol: "book.closed.fill")
+                }
+                Section {
                     NavigationLink { TravelBooksView() } label: {
                         Label(tr("旅行账本 · 独立预算", "Travel books · separate budgets", "Buku perjalanan · bajet berasingan"), systemImage: "suitcase.rolling")
                     }
@@ -1170,7 +1292,7 @@ struct ExpensesView: View {
                         Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
                             .font(.caption).foregroundStyle(.secondary)
                         AnimatedMoney(cents: timeline.personal)
-                            .font(.system(.title2, design: .default, weight: .semibold)).foregroundStyle(ink)
+                            .font(.system(.title2, design: .rounded, weight: .semibold)).foregroundStyle(ink)
                         if timeline.reimbursementOutstanding > 0 {
                             Text(tr("待报销垫付款：", "Outstanding advances: ", "Pendahuluan belum diterima: ") + money(timeline.reimbursementOutstanding))
                                 .font(.caption).foregroundStyle(.secondary)
@@ -2384,9 +2506,13 @@ struct FriendsView: View {
         NavigationStack {
             List {
                 Section {
+                    IslandPageBanner(title: tr("同行伙伴", "Better together", "Bersama rakan"),
+                        subtitle: tr("一起出发，分清每一份。", "Shared moments, clear shares.", "Kenangan bersama, bahagian yang jelas."), symbol: "person.2.fill")
+                }
+                Section {
                     VStack(alignment: .leading, spacing: 10) {
                         Text(tr("朋友还欠你", "Friends owe you", "Rakan berhutang kepada anda")).font(.subheadline).foregroundStyle(.secondary)
-                        AnimatedMoney(cents: balances.reduce(0) { $0 + $1.owed }).font(.system(.title, design: .default, weight: .bold)).foregroundStyle(ink)
+                        AnimatedMoney(cents: balances.reduce(0) { $0 + $1.owed }).font(.system(.title, design: .rounded, weight: .bold)).foregroundStyle(ink)
                         let payable = balances.reduce(0) { $0 + $1.payable }
                         if payable > 0 { Text(tr("我欠朋友：", "I owe friends: ", "Saya berhutang kepada rakan: ") + money(payable)).font(.subheadline).foregroundStyle(.orange) }
                         Text(tr("全部月份 · 点朋友查看明细和记录还款", "All months · tap a friend to settle up", "Semua bulan · ketik rakan untuk bayar balik")).font(.caption).foregroundStyle(.secondary)
@@ -2532,6 +2658,10 @@ struct SettingsView: View {
             else if guideDestination == "about" { aboutPage }
             else {
             List {
+                Section {
+                    IslandPageBanner(title: tr("我的小屋", "Your island home", "Rumah pulau anda"),
+                        subtitle: tr("按照自己的习惯，布置月记。", "Make YueJi feel like home.", "Jadikan YueJi seperti rumah sendiri."), symbol: "house.fill")
+                }
                 Section {
                     HStack(spacing: 16) {
                         Image("YueJiLogo").renderingMode(.original).resizable().scaledToFit().frame(width: 56, height: 56)
@@ -2824,20 +2954,10 @@ struct AutomationSetupView: View {
     }
 }
 private struct YueJiPrimaryButton: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glassProminent)
-        } else { content.buttonStyle(.borderedProminent) }
-    }
+    func body(content: Content) -> some View { content.buttonStyle(IslandButtonStyle()) }
 }
 private struct YueJiSecondaryButton: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glass)
-        } else { content.buttonStyle(.bordered) }
-    }
+    func body(content: Content) -> some View { content.buttonStyle(IslandButtonStyle(prominent: false)) }
 }
 extension View {
     func yuejiPrimaryButton() -> some View { modifier(YueJiPrimaryButton()) }
@@ -2846,18 +2966,12 @@ extension View {
 
 
 private struct YueJiGlassSurface: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 26))
-        } else if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26))
-        } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26))
-        }
+    func body(content: Content) -> some View {
+        content.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 26))
+            .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(IslandTheme.line, lineWidth: 1.5))
+            .shadow(color: IslandTheme.accent.opacity(0.10), radius: 0, y: 4)
     }
 }
-
 
 // Transaction details use standard push/pop from every entry point, including Overview.
 private struct YueJiZoomDestination: ViewModifier {
@@ -3253,7 +3367,7 @@ private struct GuideDemoScene: View {
             if let tab { tabs(selected: tab) }
         }
         .frame(width: 390, height: 740)
-        .background(Color(uiColor: .systemGroupedBackground))
+        .background(IslandTheme.paper)
     }
 
     private func heading(_ text: String) -> some View {
@@ -3748,10 +3862,7 @@ private struct OpeningAnimationView: View {
         ZStack {
             Color("LaunchBackground").ignoresSafeArea()
             VStack(spacing: 20) {
-                Image("YueJiLogo").resizable().scaledToFit().frame(width: 112, height: 112)
-                    .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
-                    .shadow(color: .black.opacity(0.12), radius: 14, y: 8)
-                    .accessibilityHidden(true)
+                MoonIslandMascot().frame(width: 112, height: 112)
                 VStack(spacing: 6) {
                     Text(tr("月记", "YueJi", "YueJi")).font(.largeTitle.bold())
                     Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod."))
