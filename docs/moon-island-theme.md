@@ -16,11 +16,24 @@ assets or photo permissions. Decorative views never accept taps and are hidden
 from VoiceOver. Large accessibility text sizes omit the banner mascot to keep
 text readable. VoiceOver labels and transaction control identifiers are retained.
 
-Animation consists of a single short entry spring, depth/scale feedback on
-button presses and existing animated amounts/progress meters. No forever-running
-character loops, rewards for spending, new sound triggers or launch delays.
-Reduce Motion disables the character and press transforms. Existing destructive
-roles/tints and financial amount colors remain distinct.
+Animation consists of short entry springs, depth/scale feedback and a light
+haptic on button presses, and existing animated amounts/progress meters.
+
+The companion has moods (happy, excited, worried, sad, sleepy) with matching
+eyes, brows, mouth and small extras (sparkles, a tear, drifting "z"s). On
+Overview it follows the selected month's budget: sleepy when empty, excited when
+on track, worried near the limit, sad when over. Saves show an excited companion
+in the banner with a short confetti burst; deletions show a sad companion beside
+Undo. Empty states use the companion, and tapping a companion makes it hop and
+wave. The only continuous motion is an occasional blink (and the slow tear/"z"
+drift for sad/sleepy); there are no rewards for spending and no new sound triggers.
+
+A display-only streak chip on Overview counts consecutive days with entries.
+The opening drops the companion onto a small island with a squash, confetti and
+bouncing title letters in about 1.1 s; tapping skips it, and the ledger still
+loads underneath. Reduce Motion or turning off playful animations disables all
+character, confetti and press transforms. Existing destructive roles/tints and
+financial amount colors remain distinct.
 
 Windows project and syntax validation is available. Before release, run native
 UI tests and check light/dark modes, large text, Reduce Motion, native toolbar

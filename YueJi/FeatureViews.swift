@@ -12,8 +12,9 @@ struct TravelBooksView: View {
                     subtitle: tr("带上心愿，也带上清楚的预算。", "Pack your dreams and a clear budget.", "Bawa impian dan bajet yang jelas."), symbol: "suitcase.rolling.fill")
             }
             if model.ledger.trips.isEmpty {
-                ContentUnavailableView(tr("第一趟旅行", "Your first trip", "Perjalanan pertama"), systemImage: "suitcase.rolling",
-                    description: Text(tr("独立预算，账目与分账集中查看。", "A separate budget with expenses and splits in one place.", "Bajet berasingan dengan belanja dan pembahagian bersama.")))
+                IslandEmptyState(title: tr("第一趟旅行", "Your first trip", "Perjalanan pertama"),
+                    message: tr("独立预算，账目与分账集中查看。", "A separate budget with expenses and splits in one place.", "Bajet berasingan dengan belanja dan pembahagian bersama."),
+                    mood: .happy).listRowBackground(Color.clear)
             }
             ForEach(model.ledger.trips.sorted { $0.start > $1.start }) { trip in
                 NavigationLink { TravelBookDetail(id: trip.id) } label: {
@@ -335,11 +336,9 @@ struct RecurringView: View {
                     }.pickerStyle(.segmented).listRowBackground(Color.clear).listRowInsets(EdgeInsets())
                 }
                 if rules.isEmpty {
-                    ContentUnavailableView {
-                        Label(paused ? tr("没有暂停的项目", "No paused schedules", "Tiada jadual dijeda") : tr("把固定开销交给月记", "Keep track of regular bills", "Jejak bil tetap anda"), systemImage: "calendar.badge.clock")
-                    } description: {
-                        Text(tr("设置金额和周期，每次到期更好记。", "Set an amount and a repeat schedule.", "Tetapkan amaun dan jadual berulang."))
-                    } actions: {
+                    IslandEmptyState(title: paused ? tr("没有暂停的项目", "No paused schedules", "Tiada jadual dijeda") : tr("把固定开销交给月记", "Keep track of regular bills", "Jejak bil tetap anda"),
+                        message: tr("设置金额和周期，每次到期更好记。", "Set an amount and a repeat schedule.", "Tetapkan amaun dan jadual berulang."),
+                        mood: paused ? .sleepy : .happy) {
                         Button(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) { if editor == nil { editor = .new } }.yuejiPrimaryButton()
                     }.listRowBackground(Color.clear)
                 }
@@ -514,7 +513,7 @@ struct DuplicateReviewView: View {
         List {
             Text(tr("相同原币金额、24 小时内同商户，或同日不同来源的记录会列为疑似重复。这里只提示，不自动合并或删除。最多显示 200 组。", "Same original amount and merchant within 24 hours, or different sources on the same day, are flagged. Nothing is merged or deleted automatically. Up to 200 pairs.", "Amaun asal dan peniaga sama dalam 24 jam, atau sumber berbeza pada hari sama, ditandakan. Tiada gabungan atau pemadaman automatik. Sehingga 200 pasangan.")).font(.footnote)
             let pairs = model.ledger.duplicatePairs()
-            if pairs.isEmpty { ContentUnavailableView(tr("暂无疑似重复", "No suspected duplicates", "Tiada pendua disyaki"), systemImage: "checkmark.circle") }
+            if pairs.isEmpty { IslandEmptyState(title: tr("暂无疑似重复", "No suspected duplicates", "Tiada pendua disyaki"), mood: .excited).listRowBackground(Color.clear) }
             ForEach(pairs) { pair in
                 Section {
                     ExpenseRow(entry: pair.first)
@@ -3002,8 +3001,11 @@ struct SavingsGoalsView: View {
                     subtitle: tr("为想做的事，慢慢存起来。", "Save for something that matters to you.", "Simpan untuk sesuatu yang bermakna."), symbol: "leaf.fill")
             }.listRowBackground(Color.clear)
             if model.ledger.savingsGoals.isEmpty {
-                ContentUnavailableView(tr("第一个储蓄目标", "Your first savings goal", "Matlamat simpanan pertama"), systemImage: "target", description: Text(tr("例如新电脑、旅行或学习用品。", "For a computer, a trip or school supplies.", "Untuk komputer, perjalanan atau alat belajar.")))
-                Button(tr("创建目标", "Create goal", "Cipta matlamat")) { adding = true }
+                IslandEmptyState(title: tr("第一个储蓄目标", "Your first savings goal", "Matlamat simpanan pertama"),
+                    message: tr("例如新电脑、旅行或学习用品。", "For a computer, a trip or school supplies.", "Untuk komputer, perjalanan atau alat belajar."),
+                    mood: .happy) {
+                    Button(tr("创建目标", "Create goal", "Cipta matlamat")) { adding = true }.yuejiPrimaryButton()
+                }.listRowBackground(Color.clear)
             }
             ForEach(model.ledger.savingsGoals) { goal in
                 NavigationLink { SavingsGoalDetail(id: goal.id) } label: {

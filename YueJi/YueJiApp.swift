@@ -400,4 +400,7 @@ private actor FeedbackAudioPlayback {
     static func success() { if enabled { UINotificationFeedbackGenerator().notificationOccurred(.success) } }
     static func error() { if enabled { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
     static func selection() { if enabled { UISelectionFeedbackGenerator().selectionChanged() } }
+    /// A light physical click for cartoon button presses and mascot pokes.
+    static func tap() { if enabled { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.8) } }
+    static func pop() { if enabled { UIImpactFeedbackGenerator(style: .soft).impactOccurred() } }
 }

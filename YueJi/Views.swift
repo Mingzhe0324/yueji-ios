@@ -29,34 +29,180 @@ struct IslandBackdrop: View {
     }
 }
 
+/// The companion's cartoon expression. Drives eyes, brows, mouth and small extras.
+enum IslandMood: String { case happy, excited, worried, sad, sleepy }
+
 struct MoonIslandMascot: View {
+    var mood: IslandMood = .happy
+    /// Each new value plays one short cartoon reaction: squash, hop and wave.
+    var reaction: UUID? = nil
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var hop: CGFloat = 0
+    @State private var squash: CGFloat = 1
+    @State private var wave = 0.0
+    @State private var blink = false
+    @State private var drift = false
+    private let ink = Color(red: 0.16, green: 0.23, blue: 0.22)
+    private var motion: Bool { playful && !reduceMotion }
     var body: some View {
         GeometryReader { geometry in
             let s = min(geometry.size.width, geometry.size.height)
             ZStack {
                 Ellipse().fill(IslandTheme.accent.opacity(0.15)).frame(width: s * 0.7, height: s * 0.12).offset(y: s * 0.39)
-                Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24).rotationEffect(.degrees(25)).offset(x: -s * 0.23, y: s * 0.30)
-                Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24).rotationEffect(.degrees(-25)).offset(x: s * 0.23, y: s * 0.30)
-                RoundedRectangle(cornerRadius: s * 0.34).fill(IslandTheme.sun)
-                    .frame(width: s * 0.76, height: s * 0.78)
-                    .overlay(RoundedRectangle(cornerRadius: s * 0.34).strokeBorder(Color.brown.opacity(0.25), lineWidth: 2))
-                Ellipse().fill(.white.opacity(0.38)).frame(width: s * 0.28, height: s * 0.10).rotationEffect(.degrees(-30)).offset(x: -s * 0.13, y: -s * 0.23)
-                HStack(spacing: s * 0.18) {
-                    Capsule().fill(Color(red: 0.16, green: 0.23, blue: 0.22)).frame(width: s * 0.055, height: s * 0.10)
-                    Capsule().fill(Color(red: 0.16, green: 0.23, blue: 0.22)).frame(width: s * 0.055, height: s * 0.10)
-                }
-                HStack(spacing: s * 0.37) {
-                    Ellipse().fill(.pink.opacity(0.35)).frame(width: s * 0.12, height: s * 0.055)
-                    Ellipse().fill(.pink.opacity(0.35)).frame(width: s * 0.12, height: s * 0.055)
-                }.offset(y: s * 0.08)
-                Path { path in
-                    path.move(to: CGPoint(x: s * 0.44, y: s * 0.59))
-                    path.addQuadCurve(to: CGPoint(x: s * 0.56, y: s * 0.59), control: CGPoint(x: s * 0.5, y: s * 0.69))
-                }.stroke(Color(red: 0.16, green: 0.23, blue: 0.22), style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                Image(systemName: "leaf.fill").font(.system(size: s * 0.25)).foregroundStyle(IslandTheme.accent)
-                    .rotationEffect(.degrees(-20)).offset(x: s * 0.16, y: -s * 0.38)
+                    .scaleEffect(1 + hop * 1.4)
+                character(s)
+                    .scaleEffect(x: 2 - squash, y: squash, anchor: .bottom)
+                    .offset(y: hop * s)
             }.frame(width: s, height: s)
         }.aspectRatio(1, contentMode: .fit).accessibilityHidden(true).allowsHitTesting(false)
+            .animation(motion ? .spring(duration: 0.45, bounce: 0.35) : nil, value: mood)
+            .task(id: reaction) { await react() }
+            .task(id: "\(motion)-\(mood.rawValue)") { await idle() }
+    }
+    private func character(_ s: CGFloat) -> some View {
+        let droop: Double = mood == .sad ? 18 : 0
+        return ZStack {
+            Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24)
+                .rotationEffect(.degrees(25 + droop + wave), anchor: .top).offset(x: -s * 0.23, y: s * 0.30)
+            Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24)
+                .rotationEffect(.degrees(-25 - droop - wave), anchor: .top).offset(x: s * 0.23, y: s * 0.30)
+            RoundedRectangle(cornerRadius: s * 0.34).fill(IslandTheme.sun)
+                .frame(width: s * 0.76, height: s * 0.78)
+                .overlay(RoundedRectangle(cornerRadius: s * 0.34).strokeBorder(Color.brown.opacity(0.25), lineWidth: 2))
+            Ellipse().fill(.white.opacity(0.38)).frame(width: s * 0.28, height: s * 0.10).rotationEffect(.degrees(-30)).offset(x: -s * 0.13, y: -s * 0.23)
+            // Eye frames are wider than the pupils; keep the original eye spacing.
+            HStack(spacing: s * 0.135) { eye(s, left: true); eye(s, left: false) }
+            HStack(spacing: s * 0.37) {
+                Ellipse().fill(.pink.opacity(mood == .excited ? 0.6 : 0.35)).frame(width: s * 0.12, height: s * 0.055)
+                Ellipse().fill(.pink.opacity(mood == .excited ? 0.6 : 0.35)).frame(width: s * 0.12, height: s * 0.055)
+            }.offset(y: s * 0.08)
+            mouth(s)
+            Image(systemName: "leaf.fill").font(.system(size: s * 0.25)).foregroundStyle(IslandTheme.accent)
+                .rotationEffect(.degrees(-20 + wave * 0.3), anchor: .bottomLeading).offset(x: s * 0.16, y: -s * 0.38)
+            extras(s)
+        }
+    }
+    @ViewBuilder private func eye(_ s: CGFloat, left: Bool) -> some View {
+        let width: CGFloat = s * 0.10
+        let height: CGFloat = s * 0.10
+        switch mood {
+        case .excited:
+            if blink { openEye(s, left: left).frame(width: width, height: height) } else {
+                // Happy "^" arcs.
+                Path { p in
+                    p.move(to: CGPoint(x: 0, y: height * 0.75))
+                    p.addQuadCurve(to: CGPoint(x: width, y: height * 0.75), control: CGPoint(x: width / 2, y: -height * 0.25))
+                }.stroke(ink, style: StrokeStyle(lineWidth: max(2, s * 0.035), lineCap: .round)).frame(width: width, height: height)
+            }
+        case .sleepy:
+            Path { p in
+                p.move(to: CGPoint(x: 0, y: height * 0.35))
+                p.addQuadCurve(to: CGPoint(x: width, y: height * 0.35), control: CGPoint(x: width / 2, y: height * 0.9))
+            }.stroke(ink, style: StrokeStyle(lineWidth: max(2, s * 0.03), lineCap: .round)).frame(width: width, height: height)
+        default:
+            openEye(s, left: left).frame(width: width, height: height)
+        }
+    }
+    private func openEye(_ s: CGFloat, left: Bool) -> some View {
+        Capsule().fill(ink).frame(width: s * 0.055, height: s * 0.10)
+            .scaleEffect(y: blink ? 0.15 : 1)
+            .overlay(alignment: .top) {
+                if mood == .worried || mood == .sad {
+                    Capsule().fill(ink).frame(width: s * 0.10, height: max(2, s * 0.025))
+                        .rotationEffect(.degrees(left ? -18 : 18)).offset(y: -s * 0.07)
+                }
+            }
+    }
+    @ViewBuilder private func mouth(_ s: CGFloat) -> some View {
+        let line = StrokeStyle(lineWidth: max(2.5, s * 0.032), lineCap: .round)
+        switch mood {
+        case .happy:
+            Path { p in
+                p.move(to: CGPoint(x: s * 0.44, y: s * 0.59))
+                p.addQuadCurve(to: CGPoint(x: s * 0.56, y: s * 0.59), control: CGPoint(x: s * 0.5, y: s * 0.69))
+            }.stroke(ink, style: line).frame(width: s, height: s)
+        case .excited:
+            ZStack {
+                Path { p in
+                    p.move(to: CGPoint(x: s * 0.41, y: s * 0.57))
+                    p.addQuadCurve(to: CGPoint(x: s * 0.59, y: s * 0.57), control: CGPoint(x: s * 0.5, y: s * 0.75))
+                    p.closeSubpath()
+                }.fill(ink)
+                Ellipse().fill(Color(red: 1, green: 0.45, blue: 0.48)).frame(width: s * 0.08, height: s * 0.035)
+                    .position(x: s * 0.5, y: s * 0.635)
+            }.frame(width: s, height: s)
+        case .worried:
+            Path { p in
+                p.move(to: CGPoint(x: s * 0.42, y: s * 0.62))
+                p.addCurve(to: CGPoint(x: s * 0.58, y: s * 0.62), control1: CGPoint(x: s * 0.47, y: s * 0.57), control2: CGPoint(x: s * 0.53, y: s * 0.67))
+            }.stroke(ink, style: line).frame(width: s, height: s)
+        case .sad:
+            Path { p in
+                p.move(to: CGPoint(x: s * 0.44, y: s * 0.64))
+                p.addQuadCurve(to: CGPoint(x: s * 0.56, y: s * 0.64), control: CGPoint(x: s * 0.5, y: s * 0.56))
+            }.stroke(ink, style: line).frame(width: s, height: s)
+        case .sleepy:
+            Ellipse().stroke(ink, lineWidth: max(2, s * 0.028)).frame(width: s * 0.055, height: s * 0.06)
+                .position(x: s * 0.5, y: s * 0.62).frame(width: s, height: s)
+        }
+    }
+    @ViewBuilder private func extras(_ s: CGFloat) -> some View {
+        let fall: CGFloat = drift ? s * 0.10 : 0
+        let rise: CGFloat = drift ? s * 0.08 : 0
+        switch mood {
+        case .sad:
+            Image(systemName: "drop.fill").font(.system(size: s * 0.10))
+                .foregroundStyle(Color(red: 0.40, green: 0.72, blue: 1))
+                .offset(x: -s * 0.15, y: s * 0.09 + fall).opacity(drift ? 0.15 : 1)
+                .transition(.scale.combined(with: .opacity))
+        case .sleepy:
+            ZStack {
+                Text("z").font(.system(size: s * 0.13, weight: .heavy, design: .rounded)).offset(x: s * 0.36, y: -s * 0.22 - rise)
+                Text("z").font(.system(size: s * 0.17, weight: .heavy, design: .rounded)).offset(x: s * 0.46, y: -s * 0.36 - rise)
+            }.foregroundStyle(IslandTheme.accent).opacity(drift ? 0.4 : 1)
+                .transition(.opacity)
+        case .excited:
+            ZStack {
+                Image(systemName: "sparkle").font(.system(size: s * 0.14)).offset(x: -s * 0.44, y: -s * 0.30)
+                Image(systemName: "sparkle").font(.system(size: s * 0.10)).offset(x: s * 0.46, y: -s * 0.06)
+                Image(systemName: "sparkle").font(.system(size: s * 0.08)).offset(x: -s * 0.40, y: s * 0.12)
+            }.foregroundStyle(IslandTheme.sun.opacity(0.95))
+                .transition(.scale(scale: 0.2).combined(with: .opacity))
+        default:
+            EmptyView()
+        }
+    }
+    private func react() async {
+        guard reaction != nil, motion else { return }
+        do {
+            withAnimation(.easeOut(duration: 0.09)) { squash = 0.86 }
+            try await Task.sleep(for: .milliseconds(90))
+            withAnimation(.spring(duration: 0.3, bounce: 0.4)) { hop = -0.14; squash = 1.07; wave = 45 }
+            try await Task.sleep(for: .milliseconds(230))
+            withAnimation(.spring(duration: 0.22, bounce: 0.3)) { hop = 0; squash = 0.92; wave = 10 }
+            try await Task.sleep(for: .milliseconds(140))
+            withAnimation(.spring(duration: 0.3, bounce: 0.5)) { squash = 1; wave = 45 }
+            try await Task.sleep(for: .milliseconds(160))
+            withAnimation(.spring(duration: 0.35, bounce: 0.3)) { wave = 0 }
+        } catch {
+            hop = 0; squash = 1; wave = 0
+        }
+    }
+    private func idle() async {
+        drift = false; blink = false
+        guard motion else { return }
+        if mood == .sad || mood == .sleepy {
+            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: false)) { drift = true }
+        }
+        // Occasional blinks keep the companion feeling alive without moving the layout.
+        while !Task.isCancelled {
+            do { try await Task.sleep(for: .milliseconds(Int.random(in: 2600...5200))) } catch { return }
+            guard mood != .sleepy else { continue }
+            withAnimation(.easeInOut(duration: 0.07)) { blink = true }
+            do { try await Task.sleep(for: .milliseconds(110)) } catch { blink = false; return }
+            withAnimation(.easeInOut(duration: 0.09)) { blink = false }
+        }
     }
 }
 
@@ -64,22 +210,37 @@ struct IslandPageBanner: View {
     let title: String
     let subtitle: String
     var symbol: String = "sparkles"
+    var mood: IslandMood = .happy
+    /// Optional chip under the subtitle, e.g. the logging streak.
+    var badge: AnyView? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     @AppStorage("playfulAnimations") private var playful = true
     @State private var entered = false
+    @State private var poke: UUID?
     var body: some View {
         HStack(spacing: 16) {
             VStack(alignment: .leading, spacing: 8) {
                 Label(title, systemImage: symbol).font(.headline).foregroundStyle(IslandTheme.accent)
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                    .id(subtitle)
+                    .transition(reduceMotion ? .opacity : .scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
+                if let badge { badge }
             }.frame(maxWidth: .infinity, alignment: .leading)
+                .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.3), value: subtitle)
             if !typeSize.isAccessibilitySize {
-                MoonIslandMascot().frame(width: 76, height: 76)
+                MoonIslandMascot(mood: mood, reaction: poke).frame(width: 76, height: 76)
                     .rotationEffect(.degrees(entered || reduceMotion || !playful ? -7 : 8))
                     .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.85)
+                    .overlay {
+                        // A decorative poke target: tapping makes the companion hop and wave.
+                        Rectangle().fill(Color.white.opacity(0.001))
+                            .onTapGesture { poke = UUID(); FeedbackHaptics.tap() }
+                            .accessibilityHidden(true)
+                    }
             }
         }.padding(18)
+            .onChange(of: mood) { _, _ in poke = UUID() }
             .background(IslandTheme.sun.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
             .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(IslandTheme.line, lineWidth: 1.5))
             .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
@@ -104,7 +265,8 @@ struct IslandButtonStyle: ButtonStyle {
             .offset(y: !reduceMotion && configuration.isPressed ? 2 : 0)
             .scaleEffect(!reduceMotion && configuration.isPressed ? 0.98 : 1)
             .opacity(enabled ? 1 : 0.45)
-            .animation(reduceMotion ? nil : .spring(duration: 0.2, bounce: 0.12), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .spring(duration: 0.22, bounce: 0.35), value: configuration.isPressed)
+            .onChange(of: configuration.isPressed) { _, down in if down && enabled { FeedbackHaptics.tap() } }
     }
     @ViewBuilder private func label(_ configuration: Configuration) -> some View {
         if configuration.role == .destructive { configuration.label.foregroundStyle(.red) }
@@ -559,6 +721,24 @@ struct DashboardView: View {
         String(budget > 0 ? budgetSpent * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
     }
     private var owed: Int { summary.owed }
+    @State private var streak = 0
+    private var onTrack: Bool { budget > 0 && Double(budgetSpent) / Double(budget) < 0.8 }
+    /// The companion reacts to the selected month: sleepy when empty, cheering when on track.
+    private var companionMood: IslandMood {
+        guard loadedSummary != nil, !entries.isEmpty else { return loadedSummary == nil ? .happy : .sleepy }
+        guard budget > 0 else { return .happy }
+        if budgetSpent > budget { return .sad }
+        return onTrack ? .excited : .worried
+    }
+    private var companionLine: String {
+        switch companionMood {
+        case .sleepy: return tr("这个月还很安静，记下第一笔吧！", "Quiet month so far. Let’s log the first entry!", "Bulan yang sunyi. Jom rekod entri pertama!")
+        case .excited: return tr("预算控制得很好，继续保持！", "Great job, you’re on track!", "Bagus, bajet anda terkawal!")
+        case .worried: return tr("小心，快到预算上限了。", "Careful, almost at your limit.", "Hati-hati, hampir capai had bajet.")
+        case .sad: return tr("超出预算了，没关系，我们一起调整。", "Over budget. We can bounce back together.", "Melebihi bajet. Kita boleh bangkit bersama.")
+        case .happy: return tr("把生活记清楚，给心愿留一点空间。", "A little clarity. A little room for your dreams.", "Rekod yang jelas, ruang untuk impian anda.")
+        }
+    }
     var body: some View {
         let _ = uiLocale.identifier
         let requestedMonth = month
@@ -568,7 +748,12 @@ struct DashboardView: View {
             List {
                 Section {
                     IslandPageBanner(title: tr("欢迎回到月记小岛", "Welcome to Moon Island", "Selamat kembali ke Pulau YueJi"),
-                        subtitle: tr("把生活记清楚，给心愿留一点空间。", "A little clarity. A little room for your dreams.", "Rekod yang jelas, ruang untuk impian anda."))
+                        subtitle: companionLine, mood: companionMood,
+                        badge: AnyView(IslandStreakChip(days: streak)))
+                        .task(id: model.ledger.expenses.count) {
+                            // Display-only streak computed from the published snapshot.
+                            streak = IslandStreak.days(in: model.ledger.expenses)
+                        }
                 }
                 Section {
                     MonthPicker(month: monthBinding)
@@ -874,7 +1059,7 @@ struct CategoryPaymentsView: View {
             }
             Section(tr("付款记录", "Payments", "Bayaran")) {
                 if entries.isEmpty && loadedQuery == query {
-                    ContentUnavailableView(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
+                    IslandEmptyState(title: tr("暂无记录", "No entries", "Tiada rekod")).listRowBackground(Color.clear)
                 }
                 ForEach(entries) { entry in
                     NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
@@ -1316,13 +1501,12 @@ struct ExpensesView: View {
                     .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)
                 }
                 if timeline.count == 0 && loadedQuery != nil {
-                    ContentUnavailableView {
-                        Label(tr("暂无记录", "No entries", "Tiada rekod"), systemImage: "tray")
-                    } description: {
-                        Text(filter.active || !search.isEmpty || providerFilter != "all"
+                    let filtered = filter.active || !search.isEmpty || providerFilter != "all"
+                    IslandEmptyState(title: tr("暂无记录", "No entries", "Tiada rekod"),
+                        message: filtered
                              ? tr("试试其他关键词，或清除筛选。", "Try another search or clear your filters.", "Cuba carian lain atau kosongkan penapis.")
-                             : tr("为这个月记一笔，日期会保留在所选月份。", "Add an expense for the selected month.", "Tambah belanja untuk bulan dipilih."))
-                    } actions: {
+                             : tr("为这个月记一笔，日期会保留在所选月份。", "Add an expense for the selected month.", "Tambah belanja untuk bulan dipilih."),
+                        mood: filtered ? .worried : .sleepy) {
                         if filter.active || !search.isEmpty || providerFilter != "all" {
                             Button(tr("清除筛选与搜索", "Clear filters and search", "Kosongkan penapis dan carian")) { filter = LedgerFilter(); search = ""; providerFilter = "all" }
                         } else {
@@ -2526,7 +2710,10 @@ struct FriendsView: View {
                 }
                 Section {
                     if visible.isEmpty {
-                        ContentUnavailableView(settled ? tr("还没有结清记录", "No settled balances", "Tiada baki selesai") : tr("目前没有待收款", "Nothing outstanding", "Tiada baki tertunggak"), systemImage: "person.2", description: Text(tr("新增代垫，或到账本为已有付款开启分账。", "Add an advance, or split an existing payment in Ledger.", "Tambah pendahuluan, atau bahagi bayaran sedia ada dalam Lejar.")))
+                        IslandEmptyState(title: settled ? tr("还没有结清记录", "No settled balances", "Tiada baki selesai") : tr("目前没有待收款", "Nothing outstanding", "Tiada baki tertunggak"),
+                            message: tr("新增代垫，或到账本为已有付款开启分账。", "Add an advance, or split an existing payment in Ledger.", "Tambah pendahuluan, atau bahagi bayaran sedia ada dalam Lejar."),
+                            mood: settled ? .sleepy : .excited)
+                            .listRowBackground(Color.clear)
                     }
                     ForEach(visible) { friend in
                         NavigationLink { FriendDetailView(key: friend.id) } label: { FriendBalanceRow(friend: friend) }
@@ -3800,11 +3987,20 @@ private struct NotificationBannerCard: View {
     var actionTitle: String? = nil
     var actionEnabled = true
     var action: (() -> Void)? = nil
-    private var label: some View {
-        HStack(alignment: .center, spacing: 12) {
+    /// When set, the companion replaces the symbol and reacts with this mood.
+    var mood: IslandMood? = nil
+    var reaction: UUID? = nil
+    @ViewBuilder private var badge: some View {
+        if let mood, !typeSize.isAccessibilitySize {
+            MoonIslandMascot(mood: mood, reaction: reaction).frame(width: 40, height: 40)
+        } else {
             Image(systemName: symbol).font(.title3.weight(.medium)).foregroundStyle(color)
                 .frame(width: 28, height: 32)
-                .accessibilityHidden(true)
+        }
+    }
+    private var label: some View {
+        HStack(alignment: .center, spacing: 12) {
+            badge.accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 3) {
                 Text(title).font(.subheadline.weight(.semibold)).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 if !message.isEmpty && message != title {
@@ -3854,33 +4050,73 @@ private struct OpeningAnimationView: View {
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("playfulAnimations") private var playful = true
-    @State private var entered = false
     @State private var playedSound = false
+    // Cartoon beats: the island pops up, the companion drops onto it and squashes,
+    // confetti bursts, then the title letters bounce in.
+    @State private var islandIn = false
+    @State private var dropped = false
+    @State private var landed = false
+    @State private var squash = false
+    @State private var letters = 0
+    @State private var taglineIn = false
+    @State private var cheer: UUID?
+    @State private var finished = false
     private var animates: Bool { playful && !reduceMotion }
+    private var titleLetters: [String] { tr("月记", "YueJi", "YueJi").map(String.init) }
     var body: some View {
         let _ = uiLocale.identifier
+        let still = !animates
         ZStack {
             Color("LaunchBackground").ignoresSafeArea()
-            VStack(spacing: 20) {
-                MoonIslandMascot().frame(width: 112, height: 112)
-                VStack(spacing: 6) {
-                    Text(tr("月记", "YueJi", "YueJi")).font(.largeTitle.bold())
-                    Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod."))
-                        .font(.subheadline).foregroundStyle(.secondary)
+            VStack(spacing: 14) {
+                ZStack(alignment: .bottom) {
+                    // A small grassy island for the companion to land on.
+                    Ellipse().fill(IslandTheme.accent.opacity(0.85)).frame(width: 150, height: 34)
+                        .overlay(alignment: .top) { Ellipse().fill(Color(red: 0.48, green: 0.86, blue: 0.69)).frame(width: 140, height: 18) }
+                        .scaleEffect(x: squash ? 1.12 : 1, y: squash ? 0.8 : 1, anchor: .bottom)
+                        .scaleEffect(still || islandIn ? 1 : 0.2)
+                        .opacity(still || islandIn ? 1 : 0)
+                    MoonIslandMascot(mood: landed ? .excited : .happy, reaction: cheer).frame(width: 112, height: 112)
+                        .scaleEffect(x: squash ? 1.12 : 1, y: squash ? 0.86 : 1, anchor: .bottom)
+                        .offset(y: still || dropped ? -14 : -520)
+                }.frame(height: 130)
+                HStack(spacing: 1) {
+                    ForEach(titleLetters.indices, id: \.self) { i in titleLetter(i, still: still) }
                 }
+                Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod."))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .opacity(still || taglineIn ? 1 : 0)
+                    .offset(y: still || taglineIn ? 0 : 10)
             }.padding(24)
-            .scaleEffect(entered || !animates ? 1 : 0.96)
-            .offset(y: entered || !animates ? 0 : 6)
+            ConfettiBurst(trigger: landed ? cheer : nil, spread: 190).offset(y: -50)
         }
+        .contentShape(Rectangle())
+        .onTapGesture { finish() } // Tap anywhere to skip.
         .task {
             // Finishing the optional opening must not depend on scene callbacks.
             // Give the initial logo frame time to appear without blocking the UI.
-            do { try await Task.sleep(for: .milliseconds(30)) } catch { return }
-            withAnimation(animates ? YueJiMotion.detail : nil) { entered = true }
-            do { try await Task.sleep(for: .milliseconds(animates ? 350 : 100)) }
-            catch { return }
-            guard !Task.isCancelled else { return }
-            onFinished()
+            do {
+                try await Task.sleep(for: .milliseconds(30))
+                guard animates else {
+                    try await Task.sleep(for: .milliseconds(100))
+                    finish(); return
+                }
+                withAnimation(.spring(duration: 0.4, bounce: 0.45)) { islandIn = true }
+                try await Task.sleep(for: .milliseconds(120))
+                withAnimation(.easeIn(duration: 0.26)) { dropped = true }
+                try await Task.sleep(for: .milliseconds(260))
+                landed = true; cheer = UUID(); FeedbackHaptics.pop()
+                withAnimation(.spring(duration: 0.12, bounce: 0.3)) { squash = true }
+                try await Task.sleep(for: .milliseconds(100))
+                withAnimation(.spring(duration: 0.4, bounce: 0.55)) { squash = false }
+                for i in 1...titleLetters.count {
+                    withAnimation(.spring(duration: 0.4, bounce: 0.5)) { letters = i }
+                    try await Task.sleep(for: .milliseconds(45))
+                }
+                withAnimation(.spring(duration: 0.35, bounce: 0.3)) { taglineIn = true }
+                try await Task.sleep(for: .milliseconds(380))
+                finish()
+            } catch { return }
         }
         .task(id: phase) {
             // Sound still waits for foreground activation; screen readiness does not.
@@ -3889,6 +4125,21 @@ private struct OpeningAnimationView: View {
             playedSound = true
         }
         .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
+        .accessibilityAction { finish() }
+    }
+    private func finish() {
+        guard !finished else { return }
+        finished = true
+        onFinished()
+    }
+    private func titleLetter(_ i: Int, still: Bool) -> some View {
+        let shown = still || i < letters
+        return Text(titleLetters[i])
+            .font(.largeTitle.bold())
+            .scaleEffect(shown ? 1 : 0.1)
+            .rotationEffect(.degrees(shown ? 0 : (i.isMultiple(of: 2) ? -24 : 24)))
+            .offset(y: shown ? 0 : 20)
+            .opacity(shown ? 1 : 0)
     }
 }
 
@@ -3922,6 +4173,11 @@ private struct LedgerFeedbackHost: ViewModifier {
                 topBanner.frame(maxWidth: 520).padding(.horizontal, 20).padding(.top, 52)
                     .animation(reduceMotion ? .easeOut(duration: 0.14) : YueJiMotion.banner, value: topIdentity)
             }
+            .overlay(alignment: .top) {
+                // A confetti pop just below the banner celebrates each save.
+                ConfettiBurst(trigger: visible && model.didFinishLaunch && model.undoEntries.isEmpty ? model.savedNotice : nil)
+                    .padding(.top, 110)
+            }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
             .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
     }
@@ -3934,7 +4190,7 @@ private struct LedgerFeedbackHost: ViewModifier {
                     NotificationBannerCard(title: String(model.undoEntries.count) + tr(" 笔已删除", " deleted", " dipadam"),
                         symbol: "trash", color: .gray, interaction: interaction,
                         actionTitle: tr("撤销", "Undo", "Batal padam"), actionEnabled: !model.deletionInFlight,
-                        action: { Task { await model.undoDeletion() } })
+                        action: { Task { await model.undoDeletion() } }, mood: .sad, reaction: token)
                 }.id(token).transition(bannerTransition)
             } else if let notice = model.foregroundNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissForegroundNotice(id: notice.id) },
@@ -3964,7 +4220,7 @@ private struct LedgerFeedbackHost: ViewModifier {
             } else if model.undoEntries.isEmpty, let token = model.savedNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissSavedNotice(id: token) },
                     onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
-                    NotificationBannerCard(title: model.feedbackMessage, interaction: interaction)
+                    NotificationBannerCard(title: model.feedbackMessage, interaction: interaction, mood: .excited, reaction: token)
                 }.id(token).transition(bannerTransition)
             }
         }

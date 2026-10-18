@@ -94,11 +94,9 @@ struct ReimbursementsView: View {
                 ProgressView().frame(maxWidth: .infinity, minHeight: 80)
                     .accessibilityLabel(tr("正在加载报销", "Loading reimbursements", "Memuatkan tuntutan"))
             } else if displayed.isEmpty {
-                ContentUnavailableView {
-                    Label(tr("暂无报销记录", "No reimbursements", "Tiada tuntutan"), systemImage: "doc.text")
-                } description: {
-                    Text(tr("在新增或编辑账目中打开“需要报销”，也可从账目详情设置。", "Mark an entry as reimbursable when adding or editing, or set it up in entry details.", "Tandakan rekod sebagai boleh dituntut ketika menambah atau mengedit, atau tetapkan dalam butiran rekod."))
-                }.listRowBackground(Color.clear)
+                IslandEmptyState(title: tr("暂无报销记录", "No reimbursements", "Tiada tuntutan"),
+                    message: tr("在新增或编辑账目中打开“需要报销”，也可从账目详情设置。", "Mark an entry as reimbursable when adding or editing, or set it up in entry details.", "Tandakan rekod sebagai boleh dituntut ketika menambah atau mengedit, atau tetapkan dalam butiran rekod."),
+                    mood: .happy).listRowBackground(Color.clear)
             }
             ForEach(displayed) { entry in
                 NavigationLink { ReimbursementDetailView(expenseID: entry.id) } label: {
