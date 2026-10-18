@@ -13,7 +13,21 @@ struct YueJiApp: App {
     private var selectedLocale: Locale {
         Locale(identifier: language == "zh" ? "zh_Hans_MY" : language == "ms" ? "ms_MY" : language == "en" ? "en_MY" : AppLanguage.localeID)
     }
-    init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
+    init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters(); Self.applyCartoonChrome() }
+    /// Bold rounded titles in native navigation and tab bars, matching the cartoon theme.
+    /// Fonts only: bar backgrounds/colors stay with the SwiftUI bar appearance modifiers.
+    private static func applyCartoonChrome() {
+        func rounded(_ style: UIFont.TextStyle, _ weight: UIFont.Weight) -> UIFont {
+            let size = UIFont.preferredFont(forTextStyle: style).pointSize
+            let base = UIFont.systemFont(ofSize: size, weight: weight)
+            guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
+            return UIFont(descriptor: descriptor, size: size)
+        }
+        let bar = UINavigationBar.appearance()
+        bar.largeTitleTextAttributes = [.font: rounded(.largeTitle, .heavy)]
+        bar.titleTextAttributes = [.font: rounded(.headline, .bold)]
+        UITabBarItem.appearance().setTitleTextAttributes([.font: rounded(.caption2, .bold)], for: .normal)
+    }
     var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.rounded).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
 }
 struct RestoredLedgerFeedback {

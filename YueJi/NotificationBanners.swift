@@ -337,16 +337,16 @@ struct NotificationBannerSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    private let shape = RoundedRectangle(cornerRadius: 18, style: .continuous)
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency, contrast != .increased {
-            // One system material on the floating notification, without a
-            // second custom border/shadow or an extra interactive transform.
-            content.glassEffect(.regular, in: shape)
-        } else {
-            content.background { shape.fill(IslandTheme.card) }
-                .overlay { shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5).allowsHitTesting(false) }
-                .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.08), radius: 6, y: 2)
-        }
+    private let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+    func body(content: Content) -> some View {
+        // Chunky cartoon card: opaque face, thick outline and a solid ledge, matching
+        // the island buttons. Static layers only; motion comes from the banner entry.
+        content.background { shape.fill(IslandTheme.card) }
+            .overlay {
+                shape.strokeBorder(contrast == .increased ? Color.primary.opacity(0.45) : IslandTheme.accent.opacity(0.30), lineWidth: 2)
+                    .allowsHitTesting(false)
+            }
+            .background { shape.fill(IslandTheme.accent.opacity(scheme == .dark ? 0.45 : 0.30)).offset(y: 5).allowsHitTesting(false) }
+            .shadow(color: .black.opacity(scheme == .dark ? 0.20 : 0.08), radius: 8, y: 6)
     }
 }

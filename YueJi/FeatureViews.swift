@@ -1219,12 +1219,7 @@ struct CategoryBadge: View {
     var body: some View {
         let _ = uiLocale.identifier
         Label { Text(categoryLabel(name)) } icon: {
-            Image(systemName: model.ledger.categorySymbol(name))
-                .font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(model.ledger.categoryTint(name))
-                .frame(width: 30, height: 30)
-                .background(model.ledger.categoryTint(name).opacity(colorScheme == .dark ? 0.24 : 0.14), in: RoundedRectangle(cornerRadius: 9, style: .continuous))
-                .overlay { RoundedRectangle(cornerRadius: 9, style: .continuous).strokeBorder(model.ledger.categoryTint(name).opacity(contrast == .increased ? 0.45 : (colorScheme == .dark ? 0.25 : 0.10)), lineWidth: 0.5) }
+            IslandIconTile(symbol: model.ledger.categorySymbol(name), color: model.ledger.categoryTint(name), size: 30)
                 .accessibilityHidden(true)
         }
     }

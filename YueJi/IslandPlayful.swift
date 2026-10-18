@@ -70,21 +70,30 @@ struct WaveShape: Shape {
     }
 }
 
-/// Plays a short springy pop whenever a tab becomes active again. One-shot.
-struct TabPop: ViewModifier {
-    let active: Bool
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var popped = true
-    func body(content: Content) -> some View {
-        content
-            .scaleEffect(popped ? 1 : 0.965, anchor: .bottom)
-            .opacity(popped ? 1 : 0.6)
-            .onChange(of: active) { _, isActive in
-                guard isActive, !reduceMotion, IslandPlayful.enabled else { return }
-                var instant = Transaction(); instant.disablesAnimations = true
-                withTransaction(instant) { popped = false }
-                withAnimation(.spring(duration: 0.38, bounce: 0.42)) { popped = true }
+/// Chunky cartoon icon tile: a rounded face resting on a darker ledge. Static.
+struct IslandIconTile: View {
+    let symbol: String
+    let color: Color
+    var size: CGFloat = 44
+    var filled = false
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
+        Image(systemName: symbol)
+            .font(.system(size: size * 0.42, weight: .bold))
+            .foregroundStyle(filled ? Color.white : color)
+            .frame(width: size, height: size)
+            .background { shape.fill(filled ? color : color.opacity(scheme == .dark ? 0.24 : 0.15)) }
+            .overlay {
+                shape.strokeBorder(color.opacity(contrast == .increased ? 0.75 : (filled ? 0 : 0.35)), lineWidth: 1.5)
             }
+            .background {
+                shape.fill(color).overlay { shape.fill(Color.black.opacity(filled ? 0.22 : 0.0)) }
+                    .opacity(filled ? 1 : (scheme == .dark ? 0.5 : 0.35))
+                    .offset(y: 3)
+            }
+            .padding(.bottom, 3)
     }
 }
 
@@ -108,7 +117,6 @@ struct BoingOnChange<Value: Equatable>: ViewModifier {
 }
 
 extension View {
-    func tabPop(active: Bool) -> some View { modifier(TabPop(active: active)) }
     func boing<Value: Equatable>(on value: Value, anchor: UnitPoint = .center) -> some View {
         modifier(BoingOnChange(value: value, anchor: anchor))
     }
@@ -172,7 +180,7 @@ struct ConfettiBurst: View {
     @MainActor private func launch(_ id: UUID) async {
         burstID = id
         var reset = Transaction(); reset.disablesAnimations = true
-        withTransaction(reset) { phase = 0; pieces = (0..<32).map { _ in ConfettiPiece.random(spread: spread) } }
+        withTransaction(reset) { phase = 0; pieces = (0..<26).map { _ in ConfettiPiece.random(spread: spread) } }
         do {
             try await Task.sleep(for: .milliseconds(16))
             guard burstID == id else { return }

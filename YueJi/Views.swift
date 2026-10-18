@@ -17,6 +17,9 @@ enum IslandTheme {
         : UIColor(red: 1, green: 0.99, blue: 0.95, alpha: 1) })
     static let line = accent.opacity(0.20)
     static let sun = Color(red: 1, green: 0.78, blue: 0.32)
+    /// Darker edge/ledge colors for chunky cartoon controls.
+    static let sunEdge = Color(red: 0.89, green: 0.60, blue: 0.16)
+    static let ledge = accent.opacity(0.28)
 }
 
 struct IslandBackdrop: View {
@@ -261,15 +264,22 @@ struct IslandButtonStyle: ButtonStyle {
     @Environment(\.isEnabled) private var enabled
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
-        label(configuration).fontWeight(.semibold).padding(.horizontal, 16).padding(.vertical, 10)
-            .background(prominent ? IslandTheme.sun : IslandTheme.card, in: RoundedRectangle(cornerRadius: 18))
-            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(IslandTheme.line, lineWidth: 1.5))
-            // A solid cartoon ledge: the face sinks into it on press and springs back out.
-            .shadow(color: IslandTheme.accent.opacity(enabled ? 0.28 : 0.06), radius: 0, y: configuration.isPressed ? 0 : 4)
-            .offset(y: !reduceMotion && configuration.isPressed ? 3 : 0)
-            .scaleEffect(!reduceMotion && configuration.isPressed ? 0.95 : 1)
+        let pressed = configuration.isPressed && enabled
+        let sink = pressed && !reduceMotion
+        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
+        // Chunky game button: a solid face resting on a darker ledge. The face sinks
+        // into the ledge on press and springs back. Offset is render-only, so the
+        // ledge (drawn after it) stays put and layout never shifts.
+        return label(configuration).fontWeight(.bold)
+            .padding(.horizontal, 18).padding(.vertical, 11)
+            .background { shape.fill(prominent ? IslandTheme.sun : IslandTheme.card) }
+            .overlay { shape.strokeBorder(prominent ? IslandTheme.sunEdge : IslandTheme.line, lineWidth: 2) }
+            .offset(y: sink ? 4 : 0)
+            .background { shape.fill(prominent ? IslandTheme.sunEdge : IslandTheme.ledge).offset(y: 4) }
+            .padding(.bottom, 4)
+            .contentShape(shape)
             .opacity(enabled ? 1 : 0.45)
-            .animation(reduceMotion ? nil : .spring(duration: 0.26, bounce: 0.55), value: configuration.isPressed)
+            .animation(reduceMotion ? nil : .spring(duration: 0.24, bounce: 0.5), value: pressed)
             .onChange(of: configuration.isPressed) { _, down in if down && enabled { FeedbackHaptics.tap() } }
     }
     @ViewBuilder private func label(_ configuration: Configuration) -> some View {
@@ -493,11 +503,11 @@ struct MainView: View {
     }
     private var tabs: some View {
         TabView(selection: $selectedTab) {
-            DashboardView().ledgerFeedback().modifier(YueJiBarAppearance()).tabPop(active: selectedTab == 0).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView(isActive: selectedTab == 1).ledgerFeedback().modifier(YueJiBarAppearance()).tabPop(active: selectedTab == 1).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
-            RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).tabPop(active: selectedTab == 2).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
-            FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tabPop(active: selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
-            SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tabPop(active: selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
+            DashboardView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
+            ExpensesView(isActive: selectedTab == 1).ledgerFeedback().modifier(YueJiBarAppearance()).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle") }
+            RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "repeat") }
+            FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
+            SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "slider.horizontal.3") }
         }.tint(ink).modifier(YueJiTabBarMotion())
     }
     var body: some View {
@@ -1257,10 +1267,7 @@ struct ExpenseRow: View {
     var body: some View {
         let _ = uiLocale.identifier
         rowLayout {
-            Image(systemName: symbol)
-                .font(.body.weight(.semibold)).foregroundStyle(categoryColor).frame(width: 44, height: 44)
-                .background(categoryColor.opacity(colorScheme == .dark ? 0.20 : 0.10), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
-                .overlay { RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(categoryColor.opacity(contrast == .increased ? 0.45 : (colorScheme == .dark ? 0.25 : 0.10)), lineWidth: 0.5) }
+            IslandIconTile(symbol: symbol, color: categoryColor, size: 44)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 5) {
                 headingLayout {
@@ -3118,12 +3125,10 @@ struct SimpleSettingsRow: View {
     var body: some View {
         let _ = uiLocale.identifier
         HStack(spacing: 14) {
-            Image(systemName: symbol).font(.body.weight(.medium))
-                .foregroundStyle(.white).frame(width: 34, height: 34)
-                .background(color, in: RoundedRectangle(cornerRadius: 8))
+            IslandIconTile(symbol: symbol, color: color, size: 36, filled: true)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
-                Text(title).font(.body).foregroundStyle(.primary)
+                Text(title).font(.body.weight(.semibold)).foregroundStyle(.primary)
                 Text(subtitle).font(.subheadline).foregroundStyle(.secondary)
             }
         }.padding(.vertical, 6)
@@ -4240,7 +4245,8 @@ private struct OpeningAnimationView: View {
     }
     private func titleBlock(still: Bool) -> some View {
         VStack(spacing: 16) {
-            HStack(spacing: 2) {
+            // Negative spacing offsets each letter's 8pt render padding.
+            HStack(spacing: -14) {
                 ForEach(titleLetters.indices, id: \.self) { i in titleLetter(i, still: still) }
             }
             Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod."))
@@ -4264,6 +4270,8 @@ private struct OpeningAnimationView: View {
             .shadow(color: .white, radius: 0, x: 0, y: 2)
             .shadow(color: .white, radius: 0, x: 0, y: -2)
             .shadow(color: IslandTheme.accent.opacity(0.45), radius: 0, x: 0, y: 5)
+            // Flatten the outlined sticker once so the bounce only moves a texture.
+            .padding(8).drawingGroup()
             .rotationEffect(.degrees(shown ? tilt : tilt * 10))
             .scaleEffect(shown ? 1 : 0.1)
             .offset(y: shown ? 0 : -70)
@@ -4329,7 +4337,7 @@ private struct LedgerFeedbackHost: ViewModifier {
                             model.dismissForegroundNotice(id: notice.id)
                             UserDefaults.standard.set(destination, forKey: "pendingNotificationDestination")
                             NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil)
-                        })
+                        }, mood: .happy, reaction: notice.id)
                 }.id(notice.id).transition(bannerTransition)
             } else if model.newTNGCount > 0 {
                 let token = model.newTNGToken
@@ -4343,7 +4351,7 @@ private struct LedgerFeedbackHost: ViewModifier {
                             guard model.newTNGToken == token, model.newTNGCount > 0 else { return }
                             model.dismissNewTNG(id: token)
                             NotificationCenter.default.post(name: .init("YueJiShowInbox"), object: nil)
-                        })
+                        }, mood: .happy, reaction: token)
                 }.id(token).transition(bannerTransition)
             } else if model.undoEntries.isEmpty, let token = model.savedNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissSavedNotice(id: token) },
