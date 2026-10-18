@@ -151,7 +151,13 @@ sea slides in and an island bounces up, the companion tumbles down and lands
 (ground ring, dust puffs, confetti, night turns to dawn), sticker-style title
 letters bounce in, a ribbon unrolls with the tagline, then a cartoon iris wipe
 opens from the companion onto the app. Tapping skips it, and the ledger still
-loads underneath. Reduce Motion or turning off playful animations disables all
+loads underneath. The opening layer itself never takes touches (MainView keeps it
+out of hit-testing so it can't cover the toolbar while fading); skipping uses a
+separate catcher that disappears instantly when the app is ready. The opening
+also leaves the accessibility tree as soon as the iris starts (or on skip):
+otherwise its full-screen element lingers during the fade-out and makes the
+newly mounted Add Entry button look covered to accessibility hit-testing, which
+is how `testFirstAddItemImmediatelyAfterLaunchWithOpening` checks it. Reduce Motion or turning off playful animations disables all
 character, confetti and press transforms. Existing destructive roles/tints and
 financial amount colors remain distinct.
 

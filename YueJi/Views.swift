@@ -350,9 +350,23 @@ struct MainView: View {
                     logoFinished = true
                     finishLaunchIfReady()
                 }
-                // The departing visual layer must not intercept the ready toolbar.
+                // The departing visual layer must not intercept the ready toolbar, for
+                // touches or for accessibility hit-testing.
                 .allowsHitTesting(false)
+                .accessibilityHidden(logoFinished)
                 .transition(.opacity).zIndex(1)
+                // Tap anywhere to skip. This catcher is separate from the fading layer and
+                // leaves instantly (identity transition) when the app is ready, so it can
+                // never cover the toolbar. Before the ledger loads, skipping just ends the
+                // opening as soon as loading completes.
+                Color.clear.contentShape(Rectangle()).ignoresSafeArea()
+                    .onTapGesture {
+                        logoFinished = true
+                        // Let the opening leave the accessibility tree first, then finish.
+                        Task { @MainActor in finishLaunchIfReady() }
+                    }
+                    .accessibilityHidden(true)
+                    .transition(.identity).zIndex(2)
             }
         }
             .task(id: phase) {
@@ -3827,6 +3841,8 @@ private struct OpeningAnimationView: View {
     @State private var finished = false
     /// Mirrors `ready` so the running sequence sees updates while it waits.
     @State private var ledgerReady = false
+    /// True from the moment the iris starts opening (or the opening ends).
+    @State private var revealed = false
     private var animates: Bool { playful && !reduceMotion }
     private var titleLetters: [String] { tr("月记", "YueJi", "YueJi").map(String.init) }
     private static let focus: CGFloat = 0.40 // Vertical position of the companion; the iris opens here.
@@ -3868,8 +3884,7 @@ private struct OpeningAnimationView: View {
             IrisHole(radius: iris, center: UnitPoint(x: 0.5, y: Self.focus))
                 .fill(style: FillStyle(eoFill: true)).ignoresSafeArea()
         }
-        .contentShape(Rectangle())
-        .onTapGesture { finish() } // Tap anywhere to skip.
+        // Skipping is handled by MainView: this layer never takes touches.
         .onChange(of: ready, initial: true) { _, value in ledgerReady = value }
         .task {
             // Finishing the optional opening must not depend on scene callbacks.
@@ -3907,6 +3922,7 @@ private struct OpeningAnimationView: View {
                 // Hold on the title screen while the ledger loads: the iris only opens onto
                 // real content, never a blank background.
                 while !ledgerReady { try await Task.sleep(for: .milliseconds(50)) }
+                revealed = true
                 withAnimation(.easeIn(duration: 0.38)) { iris = 1500 }
                 try await Task.sleep(for: .milliseconds(380))
                 finish()
@@ -3920,10 +3936,15 @@ private struct OpeningAnimationView: View {
         }
         .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
         .accessibilityAction { finish() }
+        // Once the app is being revealed, leave the accessibility tree immediately. Otherwise
+        // the full-screen element lingers during the fade-out and makes the newly mounted
+        // toolbar (Add Entry) look covered to accessibility hit-testing and UI tests.
+        .accessibilityHidden(revealed)
     }
     private func finish() {
         guard !finished else { return }
         finished = true
+        revealed = true
         onFinished()
     }
     private func nightSky(still: Bool) -> some View {
