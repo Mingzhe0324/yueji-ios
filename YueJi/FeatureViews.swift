@@ -1405,6 +1405,7 @@ struct AnimatedMoney: View {
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
             .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
+            .boing(on: cents, anchor: .leading)
     }
 }
 struct LedgerFilterEditor: View {

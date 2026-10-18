@@ -32,8 +32,18 @@ kept the UI test runner waiting before every step and timed out CI). There are
 no rewards for spending and no new sound triggers.
 
 A display-only streak chip on Overview counts consecutive days with entries.
-The opening drops the companion onto a small island with a squash, confetti and
-bouncing title letters in about 1.1 s; tapping skips it, and the ledger still
+The Overview companion also hops and waves after every save.
+
+Game feel across the app: tabs pop in with a short spring when selected,
+island buttons sink into a solid ledge and spring back with a light haptic,
+amounts "boing" when they change, meters are thicker with a glossy stripe and a
+springy fill (clipped to the track), and banners bounce in.
+
+The opening is a short title screen (about 1.75 s): a night sky with stars, the
+sea slides in and an island bounces up, the companion tumbles down and lands
+(ground ring, dust puffs, confetti, night turns to dawn), sticker-style title
+letters bounce in, a ribbon unrolls with the tagline, then a cartoon iris wipe
+opens from the companion onto the app. Tapping skips it, and the ledger still
 loads underneath. Reduce Motion or turning off playful animations disables all
 character, confetti and press transforms. Existing destructive roles/tints and
 financial amount colors remain distinct.

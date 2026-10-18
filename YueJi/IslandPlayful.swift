@@ -11,6 +11,109 @@ enum IslandPlayful {
     ]
 }
 
+// MARK: - Game-feel helpers
+
+/// A full-screen cover with a growing circular hole: the classic cartoon "iris" wipe.
+struct IrisHole: Shape {
+    var radius: CGFloat
+    var center: UnitPoint = .center
+    var animatableData: CGFloat {
+        get { radius }
+        set { radius = newValue }
+    }
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect)
+        let c = CGPoint(x: rect.minX + rect.width * center.x, y: rect.minY + rect.height * center.y)
+        path.addEllipse(in: CGRect(x: c.x - radius, y: c.y - radius, width: radius * 2, height: radius * 2))
+        return path
+    }
+}
+
+/// A banner ribbon with V-notched ends, like a game title card.
+struct RibbonShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let notch = min(rect.height * 0.45, 18)
+        var p = Path()
+        p.move(to: CGPoint(x: rect.minX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.minY))
+        p.addLine(to: CGPoint(x: rect.maxX - notch, y: rect.midY))
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX + notch, y: rect.midY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Gentle cartoon sea: a sine wave filled downward. `phase` shifts the crests.
+struct WaveShape: Shape {
+    var phase: CGFloat
+    var animatableData: CGFloat {
+        get { phase }
+        set { phase = newValue }
+    }
+    func path(in rect: CGRect) -> Path {
+        var p = Path()
+        let amplitude = rect.height * 0.22
+        let mid = rect.minY + rect.height * 0.35
+        p.move(to: CGPoint(x: rect.minX, y: mid))
+        var x = rect.minX
+        while x <= rect.maxX {
+            let angle = (x - rect.minX) / rect.width * .pi * 4 + phase
+            p.addLine(to: CGPoint(x: x, y: mid + sin(angle) * amplitude))
+            x += 4
+        }
+        p.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        p.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        p.closeSubpath()
+        return p
+    }
+}
+
+/// Plays a short springy pop whenever a tab becomes active again. One-shot.
+struct TabPop: ViewModifier {
+    let active: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var popped = true
+    func body(content: Content) -> some View {
+        content
+            .scaleEffect(popped ? 1 : 0.965, anchor: .bottom)
+            .opacity(popped ? 1 : 0.6)
+            .onChange(of: active) { _, isActive in
+                guard isActive, !reduceMotion, IslandPlayful.enabled else { return }
+                var instant = Transaction(); instant.disablesAnimations = true
+                withTransaction(instant) { popped = false }
+                withAnimation(.spring(duration: 0.38, bounce: 0.42)) { popped = true }
+            }
+    }
+}
+
+/// A cartoon "boing" for a value that just changed. One-shot per change.
+struct BoingOnChange<Value: Equatable>: ViewModifier {
+    let value: Value
+    var anchor: UnitPoint = .center
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var scale: CGFloat = 1
+    func body(content: Content) -> some View {
+        content.scaleEffect(scale, anchor: anchor)
+            .onChange(of: value) { _, _ in
+                guard !reduceMotion, IslandPlayful.enabled else { return }
+                Task { @MainActor in
+                    withAnimation(.spring(duration: 0.12, bounce: 0.2)) { scale = 1.12 }
+                    try? await Task.sleep(for: .milliseconds(110))
+                    withAnimation(.spring(duration: 0.45, bounce: 0.6)) { scale = 1 }
+                }
+            }
+    }
+}
+
+extension View {
+    func tabPop(active: Bool) -> some View { modifier(TabPop(active: active)) }
+    func boing<Value: Equatable>(on value: Value, anchor: UnitPoint = .center) -> some View {
+        modifier(BoingOnChange(value: value, anchor: anchor))
+    }
+}
+
 // MARK: - Confetti
 
 private struct ConfettiPiece: Identifiable {
