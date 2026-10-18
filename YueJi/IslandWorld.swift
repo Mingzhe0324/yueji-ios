@@ -8,6 +8,8 @@ import UIKit
 struct IslandProgress: Equatable {
     var streak = 0
     var loggedDays = 0
+    /// The longest run of consecutive recorded days, ever.
+    var bestStreak = 0
     /// Logged-day thresholds where the island gains something new (levels 1...7).
     static let thresholds = [0, 3, 7, 14, 30, 60, 100]
     static let streakMilestones = [3, 7, 14, 30, 60, 100, 200, 365]
@@ -26,7 +28,16 @@ struct IslandProgress: Equatable {
             guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
             cursor = previous
         }
-        return IslandProgress(streak: streak, loggedDays: days.count)
+        // Longest run: walk the recorded days in order, extending runs of consecutive days.
+        var best = 0
+        var run = 0
+        var last: Date?
+        for day in days.sorted() {
+            if let last, calendar.date(byAdding: .day, value: 1, to: last) == day { run += 1 } else { run = 1 }
+            best = max(best, run)
+            last = day
+        }
+        return IslandProgress(streak: streak, loggedDays: days.count, bestStreak: max(best, streak))
     }
 }
 
@@ -68,6 +79,8 @@ struct IslandWorldCard: View {
     /// Each new value makes the companion celebrate (for example, after a save).
     var cheer: UUID? = nil
     var isPreview = false
+    /// Opens the island journal (stages, stats and streak badges).
+    var onOpenJournal: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var phase
     @AppStorage("playfulAnimations") private var playful = true
@@ -121,6 +134,14 @@ struct IslandWorldCard: View {
                     .background(IslandTheme.sun, in: Capsule())
                 Text(IslandLevels.name(shown.level)).font(.headline).foregroundStyle(IslandTheme.accent)
                 Spacer(minLength: 0)
+                if let onOpenJournal {
+                    Button(action: onOpenJournal) {
+                        Label(tr("日志", "Journal", "Jurnal"), systemImage: "book.closed.fill")
+                            .font(.caption.weight(.bold))
+                    }
+                    .buttonStyle(IslandButtonStyle(prominent: false))
+                    .accessibilityLabel(tr("打开小岛日志", "Open island journal", "Buka jurnal pulau"))
+                }
             }
             Text(shownLine)
                 .font(.subheadline.weight(spoken == nil ? .regular : .semibold))
@@ -243,6 +264,8 @@ struct IslandScene: View {
     let alive: Bool
     var cheer: UUID? = nil
     var onSpeak: ((String) -> Void)? = nil
+    /// False draws a still miniature (for the journal): the companion takes no touches.
+    var interactive = true
     private static let grass = Color(red: 0.30, green: 0.66, blue: 0.40)
     private static let lightGrass = Color(red: 0.48, green: 0.86, blue: 0.69)
     private static let wood = Color(red: 0.55, green: 0.36, blue: 0.20)
@@ -394,8 +417,13 @@ struct IslandScene: View {
                     .animation(alive ? .easeInOut(duration: 2.1).repeatForever(autoreverses: true) : nil, value: alive)
                     .position(x: max(28, cx - 138), y: h - 40)
             }
-            InteractiveCompanion(mood: mood, size: 74, cheer: cheer, greeting: .wave, greetKey: "overview", onSpeak: onSpeak)
-                .position(x: cx, y: top - 26)
+            if interactive {
+                InteractiveCompanion(mood: mood, size: 74, cheer: cheer, greeting: .wave, greetKey: "overview", onSpeak: onSpeak)
+                    .position(x: cx, y: top - 26)
+            } else {
+                MoonIslandMascot(mood: mood).frame(width: 74, height: 74)
+                    .position(x: cx, y: top - 26)
+            }
         }
     }
 
@@ -463,6 +491,182 @@ struct IslandScene: View {
             TriangleShape().fill(Color(red: 0.95, green: 0.42, blue: 0.42)).frame(width: 9, height: 6).rotationEffect(.degrees(90)).offset(x: 4, y: -22)
             BoatHull().fill(Color(red: 0.86, green: 0.46, blue: 0.30)).frame(width: 38, height: 10).offset(y: 12)
         }.frame(width: 42, height: 50)
+    }
+}
+
+// MARK: - Journal
+
+/// Navigation value for the island journal.
+struct IslandJournalRoute: Hashable {}
+
+/// The island's album: recording stats, every stage of the island (unlocked in colour,
+/// locked in grey) and the streak badge wall. Display only.
+struct IslandJournalView: View {
+    let progress: IslandProgress
+    var mood: IslandMood = .happy
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var spoken: String?
+    @State private var spokenID = UUID()
+    @State private var badgesIn = false
+
+    var body: some View {
+        List {
+            Section {
+                header.listRowBackground(Color.clear).listRowInsets(EdgeInsets())
+            }
+            Section(tr("小岛的成长", "How your island grows", "Pertumbuhan pulau")) {
+                ForEach(1...IslandProgress.thresholds.count, id: \.self) { level in stage(level) }
+            }
+            Section {
+                badgeWall
+            } header: {
+                Text(tr("连续记账徽章", "Streak badges", "Lencana rentetan"))
+            } footer: {
+                Text(tr("徽章按最长连续记账天数获得，只奖励记录的习惯，不看花了多少。", "Badges follow your longest recording streak. They reward the habit, never the amount spent.", "Lencana mengikut rentetan rekod terpanjang anda. Ia menghargai tabiat, bukan jumlah belanja."))
+            }
+        }
+        .yuejiListSurface()
+        .navigationTitle(tr("小岛日志", "Island journal", "Jurnal pulau")).navigationBarTitleDisplayMode(.inline)
+        .task(id: spokenID) {
+            guard spoken != nil else { return }
+            do { try await Task.sleep(for: .seconds(3.5)) } catch { return }
+            spoken = nil
+        }
+    }
+
+    private var journalLine: String {
+        guard progress.loggedDays > 0 else {
+            return tr("从今天开始，每记一笔，小岛就长大一点。", "Start today: every entry helps the island grow.", "Mulakan hari ini: setiap rekod membantu pulau berkembang.")
+        }
+        return tr("你已经在 \(progress.loggedDays) 天里认真记账，小岛都看在眼里。",
+                  progress.loggedDays == 1 ? "You’ve recorded on 1 day. The island noticed!" : "You’ve recorded on \(progress.loggedDays) days. The island noticed every one.",
+                  "Anda telah merekod pada \(progress.loggedDays) hari. Pulau perasan setiap satu.")
+    }
+
+    private var header: some View {
+        VStack(spacing: 14) {
+            if !typeSize.isAccessibilitySize {
+                InteractiveCompanion(mood: progress.loggedDays > 0 ? .excited : mood, size: 96, greeting: .wave,
+                                     onSpeak: { line in spoken = line; spokenID = UUID() })
+            }
+            Text(spoken ?? journalLine)
+                .font(.headline).multilineTextAlignment(.center)
+                .foregroundStyle(spoken == nil ? Color.primary : IslandTheme.accent)
+                .fixedSize(horizontal: false, vertical: true)
+                .id(spoken ?? journalLine)
+                .transition(reduceMotion ? .opacity : .scale(scale: 0.92).combined(with: .opacity))
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 10) { stats }
+                VStack(spacing: 10) { stats }
+            }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 18).padding(.horizontal, 16)
+        .animation(reduceMotion ? nil : YueJiMotion.content, value: spoken ?? journalLine)
+    }
+
+    @ViewBuilder private var stats: some View {
+        stat(progress.loggedDays, tr("记账天数", "Days recorded", "Hari direkod"), "calendar", IslandPalette.sky)
+        stat(progress.streak, tr("当前连续", "Current streak", "Rentetan kini"), "flame.fill", IslandPalette.pumpkin)
+        stat(progress.bestStreak, tr("最长连续", "Best streak", "Rentetan terbaik"), "trophy.fill", IslandPalette.mint)
+    }
+
+    private func stat(_ value: Int, _ label: String, _ symbol: String, _ color: Color) -> some View {
+        VStack(spacing: 6) {
+            IslandIconTile(symbol: symbol, color: color, size: 30, filled: true).accessibilityHidden(true)
+            Text(String(value)).font(.title2.weight(.heavy)).monospacedDigit()
+                .contentTransition(reduceMotion ? .identity : .numericText(value: Double(value)))
+            Text(label).font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
+        }
+        .frame(maxWidth: .infinity).padding(.vertical, 12).padding(.horizontal, 6)
+        .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(IslandTheme.line, lineWidth: 1.5))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func stage(_ level: Int) -> some View {
+        let unlocked = progress.level >= level
+        let current = progress.level == level
+        let threshold = IslandProgress.thresholds[level - 1]
+        return VStack(alignment: .leading, spacing: 10) {
+            IslandScene(level: level, mood: current ? mood : .happy, alive: false, interactive: false)
+                .frame(height: 140)
+                .grayscale(unlocked ? 0 : 1)
+                .opacity(unlocked ? 1 : 0.5)
+                .overlay {
+                    if !unlocked {
+                        Image(systemName: "lock.fill").font(.title2.weight(.bold)).foregroundStyle(.white)
+                            .padding(14).background(Color.black.opacity(0.35), in: Circle())
+                    }
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .strokeBorder(current ? IslandTheme.sun : IslandTheme.line, lineWidth: current ? 3 : 1.5)
+                }
+                .accessibilityHidden(true)
+            HStack(alignment: .center, spacing: 10) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(IslandLevels.name(level)).font(.headline)
+                    Text(level == 1
+                         ? tr("一切从这里开始", "Where it all begins", "Di sinilah segalanya bermula")
+                         : tr("记账 \(threshold) 天 · 长出\(IslandLevels.unlock(level))", "\(threshold) days recorded · adds \(IslandLevels.unlock(level))", "\(threshold) hari direkod · menambah \(IslandLevels.unlock(level))"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                if current {
+                    Text(tr("你在这里", "You’re here", "Anda di sini"))
+                        .font(.caption.weight(.heavy)).foregroundStyle(Color(red: 0.12, green: 0.22, blue: 0.18))
+                        .padding(.horizontal, 10).padding(.vertical, 5)
+                        .background(IslandTheme.sun, in: Capsule())
+                } else if unlocked {
+                    Image(systemName: "checkmark.seal.fill").font(.title3).foregroundStyle(IslandPalette.mint)
+                        .accessibilityLabel(tr("已解锁", "Unlocked", "Dibuka"))
+                } else {
+                    Text(tr("还差 \(threshold - progress.loggedDays) 天", "\(threshold - progress.loggedDays) days to go", "\(threshold - progress.loggedDays) hari lagi"))
+                        .font(.caption.weight(.bold)).foregroundStyle(.secondary)
+                }
+            }
+        }
+        .padding(.vertical, 6)
+        .accessibilityElement(children: .combine)
+    }
+
+    private var badgeWall: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 74), spacing: 12)], spacing: 14) {
+            ForEach(Array(IslandProgress.streakMilestones.enumerated()), id: \.element) { index, days in
+                badge(days, earned: progress.bestStreak >= days)
+                    .scaleEffect(badgesIn || reduceMotion || !playful ? 1 : 0.5)
+                    .opacity(badgesIn || reduceMotion || !playful ? 1 : 0)
+                    .animation(reduceMotion ? nil : YueJiMotion.pop.delay(Double(index) * 0.05), value: badgesIn)
+            }
+        }
+        .padding(.vertical, 10)
+        .onAppear { badgesIn = true }
+    }
+
+    private func badge(_ days: Int, earned: Bool) -> some View {
+        VStack(spacing: 6) {
+            Image(systemName: "flame.fill").font(.title3.weight(.bold))
+                .foregroundStyle(earned ? Color.white : Color.secondary)
+                .frame(width: 52, height: 52)
+                .background { Circle().fill(earned ? IslandPalette.pumpkin : Color.secondary.opacity(0.15)) }
+                .overlay { Circle().strokeBorder(.white.opacity(earned ? 0.4 : 0), lineWidth: 2) }
+                .background {
+                    Circle().fill(earned ? IslandPalette.pumpkin : Color.secondary.opacity(0.15))
+                        .overlay { Circle().fill(Color.black.opacity(earned ? 0.22 : 0)) }
+                        .offset(y: 3)
+                }
+                .padding(.bottom, 3)
+            Text(tr("\(days) 天", "\(days) days", "\(days) hari")).font(.caption.weight(.bold))
+                .foregroundStyle(earned ? Color.primary : Color.secondary)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(earned
+            ? tr("连续 \(days) 天徽章，已获得", "\(days)-day streak badge, earned", "Lencana rentetan \(days) hari, diperoleh")
+            : tr("连续 \(days) 天徽章，尚未获得", "\(days)-day streak badge, not yet earned", "Lencana rentetan \(days) hari, belum diperoleh"))
     }
 }
 

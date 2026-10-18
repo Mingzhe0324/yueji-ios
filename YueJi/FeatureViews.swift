@@ -23,7 +23,7 @@ struct TravelBooksView: View {
                         Text(trip.destination).font(.subheadline).foregroundStyle(.secondary)
                         Text(dateLabel(trip.start) + " – " + dateLabel(trip.end)).font(.caption).foregroundStyle(.secondary)
                         LabeledContent(tr("我的消费", "My spending", "Belanja saya"), value: money(model.ledger.tripSpending(trip.id)))
-                        if trip.budget > 0 { SpendingMeter(value: model.ledger.tripSpending(trip.id), total: trip.budget, color: .blue) }
+                        if trip.budget > 0 { SpendingMeter(value: model.ledger.tripSpending(trip.id), total: trip.budget, color: IslandPalette.sky) }
                     }.padding(.vertical, 8)
                 }
             }
@@ -381,6 +381,10 @@ struct RecurringScheduleRow: View {
         VStack(alignment: .leading, spacing: 14) {
             Button(action: edit) {
                 layout {
+                    // Paused schedules doze: a sleepy tile instead of the category's.
+                    IslandIconTile(symbol: rule.active ? model.ledger.categorySymbol(rule.category) : "moon.zzz.fill",
+                                   color: rule.active ? model.ledger.categoryTint(rule.category) : IslandPalette.pebble, size: 40)
+                        .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(rule.name).font(.headline)
                         Text(rule.cycle.label + " · " + categoryLabel(rule.category)).font(.caption).foregroundStyle(.secondary)
@@ -977,7 +981,7 @@ struct FriendSpendingView: View {
                     if n > 0 {
                         VStack(alignment: .leading, spacing: 8) {
                             HStack { CategoryBadge(name: category); Spacer(); AnimatedMoney(cents: n) }
-                            ProgressView(value: Double(n), total: Double(max(breakdown.net, 1)))
+                            SpendingMeter(value: n, total: max(breakdown.net, 1), color: model.ledger.categoryTint(category))
                         }
                     }
                 }
@@ -1400,10 +1404,12 @@ private struct ComparisonRow: View {
         VStack(alignment: .leading, spacing: 8) {
             Text(name).font(.headline)
             HStack { Text(tr("所选月", "Selected", "Dipilih")); Spacer(); AnimatedMoney(cents: current) }
-            ProgressView(value: Double(current), total: Double(max(1, max(current, previous)))).tint(.teal)
+            SpendingMeter(value: current, total: max(1, max(current, previous)), color: IslandPalette.lagoon)
             HStack { Text(tr("上个月", "Previous", "Bulan lalu")); Spacer(); Text(money(previous)) }.foregroundStyle(.secondary)
-            ProgressView(value: Double(previous), total: Double(max(1, max(current, previous)))).tint(.gray)
-            Text(change).font(.caption).foregroundStyle(current < previous ? Color.red : (current > previous ? Color.orange : Color.secondary))
+            SpendingMeter(value: previous, total: max(1, max(current, previous)), color: IslandPalette.pebble)
+            // Spending less than last month is good news; more is a gentle caution.
+            Text(change).font(.caption.weight(.semibold))
+                .foregroundStyle(current < previous ? IslandPalette.mint : (current > previous ? IslandPalette.pumpkin : Color.secondary))
         }.padding(.vertical, 6)
     }
 }
@@ -2689,7 +2695,7 @@ struct ReceiptScanView: View {
                         LabeledContent(tr("餐费", "Food", "Makanan"), value: money(result.food[index]))
                         LabeledContent(tr("税费、折扣及舍入", "Charges, discount & rounding", "Caj, diskaun & pembundaran"), value: money(result.totals[index] - result.food[index]))
                             .foregroundStyle(.secondary)
-                    }.padding(14).background(Color.blue.opacity(0.04), in: RoundedRectangle(cornerRadius: 18))
+                    }.padding(14).background(IslandTheme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
                 }
                 ShareLink(item: splitSummary(result)) {
                     Label(tr("分享分账明细", "Share split details", "Kongsi butiran pembahagian"), systemImage: "square.and.arrow.up")
@@ -3021,15 +3027,17 @@ struct SavingsGoalsView: View {
             }
             ForEach(model.ledger.savingsGoals) { goal in
                 NavigationLink { SavingsGoalDetail(id: goal.id) } label: {
+                    let reached = goal.balance >= goal.target
                     VStack(alignment: .leading, spacing: 10) {
                         HStack {
-                            Label(goal.name, systemImage: "target").font(.headline)
+                            IslandRowLabel(title: goal.name, symbol: reached ? "trophy.fill" : "target",
+                                           color: reached ? IslandPalette.mint : IslandPalette.pumpkin)
+                                .font(.headline)
                             Spacer()
-                            if goal.balance >= goal.target { Image(systemName: "checkmark.seal.fill").foregroundStyle(.green) }
+                            if reached { Image(systemName: "checkmark.seal.fill").foregroundStyle(IslandPalette.mint) }
                         }
                         Text(money(goal.balance) + " / " + money(goal.target)).font(.subheadline).monospacedDigit()
-                        ProgressView(value: goal.progress).tint(goal.balance >= goal.target ? .green : .blue)
-                            .animation(reduceMotion ? nil : YueJiMotion.month, value: goal.progress)
+                        SpendingMeter(value: goal.balance, total: max(1, goal.target), color: reached ? IslandPalette.mint : IslandTheme.sun)
                     }.padding(.vertical, 8)
                 }
             }
@@ -3250,32 +3258,40 @@ private struct SavingsGoalDetail: View {
     @State private var amount = ""
     @State private var error: String?
     @State private var celebrated = false
+    /// A new value plays the goal celebration (companion cheer and confetti).
+    @State private var celebration: UUID?
     private var goal: SavingsGoal? { model.ledger.savingsGoals.first { $0.id == id } }
     var body: some View {
         let _ = uiLocale.identifier
         List {
             if let goal {
                 Section {
+                    let reached = goal.balance >= goal.target
                     VStack(spacing: 18) {
+                        // A chunky sun ring with the companion inside; it turns mint when reached.
                         ZStack {
-                            Circle().stroke(Color.blue.opacity(0.1), lineWidth: 12)
+                            Circle().stroke(IslandTheme.sun.opacity(0.2), lineWidth: 16)
                             Circle().trim(from: 0, to: CGFloat(goal.progress))
-                                .stroke(goal.balance >= goal.target ? Color.green : .blue, style: StrokeStyle(lineWidth: 12, lineCap: .round))
+                                .stroke(reached ? IslandPalette.mint : IslandTheme.sun, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
-                                .animation(reduceMotion ? nil : YueJiMotion.standard, value: goal.balance)
-                            VStack(spacing: 5) {
-                                Text("\(Int(goal.progress * 100))%") .font(.largeTitle.bold()).contentTransition(.numericText())
-                                Text(goal.balance >= goal.target ? tr("已达成", "Reached", "Tercapai") : tr("已存下", "Saved", "Disimpan")).font(.caption).foregroundStyle(.secondary)
+                                .animation(reduceMotion ? nil : YueJiMotion.meter, value: goal.balance)
+                            VStack(spacing: 0) {
+                                InteractiveCompanion(mood: reached ? .excited : .happy, size: 66, cheer: celebration)
+                                Text("\(Int(goal.progress * 100))%").font(.title.bold()).contentTransition(.numericText())
+                                Text(reached ? tr("已达成", "Reached", "Tercapai") : tr("已存下", "Saved", "Disimpan")).font(.caption).foregroundStyle(.secondary)
                             }
-                        }.frame(width: 170, height: 170).padding(.top, 12)
+                        }
+                        .frame(width: 196, height: 196).padding(.top, 12)
+                        .overlay { ConfettiBurst(trigger: celebration, spread: 170) }
                         AnimatedMoney(cents: goal.balance).font(.title.bold())
                         Text(tr("目标 ", "Target ", "Sasaran ") + money(goal.target)).foregroundStyle(.secondary)
                         Text(tr("还差 ", "Remaining ", "Baki ") + money(max(0, goal.target - goal.balance))).font(.subheadline)
                         if celebrated {
-                            MoonBuddy(size: 100, celebrating: true)
                             Label(tr("目标达成！", "Goal reached!", "Matlamat tercapai!"), systemImage: "checkmark.seal.fill")
-                                .foregroundStyle(.green).font(.headline)
-                                .transition(reduceMotion ? .opacity : .scale(scale: 0.8).combined(with: .opacity))
+                                .font(.headline).foregroundStyle(IslandPalette.mint)
+                                .padding(.horizontal, 14).padding(.vertical, 8)
+                                .background(IslandPalette.mint.opacity(0.14), in: Capsule())
+                                .transition(reduceMotion ? .opacity : .scale(scale: 0.6).combined(with: .opacity))
                         }
                         HStack {
                             Button(tr("存入", "Add savings", "Tambah simpanan")) { withdrawing = false; amount = ""; recording = true }
@@ -3348,7 +3364,8 @@ private struct SavingsGoalDetail: View {
                 try ledger.savingsGoals[index].record(cents: withdrawal ? -cents : cents)
                 return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
             }, completion: { reached in
-                withAnimation(reduceMotion ? nil : YueJiMotion.standard) { celebrated = reached }
+                withAnimation(reduceMotion ? nil : YueJiMotion.pop) { celebrated = reached }
+                if reached { celebration = UUID() }
                 model.showSaved(message: reached ? tr("目标完成！", "Goal complete!", "Matlamat tercapai!") :
                     (withdrawal ? tr("已取出 ", "Withdrawn ", "Dikeluarkan ") : tr("已存入 ", "Deposited ", "Disimpan ")) + money(cents),
                     sound: reached ? .goal : (withdrawal ? .saved : .deposit))

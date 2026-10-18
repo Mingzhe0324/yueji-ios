@@ -4033,6 +4033,17 @@ final class IslandProgressTests: XCTestCase {
         XCTAssertEqual(progress.streak, 1)
     }
 
+    func testBestStreakFindsTheLongestRunAnywhereInHistory() {
+        let now = Date()
+        // A five-day run long ago, then a two-day run ending yesterday.
+        let offsets = [-30, -29, -28, -27, -26, -10, -2, -1]
+        let expenses = offsets.map { Expense(merchant: "Tea", cents: 500, date: day($0, from: now)) }
+        let progress = IslandProgress.make(expenses: expenses, now: now, calendar: calendar)
+        XCTAssertEqual(progress.streak, 2)
+        XCTAssertEqual(progress.bestStreak, 5)
+        XCTAssertEqual(IslandProgress.make(expenses: [], now: now, calendar: calendar).bestStreak, 0)
+    }
+
     func testLevelsFollowLoggedDayThresholds() {
         XCTAssertEqual(IslandProgress(loggedDays: 0).level, 1)
         XCTAssertEqual(IslandProgress(loggedDays: 2).level, 1)

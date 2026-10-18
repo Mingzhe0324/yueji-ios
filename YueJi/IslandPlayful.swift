@@ -97,6 +97,54 @@ struct IslandIconTile: View {
     }
 }
 
+/// A list-row label with a chunky icon tile, used for links and tools so every list
+/// reads in the same visual language as settings rows.
+struct IslandRowLabel: View {
+    let title: String
+    let symbol: String
+    var color: Color = IslandPalette.leaf
+    var body: some View {
+        HStack(spacing: 12) {
+            IslandIconTile(symbol: symbol, color: color, size: 32, filled: true)
+                .accessibilityHidden(true)
+            Text(title).foregroundStyle(.primary)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
+/// A round sticker avatar: a stable island colour per name, the initial, and a little
+/// leaf badge once the balance is settled.
+struct IslandAvatar: View {
+    let name: String
+    var settled = false
+    var size: CGFloat = 44
+    private var color: Color {
+        let colors = [IslandPalette.mint, IslandPalette.sky, IslandPalette.lavender, IslandPalette.berry,
+                      IslandPalette.coral, IslandPalette.pumpkin, IslandPalette.lagoon]
+        let hash = name.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0xFFFF }
+        return colors[hash % colors.count]
+    }
+    var body: some View {
+        Text(String(name.prefix(1)).uppercased())
+            .font(.system(size: size * 0.42, weight: .heavy, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: size, height: size)
+            .background { Circle().fill(color) }
+            .overlay { Circle().strokeBorder(.white.opacity(0.35), lineWidth: 2) }
+            .background { Circle().fill(color).overlay { Circle().fill(Color.black.opacity(0.22)) }.offset(y: 3) }
+            .padding(.bottom, 3)
+            .overlay(alignment: .bottomTrailing) {
+                if settled {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: size * 0.34, weight: .bold))
+                        .foregroundStyle(.white, IslandPalette.mint)
+                        .offset(x: 4, y: 2)
+                }
+            }
+    }
+}
+
 /// A cartoon "boing" for a value that just changed. One-shot per change.
 struct BoingOnChange<Value: Equatable>: ViewModifier {
     let value: Value

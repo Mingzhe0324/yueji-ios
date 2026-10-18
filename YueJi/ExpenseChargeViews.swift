@@ -386,7 +386,7 @@ struct ExpensePlaceMapSheet: View {
     private var mapCard: some View {
         VStack(spacing: 0) {
             Map(position: $position, interactionModes: [.pan, .zoom, .rotate]) {
-                if let coordinate { Marker(selected?.name ?? "", coordinate: coordinate).tint(.blue) }
+                if let coordinate { Marker(selected?.name ?? "", coordinate: coordinate).tint(IslandPalette.coral) }
             }
             .mapStyle(.standard(elevation: .flat))
             .mapControls { MapCompass(); MapScaleView() }

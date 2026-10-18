@@ -80,6 +80,27 @@ endless drift/blink loop kept it waiting and timed out CI, so the UI tests launc
 with `-ambientAnimations NO`. Everything else (reactions, celebrations, the
 opening) is one-shot and finishes on its own.
 
+## Island journal
+
+The Overview card's Journal button opens the island's album: days recorded,
+current and best streak, all seven stages drawn as still miniatures (unlocked in
+colour, locked in grey with how many days remain, "You're here" on the current
+one), and a streak badge wall earned by the best streak. Badges reward the
+recording habit, never amounts. The companion greets and reacts here too.
+
+## Consistency rules
+
+- One character: the island companion. The retired crescent `MoonBuddy` is gone.
+- Progress always uses the chunky `SpendingMeter` (savings, comparisons, category
+  breakdowns, trips); savings detail uses a chunky sun ring that turns mint when
+  the goal is reached, with the companion inside and a celebration on reaching it.
+- Links and tools use `IslandRowLabel` (tile + title); settings-style rows use
+  `SimpleSettingsRow`; people use `IslandAvatar`; categories use `CategoryBadge`.
+- Comparisons read spending less than last month as good news (mint) and more as
+  a gentle caution (pumpkin).
+- The onboarding guide's mock screens use the same paper, cards and accent as the
+  real app.
+
 ## The living island (`IslandWorld.swift`)
 
 Overview's top card shows a sky that follows the time of day (dawn, day, dusk,

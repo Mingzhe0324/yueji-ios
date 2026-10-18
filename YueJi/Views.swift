@@ -558,6 +558,7 @@ struct DashboardView: View {
     }
     private var owed: Int { summary.owed }
     @State private var islandProgress: IslandProgress?
+    private func openJournal() { path.append(IslandJournalRoute()) }
     private var onTrack: Bool { budget > 0 && Double(budgetSpent) / Double(budget) < 0.8 }
     /// The companion reacts to the selected month: sleepy when empty, cheering when on track.
     private var companionMood: IslandMood {
@@ -599,7 +600,8 @@ struct DashboardView: View {
                 Section {
                     // The living island grows with the days you record; display only.
                     IslandWorldCard(progress: islandProgress, mood: companionMood, line: companionLine,
-                                    cheer: model.savedNotice, isPreview: model.isPreview)
+                                    cheer: model.savedNotice, isPreview: model.isPreview,
+                                    onOpenJournal: model.isPreview ? nil : openJournal)
                         .task(id: model.ledger.expenses.count) {
                             islandProgress = IslandProgress.make(expenses: model.ledger.expenses)
                         }
@@ -620,11 +622,12 @@ struct DashboardView: View {
                 Section {
                     NavigationLink { SavingsGoalsView() } label: {
                         VStack(alignment: .leading, spacing: 12) {
-                            Label(tr("储蓄目标", "Savings goals", "Matlamat simpanan"), systemImage: "target").font(.headline)
+                            IslandRowLabel(title: tr("储蓄目标", "Savings goals", "Matlamat simpanan"), symbol: "target", color: IslandPalette.pumpkin)
+                                .font(.headline)
                             if let goal = model.ledger.savingsGoals.first(where: { $0.balance < $0.target }) ?? model.ledger.savingsGoals.first {
                                 HStack { Text(goal.name); Spacer(); Text(money(goal.balance)).monospacedDigit() }
-                                ProgressView(value: goal.progress).tint(.blue)
-                                    .animation(reduceMotion ? nil : YueJiMotion.standard, value: goal.progress)
+                                SpendingMeter(value: goal.balance, total: max(1, goal.target),
+                                              color: goal.balance >= goal.target ? IslandPalette.mint : IslandTheme.sun)
                             } else {
                                 Text(tr("为想做的事，存下第一笔。", "Set aside your first contribution.", "Asingkan simpanan pertama anda.")).font(.subheadline).foregroundStyle(.secondary)
                             }
@@ -635,12 +638,15 @@ struct DashboardView: View {
                 categoriesCard
                 Section {
                     NavigationLink { OverviewToolsView(month: month) } label: {
-                        Label(tr("更多工具", "More tools", "Alat lain"), systemImage: "square.grid.2x2")
+                        IslandRowLabel(title: tr("更多工具", "More tools", "Alat lain"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
                     }
                 }
             }.yuejiListSurface()
             .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                 ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+            }
+            .navigationDestination(for: IslandJournalRoute.self) { _ in
+                IslandJournalView(progress: islandProgress ?? IslandProgress(), mood: companionMood)
             }
             .task(id: summaryQuery) {
                 guard loadedSummary != summaryQuery else { return }
@@ -944,18 +950,18 @@ struct OverviewToolsView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
-                NavigationLink { ReimbursementsView() } label: { Label(tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), systemImage: "doc.text") }
-                NavigationLink { ReceiptScanView() } label: { Label(tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), systemImage: "doc.viewfinder") }
+                NavigationLink { ReimbursementsView() } label: { IslandRowLabel(title: tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), symbol: "doc.text.fill", color: IslandPalette.lavender) }
+                NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")
-                NavigationLink { AutomationSetupView() } label: { Label(tr("自动记账", "Automatic recording", "Rekod automatik"), systemImage: "bolt.fill") }
+                NavigationLink { AutomationSetupView() } label: { IslandRowLabel(title: tr("自动记账", "Automatic recording", "Rekod automatik"), symbol: "bolt.fill", color: IslandPalette.sky) }
             }
             Section(tr("分析", "Insights", "Analisis")) {
-                NavigationLink { SpendingComparisonView(month: month) } label: { Label(tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), systemImage: "chart.bar.xaxis") }
-                NavigationLink { UpcomingView(initialMonth: month) } label: { Label(tr("固定消费预览", "Upcoming bills", "Bil akan datang"), systemImage: "calendar") }
-                NavigationLink { DuplicateReviewView() } label: { Label(tr("检查重复账目", "Review duplicates", "Semak pendua"), systemImage: "doc.on.doc") }
+                NavigationLink { SpendingComparisonView(month: month) } label: { IslandRowLabel(title: tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), symbol: "chart.bar.xaxis", color: IslandPalette.mint) }
+                NavigationLink { UpcomingView(initialMonth: month) } label: { IslandRowLabel(title: tr("固定消费预览", "Upcoming bills", "Bil akan datang"), symbol: "calendar", color: IslandPalette.pumpkin) }
+                NavigationLink { DuplicateReviewView() } label: { IslandRowLabel(title: tr("检查重复账目", "Review duplicates", "Semak pendua"), symbol: "doc.on.doc.fill", color: IslandPalette.berry) }
             }
             Section {
-                NavigationLink(tr("预算与每日提醒", "Budget & daily reminders", "Peringatan bajet & harian")) { NotificationSettingsView() }
+                NavigationLink { NotificationSettingsView() } label: { IslandRowLabel(title: tr("预算与每日提醒", "Budget & daily reminders", "Peringatan bajet & harian"), symbol: "bell.fill", color: IslandPalette.coral) }
             }
         }.yuejiListSurface().navigationTitle(tr("更多工具", "More tools", "Alat lain")).navigationBarTitleDisplayMode(.inline)
     }
@@ -967,7 +973,7 @@ struct DashboardLinkLabel: View {
     var body: some View {
         let _ = uiLocale.identifier
         HStack(spacing: 12) {
-            Image(systemName: symbol).foregroundStyle(ink).frame(width: 28)
+            IslandIconTile(symbol: symbol, color: IslandPalette.leaf, size: 28, filled: true).accessibilityHidden(true)
             Text(title).foregroundStyle(.primary).frame(maxWidth: .infinity, alignment: .leading)
             Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.secondary)
         }.font(.subheadline).padding(.vertical, 5).contentShape(Rectangle())
@@ -2575,7 +2581,7 @@ struct FriendsView: View {
                 }
                 Section {
                     NavigationLink { FuelCalculatorView() } label: { SimpleSettingsRow(title: tr("行程分摊", "Split a trip", "Bahagi perjalanan"), subtitle: tr("油费、停车费、过路费", "Fuel, parking and tolls", "Minyak, parkir dan tol"), symbol: "car.fill", color: IslandPalette.lagoon) }
-                    NavigationLink { SplitHistoryView() } label: { Label(tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), systemImage: "list.bullet.rectangle") }
+                    NavigationLink { SplitHistoryView() } label: { IslandRowLabel(title: tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), symbol: "list.bullet.rectangle.fill", color: IslandPalette.lavender) }
                 }
             }.yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
@@ -2589,9 +2595,8 @@ struct FriendBalanceRow: View {
     var body: some View {
         let _ = uiLocale.identifier
         HStack(spacing: 14) {
-            Text(String(friend.name.prefix(1)).uppercased()).font(.headline)
-                .frame(width: 44, height: 44).foregroundStyle(.teal)
-                .background(Color.teal.opacity(0.12), in: Circle()).accessibilityHidden(true)
+            IslandAvatar(name: friend.name, settled: friend.owed == 0 && friend.payable == 0)
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 6) {
                 Text(friend.name).font(.headline)
                 if friend.owed == 0 && friend.payable == 0 {
@@ -2925,7 +2930,7 @@ struct ShortcutSetupGuide: View {
                 }
             }
         }
-        .background(Color(uiColor: .systemBackground))
+        .background(IslandBackdrop())
         .navigationTitle(title).navigationBarTitleDisplayMode(.inline)
         .task(id: "\(step)-\(scenePhase)") {
             gesturePhase = 0
@@ -3343,7 +3348,7 @@ private struct GuideScreenFrame: View {
                     .frame(height: 22)
             }
             .frame(width: 390, height: 800)
-            .background(Color(uiColor: .systemBackground))
+            .background(IslandTheme.paper)
             .clipShape(RoundedRectangle(cornerRadius: 42))
             .overlay(RoundedRectangle(cornerRadius: 42).strokeBorder(Color.primary.opacity(0.85), lineWidth: 5))
             .padding(10)
@@ -3405,7 +3410,7 @@ private struct GuideDemoScene: View {
                 if tab == nil { Color.clear.frame(width: 42) }
             }
             .padding(.horizontal, 18).frame(height: 52)
-            .background(Color(uiColor: .systemBackground))
+            .background(IslandTheme.paper)
             ScrollViewReader { reader in
                 ScrollView {
                     VStack(alignment: .leading, spacing: 16) { content }
@@ -3439,10 +3444,11 @@ private struct GuideDemoScene: View {
         VStack(alignment: .leading, spacing: 10) {
             if let title { Text(title).font(.footnote.weight(.semibold)).foregroundStyle(.secondary).padding(.leading, 4) }
             VStack(spacing: 0) { content() }
-                .background(Color(uiColor: .systemBackground), in: RoundedRectangle(cornerRadius: 18))
+                .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(IslandTheme.line, lineWidth: 1.5))
         }
     }
-    private func row(_ name: String, _ value: String = "", icon: String = "", target: String? = nil, tint: Color = .blue) -> some View {
+    private func row(_ name: String, _ value: String = "", icon: String = "", target: String? = nil, tint: Color = IslandTheme.accent) -> some View {
         HStack(spacing: 12) {
             if !icon.isEmpty {
                 Image(systemName: icon).font(.system(size: 17, weight: .semibold))
@@ -3466,10 +3472,10 @@ private struct GuideDemoScene: View {
                     Image(systemName: icons[index]).font(.system(size: 19))
                     Text(labels[index]).font(.system(size: 10))
                 }
-                .foregroundStyle(selected == index ? Color.blue : Color.secondary)
+                .foregroundStyle(selected == index ? IslandTheme.accent : Color.secondary)
                 .frame(maxWidth: .infinity)
             }
-        }.padding(.top, 10).frame(height: 62).background(Color(uiColor: .systemBackground))
+        }.padding(.top, 10).frame(height: 62).background(IslandTheme.paper)
     }
     @ViewBuilder private var content: some View {
         switch screen {
@@ -3724,133 +3730,6 @@ private struct GuideDemoScene: View {
     }
 }
 
-
-private struct YueJiEntrance: ViewModifier {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var entered = false
-    func body(content: Content) -> some View {
-        content.opacity(entered || reduceMotion ? 1 : 0)
-            .offset(y: entered || reduceMotion ? 0 : 7)
-            .onAppear { withAnimation(reduceMotion ? nil : .easeOut(duration: 0.32)) { entered = true } }
-    }
-}
-/// Code-native mascot layers keep eyes and body independent and crisp at any size.
-private struct MoonBody: Shape {
-    func path(in r: CGRect) -> Path {
-        var p = Path()
-        p.move(to: CGPoint(x: 0.56, y: 0.08))
-        p.addCurve(to: CGPoint(x: 0.12, y: 0.70), control1: CGPoint(x: 0.13, y: 0.08), control2: CGPoint(x: -0.04, y: 0.40))
-        p.addCurve(to: CGPoint(x: 0.80, y: 0.86), control1: CGPoint(x: 0.23, y: 1.03), control2: CGPoint(x: 0.60, y: 1.03))
-        p.addCurve(to: CGPoint(x: 0.94, y: 0.52), control1: CGPoint(x: 0.92, y: 0.77), control2: CGPoint(x: 0.99, y: 0.49))
-        p.addCurve(to: CGPoint(x: 0.48, y: 0.53), control1: CGPoint(x: 0.82, y: 0.65), control2: CGPoint(x: 0.62, y: 0.65))
-        p.addCurve(to: CGPoint(x: 0.56, y: 0.08), control1: CGPoint(x: 0.33, y: 0.40), control2: CGPoint(x: 0.37, y: 0.21))
-        p.closeSubpath()
-        return p.applying(CGAffineTransform(scaleX: r.width, y: r.height)).applying(CGAffineTransform(translationX: r.minX, y: r.minY))
-    }
-}
-
-enum MoonGesture: String { case hello, dance, star, cuddle }
-
-struct MoonBuddy: View {
-    @Environment(\.locale) private var uiLocale
-    var size: CGFloat = 100
-    var celebrating = false
-    var animated = true
-    var reaction: UUID? = nil
-    var gesture: MoonGesture = .hello
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("playfulAnimations") private var playful = true
-    @State private var lift: CGFloat = 0
-    @State private var stretch: CGFloat = 1
-    @State private var tilt = 0.0
-    @State private var blink = false
-    @State private var sparkle = false
-    private let navy = Color(red: 0.04, green: 0.08, blue: 0.22)
-    private var motion: Bool { animated && playful && !reduceMotion }
-    private var animationKey: String { "\(motion)-\(gesture.rawValue)-\(reaction?.uuidString ?? "once")" }
-    var body: some View {
-        let _ = uiLocale.identifier
-        ZStack {
-            Ellipse().fill(Color.blue.opacity(0.12)).frame(width: size * 0.62, height: size * 0.07)
-                .blur(radius: size * 0.035).offset(y: size * 0.46).scaleEffect(lift < 0 ? 0.82 : 1)
-            ZStack {
-                MoonBody().fill(LinearGradient(colors: [Color(red: 1, green: 1, blue: 0.91), Color(red: 1, green: 0.89, blue: 0.53), Color(red: 1, green: 0.74, blue: 0.23)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .shadow(color: Color.orange.opacity(0.2), radius: size * 0.04, y: size * 0.025)
-                Ellipse().fill(Color.orange.opacity(0.35)).frame(width: size * 0.09, height: size * 0.065).offset(x: -size * 0.24, y: size * 0.22)
-                Ellipse().fill(Color.orange.opacity(0.35)).frame(width: size * 0.09, height: size * 0.065).offset(x: size * 0.15, y: size * 0.29)
-                eye.offset(x: -size * 0.15, y: size * 0.17)
-                eye.offset(x: size * 0.065, y: size * 0.23)
-                Path { p in
-                    p.move(to: CGPoint(x: size * 0.40, y: size * 0.76))
-                    p.addQuadCurve(to: CGPoint(x: size * 0.50, y: size * 0.79), control: CGPoint(x: size * 0.435, y: size * 0.85))
-                }.stroke(navy, style: StrokeStyle(lineWidth: size * 0.028, lineCap: .round))
-                Image(systemName: "sparkle").font(.system(size: size * 0.23, weight: .medium))
-                    .foregroundStyle(Color(red: 1, green: 0.83, blue: 0.30))
-                    .shadow(color: .yellow.opacity(0.3), radius: size * 0.04)
-                    .scaleEffect(sparkle ? 1.18 : 0.85).rotationEffect(.degrees(sparkle ? 12 : -8))
-                    .offset(x: size * 0.22, y: -size * 0.17)
-                if celebrating {
-                    ForEach(0..<6, id: \.self) { i in
-                        let angle = Double(i) * .pi / 3
-                        Image(systemName: "sparkle").font(.system(size: size * 0.075))
-                            .foregroundStyle(i.isMultiple(of: 2) ? Color.orange : Color.blue)
-                            .offset(x: cos(angle) * size * (sparkle ? 0.58 : 0.35), y: sin(angle) * size * (sparkle ? 0.55 : 0.32))
-                            .opacity(sparkle ? 1 : 0)
-                    }
-                }
-            }.frame(width: size, height: size)
-                .scaleEffect(x: 2 - stretch, y: stretch, anchor: .bottom)
-                .rotationEffect(.degrees(tilt)).offset(y: lift)
-        }.frame(width: size, height: size)
-            .accessibilityHidden(true)
-            .task(id: animationKey) {
-                lift = 0; stretch = 1; tilt = 0; blink = false; sparkle = !motion
-                guard motion else { return }
-                do {
-                    withAnimation(.easeInOut(duration: 0.12)) { stretch = 0.90 }
-                    try await Task.sleep(for: .milliseconds(120))
-                    withAnimation(.spring(response: 0.34, dampingFraction: 0.6)) {
-                        lift = -size * (celebrating ? 0.15 : 0.065); stretch = 1.04; tilt = -8; sparkle = true
-                    }
-                    try await Task.sleep(for: .milliseconds(240))
-                    withAnimation(.spring(response: 0.36, dampingFraction: 0.57)) { lift = 0; stretch = 1; tilt = 4 }
-                    try await Task.sleep(for: .milliseconds(200))
-                    withAnimation(.easeInOut(duration: 0.10)) { blink = true }
-                    try await Task.sleep(for: .milliseconds(120))
-                    withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) { blink = false; tilt = 0 }
-                    switch gesture {
-                    case .hello: break
-                    case .dance:
-                        for beat in 0..<6 {
-                            try await Task.sleep(for: .milliseconds(150))
-                            withAnimation(.spring(response: 0.22, dampingFraction: 0.55)) {
-                                tilt = beat.isMultiple(of: 2) ? -19 : 19
-                                lift = beat.isMultiple(of: 2) ? -size * 0.10 : 0
-                                stretch = beat.isMultiple(of: 2) ? 1.07 : 0.94
-                            }
-                        }
-                    case .star:
-                        withAnimation(.spring(response: 0.65, dampingFraction: 0.65)) {
-                            tilt = 360; lift = -size * 0.18; sparkle = true
-                        }
-                        try await Task.sleep(for: .milliseconds(650))
-                    case .cuddle:
-                        withAnimation(.easeInOut(duration: 0.3)) { blink = true; stretch = 0.88; tilt = -12 }
-                        try await Task.sleep(for: .milliseconds(650))
-                    }
-                    withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
-                        lift = 0; stretch = 1; tilt = 0; blink = false
-                    }
-                } catch { return }
-            }
-    }
-    private var eye: some View {
-        Ellipse().fill(navy).frame(width: size * 0.06, height: size * 0.09)
-            .overlay(alignment: .topTrailing) {
-                Circle().fill(.white).frame(width: size * 0.017, height: size * 0.017).padding(size * 0.01)
-            }.scaleEffect(y: blink ? 0.12 : 1)
-    }
-}
 
 private struct NotificationBannerCard: View {
     @Environment(\.dynamicTypeSize) private var typeSize
