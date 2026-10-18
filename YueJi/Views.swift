@@ -58,7 +58,7 @@ struct MoonIslandMascot: View {
         }.aspectRatio(1, contentMode: .fit).accessibilityHidden(true).allowsHitTesting(false)
             .animation(motion ? .spring(duration: 0.45, bounce: 0.35) : nil, value: mood)
             .task(id: reaction) { await react() }
-            .task(id: "\(motion)-\(mood.rawValue)") { await idle() }
+            .task(id: "\(motion)-\(mood.rawValue)") { await settle() }
     }
     private func character(_ s: CGFloat) -> some View {
         let droop: Double = mood == .sad ? 18 : 0
@@ -185,24 +185,24 @@ struct MoonIslandMascot: View {
             withAnimation(.spring(duration: 0.3, bounce: 0.5)) { squash = 1; wave = 45 }
             try await Task.sleep(for: .milliseconds(160))
             withAnimation(.spring(duration: 0.35, bounce: 0.3)) { wave = 0 }
+            // Finish the reaction with a single blink.
+            guard mood != .sleepy else { return }
+            try await Task.sleep(for: .milliseconds(200))
+            withAnimation(.easeInOut(duration: 0.07)) { blink = true }
+            try await Task.sleep(for: .milliseconds(110))
+            withAnimation(.easeInOut(duration: 0.09)) { blink = false }
         } catch {
-            hop = 0; squash = 1; wave = 0
+            hop = 0; squash = 1; wave = 0; blink = false
         }
     }
-    private func idle() async {
+    /// Plays the mood's extra once (a tear rolls, "z"s float up), then rests.
+    /// No repeating or periodic animation: the app must reach idle so UI tests
+    /// and the system aren't kept busy by a decorative character.
+    private func settle() async {
         drift = false; blink = false
-        guard motion else { return }
-        if mood == .sad || mood == .sleepy {
-            withAnimation(.easeInOut(duration: 1.6).repeatForever(autoreverses: false)) { drift = true }
-        }
-        // Occasional blinks keep the companion feeling alive without moving the layout.
-        while !Task.isCancelled {
-            do { try await Task.sleep(for: .milliseconds(Int.random(in: 2600...5200))) } catch { return }
-            guard mood != .sleepy else { continue }
-            withAnimation(.easeInOut(duration: 0.07)) { blink = true }
-            do { try await Task.sleep(for: .milliseconds(110)) } catch { blink = false; return }
-            withAnimation(.easeInOut(duration: 0.09)) { blink = false }
-        }
+        guard motion, mood == .sad || mood == .sleepy else { return }
+        do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
+        withAnimation(.easeInOut(duration: 1.4)) { drift = true }
     }
 }
 

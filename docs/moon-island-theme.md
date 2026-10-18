@@ -25,8 +25,11 @@ Overview it follows the selected month's budget: sleepy when empty, excited when
 on track, worried near the limit, sad when over. Saves show an excited companion
 in the banner with a short confetti burst; deletions show a sad companion beside
 Undo. Empty states use the companion, and tapping a companion makes it hop and
-wave. The only continuous motion is an occasional blink (and the slow tear/"z"
-drift for sad/sleepy); there are no rewards for spending and no new sound triggers.
+wave, ending with a blink. All character motion is one-shot: a sad tear rolls
+once and sleepy "z"s float up once, then the companion rests. Nothing repeats or
+runs on a timer, so the app reaches idle (an earlier endless drift/blink loop
+kept the UI test runner waiting before every step and timed out CI). There are
+no rewards for spending and no new sound triggers.
 
 A display-only streak chip on Overview counts consecutive days with entries.
 The opening drops the companion onto a small island with a squash, confetti and
