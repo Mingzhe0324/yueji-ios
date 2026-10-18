@@ -197,8 +197,8 @@ struct ConfettiBurst: View {
 
 // MARK: - Empty states
 
-/// The companion with a mood, a title, a message and optional actions.
-/// Tapping the companion makes it hop and wave.
+/// The companion with a mood, a title, a message and optional actions. The companion
+/// hops in to say hello and is fully interactive (tap, drag, hold).
 struct IslandEmptyState<Actions: View>: View {
     let title: String
     let message: String?
@@ -206,7 +206,6 @@ struct IslandEmptyState<Actions: View>: View {
     let actions: Actions
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
-    @State private var poke: UUID?
     @State private var shown = false
     init(title: String, message: String? = nil, mood: IslandMood = .sleepy, @ViewBuilder actions: () -> Actions) {
         self.title = title; self.message = message; self.mood = mood; self.actions = actions()
@@ -215,12 +214,7 @@ struct IslandEmptyState<Actions: View>: View {
         let still = shown || reduceMotion || !IslandPlayful.enabled
         VStack(spacing: 12) {
             if !typeSize.isAccessibilitySize {
-                MoonIslandMascot(mood: mood, reaction: poke).frame(width: 104, height: 104)
-                    .overlay {
-                        Rectangle().fill(Color.white.opacity(0.001))
-                            .onTapGesture { poke = UUID(); FeedbackHaptics.tap() }
-                            .accessibilityHidden(true)
-                    }
+                InteractiveCompanion(mood: mood, size: 104, greeting: mood == .sleepy ? .yawn : .hop)
                     .scaleEffect(still ? 1 : 0.6, anchor: .bottom)
                     .rotationEffect(.degrees(still ? 0 : -12))
             }
@@ -240,8 +234,6 @@ struct IslandEmptyState<Actions: View>: View {
             guard !reduceMotion, IslandPlayful.enabled else { shown = true; return }
             do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             withAnimation(.spring(duration: 0.5, bounce: 0.4)) { shown = true }
-            do { try await Task.sleep(for: .milliseconds(380)) } catch { return }
-            poke = UUID()
         }
     }
 }
@@ -253,24 +245,7 @@ extension IslandEmptyState where Actions == EmptyView {
 
 // MARK: - Streak
 
-/// Consecutive days with at least one entry, ending today (or yesterday, so an
-/// unlogged morning doesn't reset it). Display only.
-enum IslandStreak {
-    static func days(in expenses: [Expense], now: Date = Date(), calendar: Calendar = .current) -> Int {
-        let days = Set(expenses.map { calendar.startOfDay(for: $0.date) })
-        var cursor = calendar.startOfDay(for: now)
-        if !days.contains(cursor) { cursor = calendar.date(byAdding: .day, value: -1, to: cursor) ?? cursor }
-        var count = 0
-        while days.contains(cursor) {
-            count += 1
-            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
-            cursor = previous
-        }
-        return count
-    }
-}
-
-/// A flame-and-count chip that bounces when the streak grows.
+/// A flame-and-count chip that bounces when the streak grows (see `IslandProgress`).
 struct IslandStreakChip: View {
     let days: Int
     @Environment(\.accessibilityReduceMotion) private var reduceMotion

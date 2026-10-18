@@ -6,44 +6,89 @@ mint accents, a yellow moon companion and rounded typography carry across the
 app. Dark mode uses deep teal paper and lighter mint accents.
 
 Shared list/page/sheet surfaces, navigation/tab chrome, action cards and primary
-and secondary buttons use the theme. Overview, ledger, recurring, friends,
-settings, travel and savings have localized illustrated introductions. The
-launch animation uses the same native vector moon character. Maps, system
-permissions, keyboards and Apple's place detail card remain system controls.
+and secondary buttons use the theme. Ledger, recurring, friends, settings,
+travel and savings have localized illustrated introductions with the companion;
+Overview has the living island (below). Maps, system permissions, keyboards,
+alerts and Apple's place detail card remain system controls.
 
-The mascot is built from SwiftUI vector shapes, so there are no downloaded art
-assets or photo permissions. Decorative views never accept taps and are hidden
-from VoiceOver. Large accessibility text sizes omit the banner mascot to keep
-text readable. VoiceOver labels and transaction control identifiers are retained.
+The companion and island are built from SwiftUI vector shapes, so there are no
+downloaded art assets or photo permissions. Decorative art is hidden from
+VoiceOver; text, VoiceOver labels and transaction control identifiers are
+retained. Large accessibility text sizes omit the page-banner companion.
 
-Animation consists of short entry springs, depth/scale feedback and a light
-haptic on button presses, and existing animated amounts/progress meters.
+## The companion (`Companion.swift`)
 
-The companion has moods (happy, excited, worried, sad, sleepy) with matching
-eyes, brows, mouth and small extras (sparkles, a tear, drifting "z"s). On
-Overview it follows the selected month's budget: sleepy when empty, excited when
-on track, worried near the limit, sad when over. Saves show an excited companion
-in the banner with a short confetti burst; deletions show a sad companion beside
-Undo. Empty states use the companion, and tapping a companion makes it hop and
-wave, ending with a blink. All character motion is one-shot: a sad tear rolls
-once and sleepy "z"s float up once, then the companion rests. Nothing repeats or
-runs on a timer, so the app reaches idle (an earlier endless drift/blink loop
-kept the UI test runner waiting before every step and timed out CI). There are
-no rewards for spending and no new sound triggers.
+Moods set by the screen: happy, excited, worried, sad, sleepy. Momentary
+expressions for actions: wink, surprised, dizzy (spiral eyes, orbiting stars),
+love (heart eyes, rising hearts), giggle and yawn. Its eyes follow a `look`
+direction with a slight head turn.
 
-A display-only streak chip on Overview counts consecutive days with entries.
-The Overview companion also hops and waves after every save.
+Interaction (`InteractiveCompanion`), kept clear of controls and information:
+- Tap: a varied reaction (wave, hop, giggle, spin, wink, surprised, dance,
+  love) that never repeats the previous one, with a short line shown in place of
+  the banner subtitle for a few seconds. Five quick taps make it dizzy.
+- Drag: it looks toward the finger and stretches with a rubber-band pull, then
+  springs back; a long pull ends in a giggle. The gesture sits on a fixed outer
+  frame so the stretch never feeds back into the drag reading.
+- Hold (0.6 s): a hug with hearts.
+- A newer reaction interrupts the current one; it never queues.
 
-Game feel across the app: island buttons are chunky (solid face on a darker
-ledge) and sink into the ledge on press with a light haptic; row, settings and
-category icons use chunky ledged tiles; navigation titles and tab labels use a
-bold rounded font; amounts "boing" when they change; meters are thicker with a
-glossy stripe and a springy fill (clipped to the track); and in-app banners are
-opaque chunky cards that bounce in with the companion (happy, excited or sad).
+It celebrates saves (Overview and the save banner, with confetti), looks sad
+beside Undo after a deletion, encourages gently when over budget, and greets
+once per launch on Overview. Optional sounds use the Hello/Hug/Dance/Star chimes
+(full sound mode only, quieter than save chimes), and haptics follow settings.
+
+## Ambient motion
+
+Idle life (breathing, blinks, glances, the odd stretch, sigh or yawn, dozing
+"z"s) and the island scenery (drifting clouds, sea, swaying plants, bobbing boat,
+twinkling stars, flapping birds) run continuously, so they are a separate layer
+from one-shot reactions. They run only while that view is on screen and the app
+is active, and are off with Reduce Motion, Low Power Mode, playful animations
+off, or Settings › Appearance & language › Motion & feedback › Ambient motion.
+
+The XCUITest runner waits for the app to be idle before each step. An earlier
+endless drift/blink loop kept it waiting and timed out CI, so the UI tests launch
+with `-ambientAnimations NO`. Everything else (reactions, celebrations, the
+opening) is one-shot and finishes on its own.
+
+## The living island (`IslandWorld.swift`)
+
+Overview's top card shows a sky that follows the time of day (dawn, day, dusk,
+night with moon and stars), the sea, an island and the companion. The island
+grows with recorded days (distinct days with entries, never spending amounts):
+
+| Level | Logged days | Adds |
+|-------|-------------|------|
+| 1 Seedling Isle | 0 | a sprout |
+| 2 Blossom Isle | 3 | flowers |
+| 3 Palm Isle | 7 | a palm tree |
+| 4 Cottage Isle | 14 | a cottage |
+| 5 Sailing Cove | 30 | a sailboat |
+| 6 Rainbow Bay | 60 | a rainbow |
+| 7 Songbird Haven | 100 | songbirds |
+
+The card shows the level, a progress bar to the next item and the recording
+streak. Each new level and streak milestone (3, 7, 14, 30, 60, 100, 200, 365
+days) is celebrated once (confetti, companion cheer, message, haptic, goal
+chime, VoiceOver announcement) and recorded as seen only after it plays. The
+first sighting after install or update is recorded quietly. Preview ledgers in
+the guide never celebrate.
+
+## Game feel
+
+Island buttons are chunky (solid face on a darker ledge) and sink into the
+ledge on press with a light haptic; row, settings and category icons use chunky
+ledged tiles; navigation titles and tab labels use a bold rounded font; amounts
+"boing" when they change; meters are thicker with a glossy stripe and a springy
+fill (clipped to the track); in-app banners are opaque chunky cards that bounce
+in with the companion; empty states and the loading screen feature it too.
 
 Tab switching is deliberately not animated: scaling/fading a whole tab
 (navigation bar plus list) forces an offscreen render of the screen every frame
 and made switching visibly laggy, so that effect was removed.
+
+## Icon, notifications and opening
 
 The app icon and notification art are original drawings generated by
 `scripts/generate_icon.py` (companion on an island). It writes every AppIcon
@@ -61,7 +106,10 @@ loads underneath. Reduce Motion or turning off playful animations disables all
 character, confetti and press transforms. Existing destructive roles/tints and
 financial amount colors remain distinct.
 
-Windows project and syntax validation is available. Before release, run native
-UI tests and check light/dark modes, large text, Reduce Motion, native toolbar
-button sizing, rapid tab changes, keyboard dismissal and first-launch hit targets.
-The existing app icon is retained; this change styles the in-app experience.
+## Validation
+
+Windows project checks and tree-sitter Swift syntax parsing are available
+locally; they do not type-check SwiftUI. Before release, run native UI tests and
+check light/dark modes, large text, Reduce Motion, Low Power Mode, rapid tab
+changes, keyboard dismissal, first-launch hit targets, companion drag inside
+scrolling lists, and scrolling smoothness on Overview with ambient motion on.

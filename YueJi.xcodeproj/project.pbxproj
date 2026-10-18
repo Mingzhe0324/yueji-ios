@@ -17,6 +17,10 @@
         "CB8900000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB8900000000000000000001"; };
         "CF1000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "IslandPlayful.swift"; "sourceTree" = "<group>"; };
         "CF1000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF1000000000000000000001"; };
+        "CF3000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "Companion.swift"; "sourceTree" = "<group>"; };
+        "CF3000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF3000000000000000000001"; };
+        "CF3000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "IslandWorld.swift"; "sourceTree" = "<group>"; };
+        "CF3000000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CF3000000000000000000003"; };
         "CF2000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiMascotHappy.png"; "sourceTree" = "<group>"; };
         "CF2000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000001"; };
         "CF2000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiMascotWorried.png"; "sourceTree" = "<group>"; };
@@ -139,6 +143,8 @@
 			"children" = (
                 "CB8900000000000000000001",
                 "CF1000000000000000000001",
+                "CF3000000000000000000001",
+                "CF3000000000000000000003",
                 "CF2000000000000000000001",
                 "CF2000000000000000000003",
                 "CF2000000000000000000005",
@@ -202,6 +208,8 @@
 			"files" = (
                 "CB8900000000000000000002",
                 "CF1000000000000000000002",
+                "CF3000000000000000000002",
+                "CF3000000000000000000004",
                 "CE8000000000000000000002",
                 "CE8000000000000000000004",
 				"18C3C4F160B163CE58D17794",

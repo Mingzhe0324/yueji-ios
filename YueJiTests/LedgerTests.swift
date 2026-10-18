@@ -2679,7 +2679,8 @@ final class LedgerTests: XCTestCase {
     }
 
     @MainActor func testBundledFeedbackSoundsDecodeWithoutPlaying() throws {
-        for name in ["LaunchChime", "SavedChime", "GoalChime", "DeleteCue", "RestoreCue", "DepositCue"] {
+        for name in ["LaunchChime", "SavedChime", "GoalChime", "DeleteCue", "RestoreCue", "DepositCue",
+                     "HelloChime", "HugChime", "DanceChime", "StarChime"] {
             let asset = try XCTUnwrap(NSDataAsset(name: name))
             let player = try AVAudioPlayer(data: asset.data)
             XCTAssertGreaterThan(player.duration, 0.15)
@@ -3995,13 +3996,53 @@ final class FeedbackPolicyTests: XCTestCase {
         XCTAssertTrue(tracker.pending.isEmpty)
     }
     @MainActor func testSoundModesRespectMasterMuteAndLimitSuccessMode() {
-        let cues: [FeedbackSounds.Cue] = [.launch, .saved, .goal, .deleted, .restored, .deposit]
+        let cues: [FeedbackSounds.Cue] = [.launch, .saved, .goal, .deleted, .restored, .deposit, .hello, .hug, .dance, .star]
         for cue in cues {
             XCTAssertFalse(FeedbackSounds.permits(cue, mode: "full", enabled: false))
             XCTAssertFalse(FeedbackSounds.permits(cue, mode: "off", enabled: true))
             XCTAssertTrue(FeedbackSounds.permits(cue, mode: "full", enabled: true))
             XCTAssertEqual(FeedbackSounds.permits(cue, mode: "success", enabled: true), cue == .saved || cue == .goal)
         }
+    }
+}
+
+/// The Overview island grows with recorded days and tracks a recording streak. Display only.
+final class IslandProgressTests: XCTestCase {
+    private let calendar = Calendar(identifier: .gregorian)
+    private func day(_ offset: Int, from now: Date) -> Date {
+        calendar.date(byAdding: .day, value: offset, to: calendar.startOfDay(for: now))!.addingTimeInterval(9 * 3600)
+    }
+
+    func testStreakCountsConsecutiveDaysAndToleratesAnUnrecordedToday() {
+        let now = Date()
+        let expenses = [-1, -2, -3, -5].map { Expense(merchant: "Lunch", cents: 1000, date: day($0, from: now)) }
+        let progress = IslandProgress.make(expenses: expenses, now: now, calendar: calendar)
+        XCTAssertEqual(progress.streak, 3, "Yesterday back to three days ago; the gap ends the streak")
+        XCTAssertEqual(progress.loggedDays, 4)
+    }
+
+    func testSeveralEntriesOnOneDayCountOnceAndFutureEntriesAreIgnored() {
+        // A fixed midday "now" keeps both same-day entries in the past whenever CI runs.
+        let now = calendar.startOfDay(for: Date()).addingTimeInterval(12 * 3600)
+        let midnight = calendar.startOfDay(for: now)
+        let expenses = [Expense(merchant: "A", cents: 100, date: midnight.addingTimeInterval(60)),
+                        Expense(merchant: "B", cents: 200, date: midnight.addingTimeInterval(120)),
+                        Expense(merchant: "Planned", cents: 300, date: day(5, from: now))]
+        let progress = IslandProgress.make(expenses: expenses, now: now, calendar: calendar)
+        XCTAssertEqual(progress.loggedDays, 1)
+        XCTAssertEqual(progress.streak, 1)
+    }
+
+    func testLevelsFollowLoggedDayThresholds() {
+        XCTAssertEqual(IslandProgress(loggedDays: 0).level, 1)
+        XCTAssertEqual(IslandProgress(loggedDays: 2).level, 1)
+        XCTAssertEqual(IslandProgress(loggedDays: 3).level, 2)
+        XCTAssertEqual(IslandProgress(loggedDays: 7).level, 3)
+        XCTAssertEqual(IslandProgress(loggedDays: 29).level, 4)
+        XCTAssertEqual(IslandProgress(loggedDays: 100).level, 7)
+        XCTAssertNil(IslandProgress(loggedDays: 250).nextThreshold)
+        XCTAssertEqual(IslandProgress(loggedDays: 10).nextThreshold, 14)
+        XCTAssertEqual(IslandProgress(loggedDays: 10).levelFloor, 7)
     }
 }
 

@@ -56,6 +56,8 @@ final class TransactionFormTests: XCTestCase {
         runningApp = app
         app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
+                               // Continuous idle motion would keep the app from reaching idle between steps.
+                               "-ambientAnimations", "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
         let addEntry = app.buttons["overview.manualEntry"].firstMatch
@@ -217,6 +219,8 @@ final class TransactionFormTests: XCTestCase {
         // ledger fixtures. Leave the normal startup refresh/rate tasks enabled.
         app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
+                               // Continuous idle motion would keep the app from reaching idle between steps.
+                               "-ambientAnimations", "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
         // The native toolbar exposes this identifier on both an Other wrapper

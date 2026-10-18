@@ -32,233 +32,6 @@ struct IslandBackdrop: View {
     }
 }
 
-/// The companion's cartoon expression. Drives eyes, brows, mouth and small extras.
-enum IslandMood: String { case happy, excited, worried, sad, sleepy }
-
-struct MoonIslandMascot: View {
-    var mood: IslandMood = .happy
-    /// Each new value plays one short cartoon reaction: squash, hop and wave.
-    var reaction: UUID? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @AppStorage("playfulAnimations") private var playful = true
-    @State private var hop: CGFloat = 0
-    @State private var squash: CGFloat = 1
-    @State private var wave = 0.0
-    @State private var blink = false
-    @State private var drift = false
-    private let ink = Color(red: 0.16, green: 0.23, blue: 0.22)
-    private var motion: Bool { playful && !reduceMotion }
-    var body: some View {
-        GeometryReader { geometry in
-            let s = min(geometry.size.width, geometry.size.height)
-            ZStack {
-                Ellipse().fill(IslandTheme.accent.opacity(0.15)).frame(width: s * 0.7, height: s * 0.12).offset(y: s * 0.39)
-                    .scaleEffect(1 + hop * 1.4)
-                character(s)
-                    .scaleEffect(x: 2 - squash, y: squash, anchor: .bottom)
-                    .offset(y: hop * s)
-            }.frame(width: s, height: s)
-        }.aspectRatio(1, contentMode: .fit).accessibilityHidden(true).allowsHitTesting(false)
-            .animation(motion ? .spring(duration: 0.45, bounce: 0.35) : nil, value: mood)
-            .task(id: reaction) { await react() }
-            .task(id: "\(motion)-\(mood.rawValue)") { await settle() }
-    }
-    private func character(_ s: CGFloat) -> some View {
-        let droop: Double = mood == .sad ? 18 : 0
-        return ZStack {
-            Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24)
-                .rotationEffect(.degrees(25 + droop + wave), anchor: .top).offset(x: -s * 0.23, y: s * 0.30)
-            Capsule().fill(IslandTheme.accent).frame(width: s * 0.16, height: s * 0.24)
-                .rotationEffect(.degrees(-25 - droop - wave), anchor: .top).offset(x: s * 0.23, y: s * 0.30)
-            RoundedRectangle(cornerRadius: s * 0.34).fill(IslandTheme.sun)
-                .frame(width: s * 0.76, height: s * 0.78)
-                .overlay(RoundedRectangle(cornerRadius: s * 0.34).strokeBorder(Color.brown.opacity(0.25), lineWidth: 2))
-            Ellipse().fill(.white.opacity(0.38)).frame(width: s * 0.28, height: s * 0.10).rotationEffect(.degrees(-30)).offset(x: -s * 0.13, y: -s * 0.23)
-            // Eye frames are wider than the pupils; keep the original eye spacing.
-            HStack(spacing: s * 0.135) { eye(s, left: true); eye(s, left: false) }
-            HStack(spacing: s * 0.37) {
-                Ellipse().fill(.pink.opacity(mood == .excited ? 0.6 : 0.35)).frame(width: s * 0.12, height: s * 0.055)
-                Ellipse().fill(.pink.opacity(mood == .excited ? 0.6 : 0.35)).frame(width: s * 0.12, height: s * 0.055)
-            }.offset(y: s * 0.08)
-            mouth(s)
-            Image(systemName: "leaf.fill").font(.system(size: s * 0.25)).foregroundStyle(IslandTheme.accent)
-                .rotationEffect(.degrees(-20 + wave * 0.3), anchor: .bottomLeading).offset(x: s * 0.16, y: -s * 0.38)
-            extras(s)
-        }
-    }
-    @ViewBuilder private func eye(_ s: CGFloat, left: Bool) -> some View {
-        let width: CGFloat = s * 0.10
-        let height: CGFloat = s * 0.10
-        switch mood {
-        case .excited:
-            if blink { openEye(s, left: left).frame(width: width, height: height) } else {
-                // Happy "^" arcs.
-                Path { p in
-                    p.move(to: CGPoint(x: 0, y: height * 0.75))
-                    p.addQuadCurve(to: CGPoint(x: width, y: height * 0.75), control: CGPoint(x: width / 2, y: -height * 0.25))
-                }.stroke(ink, style: StrokeStyle(lineWidth: max(2, s * 0.035), lineCap: .round)).frame(width: width, height: height)
-            }
-        case .sleepy:
-            Path { p in
-                p.move(to: CGPoint(x: 0, y: height * 0.35))
-                p.addQuadCurve(to: CGPoint(x: width, y: height * 0.35), control: CGPoint(x: width / 2, y: height * 0.9))
-            }.stroke(ink, style: StrokeStyle(lineWidth: max(2, s * 0.03), lineCap: .round)).frame(width: width, height: height)
-        default:
-            openEye(s, left: left).frame(width: width, height: height)
-        }
-    }
-    private func openEye(_ s: CGFloat, left: Bool) -> some View {
-        Capsule().fill(ink).frame(width: s * 0.055, height: s * 0.10)
-            .scaleEffect(y: blink ? 0.15 : 1)
-            .overlay(alignment: .top) {
-                if mood == .worried || mood == .sad {
-                    Capsule().fill(ink).frame(width: s * 0.10, height: max(2, s * 0.025))
-                        .rotationEffect(.degrees(left ? -18 : 18)).offset(y: -s * 0.07)
-                }
-            }
-    }
-    @ViewBuilder private func mouth(_ s: CGFloat) -> some View {
-        let line = StrokeStyle(lineWidth: max(2.5, s * 0.032), lineCap: .round)
-        switch mood {
-        case .happy:
-            Path { p in
-                p.move(to: CGPoint(x: s * 0.44, y: s * 0.59))
-                p.addQuadCurve(to: CGPoint(x: s * 0.56, y: s * 0.59), control: CGPoint(x: s * 0.5, y: s * 0.69))
-            }.stroke(ink, style: line).frame(width: s, height: s)
-        case .excited:
-            ZStack {
-                Path { p in
-                    p.move(to: CGPoint(x: s * 0.41, y: s * 0.57))
-                    p.addQuadCurve(to: CGPoint(x: s * 0.59, y: s * 0.57), control: CGPoint(x: s * 0.5, y: s * 0.75))
-                    p.closeSubpath()
-                }.fill(ink)
-                Ellipse().fill(Color(red: 1, green: 0.45, blue: 0.48)).frame(width: s * 0.08, height: s * 0.035)
-                    .position(x: s * 0.5, y: s * 0.635)
-            }.frame(width: s, height: s)
-        case .worried:
-            Path { p in
-                p.move(to: CGPoint(x: s * 0.42, y: s * 0.62))
-                p.addCurve(to: CGPoint(x: s * 0.58, y: s * 0.62), control1: CGPoint(x: s * 0.47, y: s * 0.57), control2: CGPoint(x: s * 0.53, y: s * 0.67))
-            }.stroke(ink, style: line).frame(width: s, height: s)
-        case .sad:
-            Path { p in
-                p.move(to: CGPoint(x: s * 0.44, y: s * 0.64))
-                p.addQuadCurve(to: CGPoint(x: s * 0.56, y: s * 0.64), control: CGPoint(x: s * 0.5, y: s * 0.56))
-            }.stroke(ink, style: line).frame(width: s, height: s)
-        case .sleepy:
-            Ellipse().stroke(ink, lineWidth: max(2, s * 0.028)).frame(width: s * 0.055, height: s * 0.06)
-                .position(x: s * 0.5, y: s * 0.62).frame(width: s, height: s)
-        }
-    }
-    @ViewBuilder private func extras(_ s: CGFloat) -> some View {
-        let fall: CGFloat = drift ? s * 0.10 : 0
-        let rise: CGFloat = drift ? s * 0.08 : 0
-        switch mood {
-        case .sad:
-            Image(systemName: "drop.fill").font(.system(size: s * 0.10))
-                .foregroundStyle(Color(red: 0.40, green: 0.72, blue: 1))
-                .offset(x: -s * 0.15, y: s * 0.09 + fall).opacity(drift ? 0.15 : 1)
-                .transition(.scale.combined(with: .opacity))
-        case .sleepy:
-            ZStack {
-                Text("z").font(.system(size: s * 0.13, weight: .heavy, design: .rounded)).offset(x: s * 0.36, y: -s * 0.22 - rise)
-                Text("z").font(.system(size: s * 0.17, weight: .heavy, design: .rounded)).offset(x: s * 0.46, y: -s * 0.36 - rise)
-            }.foregroundStyle(IslandTheme.accent).opacity(drift ? 0.4 : 1)
-                .transition(.opacity)
-        case .excited:
-            ZStack {
-                Image(systemName: "sparkle").font(.system(size: s * 0.14)).offset(x: -s * 0.44, y: -s * 0.30)
-                Image(systemName: "sparkle").font(.system(size: s * 0.10)).offset(x: s * 0.46, y: -s * 0.06)
-                Image(systemName: "sparkle").font(.system(size: s * 0.08)).offset(x: -s * 0.40, y: s * 0.12)
-            }.foregroundStyle(IslandTheme.sun.opacity(0.95))
-                .transition(.scale(scale: 0.2).combined(with: .opacity))
-        default:
-            EmptyView()
-        }
-    }
-    private func react() async {
-        guard reaction != nil, motion else { return }
-        do {
-            withAnimation(.easeOut(duration: 0.09)) { squash = 0.86 }
-            try await Task.sleep(for: .milliseconds(90))
-            withAnimation(.spring(duration: 0.3, bounce: 0.4)) { hop = -0.14; squash = 1.07; wave = 45 }
-            try await Task.sleep(for: .milliseconds(230))
-            withAnimation(.spring(duration: 0.22, bounce: 0.3)) { hop = 0; squash = 0.92; wave = 10 }
-            try await Task.sleep(for: .milliseconds(140))
-            withAnimation(.spring(duration: 0.3, bounce: 0.5)) { squash = 1; wave = 45 }
-            try await Task.sleep(for: .milliseconds(160))
-            withAnimation(.spring(duration: 0.35, bounce: 0.3)) { wave = 0 }
-            // Finish the reaction with a single blink.
-            guard mood != .sleepy else { return }
-            try await Task.sleep(for: .milliseconds(200))
-            withAnimation(.easeInOut(duration: 0.07)) { blink = true }
-            try await Task.sleep(for: .milliseconds(110))
-            withAnimation(.easeInOut(duration: 0.09)) { blink = false }
-        } catch {
-            hop = 0; squash = 1; wave = 0; blink = false
-        }
-    }
-    /// Plays the mood's extra once (a tear rolls, "z"s float up), then rests.
-    /// No repeating or periodic animation: the app must reach idle so UI tests
-    /// and the system aren't kept busy by a decorative character.
-    private func settle() async {
-        drift = false; blink = false
-        guard motion, mood == .sad || mood == .sleepy else { return }
-        do { try await Task.sleep(for: .milliseconds(250)) } catch { return }
-        withAnimation(.easeInOut(duration: 1.4)) { drift = true }
-    }
-}
-
-struct IslandPageBanner: View {
-    let title: String
-    let subtitle: String
-    var symbol: String = "sparkles"
-    var mood: IslandMood = .happy
-    /// Optional chip under the subtitle, e.g. the logging streak.
-    var badge: AnyView? = nil
-    /// Each new value makes the companion hop and wave (e.g. after a save).
-    var cheer: UUID? = nil
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
-    @AppStorage("playfulAnimations") private var playful = true
-    @State private var entered = false
-    @State private var poke: UUID?
-    var body: some View {
-        HStack(spacing: 16) {
-            VStack(alignment: .leading, spacing: 8) {
-                Label(title, systemImage: symbol).font(.headline).foregroundStyle(IslandTheme.accent)
-                Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                    .id(subtitle)
-                    .transition(reduceMotion ? .opacity : .scale(scale: 0.9, anchor: .leading).combined(with: .opacity))
-                if let badge { badge }
-            }.frame(maxWidth: .infinity, alignment: .leading)
-                .animation(reduceMotion ? nil : .spring(duration: 0.4, bounce: 0.3), value: subtitle)
-            if !typeSize.isAccessibilitySize {
-                MoonIslandMascot(mood: mood, reaction: poke).frame(width: 76, height: 76)
-                    .rotationEffect(.degrees(entered || reduceMotion || !playful ? -7 : 8))
-                    .scaleEffect(entered || reduceMotion || !playful ? 1 : 0.85)
-                    .overlay {
-                        // A decorative poke target: tapping makes the companion hop and wave.
-                        Rectangle().fill(Color.white.opacity(0.001))
-                            .onTapGesture { poke = UUID(); FeedbackHaptics.tap() }
-                            .accessibilityHidden(true)
-                    }
-            }
-        }.padding(18)
-            .onChange(of: mood) { _, _ in poke = UUID() }
-            .onChange(of: cheer) { _, value in if value != nil { poke = UUID() } }
-            .background(IslandTheme.sun.opacity(0.12), in: RoundedRectangle(cornerRadius: 24))
-            .overlay(RoundedRectangle(cornerRadius: 24).strokeBorder(IslandTheme.line, lineWidth: 1.5))
-            .listRowBackground(Color.clear).listRowInsets(EdgeInsets())
-            .task {
-                guard !entered else { return }
-                guard !reduceMotion, playful else { entered = true; return }
-                do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
-                withAnimation(.spring(duration: 0.5, bounce: 0.22)) { entered = true }
-            }
-    }
-}
-
 struct IslandButtonStyle: ButtonStyle {
     var prominent = true
     @Environment(\.isEnabled) private var enabled
@@ -521,7 +294,7 @@ struct MainView: View {
                 tabs
                     .transition(.identity)
             } else if !openingEnabled {
-                ProgressView(tr("正在读取账本", "Loading ledger", "Memuatkan lejar"))
+                IslandLoadingView()
                     .accessibilityIdentifier("launch.loading")
             }
             if !model.didFinishLaunch && openingEnabled {
@@ -735,7 +508,7 @@ struct DashboardView: View {
         String(budget > 0 ? budgetSpent * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
     }
     private var owed: Int { summary.owed }
-    @State private var streak = 0
+    @State private var islandProgress: IslandProgress?
     private var onTrack: Bool { budget > 0 && Double(budgetSpent) / Double(budget) < 0.8 }
     /// The companion reacts to the selected month: sleepy when empty, cheering when on track.
     private var companionMood: IslandMood {
@@ -744,14 +517,28 @@ struct DashboardView: View {
         if budgetSpent > budget { return .sad }
         return onTrack ? .excited : .worried
     }
+    /// Warm, varied lines for the companion. The choice changes daily, not on every redraw.
     private var companionLine: String {
+        let options: [String]
         switch companionMood {
-        case .sleepy: return tr("这个月还很安静，记下第一笔吧！", "Quiet month so far. Let’s log the first entry!", "Bulan yang sunyi. Jom rekod entri pertama!")
-        case .excited: return tr("预算控制得很好，继续保持！", "Great job, you’re on track!", "Bagus, bajet anda terkawal!")
-        case .worried: return tr("小心，快到预算上限了。", "Careful, almost at your limit.", "Hati-hati, hampir capai had bajet.")
-        case .sad: return tr("超出预算了，没关系，我们一起调整。", "Over budget. We can bounce back together.", "Melebihi bajet. Kita boleh bangkit bersama.")
-        case .happy: return tr("把生活记清楚，给心愿留一点空间。", "A little clarity. A little room for your dreams.", "Rekod yang jelas, ruang untuk impian anda.")
+        case .sleepy:
+            options = [tr("这个月还很安静，记下第一笔吧！", "Quiet month so far. Let’s log the first entry!", "Bulan yang sunyi. Jom rekod entri pertama!"),
+                       tr("小岛在等你的第一笔记录呢。", "Your island is waiting for its first entry.", "Pulau anda menanti rekod pertama.")]
+        case .excited:
+            options = [tr("预算控制得很好，继续保持！", "Great job, you’re on track!", "Bagus, bajet anda terkawal!"),
+                       tr("每一笔都记得清清楚楚，真棒！", "Every entry, nice and clear. Lovely work!", "Setiap rekod jelas. Syabas!")]
+        case .worried:
+            options = [tr("小心，快到预算上限了。", "Careful, almost at your limit.", "Hati-hati, hampir capai had bajet."),
+                       tr("还剩一点预算，我们慢慢来。", "A little budget left. Let’s go gently.", "Sedikit bajet lagi. Mari berhati-hati.")]
+        case .sad:
+            options = [tr("超出预算了，没关系，我们一起调整。", "Over budget. We can bounce back together.", "Melebihi bajet. Kita boleh bangkit bersama."),
+                       tr("偶尔超支也没关系，记下来就是进步。", "Going over happens. Recording it is still progress.", "Terlebih belanja berlaku. Merekod tetap satu kemajuan.")]
+        case .happy:
+            options = [tr("把生活记清楚，给心愿留一点空间。", "A little clarity. A little room for your dreams.", "Rekod yang jelas, ruang untuk impian anda."),
+                       tr("今天也一起照顾好小岛吧。", "Let’s look after the island together today.", "Mari jaga pulau bersama hari ini.")]
         }
+        let day = Calendar.current.ordinality(of: .day, in: .year, for: Date()) ?? 0
+        return options[day % options.count]
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -761,12 +548,11 @@ struct DashboardView: View {
             ScrollViewReader { guideScroll in
             List {
                 Section {
-                    IslandPageBanner(title: tr("欢迎回到月记小岛", "Welcome to Moon Island", "Selamat kembali ke Pulau YueJi"),
-                        subtitle: companionLine, mood: companionMood,
-                        badge: AnyView(IslandStreakChip(days: streak)), cheer: model.savedNotice)
+                    // The living island grows with the days you record; display only.
+                    IslandWorldCard(progress: islandProgress, mood: companionMood, line: companionLine,
+                                    cheer: model.savedNotice, isPreview: model.isPreview)
                         .task(id: model.ledger.expenses.count) {
-                            // Display-only streak computed from the published snapshot.
-                            streak = IslandStreak.days(in: model.ledger.expenses)
+                            islandProgress = IslandProgress.make(expenses: model.ledger.expenses)
                         }
                 }
                 Section {
@@ -2845,6 +2631,10 @@ struct SettingsView: View {
     @EnvironmentObject var model: LedgerModel
     @AppStorage("appLanguage") private var language = "system"
     @AppStorage("appAppearance") private var appearance = "system"
+    @AppStorage("playfulAnimations") private var playful = true
+    @AppStorage("ambientAnimations") private var ambient = true
+    @AppStorage("animationSounds") private var sounds = true
+    @AppStorage("feedbackHaptics") private var haptics = true
     @State private var exporting = false
     @State private var importing = false
     @State private var document: LedgerDocument?
@@ -2938,6 +2728,17 @@ struct SettingsView: View {
                         Text(tr("深色模式", "Dark mode", "Mod gelap")).tag("dark")
                     }
 
+            }
+            Section {
+                Toggle(tr("俏皮动画", "Playful animations", "Animasi ceria"), isOn: $playful)
+                Toggle(tr("环境动态（呼吸、云朵、海浪）", "Ambient motion (breathing, clouds, waves)", "Gerakan latar (bernafas, awan, ombak)"), isOn: $ambient)
+                    .disabled(!playful)
+                Toggle(tr("音效", "Sound effects", "Kesan bunyi"), isOn: $sounds)
+                Toggle(tr("触感反馈", "Haptics", "Haptik"), isOn: $haptics)
+            } header: {
+                Text(tr("动画与反馈", "Motion & feedback", "Gerakan & maklum balas"))
+            } footer: {
+                Text(tr("开启系统“减弱动态效果”或低电量模式时，动画会自动减少。", "Animations are reduced automatically with Reduce Motion or Low Power Mode.", "Animasi dikurangkan secara automatik dengan Kurangkan Gerakan atau Mod Kuasa Rendah."))
             }
         }.yuejiListSurface().navigationTitle(tr("外观与语言", "Appearance & language", "Paparan & bahasa"))
     }

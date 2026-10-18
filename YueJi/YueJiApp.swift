@@ -335,7 +335,11 @@ struct RestoredLedgerFeedback {
 /// Ambient audio respects silent mode, mixes with music, and never requests a microphone.
 @MainActor final class FeedbackSounds {
     static let shared = FeedbackSounds()
-    enum Cue: String { case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime", deleted = "DeleteCue", restored = "RestoreCue", deposit = "DepositCue" }
+    enum Cue: String {
+        case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime", deleted = "DeleteCue", restored = "RestoreCue", deposit = "DepositCue"
+        // Companion reactions (full sound mode only).
+        case hello = "HelloChime", hug = "HugChime", dance = "DanceChime", star = "StarChime"
+    }
     static func permits(_ cue: Cue, mode: String, enabled: Bool) -> Bool {
         enabled && mode != "off" && (mode != "success" || cue == .saved || cue == .goal)
     }
@@ -349,7 +353,8 @@ struct RestoredLedgerFeedback {
         revision += 1
         let request = revision
         let data = asset.data
-        let volume: Float = cue == .launch ? 0.85 : 0.55
+        let companion: Set<Cue> = [.hello, .hug, .dance, .star]
+        let volume: Float = cue == .launch ? 0.85 : (companion.contains(cue) ? 0.4 : 0.55)
         Task { await playback.play(data: data, volume: volume, revision: request) }
     }
     func stop() {
