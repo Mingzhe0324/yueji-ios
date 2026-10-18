@@ -233,6 +233,12 @@ struct ExpensePlaceDetails: View {
 
 /// The map owns a local draft. Panning, searching and cancellation never write
 /// the ledger; only Done in an editor returns a selected place to its parent.
+struct ExpensePlaceDestination: Identifiable {
+    let id = UUID()
+    let place: ExpensePlace
+    let merchant: String
+}
+
 struct ExpensePlaceMapSheet: View {
     let initial: ExpensePlace?
     var merchantHint: String = ""
@@ -258,8 +264,24 @@ struct ExpensePlaceMapSheet: View {
     @State private var movingMap = false
     @State private var visible = false
     @StateObject private var merchantMatcher = ExpenseMerchantMatcher()
+    init(initial: ExpensePlace?, merchantHint: String = "", onSave: ((ExpensePlace) -> Void)? = nil) {
+        self.initial = initial
+        self.merchantHint = merchantHint
+        self.onSave = onSave
+        _selected = State(initialValue: initial)
+        _name = State(initialValue: initial?.name ?? "")
+        _address = State(initialValue: initial?.address ?? "")
+        if let lat = initial?.latitude, let lon = initial?.longitude {
+            let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon)
+            if CLLocationCoordinate2DIsValid(coordinate) {
+                _position = State(initialValue: .region(MKCoordinateRegion(center: coordinate,
+                    latitudinalMeters: 800, longitudinalMeters: 800)))
+                _center = State(initialValue: coordinate)
+            }
+        }
+    }
     private var matchInput: MerchantMatchInput? {
-        guard visible, initialized, editing, draft.applePlaceID == nil else { return nil }
+        guard visible, initialized, draft.applePlaceID == nil else { return nil }
         let generic = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let expected = typedName != selected?.name && !generic.contains(typedName) ? typedName : merchantHint
@@ -288,7 +310,7 @@ struct ExpensePlaceMapSheet: View {
             ScrollView {
                 VStack(spacing: 18) {
                     mapCard
-                    if editing { merchantSuggestions }
+                    merchantSuggestions
                     if #available(iOS 18.0, *) {
                         AppleMerchantCard(placeID: draft.applePlaceID)
                     }
@@ -304,9 +326,13 @@ struct ExpensePlaceMapSheet: View {
                         }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(initial?.name ?? "").font(.title3.weight(.semibold))
-                            Text(initial?.address ?? "").font(.subheadline).foregroundStyle(.secondary)
-                            if initial?.latitude == nil {
+                            Text(draft.name).font(.title3.weight(.semibold))
+                            Text(draft.address).font(.subheadline).foregroundStyle(.secondary)
+                            if draft != initial {
+                                Text(tr("当前为店铺预览，不会修改账目中保存的地点。", "Place preview; the saved transaction location is unchanged.", "Pratonton tempat; lokasi transaksi yang disimpan tidak berubah."))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            if draft.latitude == nil {
                                 Text(tr("此地点没有坐标，可搜索查看；不会更改原账目。", "This place has no saved pin. Search to preview without changing the entry.", "Tempat ini tiada pin. Cari untuk pratonton tanpa mengubah rekod."))
                                     .font(.caption).foregroundStyle(.secondary)
                             }

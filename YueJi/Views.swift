@@ -1379,8 +1379,7 @@ struct ExpenseDetailView: View {
     @State private var deleting: Expense?
     @State private var compactTitle = false
     @State private var copiedDraft: Expense?
-    @State private var viewingPlace = false
-    @State private var mapPlace: ExpensePlace?
+    @State private var mapDestination: ExpensePlaceDestination?
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
@@ -1410,7 +1409,9 @@ struct ExpenseDetailView: View {
                     }
                     ExpenseChargeDetails(entry: entry)
                     if let place = entry.place {
-                        ExpensePlaceDetails(place: place) { mapPlace = place; viewingPlace = true }
+                        ExpensePlaceDetails(place: place) {
+                            mapDestination = ExpensePlaceDestination(place: place, merchant: entry.merchant)
+                        }
                     }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
                         if entry.personalSpending != entry.purchaseDisplayCents || !entry.shares.isEmpty {
@@ -1555,7 +1556,9 @@ struct ExpenseDetailView: View {
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
             .sheet(item: $copiedDraft) { entry in ExpenseEditor(original: nil, initialDraft: entry) }
-            .sheet(isPresented: $viewingPlace) { ExpensePlaceMapSheet(initial: mapPlace, onSave: nil) }
+            .sheet(item: $mapDestination) { destination in
+                ExpensePlaceMapSheet(initial: destination.place, merchantHint: destination.merchant, onSave: nil)
+            }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
             .onAppear { if let liveDetail, lastVisibleDetail?.entry.id != liveDetail.entry.id { lastVisibleDetail = liveDetail } }
             .onChange(of: model.ledgerRevision) { _, _ in

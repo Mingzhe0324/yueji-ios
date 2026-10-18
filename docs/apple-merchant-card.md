@@ -32,6 +32,16 @@ Validation: Windows project and syntax checks; native API compilation and card
 presentation, no-photo merchants, network failure, dismissal and Reduce Motion
 still require macOS/iPhone verification.
 
+Location detail presentation now uses a single identifiable destination carrying
+the place and merchant, rather than an independent Boolean and optional payload.
+The map's first state includes the saved name, address, identifier and camera
+region. This addresses an empty first presentation seen in IMG_5231, where the
+ledger showed Restoran Al-Safa but the sheet showed neither its name nor pin.
+Read-only maps can also match a legacy location without a place identifier;
+matches are previews only and never silently change the saved transaction.
+Verify on iPhone: first open, close/reopen, open a different transaction, saved
+Apple ID, coordinates without ID, offline loading and merchants without photos.
+
 References:
 - https://developer.apple.com/documentation/swiftui/view/mapitemdetailsheet(item:displaysmap:)
 - https://developer.apple.com/documentation/mapkit/mkmapitemrequest/init(mapitemidentifier:)
