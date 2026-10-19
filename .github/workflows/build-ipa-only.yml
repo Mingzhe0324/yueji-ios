@@ -1,0 +1,89 @@
+name: Build YueJi IPA only (tested commit)
+# Packages the unsigned IPA without re-running the native test suites, to save
+# hosted macOS minutes. Use it ONLY for a commit whose native tests already
+# passed on Azure or Codemagic: you must name that commit when starting the run.
+# Manual trigger only, so it never consumes minutes on its own.
+on:
+  workflow_dispatch:
+    inputs:
+      commit:
+        description: "Commit whose native tests already passed (for example d543e04)"
+        required: true
+permissions:
+  contents: read
+jobs:
+  ipa:
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check out the tested commit
+        env:
+          COMMIT: ${{ inputs.commit }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$COMMIT" =~ ^[0-9a-f]{7,40}$ ]]; then
+            echo "::error::Enter a commit hash (7-40 lowercase hex characters)."
+            exit 1
+          fi
+          git checkout --quiet "$COMMIT"
+          git log -1 --format='Building %h  %s'
+      - name: Verify project and record source version
+        id: release
+        run: |
+          python3 scripts/check_project.py
+          python3 - <<'PYCODE'
+          import os, plistlib, subprocess
+          from pathlib import Path
+          info = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          label = f"{info['CFBundleShortVersionString']}-build{info['CFBundleVersion']}-{commit[:7]}"
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
+              f.write(f'label={label}\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as f:
+              f.write(f'YueJi {label}\n\nIPA only: this workflow runs no tests. '
+                      'It is meant for a commit whose native tests already passed.\n')
+          PYCODE
+      - name: Show Xcode version
+        run: xcodebuild -version
+      - name: Build unsigned iPhone app
+        run: |
+          set -o pipefail
+          xcodebuild build -project YueJi.xcodeproj -scheme YueJi -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-device.log
+      - name: Verify and package IPA for personal signing
+        run: |
+          set -euo pipefail
+          python3 - <<'PYCODE'
+          import plistlib
+          from pathlib import Path
+          app = Path('build-device/Build/Products/Release-iphoneos/YueJi.app')
+          source = plistlib.loads(Path('YueJi/Info.plist').read_bytes())
+          built = plistlib.loads((app / 'Info.plist').read_bytes())
+          for key in ['CFBundleShortVersionString', 'CFBundleVersion']:
+              assert built[key] == source[key], f'Built app does not match source: {key}'
+          for resource in ['YueJi', 'Assets.car', 'YueJiIncoming.wav', 'YueJiOutgoing.wav',
+                           'YueJiIcon@2x.png', 'YueJiIcon@3x.png', 'YueJiMascotHappy.png']:
+              assert (app / resource).is_file(), f'Missing app resource: {resource}'
+          PYCODE
+          mkdir -p package/Payload
+          cp -R build-device/Build/Products/Release-iphoneos/YueJi.app package/Payload/
+          cd package
+          zip -qr "../YueJi-${{ steps.release.outputs.label }}-unsigned.ipa" Payload
+      - name: Upload unsigned IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: YueJi-${{ steps.release.outputs.label }}-ipa
+          path: YueJi-${{ steps.release.outputs.label }}-unsigned.ipa
+          retention-days: 7
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: YueJi-ipa-build-log-run${{ github.run_number }}
+          path: build-device.log
+          if-no-files-found: ignore
+          retention-days: 7
