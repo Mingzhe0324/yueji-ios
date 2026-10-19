@@ -7,7 +7,8 @@ YueJiIcon@2x/@3x fallbacks (the icon AltStore shows, read from CFBundleIconFiles
 and the four notification thumbnails.
 
 The mark is a champagne crescent (月, "moon") holding three ledger lines (记,
-"record") on deep navy, with a soft warm glow: the same palette as the app.
+"record") in a twilight sky: night blue fading into plum, with moonlight in the top
+corner and a warm glow on the horizon. The app's summary cards use the same sky.
 """
 from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
@@ -16,33 +17,30 @@ import json
 ROOT = Path(__file__).resolve().parents[1]
 SS = 4  # supersampling factor
 
-NAVY_TOP = (40, 47, 92)
-NAVY_BOTTOM = (13, 16, 37)
-GOLD_LIGHT = (255, 231, 186)
-GOLD_DEEP = (229, 176, 102)
-PEACH = (250, 199, 158)
-TEAL = (13, 153, 171)
-MINT = (51, 158, 120)
-CORAL = (230, 92, 84)
-WHITE = (255, 255, 255)
+SKY = [(0.0, (20, 24, 62)), (0.55, (42, 38, 96)), (1.0, (96, 58, 112))]
+HORIZON = (250, 170, 140)
+MOONLIGHT = (130, 140, 230)
+CHAMPAGNE = (255, 233, 196)
+GOLD = (232, 174, 98)
+HALO = (255, 205, 150)
+LINE = (255, 248, 236)
 
 
 def lerp(a, b, t):
     return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
 
 
-def gradient(n, top, bottom, diagonal=True):
-    """An n x n RGB gradient from the top-left (or top) colour to the bottom-right (or bottom)."""
+def vertical(n, stops):
+    """An n x n gradient running top to bottom through (position, colour) stops."""
     img = Image.new("RGB", (n, n))
     d = ImageDraw.Draw(img)
-    if diagonal:
-        # Draw anti-diagonal bands; t runs from the top-left corner to the bottom-right.
-        for k in range(2 * n - 1):
-            d.line((k, 0, 0, k) if k < n else (n - 1, k - n + 1, k - n + 1, n - 1), fill=lerp(top, bottom, k / (2 * n - 2)), width=2)
-    else:
-        for y in range(n):
-            d.line((0, y, n, y), fill=lerp(top, bottom, y / (n - 1)))
-    return img
+    for y in range(n):
+        t = y / (n - 1)
+        for (t0, c0), (t1, c1) in zip(stops, stops[1:]):
+            if t0 <= t <= t1:
+                d.line((0, y, n, y), fill=lerp(c0, c1, (t - t0) / (t1 - t0)))
+                break
+    return img.convert("RGBA")
 
 
 def glow(n, center, radius, color, alpha):
@@ -52,94 +50,114 @@ def glow(n, center, radius, color, alpha):
     return layer.filter(ImageFilter.GaussianBlur(radius * 0.55))
 
 
-def crescent_mask(n, cx, cy, r, cut_dx, cut_dy, cut_r):
+def sky(n):
+    img = vertical(n, SKY)
+    img.alpha_composite(glow(n, (n * 0.50, n * 1.02), n * 0.55, HORIZON, 120))
+    img.alpha_composite(glow(n, (n * 0.85, n * 0.08), n * 0.35, MOONLIGHT, 60))
+    return img
+
+
+def crescent_mask(n, cx, cy, r):
+    """The crescent: a disc minus an offset disc (same proportions as CrescentShape in the app)."""
     mask = Image.new("L", (n, n), 0)
     ImageDraw.Draw(mask).ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
     cut = Image.new("L", (n, n), 0)
-    ImageDraw.Draw(cut).ellipse((cx + cut_dx - cut_r, cy + cut_dy - cut_r, cx + cut_dx + cut_r, cy + cut_dy + cut_r), fill=255)
+    x, y, cr = cx + 0.42 * r, cy - 0.30 * r, 0.80 * r
+    ImageDraw.Draw(cut).ellipse((x - cr, y - cr, x + cr, y + cr), fill=255)
     return ImageChops.subtract(mask, cut)
 
 
-def rounded_line(d, x0, x1, y, width, fill):
-    d.rounded_rectangle((x0, y - width / 2, x1, y + width / 2), radius=width / 2, fill=fill)
-
-
-def draw_mark(img, cx, cy, r, lines=True):
-    """The crescent with its ledger lines, centred on (cx, cy) with outer radius r."""
+def moon(img, cx, cy, r):
+    """A luminous champagne crescent with its halo."""
     n = img.size[0]
-    mask = crescent_mask(n, cx, cy, r, r * 0.42, -r * 0.30, r * 0.80)
-    # Luminous halo, then the champagne fill (light at the top, deeper towards the base).
-    halo = Image.new("RGBA", (n, n), PEACH + (0,))
-    halo.putalpha(mask.filter(ImageFilter.GaussianBlur(r * 0.16)).point(lambda v: int(v * 0.42)))
+    img.alpha_composite(glow(n, (cx, cy), r * 1.2, (255, 214, 160), 45))
+    mask = crescent_mask(n, cx, cy, r)
+    halo = Image.new("RGBA", (n, n), HALO + (0,))
+    halo.putalpha(mask.filter(ImageFilter.GaussianBlur(r * 0.16)).point(lambda v: int(v * 0.45)))
     img.alpha_composite(halo)
-    fill = gradient(n, GOLD_LIGHT, GOLD_DEEP, diagonal=False).convert("RGBA")
+    fill = vertical(n, [(0, CHAMPAGNE), (1, GOLD)])
     fill.putalpha(mask)
     img.alpha_composite(fill)
-    if lines:
-        # Three ledger lines inside the crescent's hollow, clear of the gold.
-        d = ImageDraw.Draw(img)
-        w = r * 0.10
-        x0 = cx + r * 0.10
-        for i, length in enumerate((0.50, 0.40, 0.27)):
-            y = cy - r * 0.50 + i * r * 0.25
-            rounded_line(d, x0, x0 + r * length, y, w, WHITE + (240 - i * 30,))
-    return img
+
+
+def ledger_lines(img, cx, cy, r):
+    """Three entries in the crescent's hollow: a champagne bullet and a line each."""
+    d = ImageDraw.Draw(img)
+    w = r * 0.085
+    x0 = cx + r * 0.16
+    for i, length in enumerate((0.42, 0.34, 0.24)):
+        y = cy - r * 0.48 + i * r * 0.24
+        d.ellipse((x0 - w * 0.75, y - w * 0.75, x0 + w * 0.75, y + w * 0.75), fill=CHAMPAGNE + (255,))
+        x1 = x0 + w * 1.6
+        d.rounded_rectangle((x1, y - w / 2, x1 + r * length, y + w / 2), radius=w / 2, fill=LINE + (240 - 30 * i,))
+
+
+def mark(img, cx, cy, r):
+    moon(img, cx, cy, r)
+    ledger_lines(img, cx, cy, r)
 
 
 def icon(size=1024):
     n = size * SS
-    img = gradient(n, NAVY_TOP, NAVY_BOTTOM).convert("RGBA")
-    img.alpha_composite(glow(n, (n * 0.80, n * 0.12), n * 0.40, (120, 132, 214), 70))
-    img.alpha_composite(glow(n, (n * 0.16, n * 0.94), n * 0.36, TEAL, 46))
-    draw_mark(img, n * 0.46, n * 0.53, n * 0.31)
+    img = sky(n)
+    mark(img, n * 0.46, n * 0.53, n * 0.31)
     return img.convert("RGB").resize((size, size), Image.LANCZOS)
 
 
-# Notification thumbnails: a soft gradient tile with one white glyph, readable at a glance
-# beside the system banner. Each matches a message kind sent by LedgerNotifications.
+# Notification thumbnails: the icon's sky with one champagne glyph, so every message
+# looks like it comes from the same app. Each matches a kind sent by LedgerNotifications.
 
-def tile(n, top, bottom):
-    img = gradient(n, top, bottom).convert("RGBA")
-    img.alpha_composite(glow(n, (n * 0.80, n * 0.12), n * 0.40, WHITE, 40))
-    return img
+def champagne_layer(n, mask):
+    fill = vertical(n, [(0, CHAMPAGNE), (1, GOLD)])
+    fill.putalpha(mask)
+    return fill
 
 
 def thumbnail_recorded(n):
-    img = tile(n, (32, 178, 168), (14, 122, 128))
-    d = ImageDraw.Draw(img)
+    img = sky(n)
+    mask = Image.new("L", (n, n), 0)
+    d = ImageDraw.Draw(mask)
     w = int(n * 0.085)
-    pts = [(n * 0.30, n * 0.52), (n * 0.44, n * 0.66), (n * 0.71, n * 0.37)]
-    d.line(pts, fill=WHITE + (255,), width=w, joint="curve")
+    pts = [(n * 0.29, n * 0.52), (n * 0.44, n * 0.67), (n * 0.72, n * 0.37)]
+    d.line(pts, fill=255, width=w, joint="curve")
     for x, y in (pts[0], pts[-1]):
-        d.ellipse((x - w / 2, y - w / 2, x + w / 2, y + w / 2), fill=WHITE + (255,))
+        d.ellipse((x - w / 2, y - w / 2, x + w / 2, y + w / 2), fill=255)
+    img.alpha_composite(glow(n, (n * 0.5, n * 0.52), n * 0.30, (255, 214, 160), 40))
+    img.alpha_composite(champagne_layer(n, mask))
     return img
 
 
 def thumbnail_review(n):
-    img = tile(n, (251, 178, 128), (226, 96, 86))
-    d = ImageDraw.Draw(img)
+    img = sky(n)
+    mask = Image.new("L", (n, n), 0)
+    d = ImageDraw.Draw(mask)
     w = n * 0.10
-    d.rounded_rectangle((n / 2 - w / 2, n * 0.25, n / 2 + w / 2, n * 0.58), radius=w / 2, fill=WHITE + (255,))
-    d.ellipse((n / 2 - w * 0.62, n * 0.66, n / 2 + w * 0.62, n * 0.66 + w * 1.24), fill=WHITE + (255,))
+    d.rounded_rectangle((n / 2 - w / 2, n * 0.24, n / 2 + w / 2, n * 0.58), radius=w / 2, fill=255)
+    d.ellipse((n / 2 - w * 0.62, n * 0.66, n / 2 + w * 0.62, n * 0.66 + w * 1.24), fill=255)
+    img.alpha_composite(glow(n, (n * 0.5, n * 0.5), n * 0.30, (255, 214, 160), 40))
+    img.alpha_composite(champagne_layer(n, mask))
     return img
 
 
 def thumbnail_reminder(n):
-    img = tile(n, NAVY_TOP, NAVY_BOTTOM)
-    draw_mark(img, n * 0.45, n * 0.53, n * 0.30)
+    img = sky(n)
+    mark(img, n * 0.46, n * 0.53, n * 0.31)
     return img
 
 
 def thumbnail_budget(n):
-    img = tile(n, (36, 66, 110), (12, 96, 112))
+    img = sky(n)
     d = ImageDraw.Draw(img)
     w = int(n * 0.075)
     box = (n * 0.22, n * 0.30, n * 0.78, n * 0.86)
-    d.arc(box, 180, 360, fill=(255, 255, 255, 90), width=w)
-    d.arc(box, 180, 315, fill=PEACH + (255,), width=w)
+    d.arc(box, 180, 360, fill=(255, 255, 255, 70), width=w)
+    arc = Image.new("L", (n, n), 0)
+    ImageDraw.Draw(arc).arc(box, 180, 318, fill=255, width=w)
+    img.alpha_composite(champagne_layer(n, arc))
     cx, cy = n * 0.50, n * 0.58
-    d.ellipse((cx - w * 0.75, cy - w * 0.75, cx + w * 0.75, cy + w * 0.75), fill=WHITE + (255,))
-    d.line((cx, cy, n * 0.66, n * 0.42), fill=WHITE + (255,), width=int(w * 0.6))
+    d = ImageDraw.Draw(img)
+    d.line((cx, cy, n * 0.66, n * 0.43), fill=CHAMPAGNE + (255,), width=int(w * 0.6))
+    d.ellipse((cx - w * 0.75, cy - w * 0.75, cx + w * 0.75, cy + w * 0.75), fill=CHAMPAGNE + (255,))
     return img
 
 

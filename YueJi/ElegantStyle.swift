@@ -49,6 +49,124 @@ extension View {
     }
 }
 
+// MARK: - Moonlit cards
+
+/// The crescent from the app icon (same proportions), for the cards' faint watermark.
+struct CrescentShape: Shape {
+    func path(in rect: CGRect) -> Path {
+        let r = min(rect.width, rect.height) / 2
+        let center = CGPoint(x: rect.midX, y: rect.midY)
+        let cutRadius = r * 0.80
+        let cutCenter = CGPoint(x: center.x + r * 0.42, y: center.y - r * 0.30)
+        let moon = Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
+        let shadow = Path(ellipseIn: CGRect(x: cutCenter.x - cutRadius, y: cutCenter.y - cutRadius, width: 2 * cutRadius, height: 2 * cutRadius))
+        return moon.subtracting(shadow)
+    }
+}
+
+/// The app's signature surface, taken from the icon: a twilight sky from night blue to
+/// plum, moonlight in the top corner, a warm glow low on the horizon and a faint champagne
+/// crescent. Each tab's summary sits on it; content on it is white. Static and cheap.
+struct MoonlitBackground: View {
+    /// 0 inside list rows, where the list rounds the cell itself.
+    var radius: CGFloat = 28
+    var crescent = true
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
+        ZStack {
+            LinearGradient(stops: [.init(color: IslandTheme.nightTop, location: 0),
+                                   .init(color: IslandTheme.nightMid, location: 0.55),
+                                   .init(color: IslandTheme.nightBottom, location: 1)],
+                           startPoint: .topLeading, endPoint: .bottomTrailing)
+            RadialGradient(colors: [IslandTheme.nightGlow.opacity(0.45), .clear], center: .topTrailing, startRadius: 0, endRadius: 260)
+            RadialGradient(colors: [IslandTheme.peach.opacity(0.30), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 300)
+            if crescent {
+                CrescentShape()
+                    .fill(LinearGradient(colors: [IslandTheme.moon.opacity(0.13), IslandTheme.moonDeep.opacity(0.03)], startPoint: .top, endPoint: .bottom))
+                    .frame(width: 176, height: 176)
+                    .offset(x: 62, y: -70)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+            }
+        }
+        .clipShape(shape)
+        .overlay { if radius > 0 { shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1) } }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+}
+
+/// A summary card on the moonlit surface with a soft, deep shadow. Content styles its own
+/// text with `OnNight` colours: a foreground style set here would also reach the pages
+/// that links inside the card open.
+struct MoonlitCard: ViewModifier {
+    var padding: CGFloat = 20
+    var radius: CGFloat = 28
+    func body(content: Content) -> some View {
+        content
+            .padding(padding)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background { MoonlitBackground(radius: radius) }
+            .shadow(color: IslandTheme.nightTop.opacity(0.30), radius: 22, y: 12)
+    }
+}
+
+extension View {
+    func moonlitCard(padding: CGFloat = 20, radius: CGFloat = 28) -> some View {
+        modifier(MoonlitCard(padding: padding, radius: radius))
+    }
+    /// A moonlit summary row inside a list; the list rounds the cell itself.
+    func moonlitRow() -> some View {
+        listRowBackground(MoonlitBackground(radius: 0))
+            .listRowSeparator(.hidden)
+    }
+}
+
+/// Buttons on the moonlit cards: a champagne capsule for the main action, a translucent
+/// white one otherwise.
+struct MoonlitButtonStyle: ButtonStyle {
+    var prominent = false
+    func makeBody(configuration: Configuration) -> some View {
+        MoonlitButtonBody(configuration: configuration, prominent: prominent)
+    }
+}
+
+private struct MoonlitButtonBody: View {
+    let configuration: ButtonStyleConfiguration
+    let prominent: Bool
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        let pressed = configuration.isPressed && enabled
+        configuration.label
+            .fontWeight(.semibold)
+            .foregroundStyle(prominent ? IslandTheme.nightTop : Color.white)
+            .padding(.horizontal, 16).padding(.vertical, 10)
+            .background {
+                if prominent {
+                    Capsule().fill(LinearGradient(colors: [IslandTheme.moon, IslandTheme.moonDeep], startPoint: .top, endPoint: .bottom))
+                } else {
+                    Capsule().fill(OnNight.fill)
+                }
+            }
+            .overlay { if !prominent { Capsule().strokeBorder(OnNight.stroke, lineWidth: 1) } }
+            .shadow(color: prominent ? IslandTheme.moonDeep.opacity(0.35) : .clear, radius: 10, y: 4)
+            .contentShape(Capsule())
+            .scaleEffect(pressed && !reduceMotion ? 0.97 : 1)
+            .opacity(enabled ? (pressed ? 0.9 : 1) : 0.45)
+            .animation(reduceMotion ? nil : YueJiMotion.press, value: pressed)
+            .onChange(of: configuration.isPressed) { _, down in if down && enabled { FeedbackHaptics.tap() } }
+    }
+}
+
+/// White text styles for content on the moonlit surface.
+enum OnNight {
+    static let primary = Color.white
+    static let secondary = Color.white.opacity(0.68)
+    static let tertiary = Color.white.opacity(0.48)
+    static let fill = Color.white.opacity(0.10)
+    static let stroke = Color.white.opacity(0.14)
+}
+
 /// Cards rise gently into place the first time a page appears, a few frames apart.
 /// One-shot; skipped with Reduce Motion or Animations off (as in UI tests).
 struct ElegantEntrance: ViewModifier {
@@ -92,16 +210,18 @@ struct ElegantChip: View {
     let title: String
     var value: String? = nil
     var tint: Color = .primary
+    /// Translucent white styling for the moonlit cards.
+    var onDark = false
     var body: some View {
         HStack(spacing: 6) {
-            Text(title).foregroundStyle(.secondary)
+            Text(title).foregroundStyle(onDark ? OnNight.secondary : Color.secondary)
             if let value { Text(value).fontWeight(.semibold).foregroundStyle(tint).monospacedDigit() }
         }
         .font(.subheadline)
         .lineLimit(1).minimumScaleFactor(0.8)
         .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(Color.primary.opacity(0.04), in: Capsule())
-        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.06), lineWidth: 1))
+        .background(onDark ? OnNight.fill : Color.primary.opacity(0.04), in: Capsule())
+        .overlay(Capsule().strokeBorder(onDark ? OnNight.stroke : Color.primary.opacity(0.06), lineWidth: 1))
         .accessibilityElement(children: .combine)
     }
 }
@@ -252,6 +372,8 @@ struct BudgetGauge: View {
     let fraction: Double
     var overTint: Color = IslandPalette.coral
     var lineWidth: CGFloat = 18
+    /// Champagne arc and white ticks for the moonlit cards.
+    var onDark = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shown = 0.0
     private var target: Double { min(max(fraction, 0), 1) }
@@ -260,16 +382,17 @@ struct BudgetGauge: View {
             let width = proxy.size.width
             let diameter = max(1, width - lineWidth - 20)
             let center = CGPoint(x: width / 2, y: proxy.size.height)
+            let ink = onDark ? Color.white : Color.primary
             ZStack {
                 ForEach(0..<25, id: \.self) { index in
-                    Capsule().fill(Color.primary.opacity(index % 6 == 0 ? 0.22 : 0.10))
+                    Capsule().fill(ink.opacity(index % 6 == 0 ? (onDark ? 0.42 : 0.22) : (onDark ? 0.18 : 0.10)))
                         .frame(width: 2, height: index % 6 == 0 ? 8 : 5)
                         .offset(y: -(diameter / 2 + lineWidth / 2 + 8))
                         .rotationEffect(.degrees(-90 + Double(index) * 7.5))
                         .position(center)
                 }
                 Circle().trim(from: 0.5, to: 1)
-                    .stroke(Color.primary.opacity(0.07), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
+                    .stroke(ink.opacity(onDark ? 0.12 : 0.07), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
                     .frame(width: diameter, height: diameter)
                     .position(center)
                 Circle().trim(from: 0.5, to: 0.5 + 0.5 * shown)
@@ -286,6 +409,9 @@ struct BudgetGauge: View {
     }
     private var arcStyle: AnyShapeStyle {
         if fraction > 1 { return AnyShapeStyle(overTint.gradient) }
+        if onDark {
+            return AnyShapeStyle(LinearGradient(colors: [IslandTheme.moon, IslandTheme.moonDeep, IslandTheme.peach], startPoint: .leading, endPoint: .trailing))
+        }
         return AnyShapeStyle(LinearGradient(colors: [IslandTheme.teal, IslandTheme.peach], startPoint: .leading, endPoint: .trailing))
     }
     private func sweep() {
@@ -322,16 +448,17 @@ struct SpendingTrendChart: View {
                     y: .value("Spent", grown || reduceMotion ? Double(point.cents) / 100 : 0),
                     width: .ratio(0.56))
                 .cornerRadius(8)
+                // The selected month wears the twilight of the summary card; the others stay soft.
                 .foregroundStyle(isSelected
-                    ? AnyShapeStyle(LinearGradient(colors: [IslandTheme.peach, IslandTheme.teal], startPoint: .top, endPoint: .bottom))
-                    : AnyShapeStyle(Color.primary.opacity(0.08)))
+                    ? AnyShapeStyle(LinearGradient(colors: [IslandTheme.nightGlow, IslandTheme.nightBottom], startPoint: .top, endPoint: .bottom))
+                    : AnyShapeStyle(IslandTheme.nightGlow.opacity(0.18)))
                 .annotation(position: .top, spacing: 6) {
                     if isSelected && !hidden && point.cents > 0 {
                         Text(money(point.cents))
                             .font(.caption2.weight(.semibold)).monospacedDigit()
-                            .foregroundStyle(IslandTheme.onAccent)
-                            .padding(.horizontal, 7).padding(.vertical, 4)
-                            .background(Capsule().fill(IslandTheme.accent))
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Capsule().fill(IslandTheme.nightMid))
                     }
                 }
         }

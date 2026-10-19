@@ -323,9 +323,30 @@ struct RecurringView: View {
         NavigationStack {
             List {
                 Section {
+                    // This month's plan on the twilight card.
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
-                        SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: IslandPalette.lagoon)
+                        HStack(spacing: 14) {
+                            Image(systemName: "calendar").font(.title3.weight(.semibold))
+                                .foregroundStyle(IslandTheme.moon)
+                                .frame(width: 48, height: 48)
+                                .background(OnNight.fill, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
+                                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(OnNight.stroke, lineWidth: 1))
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(tr("本月安排", "This month's plan", "Rancangan bulan ini")).font(.headline).foregroundStyle(.white)
+                                Text(tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"))
+                                    .font(.subheadline).foregroundStyle(OnNight.secondary)
+                                let active = model.ledger.recurring.filter(\.active).count
+                                Text(tr("\(active) 项进行中", "\(active) active", "\(active) aktif"))
+                                    .font(.caption.weight(.semibold)).foregroundStyle(IslandTheme.moon)
+                                    .padding(.horizontal, 9).padding(.vertical, 4)
+                                    .background(OnNight.fill, in: Capsule())
+                                    .padding(.top, 4)
+                            }
+                        }
+                        .padding(.vertical, 12)
                     }
+                    .moonlitRow()
                 } footer: { Text(tr("这里只记账，不会替你付款。", "Records expenses; never makes payments.", "Merekod belanja; tidak membuat bayaran.")) }
                 Section {
                     Picker(tr("显示", "Show", "Papar"), selection: $paused) {
@@ -3252,12 +3273,12 @@ private struct SavingsGoalDetail: View {
                 Section {
                     let reached = goal.balance >= goal.target
                     VStack(spacing: 18) {
-                        // A slim ring in the chart gradient; it turns mint when the goal is reached.
+                        // A slim ring in moon gold; it turns mint when the goal is reached.
                         ZStack {
                             Circle().stroke(Color.primary.opacity(0.07), lineWidth: 14)
                             Circle().trim(from: 0, to: CGFloat(goal.progress))
                                 .stroke(reached ? AnyShapeStyle(IslandPalette.mint.gradient)
-                                        : AnyShapeStyle(AngularGradient(colors: [IslandTheme.teal, IslandTheme.peach], center: .center)),
+                                        : AnyShapeStyle(AngularGradient(colors: [IslandTheme.moonDeep, IslandTheme.peach], center: .center)),
                                         style: StrokeStyle(lineWidth: 14, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
                                 .animation(reduceMotion ? nil : YueJiMotion.meter, value: goal.balance)

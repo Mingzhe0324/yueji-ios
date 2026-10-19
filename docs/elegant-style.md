@@ -1,11 +1,13 @@
-# Elegant visual style
+# Elegant visual style ("moonlit")
 
-YueJi uses a calm, premium finance look inspired by clean fintech app designs
-(not copied from any of them): warm paper backgrounds, white cards with a hairline
-edge and a soft shadow, deep navy ink for controls, and a teal-to-peach gradient
-kept for charts and the budget gauge. There is no mascot. The previous cartoon
-"Moon Island" style (companion, living island, journal, confetti) was retired in
-favour of this one; every screen, action and ledger behaviour is unchanged.
+YueJi uses a calm, premium finance look taken from its icon: a twilight sky (night
+blue fading into plum), a champagne moon, indigo ink for controls, and cool paper
+with white cards. Each tab opens with a **moonlit card** — the twilight surface with
+moonlight in one corner, a warm glow low on the horizon and a faint crescent — that
+holds the tab's summary in white type. Everything below is clean white cards or
+list rows with hairline edges and soft shadows. There is no mascot; the earlier
+cartoon "Moon Island" style was retired, and every screen, action and ledger
+behaviour is unchanged.
 
 Maps, system permissions, keyboards, alerts and Apple's place card remain system
 controls. Blocking errors and confirmations remain system alerts and dialogs
@@ -13,9 +15,13 @@ controls. Blocking errors and confirmations remain system alerts and dialogs
 
 ## Tokens
 
-- `IslandTheme` (the "Island" names are historical): `accent` (navy, periwinkle
-  in dark mode), `onAccent`, `paper`, `card`, `glow` (warm peach), `line`, `sun`,
-  and the chart gradient `teal` → `peach`.
+- `IslandTheme` (the "Island" names are historical): `accent` (indigo ink,
+  periwinkle in dark mode), `onAccent`, `paper` (cool off-white / near-black),
+  `card`, `glow`, `line`, the moon colours `moon` (champagne) and `moonDeep` (gold),
+  the twilight `nightTop` → `nightMid` → `nightBottom` with `nightGlow`, readable
+  statuses on night cards (`onNightGood`, `onNightWarn`, `onNightOver`), and `teal`,
+  `peach`.
+- `OnNight` — white text, fill and stroke levels for content on moonlit cards.
 - `IslandPalette`: muted icon and category colours (mint, lagoon, sky, lavender,
   berry, coral, pumpkin, pebble). Income green and spending red keep their
   financial meaning.
@@ -27,11 +33,19 @@ controls. Blocking errors and confirmations remain system alerts and dialogs
 
 - Pages sit on plain `IslandBackdrop` paper. Navigation and tab bars keep a visible
   paper background (see `bar-appearance.md`), so there is never a seam at their
-  edges; the warm glow lives inside the Overview hero card instead.
-- `elegantCard()` — white card, hairline edge, soft low shadow; `glow: true` adds the
-  peach light in the top corner.
-- `IslandButtonStyle` — primary buttons are navy capsules, secondary ones white
-  capsules with a hairline; a press dips slightly with a light haptic.
+  edges.
+- `MoonlitBackground`, `moonlitCard()` (scrolling pages) and `moonlitRow()` (list
+  rows; the list rounds the cell) — the signature twilight surface with the
+  `CrescentShape` watermark, drawn with the icon's proportions. Content on it styles
+  its own text with `OnNight`: a foreground style on the card would also reach pages
+  opened from links inside it. Used by the Overview, Ledger, Recurring, Friends and
+  Settings headers. `MoonlitButtonStyle` gives champagne (main action) or translucent
+  white capsules; `MonthPicker(onDark:)`, `ElegantChip(onDark:)` and
+  `BudgetGauge(onDark:)` have white variants with a champagne gauge arc.
+- `elegantCard()` — white card, hairline edge, soft low shadow.
+- `IslandButtonStyle` — primary buttons are indigo capsules with a soft top sheen,
+  secondary ones white capsules with a hairline; a press dips slightly with a light
+  haptic.
 - `ElegantPressStyle` — subtle dip and dim for tappable cards and tiles.
 - `IslandIconTile`, `IslandRowLabel`, `SimpleSettingsRow`, `IslandAvatar`,
   `CategoryBadge`, `ElegantChip` — icons, rows, people, categories and amounts.
@@ -44,14 +58,14 @@ controls. Blocking errors and confirmations remain system alerts and dialogs
 
 ## Overview
 
-Scrolling cards in this order: month picker; the hero card (personal spending in
-large type with an eye toggle that hides the amounts, the semicircle budget gauge
-with percent used and status, Remaining/Budget chips, travel and reimbursement
-lines, and Set/Edit budget); Needs attention (when automatic records wait for
+Scrolling cards in this order: the moonlit hero card (month picker, personal
+spending in large type with an eye toggle that hides the amounts, the champagne
+semicircle budget gauge with percent used and status, Remaining/Budget chips,
+travel and reimbursement lines, and Set/Edit budget); Needs attention (when automatic records wait for
 review); four quick-action tiles (Scan receipt, Automation, Savings, More tools);
 recent entries as cards (tap for details, long-press for Edit/Delete); the
-six-month spending trend (the selected month is highlighted with the gradient and
-a value tooltip; tapping a bar selects that month); savings; payment details; and
+six-month spending trend (the selected month wears the twilight gradient with a
+value tooltip; tapping a bar selects that month); savings; payment details; and
 where it went (category donut plus rows that open each category). The toolbar
 keeps More tools and Add entry (`overview.manualEntry`).
 
@@ -90,16 +104,19 @@ the reveal starts (or on skip), which is how
 
 ## Icon and notifications
 
-`scripts/generate_icon.py` draws the app icon from shapes: a champagne crescent
-(月, moon) holding three ledger lines (记, record) on deep navy with a soft glow.
+`scripts/generate_icon.py` draws the app icon from shapes: a glowing champagne
+crescent (月, moon) holding three ledger entries — a bullet and a line each (记,
+record) — in a twilight sky that fades from night blue into plum over a warm
+horizon.
 It writes every AppIcon size as opaque RGB, the byte-identical opening logo, and
 the `YueJiIcon@2x/@3x` fallbacks that sideloading tools such as AltStore read from
 `CFBundleIconFiles`. System notifications show this icon.
 
-It also writes four notification thumbnails, attached by `LedgerNotifications`:
-`YueJiNoticeRecorded` (teal check, automatic entry recorded), `YueJiNoticeReview`
-(peach alert, record needs review), `YueJiNoticeReminder` (the crescent mark,
-daily reminder) and `YueJiNoticeBudget` (gauge, budget alert). Thumbnails are
+It also writes four notification thumbnails in the same twilight sky with a
+champagne glyph, attached by `LedgerNotifications`: `YueJiNoticeRecorded` (check,
+automatic entry recorded), `YueJiNoticeReview` (alert, record needs review),
+`YueJiNoticeReminder` (the full logo mark, daily reminder) and `YueJiNoticeBudget`
+(gauge, budget alert). Thumbnails are
 cosmetic: if an attachment can't be created the notification is sent without it.
 
 ## Validation
