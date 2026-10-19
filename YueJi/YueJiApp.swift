@@ -13,22 +13,9 @@ struct YueJiApp: App {
     private var selectedLocale: Locale {
         Locale(identifier: language == "zh" ? "zh_Hans_MY" : language == "ms" ? "ms_MY" : language == "en" ? "en_MY" : AppLanguage.localeID)
     }
-    init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters(); Self.applyCartoonChrome() }
-    /// Bold rounded titles in native navigation and tab bars, matching the cartoon theme.
-    /// Fonts only: bar backgrounds/colors stay with the SwiftUI bar appearance modifiers.
-    private static func applyCartoonChrome() {
-        func rounded(_ style: UIFont.TextStyle, _ weight: UIFont.Weight) -> UIFont {
-            let size = UIFont.preferredFont(forTextStyle: style).pointSize
-            let base = UIFont.systemFont(ofSize: size, weight: weight)
-            guard let descriptor = base.fontDescriptor.withDesign(.rounded) else { return base }
-            return UIFont(descriptor: descriptor, size: size)
-        }
-        let bar = UINavigationBar.appearance()
-        bar.largeTitleTextAttributes = [.font: rounded(.largeTitle, .heavy)]
-        bar.titleTextAttributes = [.font: rounded(.headline, .bold)]
-        UITabBarItem.appearance().setTitleTextAttributes([.font: rounded(.caption2, .bold)], for: .normal)
-    }
-    var body: some Scene { WindowGroup { MainView().font(.body).fontDesign(.rounded).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
+    init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
+    // Typography is the system's SF Pro throughout: clean and elegant, with no overrides.
+    var body: some Scene { WindowGroup { MainView().font(.body).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
 }
 struct RestoredLedgerFeedback {
     let id = UUID()
@@ -100,6 +87,14 @@ struct RestoredLedgerFeedback {
         try Task.checkCancellation()
         guard query.revision == ledgerRevision else { throw CancellationError() }
         return snapshot
+    }
+    /// Personal spending for the `count` months ending with `month`, oldest first.
+    func preparedSpendingTrend(endingAt month: Date, count: Int = 6) async throws -> [SpendingTrendPoint] {
+        let revision = ledgerRevision
+        let months = (0..<count).map { shiftedMonth(month, by: $0 - (count - 1)) }
+        let totals = try await projectionWorker.spendingTrend(ledger: ledger, months: months)
+        guard !Task.isCancelled, revision == ledgerRevision, totals.count == months.count else { throw CancellationError() }
+        return zip(months, totals).map { SpendingTrendPoint(month: $0, cents: $1) }
     }
     func preparedStatement(friend: String, month: Date?) async throws -> String {
         let revision = ledgerRevision
@@ -337,8 +332,6 @@ struct RestoredLedgerFeedback {
     static let shared = FeedbackSounds()
     enum Cue: String {
         case launch = "LaunchChime", saved = "SavedChime", goal = "GoalChime", deleted = "DeleteCue", restored = "RestoreCue", deposit = "DepositCue"
-        // Companion reactions (full sound mode only).
-        case hello = "HelloChime", hug = "HugChime", dance = "DanceChime", star = "StarChime"
     }
     static func permits(_ cue: Cue, mode: String, enabled: Bool) -> Bool {
         enabled && mode != "off" && (mode != "success" || cue == .saved || cue == .goal)
@@ -353,8 +346,7 @@ struct RestoredLedgerFeedback {
         revision += 1
         let request = revision
         let data = asset.data
-        let companion: Set<Cue> = [.hello, .hug, .dance, .star]
-        let volume: Float = cue == .launch ? 0.85 : (companion.contains(cue) ? 0.4 : 0.55)
+        let volume: Float = cue == .launch ? 0.85 : 0.55
         Task { await playback.play(data: data, volume: volume, revision: request) }
     }
     func stop() {
@@ -419,7 +411,7 @@ private actor FeedbackAudioPlayback {
     static func success() { if enabled { UINotificationFeedbackGenerator().notificationOccurred(.success) } }
     static func error() { if enabled { UINotificationFeedbackGenerator().notificationOccurred(.error) } }
     static func selection() { if enabled { UISelectionFeedbackGenerator().selectionChanged() } }
-    /// A light physical click for cartoon button presses and mascot pokes.
+    /// A light physical click for button presses.
     static func tap() { if enabled { UIImpactFeedbackGenerator(style: .light).impactOccurred(intensity: 0.8) } }
     static func pop() { if enabled { UIImpactFeedbackGenerator(style: .soft).impactOccurred() } }
 }

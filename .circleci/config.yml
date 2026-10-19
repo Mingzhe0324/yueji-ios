@@ -85,7 +85,8 @@ jobs:
             built = plistlib.loads((app / 'Info.plist').read_bytes())
             for key in ['CFBundleShortVersionString', 'CFBundleVersion']:
                 assert built[key] == source[key], f'Built app does not match source: {key}'
-            for resource in ['YueJi', 'Assets.car', 'YueJiIncoming.wav', 'YueJiOutgoing.wav', 'YueJiIcon@2x.png', 'YueJiIcon@3x.png']:
+            for resource in ['YueJi', 'Assets.car', 'YueJiIncoming.wav', 'YueJiOutgoing.wav', 'YueJiIcon@2x.png', 'YueJiIcon@3x.png',
+                             'YueJiNoticeRecorded.png', 'YueJiNoticeReview.png', 'YueJiNoticeReminder.png', 'YueJiNoticeBudget.png']:
                 assert (app / resource).is_file(), f'Missing app resource: {resource}'
             PY
             mkdir -p package/Payload

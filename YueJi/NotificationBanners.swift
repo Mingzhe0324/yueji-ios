@@ -336,17 +336,15 @@ enum BannerSwipePolicy {
 struct NotificationBannerSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    private let shape = RoundedRectangle(cornerRadius: 20, style: .continuous)
+    private let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
     func body(content: Content) -> some View {
-        // Chunky cartoon card: opaque face, thick outline and a solid ledge, matching
-        // the island buttons. Static layers only; motion comes from the banner entry.
+        // A quiet floating card: opaque face, hairline edge and a soft, wide shadow, like
+        // the app's other cards. Static layers only; motion comes from the banner entry.
         content.background { shape.fill(IslandTheme.card) }
             .overlay {
-                shape.strokeBorder(contrast == .increased ? Color.primary.opacity(0.45) : IslandTheme.accent.opacity(0.30), lineWidth: 2)
+                shape.strokeBorder(contrast == .increased ? Color.primary.opacity(0.45) : Color.primary.opacity(scheme == .dark ? 0.10 : 0.05), lineWidth: 1)
                     .allowsHitTesting(false)
             }
-            .background { shape.fill(IslandTheme.accent.opacity(scheme == .dark ? 0.45 : 0.30)).offset(y: 5).allowsHitTesting(false) }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.20 : 0.08), radius: 8, y: 6)
+            .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.10), radius: 18, y: 8)
     }
 }

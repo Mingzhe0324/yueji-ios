@@ -95,6 +95,24 @@ for name in ('LaunchChime', 'SavedChime', 'GoalChime', 'DeleteCue', 'RestoreCue'
         assert 1000 < peak < 16000, 'Missing sound or excessive peak'
 print('PASS: 1024px opaque icon, dedicated opening logo and six decodable PCM sound assets.')
 
+# AltStore and other sideloading tools read the loose CFBundleIconFiles icons, and
+# LedgerNotifications attaches one thumbnail per message kind. All must ship as resources.
+def png_header(path):
+    data = path.read_bytes()[:33]
+    assert data[:8] == b'\x89PNG\r\n\x1a\n', f'Not a PNG: {path.name}'
+    return struct.unpack('>II', data[16:24]), data[25]
+for scale in (2, 3):
+    name = f'YueJiIcon@{scale}x.png'
+    assert name in resources, f'Missing icon fallback resource: {name}'
+    assert png_header(root / 'YueJi' / name) == ((60 * scale, 60 * scale), 2), f'Icon fallback must be opaque {60 * scale}px: {name}'
+notifications = (root / 'YueJi/Features.swift').read_text()
+for kind in ('Recorded', 'Review', 'Reminder', 'Budget'):
+    name = f'YueJiNotice{kind}.png'
+    assert name in resources, f'Missing notification thumbnail resource: {name}'
+    assert png_header(root / 'YueJi' / name) == ((300, 300), 2), f'Notification thumbnail must be opaque 300px: {name}'
+    assert f'"{kind}"' in notifications, f'Notification thumbnail is never attached: {name}'
+print('PASS: IPA/AltStore icon fallbacks and four notification thumbnails are bundled.')
+
 # Regression from build 53: overview still referenced removed deletion state.
 for source in (root / 'YueJi').glob('*.swift'):
     assert 'removingExpenseIDs' not in source.read_text(), f'Stale deletion state in {source.name}'

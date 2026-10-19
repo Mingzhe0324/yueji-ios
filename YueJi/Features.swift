@@ -509,7 +509,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             content.title = tr("今天的消费记好了吗？", "Have you recorded today's spending?", "Sudah rekod belanja hari ini?")
             content.body = tr("打开月记，补上今天的消费，也检查自动记账有没有遗漏。", "Open YueJi to record today's spending and check for missing automatic entries.", "Buka YueJi untuk merekod belanja hari ini dan semak rekod automatik yang terlepas.")
             content.sound = LedgerNotifications.automationSound
-            attachMascot("Sleepy", to: content)
+            attachThumbnail("Reminder", to: content)
             var components = DateComponents(); components.hour = hour; components.minute = minute
             let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
             try await center.add(UNNotificationRequest(identifier: dailyID, content: content, trigger: trigger))
@@ -519,15 +519,16 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
 
     }
-    /// Shows the cartoon companion as the notification thumbnail ("Happy", "Worried" or
-    /// "Sleepy"). Cosmetic only: any failure leaves the notification unchanged.
-    static func attachMascot(_ mood: String, to content: UNMutableNotificationContent) {
-        guard let source = Bundle.main.url(forResource: "YueJiMascot" + mood, withExtension: "png") else { return }
+    /// Adds the status thumbnail for each kind of message, drawn in the app's colours:
+    /// "Recorded", "Review", "Reminder" or "Budget". Cosmetic only: any failure leaves
+    /// the notification unchanged.
+    static func attachThumbnail(_ kind: String, to content: UNMutableNotificationContent) {
+        guard let source = Bundle.main.url(forResource: "YueJiNotice" + kind, withExtension: "png") else { return }
         // The system moves attachment files into its own store, so attach a fresh copy.
-        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("yueji-mascot-" + UUID().uuidString + ".png")
+        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("yueji-notice-" + UUID().uuidString + ".png")
         do {
             try FileManager.default.copyItem(at: source, to: copy)
-            content.attachments = [try UNNotificationAttachment(identifier: "yueji.mascot", url: copy, options: nil)]
+            content.attachments = [try UNNotificationAttachment(identifier: "yueji.thumbnail", url: copy, options: nil)]
         } catch {
             try? FileManager.default.removeItem(at: copy)
         }
@@ -561,8 +562,8 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         }
         let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = systemSound(for: sound)
         registerActions()
-        // Recorded results get a happy companion; records needing review a worried one.
-        attachMascot(expenseID == nil && noticeID != nil ? "Worried" : "Happy", to: content)
+        // Recorded results get a check; records needing review a gentle alert.
+        attachThumbnail(expenseID == nil && noticeID != nil ? "Review" : "Recorded", to: content)
         if let expenseID {
             content.categoryIdentifier = "yueji.expense"
             content.userInfo = ["recordID": expenseID, "recordKind": "expense"]
@@ -1003,6 +1004,24 @@ actor LedgerProjectionWorker {
         return snapshot
     }
 
+    /// Personal spending for each of `months` (oldest first), in one pass over the ledger.
+    /// Same totals as the overview snapshot's `personal`, which the selected month shows.
+    func spendingTrend(ledger: Ledger, months: [Date]) throws -> [Int] {
+        try Task.checkCancellation()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let intervals = months.compactMap { calendar.dateInterval(of: .month, for: $0) }
+        guard intervals.count == months.count, let first = intervals.first?.start,
+              let last = intervals.map(\.end).max() else { return [] }
+        var totals = Array(repeating: 0, count: intervals.count)
+        for entry in ledger.expenses where entry.date >= first && entry.date < last {
+            guard let index = intervals.firstIndex(where: { entry.date >= $0.start && entry.date < $0.end }) else { continue }
+            totals[index] += entry.personalSpending
+        }
+        try Task.checkCancellation()
+        return totals
+    }
+
     func index(ledger: Ledger, signature: Data) throws -> LedgerNavigationIndex {
         try Task.checkCancellation()
         if indexedSignature == signature, let navigationIndex { return navigationIndex }
@@ -1109,7 +1128,7 @@ actor BudgetAlertService {
             : tr("个人消费：", "Personal spending: ", "Belanja peribadi: ") + money(candidate.spent)
                 + tr("；预算：", "; budget: ", "; bajet: ") + money(candidate.budget)
         content.sound = LedgerNotifications.automationSound
-        LedgerNotifications.attachMascot("Worried", to: content)
+        LedgerNotifications.attachThumbnail("Budget", to: content)
         do {
             try await center.add(UNNotificationRequest(identifier: "yueji.budget." + candidate.month, content: content, trigger: nil))
             defaults.set(true, forKey: key)

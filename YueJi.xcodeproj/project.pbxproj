@@ -15,18 +15,8 @@
         "CB9300000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CB9300000000000000000003"; };
         "CB8900000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "NotificationBanners.swift"; "sourceTree" = "<group>"; };
         "CB8900000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB8900000000000000000001"; };
-        "CF1000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "IslandPlayful.swift"; "sourceTree" = "<group>"; };
+        "CF1000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "ElegantStyle.swift"; "sourceTree" = "<group>"; };
         "CF1000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF1000000000000000000001"; };
-        "CF3000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "Companion.swift"; "sourceTree" = "<group>"; };
-        "CF3000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF3000000000000000000001"; };
-        "CF3000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "IslandWorld.swift"; "sourceTree" = "<group>"; };
-        "CF3000000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CF3000000000000000000003"; };
-        "CF2000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiMascotHappy.png"; "sourceTree" = "<group>"; };
-        "CF2000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000001"; };
-        "CF2000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiMascotWorried.png"; "sourceTree" = "<group>"; };
-        "CF2000000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000003"; };
-        "CF2000000000000000000005" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiMascotSleepy.png"; "sourceTree" = "<group>"; };
-        "CF2000000000000000000006" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000005"; };
         "CE8000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "Settlements.swift"; "sourceTree" = "<group>"; };
         "CE8000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CE8000000000000000000001"; };
         "CE8000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "SettlementViews.swift"; "sourceTree" = "<group>"; };
@@ -36,6 +26,14 @@
         "CB1000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB1000000000000000000001"; };
         "CB0000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiIcon@2x.png"; "sourceTree" = "<group>"; };
         "CB0000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB0000000000000000000001"; };
+        "CF2000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiNoticeRecorded.png"; "sourceTree" = "<group>"; };
+        "CF2000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000001"; };
+        "CF2000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiNoticeReview.png"; "sourceTree" = "<group>"; };
+        "CF2000000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000003"; };
+        "CF2000000000000000000005" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiNoticeReminder.png"; "sourceTree" = "<group>"; };
+        "CF2000000000000000000006" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000005"; };
+        "CF2000000000000000000007" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiNoticeBudget.png"; "sourceTree" = "<group>"; };
+        "CF2000000000000000000008" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000007"; };
 		"4272165E609CEB45988F02A0" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "text.json.xcstrings"; "path" = "Localizable.xcstrings"; "sourceTree" = "<group>"; };
 		"ABAD2E33A649C96D618F1E8D" = { "isa" = "PBXBuildFile"; "fileRef" = "4272165E609CEB45988F02A0"; };
 		"ED29F67A6CF18DB93C10A996" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "FeatureViews.swift"; "sourceTree" = "<group>"; };
@@ -143,11 +141,6 @@
 			"children" = (
                 "CB8900000000000000000001",
                 "CF1000000000000000000001",
-                "CF3000000000000000000001",
-                "CF3000000000000000000003",
-                "CF2000000000000000000001",
-                "CF2000000000000000000003",
-                "CF2000000000000000000005",
                 "CE8000000000000000000001",
                 "CE8000000000000000000003",
 				"CE6600000000000000000001",
@@ -155,6 +148,10 @@
 				"CE7300000000000000000003",
 				"CB0000000000000000000001",
                 "CB1000000000000000000001",
+                "CF2000000000000000000001",
+                "CF2000000000000000000003",
+                "CF2000000000000000000005",
+                "CF2000000000000000000007",
                 "4272165E609CEB45988F02A0",
 				"ED29F67A6CF18DB93C10A996",
 				"AD28BE70373820C47C519965",
@@ -208,8 +205,6 @@
 			"files" = (
                 "CB8900000000000000000002",
                 "CF1000000000000000000002",
-                "CF3000000000000000000002",
-                "CF3000000000000000000004",
                 "CE8000000000000000000002",
                 "CE8000000000000000000004",
 				"18C3C4F160B163CE58D17794",
@@ -246,6 +241,7 @@
                 "CF2000000000000000000002",
                 "CF2000000000000000000004",
                 "CF2000000000000000000006",
+                "CF2000000000000000000008",
                 "ABAD2E33A649C96D618F1E8D",
 				"5522B3B3B2EACC1C8F9BEAAC",
 			);

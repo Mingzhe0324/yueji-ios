@@ -7,10 +7,6 @@ struct TravelBooksView: View {
     @State private var creating = false
     var body: some View {
         List {
-            Section {
-                IslandPageBanner(title: tr("下一站，去哪里？", "Where to next?", "Ke mana seterusnya?"),
-                    subtitle: tr("带上心愿，也带上清楚的预算。", "Pack your dreams and a clear budget.", "Bawa impian dan bajet yang jelas."), symbol: "suitcase.rolling.fill")
-            }
             if model.ledger.trips.isEmpty {
                 IslandEmptyState(title: tr("第一趟旅行", "Your first trip", "Perjalanan pertama"),
                     message: tr("独立预算，账目与分账集中查看。", "A separate budget with expenses and splits in one place.", "Bajet berasingan dengan belanja dan pembahagian bersama."),
@@ -227,8 +223,7 @@ private struct TravelSpendingMap: View {
                     IslandEmptyState(title: tr("暂无地点", "No locations", "Tiada lokasi"),
                                      message: tr("记账时加上地点，就会出现在这里。", "Add a place to an entry and it will appear here.", "Tambah lokasi pada rekod dan ia akan muncul di sini."),
                                      mood: .sleepy)
-                        .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-                        .overlay(RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(IslandTheme.line, lineWidth: 2))
+                        .elegantCard(radius: 24)
                         .padding(24)
                 }
             }
@@ -327,10 +322,6 @@ struct RecurringView: View {
         let _ = uiLocale.identifier
         NavigationStack {
             List {
-                Section {
-                    IslandPageBanner(title: tr("生活的节奏", "Your everyday rhythm", "Rentak harian anda"),
-                        subtitle: tr("把固定开销安排好，心里更有底。", "A clear plan for the bills ahead.", "Rancangan jelas untuk bil akan datang."), symbol: "calendar")
-                }
                 Section {
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
                         SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: IslandPalette.lagoon)
@@ -1249,7 +1240,7 @@ extension Ledger {
     }
     func categoryTint(_ name: String) -> Color {
         if let custom = customCategories.first(where: { $0.name == name }) { return categoryColor(custom.color) }
-        // Island palette, so categories match the rest of the cartoon world.
+        // The app's muted palette, so categories sit quietly on white cards.
         switch name {
         case "餐饮": return IslandPalette.pumpkin
         case "交通": return IslandPalette.sky
@@ -1260,7 +1251,7 @@ extension Ledger {
         }
     }
 }
-/// Custom category colours keep their stored names; only the shades follow the island palette.
+/// Custom category colours keep their stored names; only the shades follow the app palette.
 func categoryColor(_ name: String) -> Color {
     switch name {
     case "blue": return IslandPalette.sky
@@ -1422,7 +1413,6 @@ struct AnimatedMoney: View {
         Text(money(cents)).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
             .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
-            .boing(on: cents, anchor: .leading)
     }
 }
 struct LedgerFilterEditor: View {
@@ -3014,10 +3004,6 @@ struct SavingsGoalsView: View {
     var body: some View {
         let _ = uiLocale.identifier
         List {
-            Section {
-                IslandPageBanner(title: tr("心愿慢慢长大", "Let your dreams grow", "Biarkan impian berkembang"),
-                    subtitle: tr("为想做的事，慢慢存起来。", "Save for something that matters to you.", "Simpan untuk sesuatu yang bermakna."), symbol: "leaf.fill")
-            }.listRowBackground(Color.clear)
             if model.ledger.savingsGoals.isEmpty {
                 IslandEmptyState(title: tr("第一个储蓄目标", "Your first savings goal", "Matlamat simpanan pertama"),
                     message: tr("例如新电脑、旅行或学习用品。", "For a computer, a trip or school supplies.", "Untuk komputer, perjalanan atau alat belajar."),
@@ -3258,8 +3244,6 @@ private struct SavingsGoalDetail: View {
     @State private var amount = ""
     @State private var error: String?
     @State private var celebrated = false
-    /// A new value plays the goal celebration (companion cheer and confetti).
-    @State private var celebration: UUID?
     private var goal: SavingsGoal? { model.ledger.savingsGoals.first { $0.id == id } }
     var body: some View {
         let _ = uiLocale.identifier
@@ -3268,21 +3252,26 @@ private struct SavingsGoalDetail: View {
                 Section {
                     let reached = goal.balance >= goal.target
                     VStack(spacing: 18) {
-                        // A chunky sun ring with the companion inside; it turns mint when reached.
+                        // A slim ring in the chart gradient; it turns mint when the goal is reached.
                         ZStack {
-                            Circle().stroke(IslandTheme.sun.opacity(0.2), lineWidth: 16)
+                            Circle().stroke(Color.primary.opacity(0.07), lineWidth: 14)
                             Circle().trim(from: 0, to: CGFloat(goal.progress))
-                                .stroke(reached ? IslandPalette.mint : IslandTheme.sun, style: StrokeStyle(lineWidth: 16, lineCap: .round))
+                                .stroke(reached ? AnyShapeStyle(IslandPalette.mint.gradient)
+                                        : AnyShapeStyle(AngularGradient(colors: [IslandTheme.teal, IslandTheme.peach], center: .center)),
+                                        style: StrokeStyle(lineWidth: 14, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
                                 .animation(reduceMotion ? nil : YueJiMotion.meter, value: goal.balance)
-                            VStack(spacing: 0) {
-                                InteractiveCompanion(mood: reached ? .excited : .happy, size: 66, cheer: celebration)
-                                Text("\(Int(goal.progress * 100))%").font(.title.bold()).contentTransition(.numericText())
+                            VStack(spacing: 2) {
+                                Image(systemName: reached ? "checkmark.seal.fill" : "target")
+                                    .font(.title3.weight(.semibold))
+                                    .foregroundStyle(reached ? IslandPalette.mint : IslandTheme.accent)
+                                    .padding(.bottom, 4).accessibilityHidden(true)
+                                Text("\(Int(goal.progress * 100))%").font(.system(.largeTitle, weight: .bold)).monospacedDigit()
+                                    .contentTransition(.numericText())
                                 Text(reached ? tr("已达成", "Reached", "Tercapai") : tr("已存下", "Saved", "Disimpan")).font(.caption).foregroundStyle(.secondary)
                             }
                         }
-                        .frame(width: 196, height: 196).padding(.top, 12)
-                        .overlay { ConfettiBurst(trigger: celebration, spread: 170) }
+                        .frame(width: 188, height: 188).padding(.top, 12)
                         AnimatedMoney(cents: goal.balance).font(.title.bold())
                         Text(tr("目标 ", "Target ", "Sasaran ") + money(goal.target)).foregroundStyle(.secondary)
                         Text(tr("还差 ", "Remaining ", "Baki ") + money(max(0, goal.target - goal.balance))).font(.subheadline)
@@ -3365,7 +3354,6 @@ private struct SavingsGoalDetail: View {
                 return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
             }, completion: { reached in
                 withAnimation(reduceMotion ? nil : YueJiMotion.pop) { celebrated = reached }
-                if reached { celebration = UUID() }
                 model.showSaved(message: reached ? tr("目标完成！", "Goal complete!", "Matlamat tercapai!") :
                     (withdrawal ? tr("已取出 ", "Withdrawn ", "Dikeluarkan ") : tr("已存入 ", "Deposited ", "Disimpan ")) + money(cents),
                     sound: reached ? .goal : (withdrawal ? .saved : .deposit))
@@ -3958,12 +3946,35 @@ struct PendingBookkeepingCard: View {
     var body: some View {
         let _ = uiLocale.identifier
         if pending > 0 {
-            Section {
-                NavigationLink { TNGInboxView(pendingOnly: true) } label: { Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan")) }
-                NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
-            } header: {
-                Label(tr("待处理", "Needs attention", "Perlu tindakan"), systemImage: "tray.full.fill")
+            // An Overview card: the review queue first, then recent automatic entries.
+            VStack(spacing: 0) {
+                NavigationLink { TNGInboxView(pendingOnly: true) } label: {
+                    HStack(spacing: 12) {
+                        IslandIconTile(symbol: "tray.full.fill", color: IslandPalette.pumpkin, size: 40).accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(tr("待处理", "Needs attention", "Perlu tindakan")).font(.headline)
+                            Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan"))
+                                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.leading)
+                        }
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(.primary).padding(12).contentShape(Rectangle())
+                }.buttonStyle(ElegantPressStyle())
+                Divider().padding(.leading, 64)
+                NavigationLink { AutomationStatusView() } label: {
+                    HStack {
+                        Text(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")).font(.subheadline)
+                        Spacer(minLength: 8)
+                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .foregroundStyle(.primary).padding(.horizontal, 12).padding(.vertical, 12)
+                    .frame(minHeight: 44).contentShape(Rectangle())
+                }.buttonStyle(ElegantPressStyle())
             }
+            .elegantCard(padding: 4)
         }
     }
 }
