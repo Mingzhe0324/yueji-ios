@@ -16,13 +16,13 @@ enum IslandMood: String { case happy, excited, worried, sad, sleepy }
 
 // MARK: - Cards and buttons
 
-/// A white card with a hairline edge and a soft, low shadow, as in the reference designs.
-/// `glow` adds the warm peach light in the top corner used by the hero card.
+/// A card exactly like the system's grouped panels in iOS 26/27: the secondary grouped
+/// background with continuous corners, flat, with no outline or shadow.
+/// `glow` adds a warm light in the top corner.
 struct ElegantCard: ViewModifier {
     var padding: CGFloat = 16
-    var radius: CGFloat = 22
+    var radius: CGFloat = 26
     var glow = false
-    @Environment(\.colorScheme) private var scheme
     func body(content: Content) -> some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
         return content
@@ -38,13 +38,11 @@ struct ElegantCard: ViewModifier {
                     }
                     .clipShape(shape)
             }
-            .overlay(shape.strokeBorder(Color.primary.opacity(scheme == .dark ? 0.08 : 0.04), lineWidth: 1))
-            .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.06), radius: 14, y: 6)
     }
 }
 
 extension View {
-    func elegantCard(padding: CGFloat = 16, radius: CGFloat = 22, glow: Bool = false) -> some View {
+    func elegantCard(padding: CGFloat = 16, radius: CGFloat = 26, glow: Bool = false) -> some View {
         modifier(ElegantCard(padding: padding, radius: radius, glow: glow))
     }
 }
@@ -69,7 +67,7 @@ struct CrescentShape: Shape {
 /// crescent. Each tab's summary sits on it; content on it is white. Static and cheap.
 struct MoonlitBackground: View {
     /// 0 inside list rows, where the list rounds the cell itself.
-    var radius: CGFloat = 28
+    var radius: CGFloat = 26
     var crescent = true
     var body: some View {
         let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
@@ -100,18 +98,18 @@ struct MoonlitBackground: View {
 /// that links inside the card open.
 struct MoonlitCard: ViewModifier {
     var padding: CGFloat = 20
-    var radius: CGFloat = 28
+    var radius: CGFloat = 26
     func body(content: Content) -> some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background { MoonlitBackground(radius: radius) }
-            .shadow(color: IslandTheme.nightTop.opacity(0.30), radius: 22, y: 12)
+            .shadow(color: IslandTheme.nightTop.opacity(0.20), radius: 18, y: 10)
     }
 }
 
 extension View {
-    func moonlitCard(padding: CGFloat = 20, radius: CGFloat = 28) -> some View {
+    func moonlitCard(padding: CGFloat = 20, radius: CGFloat = 26) -> some View {
         modifier(MoonlitCard(padding: padding, radius: radius))
     }
     /// A moonlit summary row inside a list; the list rounds the cell itself.
@@ -167,24 +165,54 @@ enum OnNight {
     static let stroke = Color.white.opacity(0.14)
 }
 
-/// Cards rise gently into place the first time a page appears, a few frames apart.
-/// One-shot; skipped with Reduce Motion or Animations off (as in UI tests).
-struct ElegantEntrance: ViewModifier {
-    let index: Int
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
-    func body(content: Content) -> some View {
-        let still = shown || reduceMotion || !ElegantMotion.enabled
-        return content
-            .opacity(still ? 1 : 0)
-            .offset(y: still ? 0 : 14)
-            .task {
-                guard !shown else { return }
-                guard !reduceMotion, ElegantMotion.enabled else { shown = true; return }
-                do { try await Task.sleep(for: .milliseconds(16 + 45 * index)) } catch { shown = true; return }
-                withAnimation(YueJiMotion.entrance) { shown = true }
+/// A round icon button. On iOS 26 and later it is Apple's own Liquid Glass circle, so its
+/// press, glow and morphing are exactly the system's; otherwise a soft tinted circle.
+struct GlassIconButton: View {
+    let symbol: String
+    /// White glyph for the moonlit cards.
+    var onDark = false
+    let action: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            Button(action: action) {
+                Image(systemName: symbol).font(.subheadline.weight(.semibold))
+                    .foregroundStyle(onDark ? Color.white : Color.primary)
+                    .frame(width: 22, height: 22)
             }
+            .buttonStyle(.glass).buttonBorderShape(.circle)
+            .frame(minWidth: 44, minHeight: 44)
+        } else {
+            Button(action: action) {
+                Image(systemName: symbol).font(.subheadline.weight(.semibold))
+                    .foregroundStyle(onDark ? Color.white : IslandTheme.accent)
+                    .frame(width: 40, height: 40)
+                    .background(Circle().fill(onDark ? OnNight.fill : IslandTheme.accent.opacity(scheme == .dark ? 0.16 : 0.08)))
+                    .overlay { if onDark { Circle().strokeBorder(OnNight.stroke, lineWidth: 1) } }
+                    .frame(width: 44, height: 44).contentShape(Circle())
+            }
+            .buttonStyle(ElegantPressStyle())
+        }
     }
+}
+
+/// Buttons on the moonlit cards: Apple's glass (prominent in the app tint for the main
+/// action) on iOS 26 and later; champagne or translucent capsules otherwise.
+private struct MoonlitButton: ViewModifier {
+    let prominent: Bool
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            if prominent { content.buttonStyle(.glassProminent) } else { content.buttonStyle(.glass) }
+        } else {
+            content.buttonStyle(MoonlitButtonStyle(prominent: prominent))
+        }
+    }
+}
+
+extension View {
+    func moonlitButton(prominent: Bool = false) -> some View { modifier(MoonlitButton(prominent: prominent)) }
 }
 
 /// Subtle press feedback for cards and tiles: a slight dip and dim that springs back.
@@ -292,14 +320,13 @@ struct IslandAvatar: View {
 
 // MARK: - Empty and loading states
 
-/// An empty state: a quiet symbol, a title, a message and optional actions, fading in gently.
+/// An empty state, drawn by the system's own `ContentUnavailableView` exactly as in Apple's
+/// apps: a symbol, a title, a message and optional actions.
 struct IslandEmptyState<Actions: View>: View {
     let title: String
     let message: String?
     let mood: IslandMood
     let actions: Actions
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
     init(title: String, message: String? = nil, mood: IslandMood = .sleepy, @ViewBuilder actions: () -> Actions) {
         self.title = title; self.message = message; self.mood = mood; self.actions = actions()
     }
@@ -313,31 +340,12 @@ struct IslandEmptyState<Actions: View>: View {
         }
     }
     var body: some View {
-        let still = shown || reduceMotion || !ElegantMotion.enabled
-        VStack(spacing: 12) {
-            Image(systemName: symbol)
-                .font(.system(size: 24, weight: .semibold))
-                .foregroundStyle(IslandTheme.accent)
-                .frame(width: 60, height: 60)
-                .background(Circle().fill(IslandTheme.accent.opacity(0.08)))
-                .scaleEffect(still ? 1 : 0.85)
-                .accessibilityHidden(true)
-            Text(title).font(.headline).multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-            if let message {
-                Text(message).font(.subheadline).foregroundStyle(.secondary)
-                    .multilineTextAlignment(.center).fixedSize(horizontal: false, vertical: true)
-            }
-            actions.padding(.top, 4)
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 22).padding(.horizontal, 12)
-        .opacity(still ? 1 : 0).offset(y: still ? 0 : 8)
-        .accessibilityElement(children: .contain)
-        .task {
-            guard !shown else { return }
-            guard !reduceMotion, ElegantMotion.enabled else { shown = true; return }
-            do { try await Task.sleep(for: .milliseconds(16)) } catch { shown = true; return }
-            withAnimation(YueJiMotion.entrance) { shown = true }
+        ContentUnavailableView {
+            Label(title, systemImage: symbol)
+        } description: {
+            if let message { Text(message) }
+        } actions: {
+            actions
         }
     }
 }

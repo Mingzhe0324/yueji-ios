@@ -336,15 +336,20 @@ enum BannerSwipePolicy {
 struct NotificationBannerSurface: ViewModifier {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
-    private let shape = RoundedRectangle(cornerRadius: 22, style: .continuous)
-    func body(content: Content) -> some View {
-        // A quiet floating card: opaque face, hairline edge and a soft, wide shadow, like
-        // the app's other cards. Static layers only; motion comes from the banner entry.
-        content.background { shape.fill(IslandTheme.card) }
-            .overlay {
-                shape.strokeBorder(contrast == .increased ? Color.primary.opacity(0.45) : Color.primary.opacity(scheme == .dark ? 0.10 : 0.05), lineWidth: 1)
-                    .allowsHitTesting(false)
-            }
-            .shadow(color: .black.opacity(scheme == .dark ? 0.35 : 0.10), radius: 18, y: 8)
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency, contrast != .increased {
+            // One system Liquid Glass surface, exactly like iOS 26/27 notifications,
+            // without a second custom border/shadow or an extra interactive transform.
+            content.glassEffect(.regular, in: shape)
+        } else {
+            content.background { shape.fill(IslandTheme.card) }
+                .overlay {
+                    shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5)
+                        .allowsHitTesting(false)
+                }
+                .shadow(color: .black.opacity(scheme == .dark ? 0.16 : 0.08), radius: 6, y: 2)
+        }
     }
 }

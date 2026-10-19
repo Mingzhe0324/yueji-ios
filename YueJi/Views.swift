@@ -4,24 +4,17 @@ import UIKit
 
 private let ink = IslandTheme.accent
 
-/// The app's visual tokens, taken from the app icon: a twilight sky (night blue fading
-/// into plum), a champagne moon, indigo ink for controls, and cool paper with white
-/// cards. (The "Island" names are historical.)
+/// The app's visual tokens. Surfaces and the tint are Apple's own system colours, so every
+/// screen matches iOS 26/27 exactly; the twilight sky and champagne moon from the app icon
+/// are kept for the summary cards. (The "Island" names are historical.)
 enum IslandTheme {
-    /// Primary accent: indigo ink in light mode, soft periwinkle in dark mode.
-    static let accent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.62, green: 0.67, blue: 1.00, alpha: 1)
-        : UIColor(red: 0.20, green: 0.24, blue: 0.54, alpha: 1) })
+    /// The app tint: the system indigo, which suits the twilight icon.
+    static let accent = Color(uiColor: .systemIndigo)
     /// Text/icons drawn on top of `accent` fills.
-    static let onAccent = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.07, green: 0.08, blue: 0.16, alpha: 1)
-        : UIColor.white })
-    static let paper = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.039, green: 0.043, blue: 0.059, alpha: 1)
-        : UIColor(red: 0.953, green: 0.957, blue: 0.973, alpha: 1) })
-    static let card = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
-        ? UIColor(red: 0.094, green: 0.102, blue: 0.133, alpha: 1)
-        : UIColor.white })
+    static let onAccent = Color.white
+    /// The system grouped background and its cards, as in Settings and Wallet.
+    static let paper = Color(uiColor: .systemGroupedBackground)
+    static let card = Color(uiColor: .secondarySystemGroupedBackground)
     /// Warm moonlight glow behind the opening logo.
     static let glow = Color(uiColor: UIColor { $0.userInterfaceStyle == .dark
         ? UIColor(red: 0.30, green: 0.22, blue: 0.30, alpha: 0.55)
@@ -69,39 +62,6 @@ struct IslandBackdrop: View {
     }
 }
 
-/// Primary buttons are indigo capsules with a soft top sheen; secondary ones are white
-/// capsules with a hairline. A press dips and dims slightly, then springs back, with a
-/// light haptic.
-struct IslandButtonStyle: ButtonStyle {
-    var prominent = true
-    @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    func makeBody(configuration: Configuration) -> some View {
-        let pressed = configuration.isPressed && enabled
-        return label(configuration).fontWeight(.semibold)
-            .padding(.horizontal, 18).padding(.vertical, 11)
-            .background {
-                if prominent {
-                    Capsule().fill(IslandTheme.accent)
-                        .overlay(Capsule().fill(LinearGradient(colors: [.white.opacity(0.16), .clear], startPoint: .top, endPoint: .center)))
-                } else {
-                    Capsule().fill(IslandTheme.card)
-                }
-            }
-            .overlay { if !prominent { Capsule().strokeBorder(IslandTheme.line, lineWidth: 1) } }
-            .shadow(color: (prominent ? IslandTheme.accent : Color.black).opacity(prominent ? 0.28 : 0.05), radius: prominent ? 12 : 6, y: prominent ? 6 : 3)
-            .contentShape(Capsule())
-            .scaleEffect(pressed && !reduceMotion ? 0.97 : 1)
-            .opacity(enabled ? (pressed ? 0.9 : 1) : 0.45)
-            .animation(reduceMotion ? nil : YueJiMotion.press, value: pressed)
-            .onChange(of: configuration.isPressed) { _, down in if down && enabled { FeedbackHaptics.tap() } }
-    }
-    @ViewBuilder private func label(_ configuration: Configuration) -> some View {
-        if configuration.role == .destructive { configuration.label.foregroundStyle(.red) }
-        else if prominent { configuration.label.foregroundStyle(IslandTheme.onAccent) }
-        else { configuration.label.foregroundStyle(IslandTheme.accent) }
-    }
-}
 /// The app's one motion language: calm, short springs with little or no overshoot, so
 /// movement feels smooth and connected and never gets in the way. Prefer these over
 /// one-off timings.
@@ -186,20 +146,25 @@ struct PageIntroduction: View {
 }
 private struct YueJiBarAppearance: ViewModifier {
     @Environment(\.colorScheme) private var scheme
-    func body(content: Content) -> some View {
-        content
-            // Keep native chrome in the same resolved theme as the page. A
-            // visible background keeps the requested bar scheme in effect at
-            // scroll edges as well as when content is beneath the bar.
-            .toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
-            .toolbarBackground(IslandTheme.paper, for: .navigationBar, .tabBar)
-            .toolbarBackground(.visible, for: .navigationBar, .tabBar)
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            // Liquid Glass: the system draws floating glass bars over the content with
+            // its own scroll-edge effect, exactly as in iOS 26/27. MainView also sets the
+            // app's light/dark choice on the window, so the bars always follow it.
+            content.toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
+        } else {
+            content
+                // Keep native chrome in the same resolved theme as the page. A
+                // visible background keeps the requested bar scheme in effect at
+                // scroll edges as well as when content is beneath the bar.
+                .toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
+                .toolbarBackground(.visible, for: .navigationBar, .tabBar)
+        }
     }
 }
 private struct YueJiListSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.listStyle(.insetGrouped)
-            .listSectionSpacing(18)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
             .background(IslandBackdrop())
@@ -286,6 +251,7 @@ struct MainView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("completedUsageGuide") private var completedGuide = false
     @AppStorage("openingAnimationEnabled") private var openingEnabled = true
+    @AppStorage("appAppearance") private var appearance = "system"
     @State private var showingGuide = false
     @State private var selectedTab = 0
     @State private var showingNewTNG = false
@@ -295,6 +261,16 @@ struct MainView: View {
     private func finishLaunchIfReady() {
         withAnimation(reduceMotion ? nil : YueJiMotion.standard) {
             _ = model.finishLaunchIfReady(openingEnabled: openingEnabled, openingFinished: logoFinished)
+        }
+    }
+    /// Apply the app's light/dark choice to the app window as well, so chrome UIKit draws
+    /// (the glass bars, the status bar, alerts) always follows it, not only SwiftUI views.
+    private func applyWindowAppearance(_ value: String) {
+        let style: UIUserInterfaceStyle = value == "dark" ? .dark : (value == "light" ? .light : .unspecified)
+        for case let scene as UIWindowScene in UIApplication.shared.connectedScenes {
+            for window in scene.windows where window.windowLevel == .normal && window.overrideUserInterfaceStyle != style {
+                window.overrideUserInterfaceStyle = style
+            }
         }
     }
     private func openPendingNotification() {
@@ -388,6 +364,7 @@ struct MainView: View {
             .onChange(of: model.loaded) { _, loaded in
                 if loaded { finishLaunchIfReady() }
             }
+            .onChange(of: appearance, initial: true) { _, value in applyWindowAppearance(value) }
             .task(id: model.didFinishLaunch && phase == .active) {
                 guard model.didFinishLaunch, phase == .active, !model.isPreview else { return }
                 // Defer permission prompts, recovery and network updates until the opening ends.
@@ -477,25 +454,19 @@ struct MonthPicker: View {
             insertion: .opacity.combined(with: .offset(x: CGFloat(direction) * 16)),
             removal: .opacity.combined(with: .offset(x: CGFloat(direction) * -16)))
     }
-    var body: some View {
+    @ViewBuilder var body: some View {
         let _ = uiLocale.identifier
-        // Soft round chevrons either side of the month. Pages on paper wrap it in a card;
-        // list rows already provide one.
-        controls
-    }
-    private func chevron(_ symbol: String) -> some View {
-        Image(systemName: symbol).font(.subheadline.weight(.semibold))
-            .foregroundStyle(onDark ? Color.white : IslandTheme.accent)
-            .frame(width: 40, height: 40)
-            .background(Circle().fill(onDark ? OnNight.fill : IslandTheme.accent.opacity(scheme == .dark ? 0.14 : 0.06)))
-            .overlay { if onDark { Circle().strokeBorder(OnNight.stroke, lineWidth: 1) } }
-            .frame(width: 44, height: 44).contentShape(Circle())
+        // Glass chevrons either side of the month; on iOS 26 and later they share one
+        // glass container, so they blend and morph like the system's own controls.
+        if #available(iOS 26.0, *) {
+            GlassEffectContainer(spacing: 12) { controls }
+        } else {
+            controls
+        }
     }
     private var controls: some View {
         HStack(spacing: 0) {
-            Button { shift(-1) } label: { chevron("chevron.left") }
-                .buttonStyle(ElegantPressStyle())
-                .frame(minWidth: 44, minHeight: 44)
+            GlassIconButton(symbol: "chevron.left", onDark: onDark) { shift(-1) }
                 .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
             ZStack {
                 Text(monthLabel).font(.subheadline.weight(.semibold))
@@ -514,9 +485,7 @@ struct MonthPicker: View {
                     shift(dx < 0 ? 1 : -1)
                 })
                 .accessibilityHint(tr("左右滑动切换月份", "Swipe left or right to change month", "Leret kiri atau kanan untuk menukar bulan"))
-            Button { shift(1) } label: { chevron("chevron.right") }
-                .buttonStyle(ElegantPressStyle())
-                .frame(minWidth: 44, minHeight: 44)
+            GlassIconButton(symbol: "chevron.right", onDark: onDark) { shift(1) }
                 .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
         }
         .sheet(isPresented: $choosingMonth) {
@@ -617,21 +586,13 @@ struct DashboardView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 22) {
                     summaryCard
-                        .modifier(ElegantEntrance(index: 0))
                     PendingBookkeepingCard()
-                        .modifier(ElegantEntrance(index: 1))
                     quickActions
-                        .modifier(ElegantEntrance(index: 2))
                     recentCard
-                        .modifier(ElegantEntrance(index: 3))
                     trendCard
-                        .modifier(ElegantEntrance(index: 4))
                     savingsCard
-                        .modifier(ElegantEntrance(index: 5))
                     balancesCard
-                        .modifier(ElegantEntrance(index: 5))
                     categoriesCard
-                        .modifier(ElegantEntrance(index: 6))
                 }
                 .padding(.horizontal, 16).padding(.top, 4).padding(.bottom, 32)
                 .frame(maxWidth: 640).frame(maxWidth: .infinity)
@@ -738,18 +699,10 @@ struct DashboardView: View {
                         Text(tr("本月个人消费", "Personal spending", "Belanja peribadi"))
                             .font(.subheadline.weight(.medium)).foregroundStyle(OnNight.secondary)
                         Spacer(minLength: 8)
-                        Button {
+                        GlassIconButton(symbol: hideAmounts ? "eye.slash" : "eye", onDark: true) {
                             withAnimation(reduceMotion ? nil : YueJiMotion.content) { hideAmounts.toggle() }
                             FeedbackHaptics.selection()
-                        } label: {
-                            Image(systemName: hideAmounts ? "eye.slash" : "eye")
-                                .font(.subheadline.weight(.semibold)).foregroundStyle(.white)
-                                .frame(width: 36, height: 36)
-                                .background(Circle().fill(OnNight.fill))
-                                .overlay(Circle().strokeBorder(OnNight.stroke, lineWidth: 1))
-                                .frame(width: 44, height: 44).contentShape(Circle())
                         }
-                        .buttonStyle(ElegantPressStyle())
                         .padding(.vertical, -6)
                         .accessibilityLabel(hideAmounts ? tr("显示金额", "Show amounts", "Tunjuk amaun") : tr("隐藏金额", "Hide amounts", "Sembunyi amaun"))
                     }
@@ -795,12 +748,12 @@ struct DashboardView: View {
                     Button { budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""; budgeting = true } label: {
                         Label(budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"), systemImage: "slider.horizontal.3")
                             .font(.subheadline)
-                    }.buttonStyle(MoonlitButtonStyle(prominent: budget == 0))
+                    }.moonlitButton(prominent: budget == 0)
                 }
             }
             .modifier(MonthSummaryMotion(month: loadedSummary?.month))
         }
-        .moonlitCard(padding: 20, radius: 28)
+        .moonlitCard(padding: 20, radius: 26)
         .animation(reduceMotion ? nil : YueJiMotion.tone, value: heroTint)
     }
     /// The semicircle gauge from the reference designs: a champagne arc fills with this
@@ -1537,7 +1490,7 @@ struct ExpensesView: View {
                                 Button {
                                     withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filtersExpanded.toggle() }
                                 } label: { Label(filter.active || providerFilter != "all" ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
-                                    .buttonStyle(MoonlitButtonStyle(prominent: filter.active || providerFilter != "all"))
+                                    .moonlitButton(prominent: filter.active || providerFilter != "all")
                                     .font(.subheadline).guideTarget("ledger.filter")
                                     .accessibilityIdentifier("ledger.filters.toggle")
                                     .accessibilityValue(filtersExpanded ? tr("已展开", "Expanded", "Dikembangkan") : tr("已收起", "Collapsed", "Diruntuhkan"))
@@ -3241,11 +3194,23 @@ struct AutomationSetupView: View {
         }.yuejiListSurface().navigationTitle(tr("自动记账", "Automatic recording", "Rekod automatik")).navigationBarTitleDisplayMode(.inline)
     }
 }
+/// Apple's own Liquid Glass buttons on iOS 26 and later, so presses, highlights and
+/// morphing are exactly the system's; standard bordered buttons otherwise.
 private struct YueJiPrimaryButton: ViewModifier {
-    func body(content: Content) -> some View { content.buttonStyle(IslandButtonStyle()) }
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            content.buttonStyle(.glassProminent)
+        } else { content.buttonStyle(.borderedProminent) }
+    }
 }
 private struct YueJiSecondaryButton: ViewModifier {
-    func body(content: Content) -> some View { content.buttonStyle(IslandButtonStyle(prominent: false)) }
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            content.buttonStyle(.glass)
+        } else { content.buttonStyle(.bordered) }
+    }
 }
 extension View {
     func yuejiPrimaryButton() -> some View { modifier(YueJiPrimaryButton()) }
@@ -3254,11 +3219,15 @@ extension View {
 
 
 private struct YueJiGlassSurface: ViewModifier {
-    @Environment(\.colorScheme) private var scheme
-    func body(content: Content) -> some View {
-        content.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-            .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).strokeBorder(Color.primary.opacity(scheme == .dark ? 0.08 : 0.04), lineWidth: 1))
-            .shadow(color: .black.opacity(scheme == .dark ? 0.28 : 0.06), radius: 14, y: 6)
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @ViewBuilder func body(content: Content) -> some View {
+        if reduceTransparency {
+            content.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        } else if #available(iOS 26.0, *) {
+            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        } else {
+            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        }
     }
 }
 
@@ -4149,7 +4118,8 @@ private struct LedgerFeedbackHost: ViewModifier {
     private var visible: Bool { model.feedbackOwners.isVisible(modal ? owner : nil) }
     private var bannerTransition: AnyTransition {
         reduceMotion ? .opacity : .asymmetric(
-            insertion: .offset(y: -24).combined(with: .scale(scale: 0.96, anchor: .top)).combined(with: .opacity),
+            // Drops in from the top, like a system notification.
+            insertion: .move(edge: .top).combined(with: .opacity),
             // UIKit has already moved a swiped banner offscreen. Do not run
             // a second directional exit or make the outgoing card reappear.
             removal: .opacity.animation(.easeOut(duration: 0.14)))
