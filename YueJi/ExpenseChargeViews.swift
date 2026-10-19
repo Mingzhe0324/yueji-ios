@@ -346,13 +346,13 @@ struct ExpensePlaceMapSheet: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(editing ? tr("取消", "Cancel", "Batal") : tr("完成", "Done", "Selesai")) {
+                    Button(editing ? tr("取消", "Cancel", "Batal") : tr("完成", "Done", "Selesai"), systemImage: "xmark") {
                         if hasChanges { confirmingDiscard = true } else { dismiss() }
                     }
                 }
                 if editing {
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(tr("完成", "Done", "Selesai")) { onSave?(draft); dismiss() }
+                        Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { onSave?(draft); dismiss() }
                             .disabled(draft.name.isEmpty || !draft.valid).accessibilityIdentifier("place.save")
                     }
                 }

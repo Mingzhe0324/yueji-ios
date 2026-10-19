@@ -64,7 +64,7 @@ struct ManualSettlementEntryView: View {
             }
         }.yuejiListSurface().navigationTitle(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).navigationBarTitleDisplayMode(.inline)
             .onChange(of: mode) { _, _ in friend = "" }
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() } } }
     }
 }
 

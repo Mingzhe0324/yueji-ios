@@ -283,7 +283,7 @@ private struct ReimbursementEditor: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(tr("取消", "Cancel", "Batal")) {
+                        Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") {
                             focused = nil
                             if hasChanges { confirmingDiscard = true } else { dismiss() }
                         }.disabled(saving)

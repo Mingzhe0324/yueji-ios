@@ -7,8 +7,8 @@ private let ink = IslandTheme.accent
 /// The app's visual tokens: Apple's own system colours, so every screen matches iOS 26/27
 /// exactly, in light and dark mode. (The "Island" names are historical.)
 enum IslandTheme {
-    /// The app tint: the system indigo, which matches the app icon.
-    static let accent = Color(uiColor: .systemIndigo)
+    /// The app tint: the system blue, the accent of Apple's iOS 27 UI kit (#0088FF).
+    static let accent = Color(uiColor: .systemBlue)
     /// Text/icons drawn on top of `accent` fills.
     static let onAccent = Color.white
     /// The system grouped background and its panels, as in Settings and Wallet.
@@ -20,7 +20,7 @@ enum IslandTheme {
 /// Icon and category colours: the system palette, as in Settings and Apple Card.
 /// Financial meaning (income green, spending red) stays separate.
 enum IslandPalette {
-    static let leaf = IslandTheme.accent
+    static let leaf = Color(uiColor: .systemIndigo)
     static let mint = Color(uiColor: .systemGreen)
     static let lagoon = Color(uiColor: .systemTeal)
     static let sky = Color(uiColor: .systemBlue)
@@ -94,7 +94,9 @@ private struct MonthSummaryMotion: ViewModifier {
 struct EditorSaveLabel: View {
     let saving: Bool
     var body: some View {
-        Text(tr("保存", "Save", "Simpan"))
+        // A checkmark, as sheets confirm in iOS 27 (Apple's UI kit); the accessibility
+        // label stays "Save" for VoiceOver and UI tests.
+        Image(systemName: "checkmark").fontWeight(.semibold)
             // Preserve the label's layout while the async save is running.
             .opacity(saving ? 0 : 1)
             .overlay {
@@ -139,6 +141,19 @@ private struct YueJiBarAppearance: ViewModifier {
                 .toolbarBackground(.visible, for: .navigationBar, .tabBar)
         }
     }
+}
+/// The subtitle under a large title, as in iOS 26/27 and Apple's iOS 27 UI kit.
+/// Earlier systems show the title alone.
+private struct YueJiNavigationSubtitle: ViewModifier {
+    let text: String
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 26.0, *) {
+            content.navigationSubtitle(Text(text))
+        } else { content }
+    }
+}
+extension View {
+    func yuejiSubtitle(_ text: String) -> some View { modifier(YueJiNavigationSubtitle(text: text)) }
 }
 private struct YueJiListSurface: ViewModifier {
     func body(content: Content) -> some View {
@@ -386,7 +401,7 @@ struct MainView: View {
             }
             .sheet(isPresented: $showingNewTNG, onDismiss: { openPendingNotification() }) {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
-                    Button(tr("完成", "Done", "Selesai")) { showingNewTNG = false }
+                    Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { showingNewTNG = false }
                 } } }.yuejiSheetSurface().ledgerFeedback(modal: true)
             }
             .task(id: undoExpirationPaused) { model.pauseUndoExpiry(undoExpirationPaused) }
@@ -473,8 +488,8 @@ struct MonthPicker: View {
                 }.yuejiListSurface()
                     .navigationTitle(tr("月份", "Month", "Bulan")).navigationBarTitleDisplayMode(.inline)
                     .toolbar {
-                        ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { choosingMonth = false } }
-                        ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { choose(selectedDate) } }
+                        ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { choosingMonth = false } }
+                        ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { choose(selectedDate) } }
                     }
             }.presentationDetents([.large]).yuejiSheetSurface()
         }
@@ -640,6 +655,7 @@ struct DashboardView: View {
                 withAnimation(.easeInOut(duration: 0.85)) { guideScroll.scrollTo(guideFocus, anchor: .center) }
             }
             .navigationTitle(tr("概览", "Overview", "Ringkasan")).navigationBarTitleDisplayMode(.large)
+            .yuejiSubtitle(Date().formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     NavigationLink {
@@ -1433,7 +1449,9 @@ struct ExpensesView: View {
                     case .edit(let expense): ExpenseEditor(original: expense)
                     }
                 }
-                .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large).searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
+                .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large)
+                .yuejiSubtitle(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
+                .searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
                 .toolbar {
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
@@ -1668,7 +1686,7 @@ struct ExpenseDetailView: View {
                 }
                 if !embeddedInNavigation {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(tr("关闭", "Close", "Tutup")) { dismiss() }
+                    Button(tr("关闭", "Close", "Tutup"), systemImage: "xmark") { dismiss() }
                 }
                 }
             }
@@ -2147,7 +2165,7 @@ struct ExpenseEditor: View {
                 .disabled(saving)
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting, onDeleted: { dismiss() }))
                 .navigationTitle(original == nil ? tr("新增账目", "New entry", "Rekod baharu") : tr("编辑账目", "Edit expense", "Edit belanja")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { requestClose() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button { beginSave() } label: {
                     EditorSaveLabel(saving: saving)
                 }.yuejiPrimaryButton().disabled(rateLoading || saving || recoverable != nil) } }
                 .toolbar {
@@ -2535,6 +2553,7 @@ struct FriendsView: View {
     @State private var adding = false
     private var balances: [FriendBalance] { model.friends }
     private var visible: [FriendBalance] { balances.filter { ($0.owed == 0 && $0.payable == 0) == settled } }
+    private var unsettled: Int { balances.filter { $0.owed > 0 || $0.payable > 0 }.count }
     var body: some View {
         let _ = uiLocale.identifier
         NavigationStack {
@@ -2590,6 +2609,7 @@ struct FriendsView: View {
                     NavigationLink { SplitHistoryView() } label: { IslandRowLabel(title: tr("全部分账记录", "All split entries", "Semua rekod pembahagian"), symbol: "list.bullet.rectangle.fill", color: IslandPalette.lavender) }
                 }
             }.yuejiListSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
+                .yuejiSubtitle(tr("\(unsettled) 位待结清", "\(unsettled) to settle up", "\(unsettled) belum selesai"))
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
         }
@@ -2646,7 +2666,7 @@ struct RepaymentView: View {
                 .disabled(saving).interactiveDismissDisabled(saving)
                 .onAppear { if !initialized { initialized = true; amount = Currency.input(abs(balance), "MYR") } }
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.yuejiPrimaryButton().disabled(saving) }
                 }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
@@ -4075,7 +4095,7 @@ struct NotificationDestinationView: View {
                             else if ["pending", "transfer"].contains(notice.status) { FinancialNoticeReviewView(id: notice.id) }
                             else { TNGNoticeView(id: notice.id) }
                         } else { Text(tr("这笔记录已删除或清理。", "This record has been deleted or cleared.", "Rekod ini telah dipadam atau dikosongkan.")) }
-                    }.toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
+                    }.toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { dismiss() } } }
                 }
             }
         }.yuejiSheetSurface().ledgerFeedback(modal: true)

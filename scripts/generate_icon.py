@@ -7,7 +7,7 @@ dark and tinted, opaque RGB, 1024 px; Xcode derives every smaller size), the ide
 YueJiLogo image, the YueJiIcon@2x/@3x fallbacks (the icon AltStore shows, read from
 CFBundleIconFiles) and the four notification thumbnails.
 
-The icon follows Apple's iOS 26/27 Liquid Glass icon style: a vivid indigo gradient,
+The icon follows Apple's iOS 26/27 Liquid Glass icon style: a vivid Apple-blue gradient,
 a frosted glass ledger card (记, "record") with three entries and bright glass edges,
 and a gold crescent moon (月, "moon") layered in front with a soft shadow. The dark
 appearance keeps the glass and gold on graphite; the tinted one is grayscale artwork
@@ -20,9 +20,10 @@ import json
 ROOT = Path(__file__).resolve().parents[1]
 SS = 3  # supersampling factor
 
-INDIGO_TOP = (104, 100, 248)
-INDIGO_BOTTOM = (58, 44, 178)
-SHEEN = (170, 176, 255)
+# Apple blue, matching the app tint (iOS 27 system blue #0088FF), lighter at the top.
+INDIGO_TOP = (52, 170, 255)
+INDIGO_BOTTOM = (0, 100, 226)
+SHEEN = (176, 222, 255)
 GOLD_TOP = (255, 232, 170)
 GOLD_BOTTOM = (238, 168, 74)
 WHITE = (255, 255, 255)

@@ -126,8 +126,8 @@ private struct TravelBookEditor: View {
                 if let error { Text(error).foregroundStyle(.red) }
             }.yuejiListSurface().navigationTitle(tr("旅行资料", "Trip details", "Butiran perjalanan"))
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { if hasChanges { confirming = true } else { dismiss() } } }
-                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() } }
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { if hasChanges { confirming = true } else { dismiss() } } }
+                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan"), systemImage: "checkmark") { save() } }
                 }
                 .onAppear {
                     guard !loaded else { return }; loaded = true
@@ -181,9 +181,9 @@ private struct TravelEntrySelection: View {
                 }
             }.yuejiListSurface().searchable(text: $search).navigationTitle(tr("选择账目", "Select entries", "Pilih rekod"))
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { if selected != initial { confirming = true } else { dismiss() } } }
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { if selected != initial { confirming = true } else { dismiss() } } }
                     ToolbarItem(placement: .confirmationAction) {
-                        Button(tr("完成", "Done", "Selesai")) {
+                        Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") {
                             let added = selected.subtracting(initial), removed = initial.subtracting(selected), id = tripID
                             model.change { ledger in
                                 guard ledger.expenses.filter({ added.contains($0.id) }).allSatisfy({ $0.tripID == nil }),
@@ -318,6 +318,7 @@ struct RecurringView: View {
     private var rules: [RecurringExpense] {
         model.ledger.recurring.filter { $0.active != paused }.sorted { $0.nextDate < $1.nextDate }
     }
+    private var activeCount: Int { model.ledger.recurring.filter { $0.active }.count }
     var body: some View {
         let _ = uiLocale.identifier
         NavigationStack {
@@ -346,6 +347,7 @@ struct RecurringView: View {
                     }
                 }
             }.yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
+                .yuejiSubtitle(tr("\(activeCount) 项进行中", "\(activeCount) active", "\(activeCount) aktif"))
                 .toolbar { Button { if editor == nil { editor = .new } } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(item: $editor) { route in
                     switch route {
@@ -452,7 +454,7 @@ struct RecurringEditor: View {
                 Text(tr("编辑金额只影响未来未入账项目。更改周期或首次日期请暂停旧项目，再新增。每月 31 日会在短月份落到月底。", "Amount edits affect unrecorded occurrences only. To change cycle or start date, pause this schedule and create another. The 31st uses month-end in shorter months.", "Perubahan amaun hanya untuk tempoh belum direkod. Untuk ubah kitaran atau tarikh mula, jeda jadual ini dan cipta baharu. Tarikh 31 menggunakan hujung bulan bagi bulan pendek.")).font(.footnote)
                 }
             }.yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expense", "Belanja berulang")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.yuejiPrimaryButton().disabled(rateBusy || saving) } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() }.disabled(saving) }; ToolbarItem(placement: .confirmationAction) { Button(action: save) { SaveActionLabel(saving: saving) }.yuejiPrimaryButton().disabled(rateBusy || saving) } }
                 .onAppear { guard !initialized else { return }; initialized = true; if let r = original { name = r.name; currency = r.currency; amount = Currency.input(r.minor, r.currency); category = r.category; start = r.start; cycle = r.cycle; autoPost = r.autoPost } }
                 .task(id: currency) {
                 guard !model.isPreview else { return }
@@ -1081,7 +1083,7 @@ struct RestorePreviewView: View {
                 }
             }.yuejiListSurface().navigationTitle(tr("恢复预览", "Restore preview", "Pratonton pemulihan")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(restoring).interactiveDismissDisabled(restoring)
                 .overlay { if restoring { ProgressView().accessibilityLabel(tr("正在恢复", "Restoring", "Memulihkan")) } }
-                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(restoring) } }
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() }.disabled(restoring) } }
                 .confirmationDialog(tr("确认替换当前账本？", "Replace the current ledger?", "Ganti lejar semasa?"), isPresented: $confirm, titleVisibility: .visible) {
                     Button(tr("确认恢复", "Restore", "Pulihkan"), role: .destructive) {
                         guard !restoring else { return }
@@ -1320,7 +1322,7 @@ struct CategoryEditor: View {
             }.yuejiListSurface().navigationTitle(tr("自定义分类", "Custom category", "Kategori sendiri")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface().disabled(saving).interactiveDismissDisabled(saving)
                 .onAppear { if !initialized { initialized = true; name = initial.name; icon = initial.icon; color = initial.color } }
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) { Button {
                         guard !saving else { return }
                         var item = initial; item.name = name; item.icon = icon; item.color = color
@@ -1440,8 +1442,8 @@ struct LedgerFilterEditor: View {
                 Button(tr("清除筛选", "Clear filters", "Kosongkan penapis")) { value = LedgerFilter(); apply(value); dismiss() }
             }.yuejiListSurface().navigationTitle(tr("筛选账目", "Filter entries", "Tapis rekod")).navigationBarTitleDisplayMode(.inline).yuejiSheetSurface()
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
-                ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna")) { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } }.yuejiPrimaryButton() }
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button(tr("应用", "Apply", "Guna"), systemImage: "checkmark") { do { try value.validate(); apply(value); dismiss() } catch { self.error = error.localizedDescription } }.yuejiPrimaryButton() }
                 }
                 .alert(tr("筛选条件无效", "Invalid filter", "Penapis tidak sah"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
         }
@@ -1683,7 +1685,7 @@ struct ExpenseItemsEditor: View {
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(tr("取消", "Cancel", "Batal")) { requestClose() }.disabled(saving)
+                        Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { requestClose() }.disabled(saving)
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button { save() } label: { EditorSaveLabel(saving: saving) }
@@ -3153,8 +3155,8 @@ private struct SavingsGoalEditor: View {
             .navigationTitle(tr("储蓄目标", "Savings goal", "Matlamat simpanan"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(model.isWorking("goal-editor")) }
-                ToolbarItem(placement: .confirmationAction) { Button(tr("确认保存", "Confirm", "Sahkan")) { save() }.yuejiPrimaryButton().disabled(requesting) }
+                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() }.disabled(model.isWorking("goal-editor")) }
+                ToolbarItem(placement: .confirmationAction) { Button(tr("确认保存", "Confirm", "Sahkan"), systemImage: "checkmark") { save() }.yuejiPrimaryButton().disabled(requesting) }
             }
             .onAppear {
                 guard !initialized else { return }; initialized = true
@@ -3390,7 +3392,7 @@ private struct ReceiptComparisonView: View {
             }
             .yuejiPageSurface().yuejiSheetSurface()
             .navigationTitle(tr("对照收据", "Compare receipt", "Banding resit")).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup")) { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup"), systemImage: "xmark") { dismiss() } } }
             .task {
                 let renderer = UIGraphicsImageRenderer(size: image.size)
                 let normalized = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: image.size)) }
@@ -3787,7 +3789,7 @@ struct ItemOwnershipPicker: View {
             }
         }.yuejiListSurface()
             .navigationTitle(tr("属于谁", "Belongs to", "Milik siapa")).navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { dismiss() } } }
             .alert(tr("添加朋友", "Add friend", "Tambah rakan"), isPresented: $addingFriend) {
                 TextField(tr("朋友姓名", "Friend's name", "Nama rakan"), text: $newName)
                 Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}

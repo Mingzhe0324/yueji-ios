@@ -10,13 +10,30 @@ themes (the cartoon "Moon Island" companion and the "moonlit" summary cards) wer
 retired; every screen, action and ledger behaviour is unchanged.
 
 The original native design is described in `application-native-style.md`; this page
-records the current rules.
+records the current rules. The reference is Apple's "iOS and iPadOS 27 UI Kit" (Figma,
+Apple Design Resources), page "Examples": Tab Bar 12740:24076, Toolbars - Top
+12740:23996, List 12740:24202, Sheets (Modals) 12740:24097, Home Screen 12740:35189.
+
+## Matching the iOS 27 UI kit
+
+- Navigation: large titles (34 pt bold) with a subtitle line on iOS 26+ (`yuejiSubtitle`):
+  Overview shows today's date, Ledger the selected month, Recurring the active count,
+  Friends how many people are still to settle up. Toolbar buttons are system glass
+  circles and capsules; content fades under the bar with the soft scroll-edge effect.
+- Lists: inset grouped on #F2F2F7 with white sections (26 pt corners), 52 pt rows,
+  inset separators, secondary detail text and grey chevrons, as the system draws them.
+- Sheets: grabber, a glass ✕ for cancel/close and a checkmark for save/done/apply in
+  the toolbar (prominent glass in the tint), titles in the centre. Text titles remain
+  the buttons' accessibility labels ("Cancel", "Save" …), which VoiceOver reads and
+  the UI tests use.
+- Tab bar: the system Liquid Glass tab bar. (The kit's optional detached search tab
+  is not used: search stays inside Ledger.)
 
 ## Colours and type
 
-- `IslandTheme` (the "Island" names are historical): `accent` = system indigo (the app
-  tint, matching the icon), `paper` = `systemGroupedBackground`, `card` =
-  `secondarySystemGroupedBackground`, `line` = `separator`.
+- `IslandTheme` (the "Island" names are historical): `accent` = system blue, the
+  accent of Apple's iOS 27 UI kit (#0088FF), `paper` = `systemGroupedBackground`
+  (#F2F2F7), `card` = `secondarySystemGroupedBackground`, `line` = `separator`.
 - `IslandPalette`: system colours for icons and categories (green, teal, blue, purple,
   pink, red, orange, gray). Income green and spending red keep their financial meaning.
 - Type: the system font (SF Pro) at the standard text styles; summary amounts use
@@ -71,7 +88,7 @@ which `testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
 ## Icon and notifications
 
 `scripts/generate_icon.py` draws the icon in Apple's iOS 26/27 Liquid Glass icon style: a
-vivid indigo gradient, a frosted glass ledger card (记, "record") with three entries and
+vivid Apple-blue gradient matching the tint, a frosted glass ledger card (记, "record") with three entries and
 bright glass edges, and a gold crescent moon (月, "moon") layered in front with a soft
 shadow. Like Apple's own apps it ships the three home-screen appearances in a
 single-size AppIcon set (Xcode derives every smaller size): default, dark (the glass card
@@ -80,7 +97,7 @@ the user's tint). It also writes the byte-identical opening logo and the
 `YueJiIcon@2x/@3x` fallbacks that AltStore and other sideloading tools read from
 `CFBundleIconFiles`. System notifications show this icon.
 
-It also writes four notification thumbnails in the same style — the indigo background
+It also writes four notification thumbnails in the same style — the blue background
 and a frosted glass card carrying one glyph — attached by `LedgerNotifications`:
 `YueJiNoticeRecorded` (check, automatic entry recorded), `YueJiNoticeReview` (alert,
 record needs review), `YueJiNoticeReminder` (the full icon artwork, daily reminder) and
