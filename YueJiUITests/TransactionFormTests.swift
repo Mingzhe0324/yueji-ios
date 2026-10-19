@@ -56,8 +56,12 @@ final class TransactionFormTests: XCTestCase {
         runningApp = app
         app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
-                               // Continuous idle motion would keep the app from reaching idle between steps.
-                               "-ambientAnimations", "NO",
+                               // Functional runs keep decorative motion off. XCTest waits for the app to
+                               // idle before every step, so idle loops would never finish and one-shot
+                               // celebrations (companion, confetti, boings) push the suite past its CI
+                               // budget. The opening layer itself is still shown and must hand over the
+                               // toolbar correctly; only its animation is skipped.
+                               "-ambientAnimations", "NO", "-playfulAnimations", "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
         let addEntry = app.buttons["overview.manualEntry"].firstMatch
@@ -219,8 +223,8 @@ final class TransactionFormTests: XCTestCase {
         // ledger fixtures. Leave the normal startup refresh/rate tasks enabled.
         app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
-                               // Continuous idle motion would keep the app from reaching idle between steps.
-                               "-ambientAnimations", "NO",
+                               // Decorative motion off for functional runs (see verifySavedItemEditing).
+                               "-ambientAnimations", "NO", "-playfulAnimations", "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
         // The native toolbar exposes this identifier on both an Other wrapper

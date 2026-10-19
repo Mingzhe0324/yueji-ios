@@ -77,8 +77,14 @@ off, or Settings › Appearance & language › Motion & feedback › Ambient mot
 
 The XCUITest runner waits for the app to be idle before each step. An earlier
 endless drift/blink loop kept it waiting and timed out CI, so the UI tests launch
-with `-ambientAnimations NO`. Everything else (reactions, celebrations, the
-opening) is one-shot and finishes on its own.
+with `-ambientAnimations NO`. They also pass `-playfulAnimations NO`: on the
+hosted simulator the four transaction UI tests already take about 30–35 minutes
+of the 40-minute UI stage (each step costs ~2–3 s of snapshotting), and the
+one-shot celebrations (companion acting, confetti, amount boings, page pop-ins)
+added enough idle waits to exceed the budget (run on commit 7147976). Functional
+coverage is unchanged: the opening layer is still shown in the "with opening"
+variants and must still hand over the toolbar; only decorative motion is off.
+Character and celebration motion is verified on device instead.
 
 ## Island journal
 
