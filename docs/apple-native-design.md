@@ -73,9 +73,12 @@ which `testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
 `scripts/generate_icon.py` draws the icon in Apple's iOS 26/27 Liquid Glass icon style: a
 vivid indigo gradient, a frosted glass ledger card (记, "record") with three entries and
 bright glass edges, and a gold crescent moon (月, "moon") layered in front with a soft
-shadow. It writes every AppIcon size as opaque RGB, the byte-identical opening logo,
-and the `YueJiIcon@2x/@3x` fallbacks that AltStore and other sideloading tools read
-from `CFBundleIconFiles`. System notifications show this icon.
+shadow. Like Apple's own apps it ships the three home-screen appearances in a
+single-size AppIcon set (Xcode derives every smaller size): default, dark (the glass card
+and gold moon on graphite) and tinted (grayscale artwork on black that iOS recolours with
+the user's tint). It also writes the byte-identical opening logo and the
+`YueJiIcon@2x/@3x` fallbacks that AltStore and other sideloading tools read from
+`CFBundleIconFiles`. System notifications show this icon.
 
 It also writes four notification thumbnails in the same style — the indigo background
 and a frosted glass card carrying one glyph — attached by `LedgerNotifications`:

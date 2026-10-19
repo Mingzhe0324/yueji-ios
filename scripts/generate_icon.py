@@ -2,13 +2,16 @@
 
 Original artwork drawn from shapes (no downloaded assets). Run from the repo root:
     python scripts/generate_icon.py
-Writes every AppIcon size (opaque RGB), the identical YueJiLogo image, the
-YueJiIcon@2x/@3x fallbacks (the icon AltStore shows, read from CFBundleIconFiles)
-and the four notification thumbnails.
+Writes the single-size AppIcon set with Apple's three home-screen appearances (default,
+dark and tinted, opaque RGB, 1024 px; Xcode derives every smaller size), the identical
+YueJiLogo image, the YueJiIcon@2x/@3x fallbacks (the icon AltStore shows, read from
+CFBundleIconFiles) and the four notification thumbnails.
 
 The icon follows Apple's iOS 26/27 Liquid Glass icon style: a vivid indigo gradient,
 a frosted glass ledger card (记, "record") with three entries and bright glass edges,
-and a gold crescent moon (月, "moon") layered in front with a soft shadow.
+and a gold crescent moon (月, "moon") layered in front with a soft shadow. The dark
+appearance keeps the glass and gold on graphite; the tinted one is grayscale artwork
+on black, which the system recolours with the user's tint, like Apple's own icons.
 """
 from pathlib import Path
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
@@ -44,7 +47,13 @@ def glow(n, center, radius, color, alpha):
     return layer.filter(ImageFilter.GaussianBlur(radius * 0.6))
 
 
-def background(n):
+def background(n, mode="default"):
+    if mode == "tinted":
+        return Image.new("RGBA", (n, n), (0, 0, 0, 255))
+    if mode == "dark":
+        img = vertical(n, (46, 46, 56), (12, 12, 16))
+        img.alpha_composite(glow(n, (n * 0.30, n * 0.05), n * 0.55, INDIGO_TOP, 46))
+        return img
     img = vertical(n, INDIGO_TOP, INDIGO_BOTTOM)
     img.alpha_composite(glow(n, (n * 0.30, n * 0.05), n * 0.55, SHEEN, 70))
     return img
@@ -125,33 +134,40 @@ def entries(n, x0, y0, gap, w, lengths):
     return layer
 
 
-def glass_card(img, box, radius, angle=0.0, center=None):
+def glass_card(img, box, radius, angle=0.0, center=None, alpha=0.30):
     n = img.size[0]
     mask = card_mask(n, box, radius, angle, center)
     shadow(img, mask, n * 0.035, n * 0.03, 0.40)
-    frosted(img, mask, alpha=0.30)
+    frosted(img, mask, alpha=alpha)
     rim(img, mask, n * 0.007)
     return mask
 
 
-def gold_moon(img, cx, cy, r):
+def gold_moon(img, cx, cy, r, top=GOLD_TOP, bottom=GOLD_BOTTOM):
     n = img.size[0]
     mask = crescent_mask(n, cx, cy, r)
     shadow(img, mask, n * 0.025, n * 0.02, 0.45)
-    fill(img, mask, GOLD_TOP, GOLD_BOTTOM)
+    fill(img, mask, top, bottom)
     highlight(img, mask, cx - r * 0.42, cy - r * 0.47, r * 0.53, 0.6)
     rim(img, mask, n * 0.005, 0.9)
 
 
-def icon(size=1024):
+def icon(size=1024, mode="default"):
+    """The icon in one of Apple's home-screen appearances: default, dark or tinted."""
     n = size * SS
-    img = background(n)
+    img = background(n, mode)
     center = (n * 0.53, n * 0.50)
-    glass_card(img, (n * 0.25, n * 0.20, n * 0.81, n * 0.80), n * 0.115, -7, center)
+    glass_card(img, (n * 0.25, n * 0.20, n * 0.81, n * 0.80), n * 0.115, -7, center,
+               alpha={"default": 0.30, "dark": 0.20, "tinted": 0.26}[mode])
     img.alpha_composite(entries(n, n * 0.40, n * 0.43, n * 0.09, n * 0.032, (n * 0.25, n * 0.20, n * 0.14))
                        .rotate(-7, resample=Image.BICUBIC, center=center))
-    gold_moon(img, n * 0.33, n * 0.69, n * 0.17)
-    return img.convert("RGB").resize((size, size), Image.LANCZOS)
+    if mode == "tinted":
+        gold_moon(img, n * 0.33, n * 0.69, n * 0.17, top=WHITE, bottom=(214, 214, 214))
+    else:
+        gold_moon(img, n * 0.33, n * 0.69, n * 0.17)
+    out = img.convert("RGB").resize((size, size), Image.LANCZOS)
+    # Tinted icons are grayscale: the system maps their brightness to the user's tint.
+    return out.convert("L").convert("RGB") if mode == "tinted" else out
 
 
 # Notification thumbnails: the icon's indigo and glass card carrying one white glyph,
@@ -214,13 +230,20 @@ def render(painter, size=300):
     return painter(size * SS).convert("RGB").resize((size, size), Image.LANCZOS)
 
 
+APPEARANCES = {"default": ("Icon.png", None), "dark": ("Icon-dark.png", "dark"), "tinted": ("Icon-tinted.png", "tinted")}
+
+
 def main():
     master = icon(1024)
     icons = ROOT / "YueJi/Assets.xcassets/AppIcon.appiconset"
-    for entry in json.loads((icons / "Contents.json").read_text())["images"]:
-        px = round(float(entry["size"].split("x")[0]) * int(entry["scale"][0]))
-        out = master if px == 1024 else master.resize((px, px), Image.LANCZOS)
-        out.save(icons / entry["filename"], optimize=True)
+    images = []
+    for mode, (filename, appearance) in APPEARANCES.items():
+        (master if mode == "default" else icon(1024, mode)).save(icons / filename, optimize=True)
+        entry = {"filename": filename, "idiom": "universal", "platform": "ios", "size": "1024x1024"}
+        if appearance:
+            entry = {"appearances": [{"appearance": "luminosity", "value": appearance}], **entry}
+        images.append(entry)
+    (icons / "Contents.json").write_text(json.dumps({"images": images, "info": {"author": "xcode", "version": 1}}, indent=2) + "\n")
     # The opening logo must be byte-identical to the 1024 icon.
     (ROOT / "YueJi/Assets.xcassets/YueJiLogo.imageset/YueJiLogo.png").write_bytes((icons / "Icon.png").read_bytes())
     for scale in (2, 3):
