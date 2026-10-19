@@ -2,11 +2,11 @@ import SwiftUI
 import UIKit
 import Charts
 
-/// Clean, elegant presentation pieces shared across the app: cards, icon tiles, row labels,
-/// avatars, empty and loading states, the budget gauge and the spending trend chart.
-/// Presentation only; no ledger behaviour lives here. Motion is calm and short, uses the
-/// shared `YueJiMotion` springs, and honours Reduce Motion and the "playfulAnimations"
-/// setting (shown in Settings as "Animations").
+/// Shared presentation pieces in Apple's own style: flat grouped panels, glass icon buttons,
+/// icon tiles, row labels, avatars, empty and loading states, and the spending trend chart.
+/// Presentation only; no ledger behaviour lives here. Motion is the system's, and the few
+/// content animations honour Reduce Motion and the "playfulAnimations" setting (shown in
+/// Settings as "Animations").
 enum ElegantMotion {
     static var enabled: Bool { UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true }
 }
@@ -14,163 +14,31 @@ enum ElegantMotion {
 /// The tone of an empty or status state. It picks a fitting symbol; there is no character.
 enum IslandMood: String { case happy, excited, worried, sad, sleepy }
 
-// MARK: - Cards and buttons
+// MARK: - Panels and buttons
 
-/// A card exactly like the system's grouped panels in iOS 26/27: the secondary grouped
+/// A panel exactly like the system's grouped sections in iOS 26/27: the secondary grouped
 /// background with continuous corners, flat, with no outline or shadow.
-/// `glow` adds a warm light in the top corner.
 struct ElegantCard: ViewModifier {
     var padding: CGFloat = 16
-    var radius: CGFloat = 26
-    var glow = false
-    func body(content: Content) -> some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        return content
-            .padding(padding)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background {
-                shape.fill(IslandTheme.card)
-                    .overlay {
-                        if glow {
-                            RadialGradient(colors: [IslandTheme.glow, IslandTheme.glow.opacity(0)],
-                                           center: .topTrailing, startRadius: 0, endRadius: 320)
-                        }
-                    }
-                    .clipShape(shape)
-            }
-    }
-}
-
-extension View {
-    func elegantCard(padding: CGFloat = 16, radius: CGFloat = 26, glow: Bool = false) -> some View {
-        modifier(ElegantCard(padding: padding, radius: radius, glow: glow))
-    }
-}
-
-// MARK: - Moonlit cards
-
-/// The crescent from the app icon (same proportions), for the cards' faint watermark.
-struct CrescentShape: Shape {
-    func path(in rect: CGRect) -> Path {
-        let r = min(rect.width, rect.height) / 2
-        let center = CGPoint(x: rect.midX, y: rect.midY)
-        let cutRadius = r * 0.80
-        let cutCenter = CGPoint(x: center.x + r * 0.42, y: center.y - r * 0.30)
-        let moon = Path(ellipseIn: CGRect(x: center.x - r, y: center.y - r, width: 2 * r, height: 2 * r))
-        let shadow = Path(ellipseIn: CGRect(x: cutCenter.x - cutRadius, y: cutCenter.y - cutRadius, width: 2 * cutRadius, height: 2 * cutRadius))
-        return moon.subtracting(shadow)
-    }
-}
-
-/// The app's signature surface, taken from the icon: a twilight sky from night blue to
-/// plum, moonlight in the top corner, a warm glow low on the horizon and a faint champagne
-/// crescent. Each tab's summary sits on it; content on it is white. Static and cheap.
-struct MoonlitBackground: View {
-    /// 0 inside list rows, where the list rounds the cell itself.
-    var radius: CGFloat = 26
-    var crescent = true
-    var body: some View {
-        let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
-        ZStack {
-            LinearGradient(stops: [.init(color: IslandTheme.nightTop, location: 0),
-                                   .init(color: IslandTheme.nightMid, location: 0.55),
-                                   .init(color: IslandTheme.nightBottom, location: 1)],
-                           startPoint: .topLeading, endPoint: .bottomTrailing)
-            RadialGradient(colors: [IslandTheme.nightGlow.opacity(0.45), .clear], center: .topTrailing, startRadius: 0, endRadius: 260)
-            RadialGradient(colors: [IslandTheme.peach.opacity(0.30), .clear], center: .bottomTrailing, startRadius: 0, endRadius: 300)
-            if crescent {
-                CrescentShape()
-                    .fill(LinearGradient(colors: [IslandTheme.moon.opacity(0.13), IslandTheme.moonDeep.opacity(0.03)], startPoint: .top, endPoint: .bottom))
-                    .frame(width: 176, height: 176)
-                    .offset(x: 62, y: -70)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-            }
-        }
-        .clipShape(shape)
-        .overlay { if radius > 0 { shape.strokeBorder(Color.white.opacity(0.10), lineWidth: 1) } }
-        .allowsHitTesting(false)
-        .accessibilityHidden(true)
-    }
-}
-
-/// A summary card on the moonlit surface with a soft, deep shadow. Content styles its own
-/// text with `OnNight` colours: a foreground style set here would also reach the pages
-/// that links inside the card open.
-struct MoonlitCard: ViewModifier {
-    var padding: CGFloat = 20
     var radius: CGFloat = 26
     func body(content: Content) -> some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background { MoonlitBackground(radius: radius) }
-            .shadow(color: IslandTheme.nightTop.opacity(0.20), radius: 18, y: 10)
+            .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
     }
 }
 
 extension View {
-    func moonlitCard(padding: CGFloat = 20, radius: CGFloat = 26) -> some View {
-        modifier(MoonlitCard(padding: padding, radius: radius))
+    func elegantCard(padding: CGFloat = 16, radius: CGFloat = 26) -> some View {
+        modifier(ElegantCard(padding: padding, radius: radius))
     }
-    /// A moonlit summary row inside a list; the list rounds the cell itself.
-    func moonlitRow() -> some View {
-        listRowBackground(MoonlitBackground(radius: 0))
-            .listRowSeparator(.hidden)
-    }
-}
-
-/// Buttons on the moonlit cards: a champagne capsule for the main action, a translucent
-/// white one otherwise.
-struct MoonlitButtonStyle: ButtonStyle {
-    var prominent = false
-    func makeBody(configuration: Configuration) -> some View {
-        MoonlitButtonBody(configuration: configuration, prominent: prominent)
-    }
-}
-
-private struct MoonlitButtonBody: View {
-    let configuration: ButtonStyleConfiguration
-    let prominent: Bool
-    @Environment(\.isEnabled) private var enabled
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    var body: some View {
-        let pressed = configuration.isPressed && enabled
-        configuration.label
-            .fontWeight(.semibold)
-            .foregroundStyle(prominent ? IslandTheme.nightTop : Color.white)
-            .padding(.horizontal, 16).padding(.vertical, 10)
-            .background {
-                if prominent {
-                    Capsule().fill(LinearGradient(colors: [IslandTheme.moon, IslandTheme.moonDeep], startPoint: .top, endPoint: .bottom))
-                } else {
-                    Capsule().fill(OnNight.fill)
-                }
-            }
-            .overlay { if !prominent { Capsule().strokeBorder(OnNight.stroke, lineWidth: 1) } }
-            .shadow(color: prominent ? IslandTheme.moonDeep.opacity(0.35) : .clear, radius: 10, y: 4)
-            .contentShape(Capsule())
-            .scaleEffect(pressed && !reduceMotion ? 0.97 : 1)
-            .opacity(enabled ? (pressed ? 0.9 : 1) : 0.45)
-            .animation(reduceMotion ? nil : YueJiMotion.press, value: pressed)
-            .onChange(of: configuration.isPressed) { _, down in if down && enabled { FeedbackHaptics.tap() } }
-    }
-}
-
-/// White text styles for content on the moonlit surface.
-enum OnNight {
-    static let primary = Color.white
-    static let secondary = Color.white.opacity(0.68)
-    static let tertiary = Color.white.opacity(0.48)
-    static let fill = Color.white.opacity(0.10)
-    static let stroke = Color.white.opacity(0.14)
 }
 
 /// A round icon button. On iOS 26 and later it is Apple's own Liquid Glass circle, so its
 /// press, glow and morphing are exactly the system's; otherwise a soft tinted circle.
 struct GlassIconButton: View {
     let symbol: String
-    /// White glyph for the moonlit cards.
-    var onDark = false
     let action: () -> Void
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
@@ -178,7 +46,7 @@ struct GlassIconButton: View {
         if #available(iOS 26.0, *), !reduceTransparency {
             Button(action: action) {
                 Image(systemName: symbol).font(.subheadline.weight(.semibold))
-                    .foregroundStyle(onDark ? Color.white : Color.primary)
+                    .foregroundStyle(Color.primary)
                     .frame(width: 22, height: 22)
             }
             .buttonStyle(.glass).buttonBorderShape(.circle)
@@ -186,10 +54,9 @@ struct GlassIconButton: View {
         } else {
             Button(action: action) {
                 Image(systemName: symbol).font(.subheadline.weight(.semibold))
-                    .foregroundStyle(onDark ? Color.white : IslandTheme.accent)
+                    .foregroundStyle(IslandTheme.accent)
                     .frame(width: 40, height: 40)
-                    .background(Circle().fill(onDark ? OnNight.fill : IslandTheme.accent.opacity(scheme == .dark ? 0.16 : 0.08)))
-                    .overlay { if onDark { Circle().strokeBorder(OnNight.stroke, lineWidth: 1) } }
+                    .background(Circle().fill(IslandTheme.accent.opacity(scheme == .dark ? 0.16 : 0.08)))
                     .frame(width: 44, height: 44).contentShape(Circle())
             }
             .buttonStyle(ElegantPressStyle())
@@ -197,25 +64,7 @@ struct GlassIconButton: View {
     }
 }
 
-/// Buttons on the moonlit cards: Apple's glass (prominent in the app tint for the main
-/// action) on iOS 26 and later; champagne or translucent capsules otherwise.
-private struct MoonlitButton: ViewModifier {
-    let prominent: Bool
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            if prominent { content.buttonStyle(.glassProminent) } else { content.buttonStyle(.glass) }
-        } else {
-            content.buttonStyle(MoonlitButtonStyle(prominent: prominent))
-        }
-    }
-}
-
-extension View {
-    func moonlitButton(prominent: Bool = false) -> some View { modifier(MoonlitButton(prominent: prominent)) }
-}
-
-/// Subtle press feedback for cards and tiles: a slight dip and dim that springs back.
+/// Subtle press feedback for tappable panels: a slight dip and dim that springs back.
 struct ElegantPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         ElegantPressBody(configuration: configuration)
@@ -233,56 +82,38 @@ private struct ElegantPressBody: View {
     }
 }
 
-/// A small capsule label for amounts and filters ("Left RM 734", "Budget RM 2,000").
-struct ElegantChip: View {
-    let title: String
-    var value: String? = nil
-    var tint: Color = .primary
-    /// Translucent white styling for the moonlit cards.
-    var onDark = false
-    var body: some View {
-        HStack(spacing: 6) {
-            Text(title).foregroundStyle(onDark ? OnNight.secondary : Color.secondary)
-            if let value { Text(value).fontWeight(.semibold).foregroundStyle(tint).monospacedDigit() }
-        }
-        .font(.subheadline)
-        .lineLimit(1).minimumScaleFactor(0.8)
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .background(onDark ? OnNight.fill : Color.primary.opacity(0.04), in: Capsule())
-        .overlay(Capsule().strokeBorder(onDark ? OnNight.stroke : Color.primary.opacity(0.06), lineWidth: 1))
-        .accessibilityElement(children: .combine)
-    }
-}
-
 // MARK: - Icons, rows and avatars
 
-/// A soft tinted icon tile, or a solid one when `filled`.
+/// Category and transaction icons as Apple Card draws them: a white symbol on a coloured
+/// circle. `filled` gives the rounded-square tile of Settings rows instead.
 struct IslandIconTile: View {
     let symbol: String
     let color: Color
     var size: CGFloat = 44
     var filled = false
-    @Environment(\.colorScheme) private var scheme
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: size * 0.3, style: .continuous)
         Image(systemName: symbol)
-            .font(.system(size: size * 0.40, weight: .semibold))
-            .foregroundStyle(filled ? Color.white : color)
+            .font(.system(size: size * (filled ? 0.44 : 0.42), weight: .semibold))
+            .foregroundStyle(.white)
             .frame(width: size, height: size)
             .background {
-                if filled { shape.fill(color.gradient) } else { shape.fill(color.opacity(scheme == .dark ? 0.22 : 0.12)) }
+                if filled {
+                    RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).fill(color.gradient)
+                } else {
+                    Circle().fill(color.gradient)
+                }
             }
     }
 }
 
-/// A list-row label with an icon tile, for links and tools.
+/// A list-row label with a Settings-style icon tile, for links and tools.
 struct IslandRowLabel: View {
     let title: String
     let symbol: String
     var color: Color = IslandPalette.leaf
     var body: some View {
         HStack(spacing: 12) {
-            IslandIconTile(symbol: symbol, color: color, size: 32, filled: true)
+            IslandIconTile(symbol: symbol, color: color, size: 30, filled: true)
                 .accessibilityHidden(true)
             Text(title).foregroundStyle(.primary)
         }
@@ -290,7 +121,7 @@ struct IslandRowLabel: View {
     }
 }
 
-/// A round avatar with a stable palette colour per name and a check once settled.
+/// A round monogram avatar with a stable palette colour per name and a check once settled.
 struct IslandAvatar: View {
     let name: String
     var settled = false
@@ -360,8 +191,7 @@ struct YueJiLoadingView: View {
     var body: some View {
         VStack(spacing: 16) {
             Image("YueJiLogo").resizable().scaledToFit().frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
+                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
                 .accessibilityHidden(true)
             ProgressView().controlSize(.regular)
             Text(tr("正在读取账本", "Loading ledger", "Memuatkan lejar"))
@@ -369,62 +199,6 @@ struct YueJiLoadingView: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(tr("正在读取账本", "Loading ledger", "Memuatkan lejar"))
-    }
-}
-
-// MARK: - Budget gauge
-
-/// A semicircle gauge with a teal-to-peach arc that sweeps in, like the reference summary card.
-/// `fraction` is the share of the budget used; above 1 the arc stays full and turns `tint`.
-struct BudgetGauge: View {
-    let fraction: Double
-    var overTint: Color = IslandPalette.coral
-    var lineWidth: CGFloat = 18
-    /// Champagne arc and white ticks for the moonlit cards.
-    var onDark = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = 0.0
-    private var target: Double { min(max(fraction, 0), 1) }
-    var body: some View {
-        GeometryReader { proxy in
-            let width = proxy.size.width
-            let diameter = max(1, width - lineWidth - 20)
-            let center = CGPoint(x: width / 2, y: proxy.size.height)
-            let ink = onDark ? Color.white : Color.primary
-            ZStack {
-                ForEach(0..<25, id: \.self) { index in
-                    Capsule().fill(ink.opacity(index % 6 == 0 ? (onDark ? 0.42 : 0.22) : (onDark ? 0.18 : 0.10)))
-                        .frame(width: 2, height: index % 6 == 0 ? 8 : 5)
-                        .offset(y: -(diameter / 2 + lineWidth / 2 + 8))
-                        .rotationEffect(.degrees(-90 + Double(index) * 7.5))
-                        .position(center)
-                }
-                Circle().trim(from: 0.5, to: 1)
-                    .stroke(ink.opacity(onDark ? 0.12 : 0.07), style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                    .frame(width: diameter, height: diameter)
-                    .position(center)
-                Circle().trim(from: 0.5, to: 0.5 + 0.5 * shown)
-                    .stroke(arcStyle, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round))
-                    .frame(width: diameter, height: diameter)
-                    .position(center)
-                    .opacity(shown > 0.001 ? 1 : 0)
-            }
-        }
-        .aspectRatio(2, contentMode: .fit)
-        .accessibilityHidden(true)
-        .onAppear { sweep() }
-        .onChange(of: fraction) { _, _ in sweep() }
-    }
-    private var arcStyle: AnyShapeStyle {
-        if fraction > 1 { return AnyShapeStyle(overTint.gradient) }
-        if onDark {
-            return AnyShapeStyle(LinearGradient(colors: [IslandTheme.moon, IslandTheme.moonDeep, IslandTheme.peach], startPoint: .leading, endPoint: .trailing))
-        }
-        return AnyShapeStyle(LinearGradient(colors: [IslandTheme.teal, IslandTheme.peach], startPoint: .leading, endPoint: .trailing))
-    }
-    private func sweep() {
-        if reduceMotion || !ElegantMotion.enabled { shown = target; return }
-        withAnimation(YueJiMotion.meter) { shown = target }
     }
 }
 
@@ -436,8 +210,9 @@ struct SpendingTrendPoint: Identifiable, Equatable {
     var id: String { monthKey(month) }
 }
 
-/// Six months of personal spending as soft bars; the selected month glows with the gradient
-/// and carries a value tooltip. Tapping a bar selects that month.
+/// Six months of personal spending as Swift Charts bars in the app tint, as in Apple's
+/// Health and Screen Time: the selected month is solid with its value above, the others
+/// lighter. Tapping a bar selects that month.
 struct SpendingTrendChart: View {
     let points: [SpendingTrendPoint]
     let selected: Date
@@ -454,32 +229,19 @@ struct SpendingTrendChart: View {
             let isSelected = point.id == selectedKey
             BarMark(x: .value("Month", label(point.month)),
                     y: .value("Spent", grown || reduceMotion ? Double(point.cents) / 100 : 0),
-                    width: .ratio(0.56))
-                .cornerRadius(8)
-                // The selected month wears the twilight of the summary card; the others stay soft.
-                .foregroundStyle(isSelected
-                    ? AnyShapeStyle(LinearGradient(colors: [IslandTheme.nightGlow, IslandTheme.nightBottom], startPoint: .top, endPoint: .bottom))
-                    : AnyShapeStyle(IslandTheme.nightGlow.opacity(0.18)))
-                .annotation(position: .top, spacing: 6) {
+                    width: .ratio(0.6))
+                .cornerRadius(6)
+                .foregroundStyle(isSelected ? IslandTheme.accent : IslandTheme.accent.opacity(0.28))
+                .annotation(position: .top, spacing: 4) {
                     if isSelected && !hidden && point.cents > 0 {
                         Text(money(point.cents))
                             .font(.caption2.weight(.semibold)).monospacedDigit()
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 8).padding(.vertical, 4)
-                            .background(Capsule().fill(IslandTheme.nightMid))
+                            .foregroundStyle(.secondary)
                     }
                 }
         }
-        .chartYAxis {
-            AxisMarks(position: .leading) { _ in
-                AxisGridLine(stroke: StrokeStyle(lineWidth: 1, dash: [3, 4])).foregroundStyle(Color.primary.opacity(0.08))
-                // Hidden amounts keep the grid but blank the values.
-                AxisValueLabel().foregroundStyle(Color.secondary.opacity(hidden ? 0 : 1))
-            }
-        }
-        .chartXAxis {
-            AxisMarks { _ in AxisValueLabel().foregroundStyle(Color.secondary) }
-        }
+        // Hidden amounts hide the value axis; the bars keep their shape.
+        .chartYAxis(hidden ? .hidden : .automatic)
         .chartOverlay { proxy in
             GeometryReader { geometry in
                 Rectangle().fill(Color.clear).contentShape(Rectangle())
@@ -494,59 +256,12 @@ struct SpendingTrendChart: View {
                     .accessibilityHidden(true)
             }
         }
-        .frame(height: 190)
+        .frame(height: 180)
         .animation(reduceMotion ? nil : YueJiMotion.content, value: selectedKey)
         .animation(reduceMotion ? nil : YueJiMotion.content, value: points)
         .onAppear {
             guard !grown else { return }
             if reduceMotion || !ElegantMotion.enabled { grown = true } else { withAnimation(YueJiMotion.meter) { grown = true } }
-        }
-    }
-}
-
-// MARK: - Category donut
-
-/// A slim donut of this month's category shares with the total in the middle. Decorative:
-/// the rows beneath it carry the same amounts for VoiceOver.
-struct CategoryDonut: View {
-    struct Slice: Identifiable, Equatable {
-        let category: String
-        let cents: Int
-        let color: Color
-        var id: String { category }
-    }
-    let slices: [Slice]
-    let total: Int
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var shown = false
-    var body: some View {
-        let still = shown || reduceMotion || !ElegantMotion.enabled
-        ZStack {
-            Chart(slices) { slice in
-                SectorMark(angle: .value("Spent", slice.cents), innerRadius: .ratio(0.7), angularInset: 1.5)
-                    .cornerRadius(4)
-                    .foregroundStyle(slice.color)
-            }
-            .chartLegend(.hidden)
-            .rotationEffect(.degrees(still ? 0 : -40))
-            VStack(spacing: 2) {
-                Text(tr("本月", "This month", "Bulan ini")).font(.caption).foregroundStyle(.secondary)
-                Text(money(total)).font(.subheadline.weight(.semibold)).monospacedDigit()
-                    .lineLimit(1).minimumScaleFactor(0.6)
-            }
-            .frame(width: 96)
-        }
-        .frame(width: 156, height: 156)
-        .scaleEffect(still ? 1 : 0.9)
-        .opacity(still ? 1 : 0)
-        .frame(maxWidth: .infinity)
-        .animation(reduceMotion ? nil : YueJiMotion.content, value: slices)
-        .accessibilityHidden(true)
-        .task {
-            guard !shown else { return }
-            guard !reduceMotion, ElegantMotion.enabled else { shown = true; return }
-            do { try await Task.sleep(for: .milliseconds(120)) } catch { shown = true; return }
-            withAnimation(YueJiMotion.meter) { shown = true }
         }
     }
 }

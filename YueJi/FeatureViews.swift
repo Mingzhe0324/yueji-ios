@@ -323,30 +323,9 @@ struct RecurringView: View {
         NavigationStack {
             List {
                 Section {
-                    // This month's plan on the twilight card.
                     NavigationLink { UpcomingView(initialMonth: Date()) } label: {
-                        HStack(spacing: 14) {
-                            Image(systemName: "calendar").font(.title3.weight(.semibold))
-                                .foregroundStyle(IslandTheme.moon)
-                                .frame(width: 48, height: 48)
-                                .background(OnNight.fill, in: RoundedRectangle(cornerRadius: 15, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 15, style: .continuous).strokeBorder(OnNight.stroke, lineWidth: 1))
-                                .accessibilityHidden(true)
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(tr("本月安排", "This month's plan", "Rancangan bulan ini")).font(.headline).foregroundStyle(.white)
-                                Text(tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"))
-                                    .font(.subheadline).foregroundStyle(OnNight.secondary)
-                                let active = model.ledger.recurring.filter(\.active).count
-                                Text(tr("\(active) 项进行中", "\(active) active", "\(active) aktif"))
-                                    .font(.caption.weight(.semibold)).foregroundStyle(IslandTheme.moon)
-                                    .padding(.horizontal, 9).padding(.vertical, 4)
-                                    .background(OnNight.fill, in: Capsule())
-                                    .padding(.top, 4)
-                            }
-                        }
-                        .padding(.vertical, 12)
+                        SimpleSettingsRow(title: tr("本月安排", "This month's plan", "Rancangan bulan ini"), subtitle: tr("房租、账单与订阅", "Rent, bills and subscriptions", "Sewa, bil dan langganan"), symbol: "calendar", color: IslandPalette.coral)
                     }
-                    .moonlitRow()
                 } footer: { Text(tr("这里只记账，不会替你付款。", "Records expenses; never makes payments.", "Merekod belanja; tidak membuat bayaran.")) }
                 Section {
                     Picker(tr("显示", "Show", "Papar"), selection: $paused) {
@@ -3044,7 +3023,7 @@ struct SavingsGoalsView: View {
                             if reached { Image(systemName: "checkmark.seal.fill").foregroundStyle(IslandPalette.mint) }
                         }
                         Text(money(goal.balance) + " / " + money(goal.target)).font(.subheadline).monospacedDigit()
-                        SpendingMeter(value: goal.balance, total: max(1, goal.target), color: reached ? IslandPalette.mint : IslandTheme.sun)
+                        SpendingMeter(value: goal.balance, total: max(1, goal.target), color: reached ? .green : IslandTheme.accent)
                     }.padding(.vertical, 8)
                 }
             }
@@ -3273,12 +3252,11 @@ private struct SavingsGoalDetail: View {
                 Section {
                     let reached = goal.balance >= goal.target
                     VStack(spacing: 18) {
-                        // A slim ring in moon gold; it turns mint when the goal is reached.
+                        // An activity-style ring in the app tint; it turns green when the goal is reached.
                         ZStack {
-                            Circle().stroke(Color.primary.opacity(0.07), lineWidth: 14)
+                            Circle().stroke(IslandTheme.accent.opacity(0.15), lineWidth: 14)
                             Circle().trim(from: 0, to: CGFloat(goal.progress))
-                                .stroke(reached ? AnyShapeStyle(IslandPalette.mint.gradient)
-                                        : AnyShapeStyle(AngularGradient(colors: [IslandTheme.moonDeep, IslandTheme.peach], center: .center)),
+                                .stroke(reached ? AnyShapeStyle(Color.green.gradient) : AnyShapeStyle(IslandTheme.accent.gradient),
                                         style: StrokeStyle(lineWidth: 14, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
                                 .animation(reduceMotion ? nil : YueJiMotion.meter, value: goal.balance)
@@ -3967,35 +3945,14 @@ struct PendingBookkeepingCard: View {
     var body: some View {
         let _ = uiLocale.identifier
         if pending > 0 {
-            // An Overview card: the review queue first, then recent automatic entries.
-            VStack(spacing: 0) {
+            Section {
                 NavigationLink { TNGInboxView(pendingOnly: true) } label: {
-                    HStack(spacing: 12) {
-                        IslandIconTile(symbol: "tray.full.fill", color: IslandPalette.pumpkin, size: 40).accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(tr("待处理", "Needs attention", "Perlu tindakan")).font(.headline)
-                            Text(duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan"))
-                                .font(.subheadline).foregroundStyle(.secondary).multilineTextAlignment(.leading)
-                        }
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(.tertiary)
-                            .accessibilityHidden(true)
-                    }
-                    .foregroundStyle(.primary).padding(12).contentShape(Rectangle())
-                }.buttonStyle(ElegantPressStyle())
-                Divider().padding(.leading, 64)
-                NavigationLink { AutomationStatusView() } label: {
-                    HStack {
-                        Text(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")).font(.subheadline)
-                        Spacer(minLength: 8)
-                        Image(systemName: "chevron.right").font(.caption.weight(.semibold)).foregroundStyle(.tertiary)
-                            .accessibilityHidden(true)
-                    }
-                    .foregroundStyle(.primary).padding(.horizontal, 12).padding(.vertical, 12)
-                    .frame(minHeight: 44).contentShape(Rectangle())
-                }.buttonStyle(ElegantPressStyle())
+                    SimpleSettingsRow(title: tr("待处理", "Needs attention", "Perlu tindakan"),
+                        subtitle: duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan"),
+                        symbol: "tray.full.fill", color: IslandPalette.pumpkin)
+                }
+                NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
             }
-            .elegantCard(padding: 4)
         }
     }
 }
