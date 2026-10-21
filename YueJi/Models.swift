@@ -144,6 +144,8 @@ struct Expense: Codable, Identifiable, Equatable {
     var charges: ExpenseCharges? = nil
     var place: ExpensePlace? = nil
     var tripID: String? = nil
+    /// The schedule occurrence ("rule:index") a real payment renewed; nil when not matched.
+    var renewalOf: String? = nil
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var displayName: String {
         let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -185,6 +187,8 @@ struct Ledger: Codable {
     var recurring: [RecurringExpense] = []
     var postedRecurring: Set<String> = []
     var dismissedDuplicates: Set<String> = []
+    /// Merchants marked "not a subscription", by merchant key.
+    var dismissedSubscriptions: Set<String> = []
     var automationEvents: [AutomationEvent] = []
     var merchantCategories: [String: String] = [:]
     var backupCreatedAt: Date? = nil
@@ -197,7 +201,7 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -210,6 +214,7 @@ struct Ledger: Codable {
         recurring = try c.decodeIfPresent([RecurringExpense].self, forKey: .recurring) ?? []
         postedRecurring = try c.decodeIfPresent(Set<String>.self, forKey: .postedRecurring) ?? []
         dismissedDuplicates = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedDuplicates) ?? []
+        dismissedSubscriptions = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedSubscriptions) ?? []
         automationEvents = try c.decodeIfPresent([AutomationEvent].self, forKey: .automationEvents) ?? []
         merchantCategories = try c.decodeIfPresent([String: String].self, forKey: .merchantCategories) ?? [:]
         backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
@@ -251,7 +256,8 @@ struct Ledger: Codable {
         }
         guard version == 6, expenses.count <= 50_000, Set(expenses.map(\.id)).count == expenses.count,
               budgets.values.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
-        guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count else { throw LedgerError.invalid("账本格式或版本无效。") }
+        guard rates.count <= 100, recurring.count <= 500, Set(recurring.map(\.id)).count == recurring.count,
+              dismissedSubscriptions.count <= 5000, dismissedSubscriptions.allSatisfy({ $0.count <= 1000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for (code, quote) in rates { guard Currency.codes.contains(code), code != "MYR" else { throw LedgerError.invalid("币种无效。") }; try quote.validate() }
         for rule in recurring { try rule.validate(allowedCategories: categoryNames) }
         guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
@@ -1182,7 +1188,7 @@ extension Ledger {
             try e.validateCharges()
             try e.validateItems(allowedCategories: categoryNames)
             try e.validateReimbursement()
-            guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20,
+            guard (e.note?.count ?? 0) <= 2000, (e.tags?.count ?? 0) <= 20, (e.renewalOf?.count ?? 0) <= 300,
                   (e.tags ?? []).allSatisfy({ !friendKey($0).isEmpty && $0.count <= 40 }),
                   Set((e.tags ?? []).map(friendKey)).count == (e.tags?.count ?? 0) else { throw LedgerError.invalid("备注或标签无效。") }
             try e.validateLegacyCategorySplits(allowedCategories: categoryNames)

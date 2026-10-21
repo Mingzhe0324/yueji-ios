@@ -423,3 +423,147 @@ struct SpendingDonutChart: View {
         .accessibilityHidden(true)
     }
 }
+
+// MARK: - Spending by merchant
+
+/// The colours of a category's merchant split, in a fixed order, largest merchant first:
+/// Apple's system teal, orange, indigo, pink and purple. Red and green keep their spending
+/// and income meaning. In dark mode teal and orange step down (hue held) to sit with the
+/// others on the dark card. The order passes the dataviz palette checks in both modes for
+/// every pair of sectors that can touch, the wrap-around to the first included, so they
+/// stay apart with colour blindness too. "Other" is a recessive grey.
+enum MerchantPalette {
+    static let slots: [Color] = [
+        dynamic(light: 0x00C3D0, dark: 0x03A6B1),
+        dynamic(light: 0xFF8D28, dark: 0xD87403),
+        dynamic(light: 0x6155F5, dark: 0x6D7CFF),
+        dynamic(light: 0xFF2D55, dark: 0xFF375F),
+        dynamic(light: 0xCB30E0, dark: 0xDB34F2),
+    ]
+    static let other = dynamic(light: 0x8E8E93, dark: 0x48484A)
+    private static func dynamic(light: Int, dark: Int) -> Color {
+        Color(uiColor: UIColor { traits in rgb(traits.userInterfaceStyle == .dark ? dark : light) })
+    }
+    private static func rgb(_ value: Int) -> UIColor {
+        UIColor(red: CGFloat((value >> 16) & 0xFF) / 255, green: CGFloat((value >> 8) & 0xFF) / 255,
+                blue: CGFloat(value & 0xFF) / 255, alpha: 1)
+    }
+}
+
+/// One merchant's part of a category's month: what it cost me in that category, over how
+/// many payments, and its colour. The last slice may be "Other", the merchants past the
+/// fifth folded together.
+struct MerchantSlice: Identifiable, Equatable {
+    /// The merchant's key, or "" for "Other" (no merchant's key is empty).
+    let id: String
+    /// The merchants it covers: its own key, or every key folded into "Other".
+    let merchants: Set<String>
+    let name: String
+    let cents: Int
+    let payments: Int
+    let color: Color
+
+    /// Payments group by merchant name, ignoring case and spacing.
+    static func key(for entry: Expense) -> String { entry.merchantKey }
+
+    /// A category's month by merchant, largest first: the top five in the palette's order,
+    /// then the rest folded into one grey "Other", so the donut never needs a sixth hue.
+    /// The amounts are my share in the category, so they add up to its total.
+    static func split(_ entries: [Expense], category: String) -> [MerchantSlice] {
+        var groups: [String: (name: String, cents: Int, payments: Int)] = [:]
+        for entry in entries {
+            let cents = entry.personalAmount(category: category)
+            guard cents > 0 else { continue }
+            let id = Self.key(for: entry)
+            var group = groups[id] ?? (name: entry.displayName, cents: 0, payments: 0)
+            group.cents += cents
+            group.payments += 1
+            groups[id] = group
+        }
+        let ranked = groups.sorted {
+            $0.value.cents == $1.value.cents ? $0.value.name < $1.value.name : $0.value.cents > $1.value.cents
+        }
+        let palette = MerchantPalette.slots
+        var slices = ranked.prefix(palette.count).enumerated().map { index, merchant in
+            MerchantSlice(id: merchant.key, merchants: [merchant.key], name: merchant.value.name,
+                          cents: merchant.value.cents, payments: merchant.value.payments, color: palette[index])
+        }
+        let rest = ranked.dropFirst(palette.count)
+        if !rest.isEmpty {
+            let count = rest.count
+            slices.append(MerchantSlice(
+                id: "", merchants: Set(rest.map { $0.key }),
+                name: tr("其他 \(count) 家商户", count == 1 ? "1 other merchant" : "\(count) other merchants", "\(count) peniaga lain"),
+                cents: rest.reduce(0) { $0 + $1.value.cents }, payments: rest.reduce(0) { $0 + $1.value.payments },
+                color: MerchantPalette.other))
+        }
+        return slices
+    }
+}
+
+/// A category's month split by merchant, drawn like the Overview's donut: one rounded sector
+/// per merchant in the merchant palette. Tapping a sector selects it (tap it again, or the
+/// middle, to clear): the others fade and the middle shows its share. Decorative for
+/// VoiceOver; the merchant rows carry the same figures and the same selection.
+struct MerchantDonutChart: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let slices: [MerchantSlice]
+    @Binding var selection: String?
+    var size: CGFloat = 132
+    private var total: Int { slices.reduce(0) { $0 + $1.cents } }
+    var body: some View {
+        Chart(slices) { slice in
+            SectorMark(angle: .value("Spent", Double(slice.cents) / 100),
+                       innerRadius: .ratio(0.6), angularInset: 1.5)
+                .cornerRadius(4)
+                .foregroundStyle(slice.color)
+                .opacity(selection == nil || selection == slice.id ? 1 : 0.3)
+        }
+        .chartLegend(.hidden)
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                Rectangle().fill(Color.clear).contentShape(Rectangle())
+                    .onTapGesture { location in
+                        guard let plot = proxy.plotFrame else { return }
+                        select(at: location, in: geometry[plot])
+                    }
+            }
+        }
+        .overlay {
+            if let selected = slices.first(where: { $0.id == selection }) {
+                Text(share(selected.cents))
+                    .font(.headline).monospacedDigit()
+                    .foregroundStyle(.primary)
+                    .allowsHitTesting(false)
+            }
+        }
+        .frame(width: size, height: size)
+        .animation(reduceMotion ? nil : YueJiMotion.content, value: slices)
+        .animation(reduceMotion ? nil : YueJiMotion.standard, value: selection)
+        .accessibilityHidden(true)
+    }
+    private func share(_ cents: Int) -> String {
+        String(format: "%.0f%%", Double(cents) / Double(max(total, 1)) * 100)
+    }
+    /// The sector under a tap on the ring; the middle and the corners clear the selection.
+    private func select(at location: CGPoint, in plot: CGRect) {
+        let dx = location.x - plot.midX, dy = location.y - plot.midY
+        let radius = min(plot.width, plot.height) / 2
+        let distance = (dx * dx + dy * dy).squareRoot()
+        var picked: String?
+        if total > 0, distance <= radius, distance >= radius * 0.5 {
+            // Sectors run clockwise from twelve o'clock, in the order of `slices`.
+            var angle = atan2(Double(dx), Double(-dy))
+            if angle < 0 { angle += 2 * .pi }
+            var remaining = angle / (2 * .pi) * Double(total)
+            for slice in slices {
+                remaining -= Double(slice.cents)
+                if remaining < 0 { picked = slice.id; break }
+            }
+        }
+        let next = picked == selection ? nil : picked
+        guard next != selection else { return }
+        FeedbackHaptics.selection()
+        withAnimation(reduceMotion ? nil : YueJiMotion.standard) { selection = next }
+    }
+}

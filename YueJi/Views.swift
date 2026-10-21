@@ -202,12 +202,15 @@ private struct YueJiListSurface: ViewModifier {
             .modifier(YueJiScrollEdge())
     }
 }
-/// Plain, edge-to-edge rows on the system background, as in Messages in the iOS 27 Builder
-/// kit: for the ledger's running list of payments.
+/// Plain, edge-to-edge rows, as in Messages in the iOS 27 Builder kit, over the same softly
+/// lit page as the other tabs: for the ledger's running list of payments. Its rows need
+/// `.listRowBackground(Color.clear)` so the page shows through them.
 private struct YueJiPlainListSurface: ViewModifier {
     func body(content: Content) -> some View {
         content.listStyle(.plain)
             .scrollDismissesKeyboard(.interactively)
+            .scrollContentBackground(.hidden)
+            .background { AmbientGlowBackdrop() }
             .tint(IslandTheme.accent)
             .modifier(YueJiBarAppearance())
             .modifier(YueJiScrollEdge())
@@ -422,6 +425,9 @@ struct MainView: View {
                 guard model.didFinishLaunch, phase == .active, !model.isPreview else { return }
                 // Defer permission prompts, recovery and network updates until the opening ends.
                 await LedgerNotifications.prepareAutomaticResultsAuthorization()
+                await LedgerNotifications.refreshDailyReminder()
+                // Reminders already fired make way for the next ones, in the current language.
+                await RenewalReminders.sync(model.ledger)
                 guard !Task.isCancelled else { return }
                 if let error = await AutomationRecovery.shared.retryPending() { model.error = error }
                 guard !Task.isCancelled else { return }
@@ -1149,41 +1155,69 @@ struct CategoryPaymentsView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     let category: String
     let month: Date
     private var tint: Color { model.ledger.categoryTint(category) }
     @State private var summary = OverviewSnapshot()
     @State private var entries: [Expense] = []
+    /// The category's month by merchant, for the donut and its rows.
+    @State private var merchants: [MerchantSlice] = []
+    /// The merchant tapped in the donut or its rows; the payments narrow to it.
+    @State private var selectedMerchant: String?
     @State private var loadedQuery: LedgerTimelineQuery?
+    private var selectedSlice: MerchantSlice? { merchants.first { $0.id == selectedMerchant } }
+    /// All the category's payments, or with a merchant selected exactly the ones behind its
+    /// sector, so the list matches the row's payment count.
+    private var shownEntries: [Expense] {
+        guard let selectedSlice else { return entries }
+        return entries.filter {
+            selectedSlice.merchants.contains(MerchantSlice.key(for: $0)) && $0.personalAmount(category: category) > 0
+        }
+    }
     var body: some View {
         let _ = uiLocale.identifier
         let query = model.overviewQuery(month: month)
         List {
             Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    CategoryBadge(name: category).font(.headline)
-                    Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    AnimatedMoney(cents: summary.categoryTotals[category] ?? 0)
-                        .font(.largeTitle.bold()).foregroundStyle(tint)
-                        .lineLimit(1).minimumScaleFactor(0.5)
-                    if loadedQuery == query {
-                        Text(String(format: "%.1f%%", Double(summary.categoryTotals[category] ?? 0) / Double(max(summary.personal, 1)) * 100))
-                            .font(.headline).monospacedDigit().foregroundStyle(tint)
-                            .accessibilityIdentifier("category.spending.percent")
+                // The category's own expenses card: its total beside the donut of where it
+                // went, merchant by merchant.
+                headerLayout {
+                    VStack(alignment: .leading, spacing: 12) {
+                        CategoryBadge(name: category).font(.headline)
+                        Text(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        AnimatedMoney(cents: summary.categoryTotals[category] ?? 0)
+                            .font(.largeTitle.bold()).foregroundStyle(tint)
+                            .lineLimit(1).minimumScaleFactor(0.5)
+                        if loadedQuery == query {
+                            Text(String(format: "%.1f%%", Double(summary.categoryTotals[category] ?? 0) / Double(max(summary.personal, 1)) * 100))
+                                .font(.headline).monospacedDigit().foregroundStyle(tint)
+                                .accessibilityIdentifier("category.spending.percent")
+                        }
+                        Text(tr("我的分类消费", "My category spending", "Belanja kategori saya"))
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
                     }
-                    Text(tr("我的分类消费", "My category spending", "Belanja kategori saya"))
-                        .font(.caption).foregroundStyle(.secondary)
-                    Text(String(entries.count) + tr(" 笔付款", " payments", " bayaran")).font(.caption).foregroundStyle(.secondary)
+                    if !merchants.isEmpty {
+                        if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
+                        MerchantDonutChart(slices: merchants, selection: $selectedMerchant)
+                    }
                 }.padding(.vertical, 8)
             } footer: {
                 Text(tr("分类合计是扣除退款后的个人份额；付款记录显示整笔金额。", "The category total is your share after refunds; payment records show the full payment amount.", "Jumlah kategori ialah bahagian anda selepas pulangan; rekod bayaran menunjukkan amaun penuh."))
             }
-            Section(tr("付款记录", "Payments", "Bayaran")) {
-                if entries.isEmpty && loadedQuery == query {
+            if !merchants.isEmpty {
+                // The donut's legend and its figures: one row per merchant, largest first.
+                Section(tr("按商户", "By merchant", "Mengikut peniaga")) {
+                    ForEach(merchants) { slice in merchantRow(slice) }
+                }
+            }
+            Section {
+                if shownEntries.isEmpty && loadedQuery == query {
                     IslandEmptyState(title: tr("暂无记录", "No entries", "Tiada rekod")).listRowBackground(Color.clear)
                 }
-                ForEach(entries) { entry in
+                ForEach(shownEntries) { entry in
                     NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
                         VStack(alignment: .leading, spacing: 8) {
                             ExpenseRow(entry: entry)
@@ -1193,6 +1227,8 @@ struct CategoryPaymentsView: View {
                         }
                     }.foregroundStyle(.primary)
                 }
+            } header: {
+                Text(selectedSlice.map { tr("付款记录 · ", "Payments · ", "Bayaran · ") + $0.name } ?? tr("付款记录", "Payments", "Bayaran"))
             }
         }.yuejiListSurface()
             .tint(tint)
@@ -1204,10 +1240,58 @@ struct CategoryPaymentsView: View {
                 do {
                     let fresh = try await model.preparedOverview(month: month, query: query)
                     guard !Task.isCancelled, model.overviewQuery(month: month) == query else { return }
-                    summary = fresh; entries = fresh.entries.filter { $0.hasCategory(category) }; loadedQuery = query
+                    summary = fresh; entries = fresh.entries.filter { $0.hasCategory(category) }
+                    merchants = MerchantSlice.split(entries, category: category)
+                    // A merchant whose payments were all deleted or moved leaves the selection.
+                    if let selected = selectedMerchant, !merchants.contains(where: { $0.id == selected }) { selectedMerchant = nil }
+                    loadedQuery = query
                 } catch is CancellationError { return }
                 catch { model.error = error.localizedDescription }
             }
+    }
+    /// The total beside the donut; stacked above it at accessibility text sizes.
+    private var headerLayout: AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 16))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 16))
+    }
+    private func share(_ cents: Int) -> String {
+        String(format: "%.0f%%", Double(cents) / Double(max(merchants.reduce(0) { $0 + $1.cents }, 1)) * 100)
+    }
+    /// A merchant's row, the donut's legend: its colour, name and payments, its share and
+    /// amount. Tapping it selects it in the donut and narrows the payments to it; tapping it
+    /// again shows them all.
+    private func merchantRow(_ slice: MerchantSlice) -> some View {
+        let selected = slice.id == selectedMerchant
+        let payments = slice.payments == 1
+            ? tr("1 笔付款", "1 payment", "1 bayaran")
+            : String(slice.payments) + tr(" 笔付款", " payments", " bayaran")
+        return Button {
+            FeedbackHaptics.selection()
+            withAnimation(reduceMotion ? nil : YueJiMotion.standard) { selectedMerchant = selected ? nil : slice.id }
+        } label: {
+            HStack(spacing: 12) {
+                Circle().fill(slice.color).frame(width: 12, height: 12)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(slice.name).font(.body.weight(.semibold)).lineLimit(2)
+                    Text(payments + " · " + share(slice.cents))
+                        .font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                }
+                Spacer(minLength: 8)
+                Text(money(slice.cents)).font(.body.weight(.semibold)).monospacedDigit()
+                if selected {
+                    Image(systemName: "checkmark").font(.body.weight(.semibold)).foregroundStyle(tint)
+                        .accessibilityHidden(true)
+                }
+            }
+            .foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
+        }
+        .buttonStyle(.borderless)
+        .accessibilityAddTraits(selected ? .isSelected : [])
+        .accessibilityHint(selected
+            ? tr("显示这个分类的全部付款", "Shows all of this category's payments", "Tunjukkan semua bayaran kategori ini")
+            : tr("只显示这家商户的付款", "Shows only this merchant's payments", "Tunjukkan bayaran peniaga ini sahaja"))
     }
 }
 struct OverviewToolsView: View {
@@ -1583,6 +1667,7 @@ struct ExpensesView: View {
                         .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)
                         .listRowSeparator(.hidden)
                 }
+                .listRowBackground(Color.clear)
                 if timeline.count == 0 && loadedQuery != nil {
                     let filtered = filter.active || !search.isEmpty || providerFilter != "all"
                     IslandEmptyState(title: tr("暂无记录", "No entries", "Tiada rekod"),
@@ -1631,6 +1716,7 @@ struct ExpensesView: View {
                             }
                         }
                     } header: { Text(dateLabel(day.date)) }
+                    .listRowBackground(Color.clear)
                 }
             }
                 .navigationDestination(for: LedgerExpenseDestination.self) { destination in
@@ -1822,6 +1908,10 @@ struct ExpenseDetailView: View {
     @State private var compactTitle = false
     @State private var copiedDraft: Expense?
     @State private var mapDestination: ExpensePlaceDestination?
+    /// A possible subscription being confirmed for Recurring.
+    @State private var addingSubscription: SubscriptionCandidate?
+    /// The suggestion just hidden here, offered back for a few seconds.
+    @State private var hiddenSuggestion: SubscriptionCandidate?
     // Hold the last real content until the native dismissal has finished.
     @State private var lastVisibleDetail: ExpenseDetailSnapshot?
 
@@ -1840,6 +1930,36 @@ struct ExpenseDetailView: View {
                     let entry = detail.entry
                     Section {
                         ExpenseDetailHero(entry: entry, compact: $compactTitle)
+                    }
+                    // Where a payment's notification about a subscription leads: the schedule it
+                    // renewed, or the possible subscription it may be part of.
+                    if let key = entry.renewalOf, let schedule = model.ledger.recurring.first(where: { $0.owns(key) }) {
+                        Section {
+                            NavigationLink { RecurringDetailView(ruleID: schedule.id) } label: {
+                                Label(tr("\(schedule.name) 的续费", "Renewal of \(schedule.name)", "Pembaharuan \(schedule.name)"), systemImage: "arrow.triangle.2.circlepath")
+                            }
+                        }
+                    } else if let candidate = model.ledger.subscriptionCandidate(forExpense: entry.id) {
+                        Section(candidate.kind.label) {
+                            SubscriptionSuggestionRow(candidate: candidate) {
+                                addingSubscription = candidate
+                            } dismiss: {
+                                model.change { [id = candidate.id] in $0.dismissedSubscriptions.insert(id) }
+                                hiddenSuggestion = candidate
+                            }
+                        }
+                    } else if let hidden = hiddenSuggestion {
+                        Section {
+                            HStack {
+                                Text(tr("已隐藏“\(hidden.name)”", "Hid “\(hidden.name)”", "“\(hidden.name)” disembunyikan"))
+                                    .font(.subheadline).foregroundStyle(.secondary)
+                                Spacer()
+                                Button(tr("撤销", "Undo", "Buat asal")) {
+                                    model.change { [id = hidden.id] in $0.dismissedSubscriptions.remove(id) }
+                                    hiddenSuggestion = nil
+                                }.buttonStyle(.borderless).fontWeight(.semibold)
+                            }
+                        }
                     }
                     Section(tr("账目信息", "Entry information", "Maklumat rekod")) {
                         ExpenseDescriptionDetails(entry: entry)
@@ -2004,6 +2124,12 @@ struct ExpenseDetailView: View {
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }
             .sheet(item: $copiedDraft) { entry in ExpenseEditor(original: nil, initialDraft: entry) }
+            .sheet(item: $addingSubscription) { candidate in RecurringEditor(original: nil, candidate: candidate).ledgerFeedback(modal: true) }
+            .task(id: hiddenSuggestion?.id) {
+                guard hiddenSuggestion != nil else { return }
+                do { try await Task.sleep(for: .seconds(8)) } catch { return }
+                hiddenSuggestion = nil
+            }
             .sheet(item: $mapDestination) { destination in
                 ExpensePlaceMapSheet(initial: destination.place, merchantHint: destination.merchant, onSave: nil)
             }
@@ -4125,43 +4251,63 @@ private struct NotificationBannerCard: View {
 private enum OpeningStage: Int, Comparable {
     /// The first frame: only the background, as the system launch screen.
     case start
-    /// Cosmos's mark: six dots on a ring.
-    case mark
-    /// The dots have burst into category tiles around the icon and wordmark.
-    case cosmos
-    /// The reveal: the tiles drift on and fade while the icon lifts.
+    /// Blue Liquid Glass droplets form around the centre.
+    case drops
+    /// The droplets flow together into one glass moon, the moon of the app icon.
+    case merged
+    /// The icon's gold crescent and three entries appear on the glass and the wordmark
+    /// sharpens in from a blur.
+    case moon
+    /// The reveal: the moon and wordmark zoom towards the viewer as the app fades in.
     case departing
     static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
 }
 
-/// One dot of the opening's mark and the category tile it becomes: the six default
-/// categories, scattered at different sizes like the cards around Cosmos's name.
-private struct OpeningOrbiter: Identifiable {
+/// One Liquid Glass droplet of the opening. The first is the core that swells into the
+/// moon; the others form around it and flow into it.
+private struct OpeningDrop: Identifiable {
     let id: Int
-    let symbol: String
-    let color: Color
-    /// Where the tile settles: degrees clockwise from the trailing side, and points out.
+    /// Where it forms: degrees clockwise from the trailing side, and points out.
     let angle: Double
     let distance: CGFloat
     let size: CGFloat
-    /// The dot's place on the mark, the top one first, clockwise.
-    var ringAngle: Double { -90 + Double(id) * 60 }
     static let all = [
-        OpeningOrbiter(id: 0, symbol: "fork.knife", color: IslandPalette.pumpkin, angle: -98, distance: 158, size: 56),
-        OpeningOrbiter(id: 1, symbol: "car.fill", color: IslandPalette.sky, angle: -24, distance: 150, size: 44),
-        OpeningOrbiter(id: 2, symbol: "bag.fill", color: IslandPalette.lavender, angle: 36, distance: 162, size: 62),
-        OpeningOrbiter(id: 3, symbol: "doc.text.fill", color: IslandPalette.lagoon, angle: 84, distance: 176, size: 46),
-        OpeningOrbiter(id: 4, symbol: "gamecontroller.fill", color: IslandPalette.berry, angle: 156, distance: 150, size: 58),
-        OpeningOrbiter(id: 5, symbol: "tag.fill", color: IslandPalette.coral, angle: 202, distance: 146, size: 40),
+        OpeningDrop(id: 0, angle: 0, distance: 0, size: 30),
+        OpeningDrop(id: 1, angle: -112, distance: 112, size: 30),
+        OpeningDrop(id: 2, angle: -38, distance: 96, size: 20),
+        OpeningDrop(id: 3, angle: 18, distance: 124, size: 36),
+        OpeningDrop(id: 4, angle: 82, distance: 100, size: 24),
+        OpeningDrop(id: 5, angle: 146, distance: 118, size: 32),
+        OpeningDrop(id: 6, angle: 208, distance: 90, size: 18),
     ]
 }
 
-/// The opening, after Cosmos's (Mobbin, "Cosmos iOS"): on the system background its mark
-/// of six dots turns into place, then bursts, each dot flying out to become a category
-/// tile around the app icon and the bold wordmark, as Cosmos scatters cards around its
-/// name. It waits for the ledger, then the tiles drift on and fade while the icon lifts
-/// and MainView fades the opening into the app. With Animations off or Reduce Motion
-/// only the icon and wordmark show.
+/// The icon's lit crescent (月): the moon's disc minus a disc of 0.98 its radius, centred
+/// 0.45 of its radius away up and to the right (38°), as `generate_icon.py` draws it.
+/// Inset by `rounding`, so a round-joined stroke twice that wide rounds the horns.
+private struct OpeningCrescent: Shape {
+    var rounding: CGFloat = 0
+    func path(in rect: CGRect) -> Path {
+        let r = min(rect.width, rect.height) / 2
+        let angle = 38 * Double.pi / 180
+        let disc = Self.circle(CGPoint(x: rect.midX, y: rect.midY), r - rounding)
+        let cut = Self.circle(CGPoint(x: rect.midX + r * 0.45 * CGFloat(cos(angle)),
+                                      y: rect.midY - r * 0.45 * CGFloat(sin(angle))), r * 0.98 + rounding)
+        return disc.subtracting(cut)
+    }
+    private static func circle(_ centre: CGPoint, _ radius: CGFloat) -> Path {
+        Path(ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2))
+    }
+}
+
+/// The opening, in the Liquid Glass of iOS 26/27, about 1 s to the reveal: on the tabs'
+/// softly lit page, blue glass droplets form around the centre and flow together into the
+/// glass moon of the app icon, merging like liquid because they share one glass container.
+/// The icon's gold crescent and three white entries appear on the glass while the wordmark
+/// sharpens in from a blur. Once the ledger has loaded, the moon and wordmark zoom towards
+/// the viewer and MainView fades the opening into the app. Before iOS 26, and with Reduce
+/// Transparency, the droplets are solid blue; with Animations off or Reduce Motion only the
+/// finished moon and wordmark show.
 private struct OpeningAnimationView: View {
     @Environment(\.locale) private var uiLocale
     var sound = true
@@ -4170,6 +4316,7 @@ private struct OpeningAnimationView: View {
     var onFinished: () -> Void
     @Environment(\.scenePhase) private var phase
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @AppStorage("playfulAnimations") private var playful = true
     @State private var playedSound = false
     @State private var stage = OpeningStage.start
@@ -4179,20 +4326,39 @@ private struct OpeningAnimationView: View {
     /// True from the moment the reveal starts (or the opening ends).
     @State private var revealed = false
     private var animates: Bool { playful && !reduceMotion }
-    private static let dotSize: CGFloat = 14
-    private static let ringRadius: CGFloat = 26
-    /// The tiles spread a little further vertically, to use the phone's height.
-    private static let stretch: CGFloat = 1.3
+    /// The step to draw: without animation, the finished moon straight away.
+    private var shown: OpeningStage { animates ? stage : .moon }
+    /// The moon's diameter once the droplets have merged.
+    private static let moonSize: CGFloat = 116
+    /// The icon's three entries in units of the moon's radius: rows from the centre,
+    /// lengths, thickness and their shared leading edge (from `generate_icon.py`).
+    private static let entryRows: [CGFloat] = [-0.403, -0.097, 0.208]
+    private static let entryLengths: [CGFloat] = [0.944, 0.75, 0.556]
+    private static let entryThickness: CGFloat = 0.144
+    private static let entryLeading: CGFloat = -0.33
+    /// The icon's shadow colour and gold.
+    private static let ink = Color(red: 6 / 255, green: 26 / 255, blue: 80 / 255)
+    private static let gold = LinearGradient(colors: [Color(red: 1, green: 232 / 255, blue: 170 / 255),
+                                                      Color(red: 238 / 255, green: 168 / 255, blue: 74 / 255)],
+                                             startPoint: .top, endPoint: .bottom)
     var body: some View {
         let _ = uiLocale.identifier
-        let still = !animates
         ZStack {
             Color("LaunchBackground")
-            if !still {
-                ForEach(OpeningOrbiter.all) { orbiter in tile(orbiter) }
-                mark
+            // The tabs' lit page, so the opening hands over to the Overview seamlessly.
+            AmbientGlowBackdrop()
+                .opacity(shown > .start ? 1 : 0)
+                .animation(.smooth(duration: 0.45), value: shown)
+            ZStack {
+                droplets
+                moonDetail(shown: shown >= .moon)
+                wordmark(shown: shown >= .moon)
+                    .offset(y: Self.moonSize / 2 + 44)
             }
-            centre(still: still)
+            // The zoom into the app.
+            .scaleEffect(stage == .departing ? 2.2 : 1)
+            .opacity(stage == .departing ? 0 : 1)
+            .animation(.easeIn(duration: 0.28), value: stage)
         }
         .ignoresSafeArea()
         // Skipping is handled by MainView: this layer never takes touches.
@@ -4207,13 +4373,17 @@ private struct OpeningAnimationView: View {
                     finish(); return
                 }
                 // Each layer animates its own part of every step (see the views below).
-                stage = .mark
-                try await Task.sleep(for: .milliseconds(320))
-                stage = .cosmos
-                try await Task.sleep(for: .milliseconds(600))
+                stage = .drops
+                try await Task.sleep(for: .milliseconds(210))
+                stage = .merged
+                try await Task.sleep(for: .milliseconds(360))
+                stage = .moon
+                try await Task.sleep(for: .milliseconds(400))
                 // Hold while the ledger loads: the reveal only opens onto real content.
                 while !ledgerReady { try await Task.sleep(for: .milliseconds(50)) }
                 stage = .departing
+                // Let the zoom get going before MainView fades the opening into the app.
+                try await Task.sleep(for: .milliseconds(70))
                 finish()
             } catch { return }
         }
@@ -4236,61 +4406,88 @@ private struct OpeningAnimationView: View {
         revealed = true
         onFinished()
     }
-    /// Cosmos's mark: six dots in the label colour on a ring that turns into place. On the
-    /// burst each dot flies out along its way, growing and fading into its tile.
-    private var mark: some View {
-        ZStack {
-            ForEach(OpeningOrbiter.all) { orbiter in
-                let out = stage >= .cosmos
-                Circle().fill(Color.primary)
-                    .frame(width: Self.dotSize, height: Self.dotSize)
-                    .scaleEffect(out ? 2.2 : 1)
-                    .opacity(out ? 0 : 1)
-                    .offset(out ? place(orbiter.angle, orbiter.distance, stretch: Self.stretch)
-                                : place(orbiter.ringAngle, Self.ringRadius))
-                    .animation(.spring(duration: 0.6, bounce: 0.22).delay(Double(orbiter.id) * 0.035), value: stage)
+    /// The droplets share one glass container on iOS 26 and later, so they blend and merge
+    /// like liquid as they meet, exactly as the system's own glass does; solid blue circles
+    /// otherwise.
+    @ViewBuilder private var droplets: some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            GlassEffectContainer(spacing: 24) {
+                dropletField { size in
+                    Color.clear.frame(width: size, height: size)
+                        .glassEffect(.regular.tint(IslandTheme.accent), in: Circle())
+                }
+            }
+        } else {
+            dropletField { size in
+                Circle().fill(IslandTheme.accent.gradient).frame(width: size, height: size)
             }
         }
-        .rotationEffect(.degrees(stage == .start ? -60 : 0))
-        .scaleEffect(stage == .start ? 0.6 : 1)
-        .opacity(stage == .start ? 0 : 1)
-        .animation(.spring(duration: 0.45, bounce: 0.15), value: stage)
     }
-    /// A category tile, the kit's tinted rounded square: it grows out of its dot on the
-    /// burst, settles among the others, then drifts further out and fades on the reveal.
-    private func tile(_ orbiter: OpeningOrbiter) -> some View {
-        let out = stage >= .cosmos
-        let departing = stage == .departing
-        return IslandIconTile(symbol: orbiter.symbol, color: orbiter.color, size: orbiter.size)
-            .scaleEffect(out ? (departing ? 1.1 : 1) : 0.25)
-            .opacity(stage == .cosmos ? 1 : 0)
-            .offset(out ? place(orbiter.angle, orbiter.distance * (departing ? 1.35 : 1), stretch: Self.stretch)
-                        : place(orbiter.ringAngle, Self.ringRadius))
-            .animation(departing ? Animation.smooth(duration: 0.45)
-                       : Animation.spring(duration: 0.6, bounce: 0.22).delay(Double(orbiter.id) * 0.035), value: stage)
-    }
-    /// The app icon with the wordmark beneath, set bold and wide like Cosmos's name. It
-    /// arrives with the burst and lifts slightly on the reveal.
-    private func centre(still: Bool) -> some View {
-        let shown = still || stage >= .cosmos
-        return ZStack {
-            Image("YueJiLogo").resizable().scaledToFit().frame(width: 96, height: 96)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 18, y: 8)
-                .scaleEffect(shown ? (stage == .departing ? 1.06 : 1) : 0.85)
-            Text(tr("月记", "YueJi", "YueJi"))
-                .font(.system(size: 30, weight: .heavy)).fontWidth(.expanded)
-                .foregroundStyle(.primary)
-                .offset(y: 82)
+    /// Lays the droplets out for the current step: they pop up around the centre, then flow
+    /// into it, the core swelling into the moon with a slight wobble while the others sink in.
+    private func dropletField<Drop: View>(@ViewBuilder _ drop: @escaping (CGFloat) -> Drop) -> some View {
+        ZStack {
+            ForEach(OpeningDrop.all) { item in
+                drop(dropSize(item))
+                    .offset(shown < .merged ? place(item.angle, item.distance) : .zero)
+                    // Solid droplets sink beneath the core instead of showing through it.
+                    .zIndex(item.id == 0 ? 1 : 0)
+                    .animation(shown == .drops
+                               ? Animation.spring(duration: 0.32, bounce: 0.32).delay(Double(item.id) * 0.015)
+                               : Animation.spring(duration: 0.48, bounce: 0.22).delay(Double(item.id) * 0.02), value: shown)
+            }
         }
-        .opacity(shown ? 1 : 0)
-        .animation(.smooth(duration: 0.45), value: stage)
+        // Room for every droplet, so the glass container never clips one.
+        .frame(width: 320, height: 320)
     }
-    /// A point at the angle (degrees clockwise from the trailing side) and distance from
-    /// the centre; `stretch` lengthens the vertical part.
-    private func place(_ angle: Double, _ distance: CGFloat, stretch: CGFloat = 1) -> CGSize {
+    private func dropSize(_ drop: OpeningDrop) -> CGFloat {
+        if shown < .drops { return 0 }
+        if shown < .merged { return drop.size }
+        return drop.id == 0 ? Self.moonSize : drop.size * 0.6
+    }
+    /// The icon's moon on the glass: three white entries (记) left-aligned just clear of the
+    /// gold crescent (月) in front, placed as in the icon.
+    private func moonDetail(shown: Bool) -> some View {
+        let r = Self.moonSize / 2
+        let rounding = r * 0.033
+        return ZStack {
+            ForEach(0..<3, id: \.self) { index in
+                let length = r * Self.entryLengths[index]
+                Capsule().fill(Color.white)
+                    .frame(width: length, height: r * Self.entryThickness)
+                    .shadow(color: Self.ink.opacity(0.25), radius: 2, y: 1)
+                    .position(x: r + r * Self.entryLeading + length / 2, y: r + r * Self.entryRows[index])
+                    .offset(x: shown ? 0 : -10)
+                    .opacity(shown ? 1 : 0)
+                    .animation(.smooth(duration: 0.3).delay(0.04 + Double(index) * 0.04), value: shown)
+            }
+            OpeningCrescent(rounding: rounding)
+                .fill(Self.gold)
+                .overlay {
+                    OpeningCrescent(rounding: rounding)
+                        .stroke(Self.gold, style: StrokeStyle(lineWidth: rounding * 2, lineJoin: .round))
+                }
+                .shadow(color: Self.ink.opacity(0.35), radius: r * 0.05, x: r * 0.028, y: r * 0.05)
+                .scaleEffect(shown ? 1 : 0.8)
+                .opacity(shown ? 1 : 0)
+                .animation(.spring(duration: 0.4, bounce: 0.18), value: shown)
+        }
+        .frame(width: Self.moonSize, height: Self.moonSize)
+    }
+    /// The name, sharpening in from a blur as the moon completes.
+    private func wordmark(shown: Bool) -> some View {
+        Text(tr("月记", "YueJi", "YueJi"))
+            .font(.system(size: 34, weight: .bold))
+            .foregroundStyle(.primary)
+            .blur(radius: shown ? 0 : 10)
+            .scaleEffect(shown ? 1 : 1.08)
+            .opacity(shown ? 1 : 0)
+            .animation(.smooth(duration: 0.4), value: shown)
+    }
+    /// A point at the angle (degrees clockwise from the trailing side) and distance from the centre.
+    private func place(_ angle: Double, _ distance: CGFloat) -> CGSize {
         let radians = angle * .pi / 180
-        return CGSize(width: CGFloat(cos(radians)) * distance, height: CGFloat(sin(radians)) * distance * stretch)
+        return CGSize(width: CGFloat(cos(radians)) * distance, height: CGFloat(sin(radians)) * distance)
     }
 }
 
@@ -4471,7 +4668,13 @@ struct NotificationDestinationView: View {
     var body: some View {
         let _ = uiLocale.identifier
         Group {
-            if target.kind == "expense", let entry = model.expense(id: target.recordID) {
+            if target.kind == "recurring" {
+                // A renewal reminder opens its schedule.
+                NavigationStack {
+                    RecurringDetailView(ruleID: target.recordID)
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { dismiss() } } }
+                }
+            } else if target.kind == "expense", let entry = model.expense(id: target.recordID) {
                 if target.action == "category" { ExpenseEditor(original: entry) }
                 else { ExpenseDetailView(id: entry.id) }
             } else {

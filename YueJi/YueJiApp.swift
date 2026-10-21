@@ -270,6 +270,8 @@ struct RestoredLedgerFeedback {
         refreshSignature = snapshot.signature
         if !loaded { loaded = true }
         Task { await BudgetAlertService.shared.check() }
+        // Edits, matched payments and restores move expected payments; reminders follow.
+        Task { await RenewalReminders.sync(fresh) }
     }
     func dismissNewTNG() {
         newTNGToken = UUID()

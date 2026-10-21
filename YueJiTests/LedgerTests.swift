@@ -1,4 +1,5 @@
 import XCTest
+import UserNotifications
 import UIKit
 import AVFoundation
 import SwiftUI
@@ -301,6 +302,30 @@ final class ExpenseChargeTests: XCTestCase {
                         ExpenseCharges(currency: "INVALID", subtotal: 100, sstBasisPoints: 0, serviceBasisPoints: 0)] {
             XCTAssertThrowsError(try charges.breakdown())
         }
+    }
+    func testCategoryMerchantSplitGroupsRanksAndFoldsTheRestIntoOther() {
+        let entries = [
+            Expense(merchant: "McDonald's", cents: 3000, category: "餐饮"),
+            Expense(merchant: " mcdonald's ", cents: 1500, category: "餐饮"),
+            Expense(merchant: "Mamak Corner", cents: 4000, category: "餐饮"),
+            Expense(merchant: "Starbucks", cents: 1200, category: "餐饮"),
+            Expense(merchant: "Tealive", cents: 900, category: "餐饮"),
+            Expense(merchant: "Subway", cents: 800, category: "餐饮"),
+            Expense(merchant: "KFC", cents: 700, category: "餐饮"),
+            Expense(merchant: "Bakery", cents: 600, category: "餐饮"),
+            Expense(merchant: "Shell", cents: 5000, category: "交通"),
+        ]
+        let slices = MerchantSlice.split(entries, category: "餐饮")
+        // One merchant whatever its case and spacing, largest first, and past five one "Other".
+        XCTAssertEqual(slices.map(\.cents), [4500, 4000, 1200, 900, 800, 1300])
+        XCTAssertEqual(slices.first?.name, "McDonald's")
+        XCTAssertEqual(slices.first?.payments, 2)
+        XCTAssertEqual(slices.last?.id, "")
+        XCTAssertEqual(slices.last?.merchants, ["kfc", "bakery"])
+        XCTAssertEqual(slices.last?.payments, 2)
+        // The donut adds up to the category's total; other categories stay out of it.
+        XCTAssertEqual(slices.reduce(0) { $0 + $1.cents }, entries.reduce(0) { $0 + $1.personalAmount(category: "餐饮") })
+        XCTAssertEqual(MerchantSlice.split(entries, category: "交通").map(\.name), ["Shell"])
     }
     func testItemPricesAndQuantitiesStayIntactWhileSharesAndReportsIncludeCharges() throws {
         let entry = try purchase()
@@ -4898,5 +4923,243 @@ final class DirectionNotificationSoundTests: XCTestCase {
             XCTAssertLessThan(audio.duration, 1.2)
             XCTAssertEqual(audio.numberOfChannels, 1)
         }
+    }
+}
+
+final class SubscriptionTrackingTests: XCTestCase {
+    private func noon(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        Calendar.current.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
+    }
+    func testSubscriptionSuggestionsAreTentativeAndFollowRealBilling() throws {
+        let calendar = Calendar.current
+        let now = noon(2026, 6, 15)
+        var ledger = Ledger(expenses: [
+            // One payment at a known service is only possible: the cycle is asked, not assumed.
+            Expense(merchant: "APPLE.COM/BILL", cents: 1490, date: noon(2026, 6, 10), category: "娱乐", source: "Apple Pay"),
+            // Month-end billing, with company suffixes and spacing that don't change the merchant.
+            Expense(merchant: "Gym Kita", cents: 12000, date: noon(2026, 1, 31), category: "其他"),
+            Expense(merchant: "Gym Kita", cents: 12000, date: noon(2026, 2, 28), category: "其他"),
+            Expense(merchant: "Gym Kita", cents: 12000, date: noon(2026, 3, 31), category: "其他"),
+            Expense(merchant: "GYM KITA SDN BHD", cents: 12000, date: noon(2026, 4, 30), category: "其他"),
+            Expense(merchant: " gym  kita ", cents: 12000, date: noon(2026, 5, 31), category: "其他"),
+            // A price change and a charge two days late: still one suggestion, at the new price.
+            Expense(merchant: "Spotify", cents: 1490, date: noon(2026, 3, 5), category: "娱乐"),
+            Expense(merchant: "Spotify", cents: 1490, date: noon(2026, 4, 7), category: "娱乐"),
+            Expense(merchant: "Spotify", cents: 1590, date: noon(2026, 5, 5), category: "娱乐"),
+            Expense(merchant: "Spotify", cents: 1590, date: noon(2026, 6, 5), category: "娱乐"),
+            // The same charge recorded twice counts once.
+            Expense(merchant: "Spotify", cents: 1590, date: noon(2026, 6, 5).addingTimeInterval(60), category: "娱乐"),
+            // Groceries change amount, so they aren't a subscription.
+            Expense(merchant: "Jaya Grocer", cents: 8000, date: noon(2026, 5, 15), category: "餐饮"),
+            Expense(merchant: "Jaya Grocer", cents: 11250, date: noon(2026, 6, 12), category: "餐饮"),
+        ])
+        let found = ledger.subscriptionCandidates(now: now)
+        XCTAssertEqual(found.map(\.name), ["APPLE.COM/BILL", "Spotify", "gym kita"])
+        XCTAssertNil(found[0].cycle)
+        XCTAssertEqual(found[0].kind, .subscription)
+        XCTAssertEqual(found[1].cycle, .monthly)
+        XCTAssertEqual([found[1].minor, found[1].previousMinor], [1590, 1490])
+        XCTAssertEqual(found[1].expenseIDs.count, 4)
+        XCTAssertFalse(found[1].overdue)
+        let gym = found[2]
+        XCTAssertEqual(gym.kind, .recurring)
+        XCTAssertEqual(gym.billingDay, 31)
+        let next = calendar.dateComponents([.month, .day], from: gym.expectedNext(.monthly))
+        XCTAssertEqual([next.month, next.day], [6, 30])
+        XCTAssertTrue(found.contains { $0.merchantKey == "gym kita" && $0.expenseIDs.count == 5 })
+        // A missed payment is shown as not seen, not as cancelled; a long-gone run isn't suggested.
+        XCTAssertTrue(ledger.subscriptionCandidates(now: noon(2026, 7, 20)).first(where: { $0.id == gym.id })?.overdue == true)
+        XCTAssertFalse(ledger.subscriptionCandidates(now: noon(2026, 12, 1)).contains { $0.id == gym.id })
+        // Not a subscription hides it until restored; the id holds across new charges.
+        ledger.dismissedSubscriptions.insert(gym.id)
+        XCTAssertFalse(ledger.subscriptionCandidates(now: now).contains { $0.id == gym.id })
+        XCTAssertTrue(ledger.subscriptionCandidates(now: now, includeHidden: true).contains { $0.id == gym.id })
+        ledger.expenses.append(Expense(merchant: "Gym Kita", cents: 12000, date: noon(2026, 6, 30), category: "其他"))
+        XCTAssertFalse(ledger.subscriptionCandidates(now: noon(2026, 7, 1)).contains { $0.merchantKey == "gym kita" })
+        ledger.dismissedSubscriptions.remove(gym.id)
+        XCTAssertTrue(ledger.subscriptionCandidates(now: noon(2026, 7, 1)).contains { $0.id == gym.id })
+        // Once a schedule follows the merchant, it isn't suggested again.
+        ledger.recurring = [RecurringExpense(name: "Spotify Premium", minor: 1590, start: noon(2026, 7, 5))]
+        XCTAssertFalse(ledger.subscriptionCandidates(now: now).contains { $0.merchantKey == "spotify" })
+        // Whole words only: "viu" isn't inside "Viuva".
+        XCTAssertNil(SubscriptionDetector.knownKind(Expense(merchant: "Viuva Bakery", cents: 1490)))
+        XCTAssertEqual(SubscriptionDetector.knownKind(Expense(merchant: "TM UNIFI", cents: 12900)), .bill)
+    }
+    func testSubscriptionDetectionSkipsTransfersFriendPaymentsRefundsAndScheduledEntries() {
+        let rentMay = Expense(merchant: "Landlord Ali", cents: 150000, date: noon(2026, 5, 1), category: "账单")
+        let rentJune = Expense(merchant: "Landlord Ali", cents: 150000, date: noon(2026, 6, 1), category: "账单")
+        var friendMay = Expense(merchant: "Netflix", cents: 5490, date: noon(2026, 5, 3), category: "娱乐")
+        friendMay.paidByFriend = "Amy"
+        var friendJune = Expense(merchant: "Netflix", cents: 5490, date: noon(2026, 6, 3), category: "娱乐")
+        friendJune.paidByFriend = "Amy"
+        var refunded = Expense(merchant: "Spotify", cents: 1590, date: noon(2026, 6, 5), category: "娱乐")
+        refunded.refunds = [RefundRecord(cents: 1590, date: noon(2026, 6, 6), personalCents: 1590, shares: [:])]
+        let scheduled = Expense(merchant: "Disney+ Hotstar", cents: 3990, date: noon(2026, 6, 1), category: "娱乐", source: "固定消费", recurringKey: "rule:0")
+        var ledger = Ledger(expenses: [rentMay, rentJune, friendMay, friendJune, refunded, scheduled])
+        // The rent was confirmed from bank transfers.
+        ledger.tngNotices = [rentMay, rentJune].map {
+            TNGNotice(body: "DuitNow transfer", title: "", date: $0.date, usesReceivedDate: false, kind: "transfer", status: "transfer", cents: $0.cents, party: $0.merchant, expenseID: $0.id)
+        }
+        XCTAssertTrue(ledger.subscriptionCandidates(now: noon(2026, 6, 15)).isEmpty)
+    }
+    func testRealPaymentsRenewSchedulesWithoutDuplicates() throws {
+        // A tracked subscription: a sure payment moves it on, once per billing period.
+        let spotify = RecurringExpense(name: "Spotify", minor: 1590, category: "娱乐", start: noon(2026, 6, 5), merchantKey: "spotify")
+        var ledger = Ledger(recurring: [spotify])
+        ledger.expenses.append(Expense(merchant: "SPOTIFY", cents: 1590, date: noon(2026, 6, 6), source: "Apple Pay"))
+        XCTAssertEqual(ledger.reconcileRenewal(expenseID: ledger.expenses[0].id), .renewed(name: "Spotify", next: spotify.occurrence(1)))
+        XCTAssertEqual(ledger.expenses[0].renewalOf, spotify.occurrenceKey(0))
+        XCTAssertEqual(ledger.recurring[0].nextIndex, 1)
+        ledger.expenses.append(Expense(merchant: "SPOTIFY", cents: 1590, date: noon(2026, 6, 8), source: "Apple Pay"))
+        XCTAssertEqual(ledger.reconcileRenewal(expenseID: ledger.expenses[1].id), .none)
+        // A new price isn't matched for sure: nothing changes until the user confirms it.
+        ledger.expenses.append(Expense(merchant: "SPOTIFY", cents: 1790, date: noon(2026, 7, 5), source: "Apple Pay"))
+        if case .uncertain = ledger.reconcileRenewal(expenseID: ledger.expenses[2].id) {} else { XCTFail("A changed price must be confirmed") }
+        XCTAssertEqual(ledger.recurring[0].nextIndex, 1)
+        XCTAssertEqual(ledger.possibleRenewal(for: ledger.recurring[0])?.id, ledger.expenses[2].id)
+        try ledger.useRenewalPayment(ruleID: spotify.id, expenseID: ledger.expenses[2].id)
+        XCTAssertEqual([ledger.recurring[0].minor, ledger.recurring[0].nextIndex], [1790, 2])
+        XCTAssertNil(ledger.possibleRenewal(for: ledger.recurring[0]))
+
+        // An automatic schedule's entry gives way to the real payment: one expense, not two.
+        let netflix = RecurringExpense(name: "Netflix", minor: 5490, category: "娱乐", start: noon(2026, 6, 1), autoPost: true, merchantKey: "netflix com")
+        var auto = Ledger(recurring: [netflix])
+        try auto.postDue(now: noon(2026, 6, 1))
+        XCTAssertEqual(auto.expenses.map(\.source), ["固定消费"])
+        auto.expenses.append(Expense(merchant: "NETFLIX.COM", cents: 5490, date: noon(2026, 6, 2), category: "其他", source: "Apple Pay"))
+        let real = auto.expenses[1].id
+        XCTAssertEqual(auto.reconcileRenewal(expenseID: real), .replacedScheduled(name: "Netflix", date: try XCTUnwrap(netflix.occurrence(0))))
+        XCTAssertEqual(auto.expenses.map(\.id), [real])
+        XCTAssertEqual(auto.expenses[0].renewalOf, netflix.occurrenceKey(0))
+        XCTAssertEqual(auto.expenses[0].category, "娱乐")
+        try auto.postDue(now: noon(2026, 6, 20))
+        XCTAssertEqual(auto.expenses.count, 1)
+
+        // A payment already recorded for a date stands in for the entry the schedule would add.
+        var early = Ledger(recurring: [netflix])
+        early.expenses.append(Expense(merchant: "NETFLIX.COM", cents: 5490, date: noon(2026, 5, 31), source: "Apple Pay"))
+        try early.postDue(now: noon(2026, 6, 2))
+        XCTAssertEqual(early.expenses.count, 1)
+        XCTAssertEqual(early.expenses[0].renewalOf, netflix.occurrenceKey(0))
+
+        // Unsure next to a scheduled entry: both stay, and the pair is offered for review.
+        var unsure = Ledger(recurring: [netflix])
+        try unsure.postDue(now: noon(2026, 6, 1))
+        unsure.expenses.append(Expense(merchant: "NETFLIX.COM", cents: 5990, date: noon(2026, 6, 2), source: "Apple Pay"))
+        if case .uncertain = unsure.reconcileRenewal(expenseID: unsure.expenses[1].id) {} else { XCTFail("A different price must be confirmed") }
+        XCTAssertEqual(unsure.expenses.count, 2)
+        XCTAssertTrue(unsure.duplicatePairs().contains { Set([$0.first.id, $0.second.id]) == Set(unsure.expenses.map(\.id)) })
+    }
+    func testMissedPaymentsAreConfirmedNotAssumedCancelled() {
+        let gym = RecurringExpense(name: "Gym", minor: 12000, category: "其他", start: noon(2026, 6, 1), merchantKey: "gym")
+        var ledger = Ledger(recurring: [gym])
+        XCTAssertNil(ledger.awaitedPayment(of: gym, now: noon(2026, 5, 30)))
+        XCTAssertEqual(ledger.awaitedPayment(of: gym, now: noon(2026, 6, 3))?.missed, false)
+        XCTAssertEqual(ledger.awaitedPayment(of: gym, now: noon(2026, 6, 20))?.missed, true)
+        XCTAssertTrue(ledger.recurring[0].isTracking)
+        ledger.confirmStillActive(ruleID: gym.id, now: noon(2026, 6, 20))
+        XCTAssertEqual(ledger.recurring[0].upcomingDate(now: noon(2026, 6, 20)), gym.occurrence(1))
+        XCTAssertNil(ledger.awaitedPayment(of: ledger.recurring[0], now: noon(2026, 6, 20)))
+        // Cancelled in YueJi only: no tracking until reactivated.
+        ledger.cancelRule(gym.id, now: noon(2026, 6, 20))
+        XCTAssertFalse(ledger.recurring[0].isTracking)
+        ledger.reactivateRule(gym.id, now: noon(2026, 6, 20))
+        XCTAssertTrue(ledger.recurring[0].isTracking)
+        // A new next payment date never reuses the markers of earlier payments.
+        ledger.postedRecurring.insert(ledger.recurring[0].occurrenceKey(0))
+        ledger.changeNextPayment(ruleID: gym.id, to: noon(2026, 7, 10))
+        XCTAssertEqual(ledger.recurring[0].nextDate, Calendar.current.startOfDay(for: noon(2026, 7, 10)))
+        XCTAssertFalse(ledger.postedRecurring.contains(ledger.recurring[0].occurrenceKey(0)))
+    }
+    func testRenewalRemindersComeBeforeExpectedPaymentsAndFollowMonthEnds() {
+        let defaults = UserDefaults.standard
+        let language = defaults.object(forKey: "appLanguage"), hidden = defaults.object(forKey: "hideNotificationDetails")
+        defer {
+            defaults.set(language, forKey: "appLanguage")
+            defaults.set(hidden, forKey: "hideNotificationDetails")
+        }
+        defaults.set("en", forKey: "appLanguage")
+        defaults.set(false, forKey: "hideNotificationDetails")
+        let calendar = Calendar.current
+        let now = noon(2027, 1, 20)
+        // Billed on the 31st: 31 Jan, then 28 Feb 2027, the last day of February.
+        let rule = RecurringExpense(name: "Spotify", minor: 1590, start: noon(2027, 1, 31), kind: .subscription, reminderDays: 3, billingDay: 31)
+        var ledger = Ledger(recurring: [rule])
+        let plan = RenewalReminders.plan(ledger, now: now)
+        XCTAssertEqual(plan.map(\.identifier), [RenewalReminders.prefix + rule.occurrenceKey(0), RenewalReminders.prefix + rule.occurrenceKey(1)])
+        let first = calendar.dateComponents([.month, .day, .hour], from: plan[0].fire)
+        let second = calendar.dateComponents([.month, .day], from: plan[1].fire)
+        XCTAssertEqual([first.month, first.day, first.hour, second.month, second.day], [1, 28, 9, 2, 25])
+        XCTAssertTrue(plan.allSatisfy { $0.ruleID == rule.id })
+        XCTAssertEqual(RenewalReminders.plan(ledger, now: now), plan)
+        XCTAssertEqual(plan[0].body, "Spotify is expected to renew in 3 days (\(dateLabel(noon(2027, 1, 31)))) for \(Currency.display(1590, "MYR")).")
+        var bill = rule
+        bill.kind = .bill
+        XCTAssertTrue(RenewalReminders.body(bill, expected: noon(2027, 1, 31), lead: 1).contains("about"))
+        // A reminder whose time has passed gives way to the next payment's.
+        ledger.recurring[0].reminderDays = 0
+        let late = RenewalReminders.plan(ledger, now: noon(2027, 1, 31))
+        let lateFirst = calendar.dateComponents([.month, .day, .hour], from: late[0].fire)
+        XCTAssertEqual([lateFirst.month, lateFirst.day, lateFirst.hour], [2, 28, 9])
+        // Off, paused or cancelled: no reminders.
+        ledger.recurring[0].reminderDays = nil
+        XCTAssertTrue(RenewalReminders.plan(ledger, now: now).isEmpty)
+        ledger.recurring[0].reminderDays = 3
+        ledger.recurring[0].active = false
+        XCTAssertTrue(RenewalReminders.plan(ledger, now: now).isEmpty)
+        ledger.recurring[0].active = true
+        ledger.cancelRule(rule.id, now: now)
+        XCTAssertTrue(RenewalReminders.plan(ledger, now: now).isEmpty)
+    }
+    func testRenewalRemindersOpenTheirSchedule() {
+        let notice = ForegroundLedgerNotice(title: "t", message: "m", userInfo: ["recordID": "rule-1", "recordKind": "recurring"])
+        XCTAssertEqual(notice.destination?["kind"], "recurring")
+        XCTAssertEqual(notice.destination?["recordID"], "rule-1")
+        let planned = RenewalReminders.Planned(identifier: RenewalReminders.prefix + "rule-1:0", ruleID: "rule-1", fire: Date(),
+                                               components: DateComponents(year: 2027, month: 1, day: 28, hour: 9, minute: 0), title: "t", body: "b")
+        let request = RenewalReminders.request(planned)
+        XCTAssertEqual(request.content.userInfo["recordKind"] as? String, "recurring")
+        XCTAssertEqual(request.content.userInfo["recordID"] as? String, "rule-1")
+        XCTAssertFalse((request.trigger as? UNCalendarNotificationTrigger)?.repeats ?? true)
+    }
+    func testSubscriptionStateSurvivesBackupAndOldBackupsStillLoad() throws {
+        let start = Date(timeIntervalSince1970: 1_780_000_000)
+        var rule = RecurringExpense(name: "Spotify", minor: 1590, start: start, kind: .subscription, reminderDays: 3, billingDay: 31, merchantKey: "spotify")
+        rule.generation = 2
+        rule.ignoredPaymentIDs = ["payment"]
+        var ledger = Ledger(expenses: [Expense(merchant: "Spotify", cents: 1590, date: start)], recurring: [rule])
+        ledger.expenses[0].renewalOf = rule.occurrenceKey(0)
+        ledger.dismissedSubscriptions = ["netflix com|MYR|first"]
+        let restored = try LocalStore.decode(LocalStore.exportData(ledger))
+        XCTAssertEqual(restored.recurring, [rule])
+        XCTAssertEqual(restored.dismissedSubscriptions, ledger.dismissedSubscriptions)
+        XCTAssertEqual(restored.expenses[0].renewalOf, rule.occurrenceKey(0))
+        XCTAssertEqual(RenewalReminders.plan(restored, now: start).map(\.identifier), RenewalReminders.plan(ledger, now: start).map(\.identifier))
+        // A backup from before these fields loads with reminders off and nothing hidden.
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        json.removeValue(forKey: "dismissedSubscriptions")
+        var rules = try XCTUnwrap(json["recurring"] as? [[String: Any]])
+        for key in ["kind", "reminderDays", "billingDay", "merchantKey", "cancelledAt", "generation", "ignoredPaymentIDs"] { rules[0].removeValue(forKey: key) }
+        json["recurring"] = rules
+        let old = try LocalStore.decode(JSONSerialization.data(withJSONObject: json))
+        XCTAssertNil(old.recurring[0].reminderDays)
+        XCTAssertEqual(old.recurring[0].displayKind, .bill)
+        XCTAssertTrue(old.dismissedSubscriptions.isEmpty)
+        XCTAssertTrue(RenewalReminders.plan(old, now: start).isEmpty)
+    }
+    func testDeletingATravelBookKeepsItsEntriesInEverydaySpending() throws {
+        let now = Date()
+        let trip = TravelBook(name: "Penang", start: now, end: now, budget: 100000)
+        var ledger = Ledger(expenses: [Expense(merchant: "Lunch", cents: 4000, date: now)])
+        try ledger.saveTrip(trip)
+        try ledger.assignTrip(trip.id, expenseIDs: [ledger.expenses[0].id])
+        XCTAssertEqual(ledger.dailyBudgetSpending(in: now), 0)
+        try ledger.deleteTrip(trip.id)
+        XCTAssertTrue(ledger.trips.isEmpty)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertNil(ledger.expenses[0].tripID)
+        XCTAssertEqual(ledger.dailyBudgetSpending(in: now), 4000)
+        XCTAssertNoThrow(try ledger.validated())
+        XCTAssertThrowsError(try ledger.deleteTrip(trip.id))
     }
 }

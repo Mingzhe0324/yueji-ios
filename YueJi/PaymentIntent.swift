@@ -48,6 +48,7 @@ struct PostRecurringIntent: AppIntent {
             throw failure
         }
         await BudgetAlertService.shared.check()
+        if let ledger = try? LocalStore.shared.read() { await RenewalReminders.sync(ledger) }
         return .result(dialog: "已检查到期项目。缺少汇率的项目仍保留待记。")
     }
 }

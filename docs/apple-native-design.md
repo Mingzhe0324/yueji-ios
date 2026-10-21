@@ -86,6 +86,17 @@ its lit page, bold section headings, tinted card icons and the expenses card.
   (#F2F2F7), `card` = `secondarySystemGroupedBackground`, `line` = `separator`.
 - `IslandPalette`: system colours for icons and categories (green, teal, blue, purple,
   pink, red, orange, gray). Income green and spending red keep their financial meaning.
+- `MerchantPalette`: the merchant donut's five slots, in a fixed order, largest merchant
+  first: teal, orange, indigo, pink, purple (system colours, #00C3D0 #FF8D28 #6155F5
+  #FF2D55 #CB30E0), with no red or green, which keep their money meaning. In dark mode
+  teal and orange step down, hue held, to #03A6B1 and #D87403 so all five sit in the dark
+  lightness band; indigo, pink and purple use the system's dark values (#6D7CFF #FF375F
+  #DB34F2). "Other" is #8E8E93, or #48484A in dark mode. The order was chosen by
+  enumerating orderings with the dataviz palette validator: every pair of sectors that can
+  touch, including the wrap-around to the first, clears colour-blind separation ΔE 10.7
+  and normal-vision ΔE 19.1 in both modes, and "Other" stays apart from all five. Teal
+  and orange sit below 3:1 on the white card, so each sector also has a labelled row with
+  its amount and share. Re-validate before changing a slot.
 - Type: the system font (SF Pro) at the standard text styles; summary amounts use
   `largeTitle` bold with monospaced digits.
 - `LaunchBackground` equals `systemGroupedBackground`, so the launch screen, the opening
@@ -94,7 +105,8 @@ its lit page, bold section headings, tinted card icons and the expenses card.
 ## Components
 
 - Lists: `insetGrouped` with the system section spacing on every tab except Ledger,
-  which uses plain rows like Messages; the tabs' root lists sit on the lit page. Summary
+  which uses plain rows like Messages; the tabs' root lists, Ledger's included, sit on
+  the lit page (Ledger's rows are clear so the page shows through them). Summary
   headers sit on the page: an uppercase caption, the amount in large type and secondary
   detail text.
 - Navigation rows: `SimpleSettingsRow` and `IslandRowLabel` with Settings-style solid
@@ -108,6 +120,20 @@ its lit page, bold section headings, tinted card icons and the expenses card.
   solid, a dashed average, tap a bar to select it); savings; payment details. Needs
   attention is no longer on the Overview: pending bank / TNG notices are under Automatic
   recording › Recent automatic entries. More tools is the toolbar's ellipsis.
+- Category pages (a category row under where it went): the category's own expenses card,
+  its month total beside `MerchantDonutChart`, the month split by merchant (my share in
+  the category, so it adds up to the total; the top five merchants, then "Other"). Below
+  it, By merchant lists one row per sector, largest first, and serves as the legend and
+  the figures: the colour, the name, payments and share, and the amount. Tapping a sector
+  or its row selects that merchant: the other sectors fade, its share shows in the middle,
+  and Payments narrows to its payments. Tap it again, or the middle of the donut, to show
+  them all.
+- Recurring (see `subscription-detection.md`): a compact Possible subscriptions section,
+  hidden when empty, of `SubscriptionSuggestionRow`s with a glass Add (opens the editor to
+  review) and Not a subscription (with Undo, and Hidden suggestions to restore). Schedules
+  open `RecurringDetailView`, which renewal reminders also open: next expected payment,
+  possible payment or no-recent-payment prompts, the reminder, change next payment date,
+  pause, and mark cancelled (YueJi only).
 - Progress: `SpendingMeter` is the system `ProgressView` tinted per category or goal.
 - Empty states: `IslandEmptyState` is `ContentUnavailableView`.
 - Liquid Glass on iOS 26+: system glass navigation and tab bars (MainView also applies
@@ -133,19 +159,21 @@ UI tests launch with `-playfulAnimations NO`.
 
 ## Opening
 
-After the opening of Cosmos (Mobbin, "Cosmos iOS"), whose mark is six dots on a ring and
-whose welcome screen scatters cards of different sizes around its bold name. On the
-system background the six dots, in the label colour, turn into place at the centre.
-Then they burst: each dot flies out along its way and grows into one of the six default
-category tiles (Food, Transport, Shopping, Bills, Entertainment, Other, in the tinted
-style of the card rows), scattered at different sizes around the app icon and the bold,
-wide wordmark (月记 / YueJi). The opening waits for the ledger to load, then the tiles
-drift further out and fade while the icon lifts slightly and the opening fades into the
-app, so it never opens onto a blank screen. With the ledger ready it reaches the app in
-about 0.95 s; tapping skips it. With Animations off or Reduce Motion only the icon and
-wordmark show, briefly. The opening layer never takes touches, and it leaves the
-accessibility tree as soon as the reveal starts (or on skip), which
-`testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
+A Liquid Glass morph in the style of iOS 26/27. From the plain launch screen the tabs'
+lit page fades in while seven blue glass droplets pop up around the centre. They share
+one `GlassEffectContainer`, so as they flow together they bridge and merge like liquid,
+the way the system's own glass morphs, and the core swells, with a slight wobble, into
+the glass moon of the app icon. The icon's gold crescent (月) and three white entries
+(记) appear on the glass, placed as `generate_icon.py` places them, while the wordmark
+(月记 / YueJi) sharpens in from a blur. The opening waits for the ledger to load, then
+the moon and wordmark zoom towards the viewer and the opening fades into the app, so it
+never opens onto a blank screen. With the ledger ready the zoom starts about 1 s after
+launch and the app is in place by about 1.3 s: long enough to watch the glass merge and
+read the name, short enough not to hold anyone up. Tapping skips it. Before iOS 26, and
+with Reduce Transparency, the droplets are solid blue circles; with Animations off or
+Reduce Motion only the finished moon and wordmark show, briefly. The opening layer never
+takes touches, and it leaves the accessibility tree as soon as the reveal starts (or on
+skip), which `testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
 
 ## Icon and notifications
 
@@ -159,10 +187,12 @@ icon would get from the system are drawn in. Like Apple's own apps it ships the 
 home-screen appearances in a single-size AppIcon set (Xcode derives every smaller size):
 default, dark (the same layers on graphite, the glass in the app blue) and tinted
 (grayscale on black, crescent and entries in white, which iOS recolours with the user's
-tint). It also writes the byte-identical opening logo and the `YueJiIcon@2x/@3x`
-fallbacks that AltStore and other sideloading tools read from `CFBundleIconFiles`.
-System notifications show this icon. A new icon needs a new version: AltStore and iOS
-keep showing the icon they cached for an already-installed version.
+tint). It also writes the byte-identical in-app logo, `YueJiLogo`, with the dark icon as
+its dark appearance so the in-app banners and the Settings header match the home screen
+in dark mode, and the `YueJiIcon@2x/@3x` fallbacks that AltStore and other sideloading
+tools read from `CFBundleIconFiles`. System notifications show this icon. A new icon
+needs a new version: AltStore and iOS keep showing the icon they cached for an
+already-installed version.
 
 It also writes four notification thumbnails in the same style — the blue background
 and the icon's glass moon carrying one white glyph — attached by `LedgerNotifications`:
@@ -170,6 +200,12 @@ and the icon's glass moon carrying one white glyph — attached by `LedgerNotifi
 record needs review), `YueJiNoticeReminder` (the full icon artwork, daily reminder) and
 `YueJiNoticeBudget` (gauge, budget alert). Thumbnails are cosmetic: if an attachment
 can't be created the notification is sent without it.
+
+The daily reminder repeats, and iOS copies its thumbnail once, when it is scheduled, so a
+reminder saved under an older build would keep showing that build's icon (and its text
+would stay in the old language). After the opening, `LedgerNotifications.refreshDailyReminder`
+schedules it again at the same time whenever the build or the app language has changed;
+the same identifier replaces the old request.
 
 ## Validation
 

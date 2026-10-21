@@ -69,7 +69,7 @@ extension Ledger {
                                     shouldNotify: delivery.kind == "applePay" || shouldReviewFinancialNotification(delivery.body, title: delivery.title))
         }
         var copy = self
-        let result: AutomationResult
+        var result: AutomationResult
         if delivery.kind == "notification" {
             let processed = try copy.processTNGNotification(body: delivery.body, title: delivery.title,
                                                           date: delivery.date ?? delivery.receivedAt, eventID: delivery.eventID, sourceApp: delivery.sourceApp)
@@ -97,6 +97,15 @@ extension Ledger {
             copy.logAutomation(source: "Apple Pay", outcome: saved ? "saved" : (pending == nil ? "duplicate" : "pending"), detail: detail)
             result = AutomationResult(title: saved ? tr("月记 · 已自动记账", "YueJi · Automatically recorded", "YueJi · Direkod secara automatik") : (pending == nil ? tr("月记 · 未重复记账", "YueJi · Duplicate skipped", "YueJi · Pendua dilangkau") : tr("月记 · Apple Pay 待确认", "YueJi · Apple Pay needs review", "YueJi · Apple Pay perlu semakan")),
                                       message: detail, expenseID: entry?.id, noticeID: pending?.id, sound: saved ? .outgoing : .neutral)
+        }
+        if let id = result.expenseID {
+            // A payment that renews a confirmed schedule is matched to it, or takes the place of
+            // the entry the schedule added for that date; otherwise it may look like part of a
+            // subscription. Either way the notification says so.
+            let renewal = copy.reconcileRenewal(expenseID: id)
+            if let note = renewal.message ?? copy.subscriptionCandidate(forExpense: id)?.notificationHint {
+                result.message += "\n" + note
+            }
         }
         // The marker and money are committed in the same atomic ledger file replacement.
         if let place = delivery.place {
@@ -181,6 +190,8 @@ actor AutomationRecovery {
             await LedgerNotifications.result(title: result.title, body: result.message,
                                              expenseID: result.expenseID, noticeID: result.noticeID, deliveryID: delivery.id, sound: result.sound)
         }
+        // A matched renewal moves its schedule on, and its reminders with it.
+        if sendsNotifications, let ledger = try? store.read() { await RenewalReminders.sync(ledger) }
         return result
     }
     func retryPending(manual: Bool = false) async -> String? {

@@ -1,6 +1,7 @@
 {
   "images": [
-    { "filename": "YueJiLogo.png", "idiom": "universal" }
+    { "filename": "YueJiLogo.png", "idiom": "universal" },
+    { "appearances": [{ "appearance": "luminosity", "value": "dark" }], "filename": "YueJiLogo-dark.png", "idiom": "universal" }
   ],
   "info": { "author": "xcode", "version": 1 }
 }

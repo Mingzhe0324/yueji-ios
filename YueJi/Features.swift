@@ -46,6 +46,34 @@ struct ForeignAmount: Codable, Equatable {
 enum RepeatCycle: String, Codable, CaseIterable {
     case weekly, monthly, yearly
     var label: String { switch self { case .weekly: return tr("每周", "Weekly", "Mingguan"); case .monthly: return tr("每月", "Monthly", "Bulanan"); case .yearly: return tr("每年", "Yearly", "Tahunan") } }
+    /// How many days a real payment may come before or after the expected date and still be
+    /// that payment: billing moves around weekends, holidays and processing.
+    var paymentWindow: ClosedRange<Int> {
+        switch self {
+        case .weekly: return -2...3
+        case .monthly: return -7...10
+        case .yearly: return -14...21
+        }
+    }
+}
+/// A subscription renews; a bill falls due. Only the wording differs.
+enum RecurringKind: String, Codable, CaseIterable {
+    case subscription, bill
+    var label: String { self == .subscription ? tr("订阅", "Subscription", "Langganan") : tr("账单", "Bill", "Bil") }
+}
+/// When a reminder comes before an expected payment: on the day, or 1, 3 or 7 days before.
+enum ReminderLead {
+    static let options = [0, 1, 3, 7]
+    /// New schedules remind 3 days before.
+    static let standard = 3
+    static func label(_ days: Int?) -> String {
+        switch days {
+        case nil: return tr("不提醒", "Off", "Tiada")
+        case 0?: return tr("当天", "On the day", "Pada hari itu")
+        case 1?: return tr("提前 1 天", "1 day before", "1 hari sebelum")
+        case let days?: return tr("提前 \(days) 天", "\(days) days before", "\(days) hari sebelum")
+        }
+    }
 }
 struct RecurringExpense: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
@@ -59,6 +87,23 @@ struct RecurringExpense: Codable, Identifiable, Equatable {
     var autoPost = false
     var active = true
     var nextIndex = 0
+    // Added with subscription tracking; nil in schedules saved before it.
+    /// Subscription or bill; nil (older schedules) is worded as a bill.
+    var kind: RecurringKind? = nil
+    /// Days before an expected payment to remind, 0 for the day itself; nil is off.
+    var reminderDays: Int? = nil
+    /// The day of the month it bills on, 1–31, so the 29th–31st fall on the last day of
+    /// shorter months and come back after; nil uses `start`'s day.
+    var billingDay: Int? = nil
+    /// The merchant its payments come from (`merchantIdentity`); nil matches by name.
+    var merchantKey: String? = nil
+    /// When it was marked cancelled in YueJi; the provider isn't told.
+    var cancelledAt: Date? = nil
+    /// Raised when the next payment date is changed, so occurrences counted from the new
+    /// date never reuse the markers of earlier ones.
+    var generation: Int? = nil
+    /// Payments the user said aren't this schedule's.
+    var ignoredPaymentIDs: [String]? = nil
     var calendar: Calendar { var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: timeZoneID) ?? .current; return c }
     func occurrence(_ index: Int) -> Date? {
         guard index >= 0, index < 10_000 else { return nil }
@@ -68,14 +113,42 @@ struct RecurringExpense: Codable, Identifiable, Equatable {
         guard let anchor = c.date(from: DateComponents(year: original.year, month: original.month, day: 1)),
               let month = c.date(byAdding: .month, value: index * (cycle == .yearly ? 12 : 1), to: anchor),
               let range = c.range(of: .day, in: .month, for: month) else { return nil }
-        return c.date(byAdding: .day, value: min(original.day ?? 1, range.count) - 1, to: month)
+        return c.date(byAdding: .day, value: min(billingDay ?? original.day ?? 1, range.count) - 1, to: month)
     }
     var nextDate: Date { occurrence(nextIndex) ?? start }
+    /// The marker an occurrence leaves once it is posted or paid.
+    func occurrenceKey(_ index: Int) -> String {
+        let generation = self.generation ?? 0
+        return generation == 0 ? "\(id):\(index)" : "\(id)#\(generation):\(index)"
+    }
+    /// Whether a marker belongs to this schedule, in any generation.
+    func owns(_ key: String) -> Bool { key.hasPrefix(id + ":") || key.hasPrefix(id + "#") }
+    /// Followed: neither paused nor marked cancelled.
+    var isTracking: Bool { active && cancelledAt == nil }
+    var displayKind: RecurringKind { kind ?? .bill }
+    /// The next payment expected from today on.
+    func upcomingIndex(now: Date = Date()) -> Int? {
+        let today = calendar.startOfDay(for: now)
+        var index = nextIndex
+        while let date = occurrence(index), index < nextIndex + 1_200 {
+            if date >= today { return index }
+            index += 1
+        }
+        return nil
+    }
+    func upcomingDate(now: Date = Date()) -> Date? { upcomingIndex(now: now).flatMap { occurrence($0) } }
     func validate(allowedCategories: [String] = categories) throws {
         guard !id.isEmpty, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.count <= 200,
               Currency.codes.contains(currency), minor > 0, minor <= 10_000_000_000, allowedCategories.contains(category),
               start.timeIntervalSince1970 >= 0, start.timeIntervalSince1970 < 4_102_444_800,
-              TimeZone(identifier: timeZoneID) != nil, nextIndex >= 0, nextIndex < 10_000 else { throw LedgerError.invalid("固定消费资料无效。") }
+              TimeZone(identifier: timeZoneID) != nil, nextIndex >= 0, nextIndex < 10_000,
+              billingDay.map({ (1...31).contains($0) }) ?? true,
+              reminderDays.map({ ReminderLead.options.contains($0) }) ?? true,
+              (merchantKey?.count ?? 0) <= 200, (generation ?? 0) >= 0, (generation ?? 0) < 10_000,
+              (ignoredPaymentIDs?.count ?? 0) <= 200,
+              cancelledAt.map({ $0.timeIntervalSince1970 >= 0 && $0.timeIntervalSince1970 < 4_102_444_800 }) ?? true else {
+            throw LedgerError.invalid("固定消费资料无效。")
+        }
     }
 }
 extension Ledger {
@@ -89,18 +162,24 @@ extension Ledger {
     // Called on app activation or the explicit Shortcuts action. Never claims an exact background timer.
     mutating func postDue(now: Date = Date(), only ruleID: String? = nil, force: Bool = false) throws {
         for i in recurring.indices {
-            guard recurring[i].active, ruleID == nil || recurring[i].id == ruleID,
+            guard recurring[i].isTracking, ruleID == nil || recurring[i].id == ruleID,
                   recurring[i].autoPost || force else { continue }
             // Missing FX leaves this rule pending; it does not block unrelated Apple Pay/MYR entries.
             if recurring[i].currency != "MYR", rates[recurring[i].currency] == nil { continue }
             var count = 0
             while let date = recurring[i].occurrence(recurring[i].nextIndex), date <= now, count < 600 {
-                let key = "\(recurring[i].id):\(recurring[i].nextIndex)"
+                let key = recurring[i].occurrenceKey(recurring[i].nextIndex)
                 if !postedRecurring.contains(key) {
                     let rule = recurring[i]
-                    let fx = try foreignAmount(minor: rule.minor, code: rule.currency)
-                    let cents = try fx?.myrCents() ?? rule.minor
-                    expenses.append(Expense(merchant: rule.name, cents: cents, date: date, category: rule.category, source: "固定消费", foreign: fx, recurringKey: key))
+                    // A payment already recorded for this date stands in for the scheduled
+                    // entry, so the schedule never adds a second expense.
+                    if let paid = renewalPayment(for: rule, index: rule.nextIndex) {
+                        expenses[paid].renewalOf = key
+                    } else {
+                        let fx = try foreignAmount(minor: rule.minor, code: rule.currency)
+                        let cents = try fx?.myrCents() ?? rule.minor
+                        expenses.append(Expense(merchant: rule.name, cents: cents, date: date, category: rule.category, source: "固定消费", foreign: fx, recurringKey: key))
+                    }
                     postedRecurring.insert(key)
                 }
                 recurring[i].nextIndex += 1; count += 1
@@ -113,6 +192,499 @@ extension Ledger {
         let today = recurring[i].calendar.startOfDay(for: now)
         while let date = recurring[i].occurrence(recurring[i].nextIndex), date < today { recurring[i].nextIndex += 1 }
         recurring[i].active = true
+    }
+}
+
+// MARK: - Matching real payments to schedules
+
+extension Expense {
+    /// The merchant a payment belongs to, ignoring case, punctuation and company suffixes.
+    var merchantKey: String { merchantIdentity(displayName) }
+    /// The amount and currency it was charged in.
+    var chargedMinor: Int { foreign?.minor ?? cents }
+    var chargedCurrency: String { foreign?.currency ?? "MYR" }
+    /// A real payment of mine that no schedule added and nothing has matched yet.
+    var canRenew: Bool { recurringKey == nil && renewalOf == nil && paidByFriend == nil && refunded < cents }
+}
+/// How surely a payment comes from a schedule's merchant.
+enum RenewalMerchantMatch: Int, Comparable {
+    case none, name, exact
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+extension RecurringExpense {
+    /// Exact when it's the merchant the schedule was made from (or, for one made by hand,
+    /// the same name once normalised); by name when one name contains the other, which is
+    /// less sure.
+    func merchantMatch(key payment: String) -> RenewalMerchantMatch {
+        guard !payment.isEmpty else { return .none }
+        if (merchantKey ?? merchantIdentity(name)) == payment { return .exact }
+        let own = merchantIdentity(name).filter { $0.isLetter || $0.isNumber }
+        let other = payment.filter { $0.isLetter || $0.isNumber }
+        guard min(own.count, other.count) >= 4 else { return .none }
+        return own.contains(other) || other.contains(own) ? .name : .none
+    }
+    func merchantMatch(_ entry: Expense) -> RenewalMerchantMatch { merchantMatch(key: entry.merchantKey) }
+    /// A payment's amount, if it was charged in this schedule's currency.
+    func paymentMinor(_ entry: Expense) -> Int? { entry.chargedCurrency == currency ? entry.chargedMinor : nil }
+    /// The same price, give or take 2% or 50 minor units.
+    func amountMatches(_ amount: Int) -> Bool { abs(amount - minor) <= max(50, minor / 50) }
+    /// Within half the expected price either way: perhaps a price change.
+    func amountNear(_ amount: Int) -> Bool { abs(amount - minor) * 2 <= minor }
+    /// The occurrence a payment date is nearest, inside the payment window, searching from
+    /// `first`; and how many days after it the payment came.
+    func nearestOccurrence(to date: Date, from first: Int) -> (index: Int, days: Int)? {
+        let c = calendar
+        let day = c.startOfDay(for: date)
+        var best: (index: Int, days: Int)?
+        var index = max(0, first)
+        while let expected = occurrence(index), index < first + 1_200 {
+            let days = c.dateComponents([.day], from: c.startOfDay(for: expected), to: day).day ?? 0
+            if days < cycle.paymentWindow.lowerBound { break }
+            if cycle.paymentWindow.contains(days), abs(days) < abs(best?.days ?? Int.max) { best = (index, days) }
+            index += 1
+        }
+        return best
+    }
+}
+extension Ledger {
+    /// What became of a real payment that may renew a schedule.
+    enum RenewalOutcome: Equatable {
+        case none
+        /// It renewed the schedule.
+        case renewed(name: String, next: Date?)
+        /// It took the place of the entry the schedule added for that date, so it counts once.
+        case replacedScheduled(name: String, date: Date)
+        /// It may renew the schedule, but not surely: nothing changed, and the user confirms.
+        case uncertain(name: String, expected: Date, amount: String)
+        /// A line for the payment's notification.
+        var message: String? {
+            switch self {
+            case .none: return nil
+            case .renewed(let name, .some(let next)):
+                let date = dateLabel(next)
+                return tr("已对应 \(name) 的续费，下次预计 \(date)。", "Matched to your \(name) renewal. Next payment expected \(date).", "Dipadankan dengan pembaharuan \(name). Bayaran seterusnya dijangka \(date).")
+            case .renewed(let name, .none):
+                return tr("已对应 \(name) 的续费。", "Matched to your \(name) renewal.", "Dipadankan dengan pembaharuan \(name).")
+            case .replacedScheduled(let name, let date):
+                let day = dateLabel(date)
+                return tr("已替换 \(name) 在 \(day) 的预计账目，只记一笔。", "Replaced the scheduled \(name) entry for \(day), so it's recorded once.", "Menggantikan rekod berjadual \(name) untuk \(day), jadi ia direkod sekali.")
+            case .uncertain(let name, let expected, let amount):
+                let day = dateLabel(expected)
+                return tr("可能是 \(name) 的续费（预计 \(day)，\(amount)），请在“固定”中确认。", "May be your \(name) renewal (expected \(day), \(amount)). Confirm it in Recurring.", "Mungkin pembaharuan \(name) (dijangka \(day), \(amount)). Sahkan dalam Berulang.")
+            }
+        }
+    }
+    /// Whether an occurrence already has its real payment.
+    func isRenewed(_ key: String) -> Bool { expenses.contains { $0.renewalOf == key } }
+    /// The recorded payment that surely is a schedule's occurrence: its merchant, the same
+    /// price, inside the payment window, nearer this occurrence than any other, and the only one.
+    func renewalPayment(for rule: RecurringExpense, index: Int) -> Int? {
+        guard !isRenewed(rule.occurrenceKey(index)) else { return nil }
+        let ignored = Set(rule.ignoredPaymentIDs ?? [])
+        let found = expenses.indices.filter { i in
+            let entry = expenses[i]
+            guard entry.canRenew, !ignored.contains(entry.id), rule.merchantMatch(entry) == .exact,
+                  let amount = rule.paymentMinor(entry), rule.amountMatches(amount) else { return false }
+            return rule.nearestOccurrence(to: entry.date, from: index - 1)?.index == index
+        }
+        return found.count == 1 ? found[0] : nil
+    }
+    /// Matches a payment that just arrived from Apple Pay or a bank notification to the
+    /// schedule it renews. A sure match moves the schedule on, or takes the place of the entry
+    /// the schedule added for that date so the payment counts once. An unsure one (another
+    /// price, a name that only partly matches, or more than one schedule) changes nothing.
+    mutating func reconcileRenewal(expenseID: String) -> RenewalOutcome {
+        guard let entry = expenses.first(where: { $0.id == expenseID }), entry.canRenew else { return .none }
+        var sure: [(rule: Int, index: Int)] = []
+        var unsure: [(rule: Int, index: Int)] = []
+        for r in recurring.indices where recurring[r].isTracking {
+            let rule = recurring[r]
+            let merchant = rule.merchantMatch(entry)
+            guard merchant != .none, !(rule.ignoredPaymentIDs ?? []).contains(entry.id), let amount = rule.paymentMinor(entry),
+                  let near = rule.nearestOccurrence(to: entry.date, from: rule.nextIndex - 3),
+                  !isRenewed(rule.occurrenceKey(near.index)) else { continue }
+            if merchant == .exact, rule.amountMatches(amount) { sure.append((r, near.index)) }
+            else if rule.amountNear(amount) { unsure.append((r, near.index)) }
+        }
+        guard sure.count == 1, unsure.isEmpty else {
+            guard let first = sure.first ?? unsure.first else { return .none }
+            return unsureOutcome(rule: first.rule, index: first.index)
+        }
+        let (r, index) = sure[0]
+        let rule = recurring[r], key = rule.occurrenceKey(index)
+        if index >= rule.nextIndex {
+            // An automatic schedule may still owe entries for earlier dates; leave it to the user.
+            guard !rule.autoPost || index == rule.nextIndex else { return unsureOutcome(rule: r, index: index) }
+            link(expenseID, to: key)
+            recurring[r].nextIndex = index + 1
+            return .renewed(name: rule.name, next: recurring[r].occurrence(index + 1))
+        }
+        if let s = expenses.firstIndex(where: { $0.recurringKey == key && $0.source == "固定消费" }) {
+            guard canReplaceScheduled(expenses[s]) else { return unsureOutcome(rule: r, index: index) }
+            let scheduled = expenses.remove(at: s)
+            link(expenseID, to: key)
+            if let e = expenses.firstIndex(where: { $0.id == expenseID }) { expenses[e].category = scheduled.category }
+            return .replacedScheduled(name: rule.name, date: scheduled.date)
+        }
+        // The entry for that date was deleted earlier; the payment renews it.
+        link(expenseID, to: key)
+        return .renewed(name: rule.name, next: rule.upcomingDate())
+    }
+    private mutating func link(_ expenseID: String, to key: String) {
+        guard let e = expenses.firstIndex(where: { $0.id == expenseID }) else { return }
+        expenses[e].renewalOf = key
+        postedRecurring.insert(key)
+    }
+    private func unsureOutcome(rule r: Int, index: Int) -> RenewalOutcome {
+        let rule = recurring[r]
+        return .uncertain(name: rule.name, expected: rule.occurrence(index) ?? rule.start, amount: Currency.display(rule.minor, rule.currency))
+    }
+    /// A scheduled entry the user hasn't built on (no split, items, refund, claim, charges,
+    /// settlement or notice), so a real payment can take its place.
+    private func canReplaceScheduled(_ entry: Expense) -> Bool {
+        entry.shares.isEmpty && (entry.items ?? []).isEmpty && (entry.refunds ?? []).isEmpty && entry.reimbursement == nil
+            && entry.charges == nil && !hasActiveSettlement(expenseID: entry.id) && !tngNotices.contains { $0.expenseID == entry.id }
+    }
+    /// A recorded payment that may be a tracked schedule's next one but wasn't matched for
+    /// sure, for the user to confirm: from its merchant, near a payment still awaited.
+    func possibleRenewal(for rule: RecurringExpense) -> Expense? {
+        guard rule.isTracking, !rule.autoPost else { return nil }
+        let ignored = Set(rule.ignoredPaymentIDs ?? [])
+        return expenses.filter { entry in
+            guard entry.canRenew, !ignored.contains(entry.id), rule.merchantMatch(entry) != .none,
+                  let amount = rule.paymentMinor(entry), rule.amountNear(amount),
+                  let near = rule.nearestOccurrence(to: entry.date, from: rule.nextIndex) else { return false }
+            return !isRenewed(rule.occurrenceKey(near.index))
+        }.max { $0.date < $1.date }
+    }
+    /// The expected payment a tracked schedule is still waiting for once its date has come.
+    /// A payment may yet arrive, or the channel may have missed it; `missed` once the payment
+    /// window has passed too. Nothing is assumed cancelled.
+    func awaitedPayment(of rule: RecurringExpense, now: Date = Date()) -> (date: Date, missed: Bool)? {
+        guard rule.isTracking, !rule.autoPost, let expected = rule.occurrence(rule.nextIndex) else { return nil }
+        let c = rule.calendar, today = c.startOfDay(for: now)
+        guard expected <= today else { return nil }
+        let late = c.date(byAdding: .day, value: rule.cycle.paymentWindow.upperBound, to: c.startOfDay(for: expected)) ?? expected
+        return (expected, late < today)
+    }
+    /// The latest real payment matched to a schedule.
+    func lastRenewal(of rule: RecurringExpense) -> Expense? {
+        expenses.filter { entry in entry.renewalOf.map { rule.owns($0) } ?? false }.max { $0.date < $1.date }
+    }
+    /// Links a payment the user confirmed as a schedule's renewal, and takes its price as the
+    /// expected one if it changed.
+    mutating func useRenewalPayment(ruleID: String, expenseID: String) throws {
+        guard let r = recurring.firstIndex(where: { $0.id == ruleID }),
+              let entry = expenses.first(where: { $0.id == expenseID }), entry.canRenew,
+              let amount = recurring[r].paymentMinor(entry),
+              let near = recurring[r].nearestOccurrence(to: entry.date, from: recurring[r].nextIndex - 3),
+              !isRenewed(recurring[r].occurrenceKey(near.index)) else {
+            throw reviewError("这笔付款或固定项目已改变，请重新打开。", "This payment or schedule changed. Reopen it.", "Bayaran atau jadual ini telah berubah. Buka semula.")
+        }
+        link(expenseID, to: recurring[r].occurrenceKey(near.index))
+        recurring[r].minor = amount
+        if near.index >= recurring[r].nextIndex { recurring[r].nextIndex = near.index + 1 }
+    }
+    mutating func ignoreRenewalPayment(ruleID: String, expenseID: String) {
+        guard let r = recurring.firstIndex(where: { $0.id == ruleID }) else { return }
+        let ignored = (recurring[r].ignoredPaymentIDs ?? []).filter { $0 != expenseID } + [expenseID]
+        recurring[r].ignoredPaymentIDs = Array(ignored.suffix(200))
+    }
+    /// The user says the schedule still runs: stop waiting for payments not seen and move on
+    /// to the next one not yet due. Nothing is recorded.
+    mutating func confirmStillActive(ruleID: String, now: Date = Date()) {
+        guard let r = recurring.firstIndex(where: { $0.id == ruleID }) else { return }
+        let today = recurring[r].calendar.startOfDay(for: now)
+        var count = 0
+        while let date = recurring[r].occurrence(recurring[r].nextIndex), date <= today, count < 1_200 {
+            recurring[r].nextIndex += 1; count += 1
+        }
+    }
+    /// Records the payment a tracked schedule was waiting for, at the user's request, as a
+    /// scheduled entry: it doesn't confirm the charge.
+    mutating func recordAwaitedPayment(ruleID: String) throws {
+        guard let r = recurring.firstIndex(where: { $0.id == ruleID }),
+              let date = recurring[r].occurrence(recurring[r].nextIndex) else { return }
+        let rule = recurring[r], key = rule.occurrenceKey(rule.nextIndex)
+        if !postedRecurring.contains(key) {
+            let fx = try foreignAmount(minor: rule.minor, code: rule.currency)
+            let cents = try fx?.myrCents() ?? rule.minor
+            expenses.append(Expense(merchant: rule.name, cents: cents, date: date, category: rule.category, source: "固定消费", foreign: fx, recurringKey: key))
+            postedRecurring.insert(key)
+        }
+        recurring[r].nextIndex += 1
+    }
+    /// Marks a schedule cancelled in YueJi only: no more reminders, entries or matching.
+    mutating func cancelRule(_ id: String, now: Date = Date()) {
+        guard let r = recurring.firstIndex(where: { $0.id == id }) else { return }
+        recurring[r].cancelledAt = now
+        recurring[r].active = false
+    }
+    mutating func reactivateRule(_ id: String, now: Date = Date()) {
+        guard let r = recurring.firstIndex(where: { $0.id == id }) else { return }
+        recurring[r].cancelledAt = nil
+        resumeRule(id, now: now)
+    }
+    /// Moves a schedule's next payment to a new date; later ones follow the cycle from it.
+    /// Month-end billing stays at month ends.
+    mutating func changeNextPayment(ruleID: String, to date: Date) {
+        guard let r = recurring.firstIndex(where: { $0.id == ruleID }) else { return }
+        let rule = recurring[r], c = rule.calendar
+        let day = c.component(.day, from: date)
+        let lastDay = c.range(of: .day, in: .month, for: date)?.count == day
+        recurring[r].generation = (rule.generation ?? 0) + 1
+        recurring[r].start = date
+        recurring[r].nextIndex = 0
+        recurring[r].billingDay = rule.cycle == .weekly ? nil : (rule.billingDay == 31 && lastDay ? 31 : day)
+    }
+}
+
+// MARK: - Subscription detection
+
+/// What a run of charges looks like. Only ever a suggestion: a known merchant alone doesn't
+/// prove a subscription, and nothing is tracked until the user confirms it.
+enum SubscriptionKind: String {
+    /// A well-known subscription service.
+    case subscription
+    /// A well-known biller: broadband, mobile, utilities.
+    case bill
+    /// Any merchant charging the same amount on a regular cycle.
+    case recurring
+    var label: String {
+        switch self {
+        case .subscription: return tr("可能是订阅", "Possible subscription", "Mungkin langganan")
+        case .bill: return tr("可能是定期账单", "Possible recurring bill", "Mungkin bil berulang")
+        case .recurring: return tr("可能是定期付款", "Possible recurring payment", "Mungkin bayaran berulang")
+        }
+    }
+    var recurringKind: RecurringKind { self == .bill ? .bill : .subscription }
+}
+
+/// A possible subscription found in the recorded payments.
+struct SubscriptionCandidate: Identifiable, Equatable {
+    /// Stable across new charges and price changes: the merchant, the currency and the first
+    /// payment of the run.
+    let id: String
+    let merchantKey: String
+    let name: String
+    let kind: SubscriptionKind
+    /// The latest charge, in its own currency.
+    let minor: Int
+    let currency: String
+    /// The price before a change seen in the run, if any.
+    let previousMinor: Int?
+    let category: String
+    /// The cycle the charges keep to; nil after a single payment, for the user to confirm.
+    let cycle: RepeatCycle?
+    /// The day of the month it bills on; 31 for month-end billing.
+    let billingDay: Int
+    let lastDate: Date
+    let expenseIDs: [String]
+    /// The next payment wasn't seen when it was due: the channel may have missed it, or it
+    /// may have ended.
+    let overdue: Bool
+
+    /// The next payment expected after the latest, for a cycle (the seen one, or the one the
+    /// user chooses).
+    func expectedNext(_ cycle: RepeatCycle) -> Date {
+        SubscriptionDetector.next(after: lastDate, cycle: cycle, billingDay: billingDay)
+    }
+    /// The next expected payment that hasn't passed.
+    func upcoming(_ cycle: RepeatCycle, now: Date = Date()) -> Date {
+        RecurringExpense(name: name, minor: minor, start: lastDate, cycle: cycle, nextIndex: 1,
+                         billingDay: cycle == .weekly ? nil : billingDay).upcomingDate(now: now) ?? expectedNext(cycle)
+    }
+    /// A line for the notification of a payment that looks like part of one.
+    var notificationHint: String {
+        kind.label + tr("，可在“固定”中确认。", ". Confirm it in Recurring if it is one.", ". Sahkan dalam Berulang jika ya.")
+    }
+}
+
+enum SubscriptionDetector {
+    /// Well-known subscription services and billers, matched as whole words of the merchant
+    /// name or payment description, so a short name such as "viu" never matches inside
+    /// another word.
+    static let knownSubscriptions: [[String]] = [
+        "netflix", "disney", "hotstar", "viu", "iqiyi", "wetv", "astro", "sooka", "hbo", "crunchyroll",
+        "prime video", "primevideo", "amazon prime", "apple tv", "youtube premium", "youtubepremium", "youtube music",
+        "spotify", "apple music", "joox", "kkbox", "deezer", "tidal",
+        "icloud", "apple one", "apple arcade", "apple com bill", "itunes", "google one", "google storage",
+        "chatgpt", "openai", "anthropic", "claude ai", "midjourney", "perplexity", "github", "notion", "canva", "adobe",
+        "microsoft 365", "office 365", "game pass", "playstation plus", "nintendo switch online", "dropbox", "evernote",
+        "1password", "nordvpn", "expressvpn", "surfshark", "grammarly", "duolingo", "linkedin", "patreon", "discord",
+        "twitch", "zoom us", "figma", "grabunlimited", "grab unlimited", "pandapro", "panda pro",
+        "anytime fitness", "celebrity fitness", "fitness first", "chi fitness",
+    ].map { SubscriptionDetector.words($0) }
+    static let knownBills: [[String]] = [
+        "unifi", "time internet", "time fibre", "maxis", "celcom", "digi", "celcomdigi", "umobile", "u mobile",
+        "yes 5g", "tnb", "tenaga nasional", "air selangor", "indah water",
+    ].map { SubscriptionDetector.words($0) }
+    static func words(_ text: String) -> [String] { merchantIdentity(text).split(separator: " ").map(String.init) }
+
+    /// The kind of a known merchant, from its name or the payment's description.
+    static func knownKind(_ entry: Expense) -> SubscriptionKind? {
+        let text = words(entry.merchant + " " + (entry.entryDescription ?? ""))
+        func has(_ service: [String]) -> Bool {
+            text.count >= service.count
+                && (0...(text.count - service.count)).contains { Array(text[$0..<($0 + service.count)]) == service }
+        }
+        if knownBills.contains(where: has) { return .bill }
+        if knownSubscriptions.contains(where: has) { return .subscription }
+        return nil
+    }
+    /// Charges that can be part of a subscription: real payments of mine that no schedule
+    /// added or matched, not fully refunded, and not transfers (rent to a person, moving
+    /// money) confirmed from a bank notice. Refunds, cashback and settlements are never
+    /// charges here.
+    static func eligible(_ entry: Expense, transfers: Set<String>) -> Bool {
+        entry.canRenew && !transfers.contains(entry.id) && !entry.merchantKey.isEmpty
+    }
+    static func close(_ a: Int, _ b: Int) -> Bool { abs(a - b) <= max(50, max(a, b) / 50) }
+    /// The same price twice within two days is one charge recorded twice.
+    static func withoutDuplicates(_ charges: [Expense]) -> [Expense] {
+        var kept: [Expense] = []
+        for entry in charges.sorted(by: { $0.date < $1.date }) {
+            if let previous = kept.last(where: { close($0.chargedMinor, entry.chargedMinor) }),
+               entry.date.timeIntervalSince(previous.date) < 2 * 86_400 { continue }
+            kept.append(entry)
+        }
+        return kept
+    }
+    /// Whether `later` comes one cycle after `earlier`, give or take a few days for weekends,
+    /// holidays and month-end billing (a month after the 31st is the 28th–30th in shorter months).
+    static func follows(_ later: Date, _ earlier: Date, by cycle: RepeatCycle, calendar: Calendar) -> Bool {
+        let step: DateComponents, slack: Int
+        switch cycle {
+        case .weekly: step = DateComponents(day: 7); slack = 2
+        case .monthly: step = DateComponents(month: 1); slack = 4
+        case .yearly: step = DateComponents(year: 1); slack = 7
+        }
+        guard let expected = calendar.date(byAdding: step, to: earlier),
+              let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: expected), to: calendar.startOfDay(for: later)).day else { return false }
+        return abs(days) <= slack
+    }
+    /// A run of charges a cycle apart, oldest first, with at most one price change.
+    struct Series {
+        var charges: [Expense]
+        var cycle: RepeatCycle?
+        var previousMinor: Int?
+    }
+    /// Splits one merchant's charges into runs: from the latest back through earlier charges a
+    /// cycle apart, preferring the same price and allowing one price change of up to half.
+    /// Charges left over start runs of their own, so two subscriptions billed by one merchant
+    /// (iCloud and Apple Music, say) stay apart.
+    static func series(_ charges: [Expense], calendar: Calendar) -> [Series] {
+        var unused = charges.sorted { $0.date < $1.date }
+        var result: [Series] = []
+        while let latest = unused.popLast() {
+            var chain = [latest]
+            var cycle: RepeatCycle?
+            var previous: Int?
+            while let head = chain.last {
+                let fitting = unused.indices.reversed().filter { i in
+                    unused[i].date < head.date && RepeatCycle.allCases.contains { c in
+                        (cycle == nil || cycle == c) && follows(head.date, unused[i].date, by: c, calendar: calendar)
+                    }
+                }
+                let price = head.chargedMinor
+                let samePrice = fitting.first(where: { close(unused[$0].chargedMinor, price) })
+                let changedPrice = previous == nil ? fitting.first(where: {
+                    abs(unused[$0].chargedMinor - price) * 2 <= max(unused[$0].chargedMinor, price)
+                }) : nil
+                guard let pick = samePrice ?? changedPrice else { break }
+                let earlier = unused.remove(at: pick)
+                if cycle == nil { cycle = RepeatCycle.allCases.first { follows(head.date, earlier.date, by: $0, calendar: calendar) } }
+                if !close(earlier.chargedMinor, price) { previous = earlier.chargedMinor }
+                chain.append(earlier)
+            }
+            result.append(Series(charges: Array(chain.reversed()), cycle: chain.count > 1 ? cycle : nil, previousMinor: previous))
+        }
+        return result
+    }
+    /// The day of the month a run bills on: its commonest day, the latest winning ties.
+    /// Month-end charges count as the 31st when the run shows month-end billing (two month
+    /// ends, or a 31st), so it keeps to month ends.
+    static func billingDay(_ charges: [Expense], calendar: Calendar) -> Int {
+        func day(_ date: Date) -> Int { calendar.component(.day, from: date) }
+        func monthEnd(_ date: Date) -> Bool { calendar.range(of: .day, in: .month, for: date)?.count == day(date) }
+        let toMonthEnd = charges.filter { monthEnd($0.date) }.count >= 2 || charges.contains { day($0.date) == 31 }
+        let days = charges.map { toMonthEnd && monthEnd($0.date) ? 31 : day($0.date) }
+        var counts: [Int: Int] = [:]
+        for d in days { counts[d, default: 0] += 1 }
+        let latest = days.last ?? 1, most = counts.values.max() ?? 0
+        return counts[latest] == most ? latest : (counts.filter { $0.value == most }.keys.max() ?? latest)
+    }
+    static func next(after date: Date, cycle: RepeatCycle, billingDay: Int) -> Date {
+        RecurringExpense(name: "", minor: 1, start: date, cycle: cycle, nextIndex: 1,
+                         billingDay: cycle == .weekly ? nil : billingDay).occurrence(1) ?? date
+    }
+    /// The suggestion a run makes, if it is strong and recent enough:
+    /// - a cycle seen in two charges (three for a week, or across a price change), or
+    /// - one payment at a known service or biller, the merchant's latest and within 40 days,
+    ///   with the cycle left for the user to confirm.
+    /// A run whose next payment wasn't seen stays for a while, marked overdue, since the
+    /// channel may have missed it; long-gone runs aren't suggested.
+    static func candidate(_ run: Series, isLatest: Bool, now: Date, calendar: Calendar) -> SubscriptionCandidate? {
+        guard let first = run.charges.first, let last = run.charges.last else { return nil }
+        let known = knownKind(last)
+        if let cycle = run.cycle {
+            guard run.charges.count >= (cycle == .weekly || run.previousMinor != nil ? 3 : 2) else { return nil }
+        } else {
+            guard known != nil, isLatest, now.timeIntervalSince(last.date) <= 40 * 86_400 else { return nil }
+        }
+        let anchor = billingDay(run.charges, calendar: calendar)
+        var overdue = false
+        if let cycle = run.cycle {
+            let expected = calendar.startOfDay(for: next(after: last.date, cycle: cycle, billingDay: anchor))
+            let late = calendar.dateComponents([.day], from: expected, to: calendar.startOfDay(for: now)).day ?? 0
+            guard late <= (cycle == .weekly ? 28 : cycle == .monthly ? 92 : 365) else { return nil }
+            overdue = late > cycle.paymentWindow.upperBound
+        }
+        return SubscriptionCandidate(
+            id: [first.merchantKey, first.chargedCurrency, first.id].joined(separator: "|"),
+            merchantKey: last.merchantKey, name: last.displayName, kind: known ?? .recurring,
+            minor: last.chargedMinor, currency: last.chargedCurrency, previousMinor: run.previousMinor,
+            category: last.category, cycle: run.cycle, billingDay: anchor, lastDate: last.date,
+            expenseIDs: run.charges.map(\.id), overdue: overdue)
+    }
+}
+
+extension Ledger {
+    /// Possible subscriptions in the recorded payments that no schedule follows yet, latest
+    /// charge first; hidden ones only when asked for.
+    func subscriptionCandidates(now: Date = Date(), includeHidden: Bool = false, calendar: Calendar = .current) -> [SubscriptionCandidate] {
+        let transfers = Set(tngNotices.filter { $0.kind == "transfer" }.compactMap(\.expenseID))
+        let groups = Dictionary(grouping: expenses.filter { SubscriptionDetector.eligible($0, transfers: transfers) }) {
+            $0.merchantKey + "|" + $0.chargedCurrency
+        }
+        return groups.values.flatMap { candidates(in: $0, now: now, includeHidden: includeHidden, calendar: calendar) }
+            .sorted { $0.lastDate > $1.lastDate }
+    }
+    /// The possible subscription a payment is part of.
+    func subscriptionCandidate(forExpense id: String, now: Date = Date(), calendar: Calendar = .current) -> SubscriptionCandidate? {
+        let transfers = Set(tngNotices.filter { $0.kind == "transfer" }.compactMap(\.expenseID))
+        guard let entry = expenses.first(where: { $0.id == id }), SubscriptionDetector.eligible(entry, transfers: transfers) else { return nil }
+        let charges = expenses.filter {
+            $0.merchantKey == entry.merchantKey && $0.chargedCurrency == entry.chargedCurrency && SubscriptionDetector.eligible($0, transfers: transfers)
+        }
+        return candidates(in: charges, now: now, includeHidden: false, calendar: calendar).first { $0.expenseIDs.contains(id) }
+    }
+    private func candidates(in charges: [Expense], now: Date, includeHidden: Bool, calendar: Calendar) -> [SubscriptionCandidate] {
+        let runs = SubscriptionDetector.series(SubscriptionDetector.withoutDuplicates(charges), calendar: calendar)
+        let latest = runs.compactMap { $0.charges.last }.max { $0.date < $1.date }?.id
+        return runs.compactMap { run in
+            guard let candidate = SubscriptionDetector.candidate(run, isLatest: run.charges.last?.id == latest, now: now, calendar: calendar),
+                  !followsSchedule(candidate), includeHidden || !dismissedSubscriptions.contains(candidate.id) else { return nil }
+            return candidate
+        }
+    }
+    /// Whether a schedule already follows a candidate's merchant. A cancelled one covers only
+    /// payments before it was cancelled, so charges that continue show again.
+    func followsSchedule(_ candidate: SubscriptionCandidate) -> Bool {
+        recurring.contains { rule in
+            if let cancelled = rule.cancelledAt, candidate.lastDate > cancelled { return false }
+            return rule.merchantMatch(key: candidate.merchantKey) != .none
+        }
     }
 }
 struct FXService {
@@ -314,6 +886,20 @@ extension Ledger {
                 }
             }
         }
+        // An entry a schedule added and a real payment from its merchant in the same billing
+        // period that weren't matched for sure: the user decides if they're one payment.
+        for scheduled in expenses where scheduled.source == "固定消费" {
+            guard let key = scheduled.recurringKey, let rule = recurring.first(where: { $0.owns(key) }) else { continue }
+            for payment in expenses where payment.canRenew && rule.merchantMatch(payment) != .none {
+                guard pairs.count < limit, let amount = rule.paymentMinor(payment), rule.amountNear(amount) else { continue }
+                let c = rule.calendar
+                let days = c.dateComponents([.day], from: c.startOfDay(for: scheduled.date), to: c.startOfDay(for: payment.date)).day ?? .max
+                let pair = DuplicatePair(first: scheduled, second: payment)
+                if rule.cycle.paymentWindow.contains(days), !dismissedDuplicates.contains(pair.id), !pairs.contains(where: { $0.id == pair.id }) {
+                    pairs.append(pair)
+                }
+            }
+        }
         return pairs
     }
     mutating func logAutomation(source: String, outcome: String, detail: String = "") {
@@ -328,10 +914,10 @@ extension Ledger {
     func upcoming(in month: Date, now: Date = Date()) -> [PlannedCharge] {
         guard let range = Calendar.current.dateInterval(of: .month, for: month) else { return [] }
         var result: [PlannedCharge] = []
-        for r in recurring where r.active {
+        for r in recurring where r.isTracking {
             var index = r.nextIndex
             while let d = r.occurrence(index), d < range.end {
-                if d >= max(Calendar.current.startOfDay(for: now), range.start), !postedRecurring.contains("\(r.id):\(index)") {
+                if d >= max(Calendar.current.startOfDay(for: now), range.start), !postedRecurring.contains(r.occurrenceKey(index)) {
                     let converted: Int? = r.currency == "MYR" ? r.minor : (try? foreignAmount(minor: r.minor, code: r.currency)?.myrCents())
                     result.append(PlannedCharge(id: "\(r.id):\(index)", name: r.name, date: d, currency: r.currency, minor: r.minor, myr: converted))
                 }
@@ -463,9 +1049,10 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
     func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
         let info = response.notification.request.content.userInfo
+        // Renewal reminders open their schedule ("recurring").
         guard response.actionIdentifier != UNNotificationDismissActionIdentifier,
               let recordID = info["recordID"] as? String, let kind = info["recordKind"] as? String,
-              ["expense", "notice"].contains(kind), !recordID.isEmpty else { completionHandler(); return }
+              ["expense", "notice", "recurring"].contains(kind), !recordID.isEmpty else { completionHandler(); return }
         let target = ["recordID": recordID, "kind": kind, "action": response.actionIdentifier]
         UserDefaults.standard.set(target, forKey: "pendingNotificationDestination")
         DispatchQueue.main.async { NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil) }
@@ -505,19 +1092,44 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             }
         }
         if daily {
-            let content = UNMutableNotificationContent()
-            content.title = tr("今天的消费记好了吗？", "Have you recorded today's spending?", "Sudah rekod belanja hari ini?")
-            content.body = tr("打开月记，补上今天的消费，也检查自动记账有没有遗漏。", "Open YueJi to record today's spending and check for missing automatic entries.", "Buka YueJi untuk merekod belanja hari ini dan semak rekod automatik yang terlepas.")
-            content.sound = LedgerNotifications.automationSound
-            attachThumbnail("Reminder", to: content)
-            var components = DateComponents(); components.hour = hour; components.minute = minute
-            let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
-            try await center.add(UNNotificationRequest(identifier: dailyID, content: content, trigger: trigger))
+            try await center.add(dailyReminderRequest(hour: hour, minute: minute))
         } else { center.removePendingNotificationRequests(withIdentifiers: [dailyID]) }
         let defaults = UserDefaults.standard
         defaults.set(daily, forKey: "dailyReminder"); defaults.set(results, forKey: "automationNotifications")
         defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
+        defaults.set(dailyReminderVersion, forKey: "dailyReminderVersion")
 
+    }
+    private static func dailyReminderRequest(hour: Int, minute: Int) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = tr("今天的消费记好了吗？", "Have you recorded today's spending?", "Sudah rekod belanja hari ini?")
+        content.body = tr("打开月记，补上今天的消费，也检查自动记账有没有遗漏。", "Open YueJi to record today's spending and check for missing automatic entries.", "Buka YueJi untuk merekod belanja hari ini dan semak rekod automatik yang terlepas.")
+        content.sound = LedgerNotifications.automationSound
+        attachThumbnail("Reminder", to: content)
+        var components = DateComponents(); components.hour = hour; components.minute = minute
+        let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
+        return UNNotificationRequest(identifier: dailyID, content: content, trigger: trigger)
+    }
+    /// The build and language the pending daily reminder was scheduled with.
+    private static var dailyReminderVersion: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + "|" + AppLanguage.code
+    }
+    /// A repeating reminder keeps the content it was scheduled with: iOS copies its thumbnail
+    /// (the full app icon) once, so a reminder saved under an older build keeps showing that
+    /// build's icon, and its text stays in the old language. After an update or a language
+    /// change, schedule it again at the same time; the same identifier replaces the old one.
+    static func refreshDailyReminder() async {
+        let defaults = UserDefaults.standard
+        let version = dailyReminderVersion
+        guard defaults.string(forKey: "dailyReminderVersion") != version else { return }
+        let center = UNUserNotificationCenter.current()
+        if let pending = await center.pendingNotificationRequests().first(where: { $0.identifier == dailyID }),
+           let trigger = pending.trigger as? UNCalendarNotificationTrigger,
+           let hour = trigger.dateComponents.hour, let minute = trigger.dateComponents.minute {
+            // Try again on the next activation if iOS refuses it now.
+            do { try await center.add(dailyReminderRequest(hour: hour, minute: minute)) } catch { return }
+        }
+        defaults.set(version, forKey: "dailyReminderVersion")
     }
     /// Adds the status thumbnail for each kind of message, drawn in the app's colours:
     /// "Recorded", "Review", "Reminder" or "Budget". Cosmetic only: any failure leaves
@@ -588,6 +1200,127 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     }
 }
 
+/// Renewal reminders: local notifications before the expected payment of a subscription or
+/// bill the user has confirmed (saved as a schedule with a reminder). They work offline,
+/// subject to notification permission and iOS delivery settings, and never record an expense
+/// or say a payment went through. `sync` keeps the pending ones in step with the ledger, one
+/// identifier per expected payment, so launches, edits and restores replace rather than
+/// duplicate them.
+enum RenewalReminders {
+    static let prefix = "yueji.renewal."
+    /// Reminders come at 9:00 on their day.
+    static let hour = 9
+    /// The next two per schedule, so one is ready even if the app isn't opened in between.
+    static let perSchedule = 2
+    /// Leaves room under iOS's 64 pending notifications for the app's others.
+    static let limit = 40
+
+    struct Planned: Equatable {
+        let identifier: String
+        let ruleID: String
+        let fire: Date
+        let components: DateComponents
+        let title: String
+        let body: String
+    }
+
+    static func plan(_ ledger: Ledger, now: Date = Date()) -> [Planned] {
+        var result: [Planned] = []
+        for rule in ledger.recurring where rule.isTracking {
+            guard let lead = rule.reminderDays, let first = rule.upcomingIndex(now: now) else { continue }
+            let c = rule.calendar
+            var index = first, added = 0
+            while added < perSchedule, index < first + 24, let expected = rule.occurrence(index) {
+                if let day = c.date(byAdding: .day, value: -lead, to: c.startOfDay(for: expected)),
+                   let fire = c.date(bySettingHour: hour, minute: 0, second: 0, of: day), fire > now {
+                    result.append(Planned(identifier: prefix + rule.occurrenceKey(index), ruleID: rule.id, fire: fire,
+                                          components: c.dateComponents([.year, .month, .day, .hour, .minute], from: fire),
+                                          title: title(rule), body: body(rule, expected: expected, lead: lead)))
+                    added += 1
+                }
+                index += 1
+            }
+        }
+        return Array(result.sorted { $0.fire < $1.fire }.prefix(limit))
+    }
+    static func title(_ rule: RecurringExpense) -> String {
+        rule.displayKind == .subscription
+            ? tr("月记 · 续费提醒", "YueJi · Renewal reminder", "YueJi · Peringatan pembaharuan")
+            : tr("月记 · 账单提醒", "YueJi · Bill reminder", "YueJi · Peringatan bil")
+    }
+    /// "Spotify is expected to renew in 3 days (3 Nov 2026) for RM 15.90." The date is always
+    /// an expectation, and a bill's amount is "about". With notification details hidden, the
+    /// name and amount are left out.
+    static func body(_ rule: RecurringExpense, expected: Date, lead: Int) -> String {
+        let date = dateLabel(expected)
+        if UserDefaults.standard.bool(forKey: "hideNotificationDetails") {
+            return rule.displayKind == .subscription
+                ? tr("有一项订阅预计在 \(date) 续费。打开月记查看。", "A subscription is expected to renew on \(date). Open YueJi for details.", "Satu langganan dijangka diperbaharui pada \(date). Buka YueJi untuk butiran.")
+                : tr("有一项账单预计在 \(date) 到期。打开月记查看。", "A bill is expected to be due on \(date). Open YueJi for details.", "Satu bil dijangka perlu dibayar pada \(date). Buka YueJi untuk butiran.")
+        }
+        let name = rule.name, amount = Currency.display(rule.minor, rule.currency)
+        if rule.displayKind == .subscription {
+            switch lead {
+            case 0: return tr("\(name) 预计今天续费，金额 \(amount)。", "\(name) is expected to renew today for \(amount).", "\(name) dijangka diperbaharui hari ini dengan \(amount).")
+            case 1: return tr("\(name) 预计明天（\(date)）续费，金额 \(amount)。", "\(name) is expected to renew tomorrow (\(date)) for \(amount).", "\(name) dijangka diperbaharui esok (\(date)) dengan \(amount).")
+            default: return tr("\(name) 预计 \(lead) 天后（\(date)）续费，金额 \(amount)。", "\(name) is expected to renew in \(lead) days (\(date)) for \(amount).", "\(name) dijangka diperbaharui dalam \(lead) hari (\(date)) dengan \(amount).")
+            }
+        }
+        switch lead {
+        case 0: return tr("\(name) 预计今天到期，约 \(amount)。", "\(name) is expected to be due today, about \(amount).", "\(name) dijangka perlu dibayar hari ini, kira-kira \(amount).")
+        case 1: return tr("\(name) 预计明天（\(date)）到期，约 \(amount)。", "\(name) is expected to be due tomorrow (\(date)), about \(amount).", "\(name) dijangka perlu dibayar esok (\(date)), kira-kira \(amount).")
+        default: return tr("\(name) 预计 \(lead) 天后（\(date)）到期，约 \(amount)。", "\(name) is expected to be due in \(lead) days (\(date)), about \(amount).", "\(name) dijangka perlu dibayar dalam \(lead) hari (\(date)), kira-kira \(amount).")
+        }
+    }
+    /// Brings the pending reminders in line with the ledger: adds missing or changed ones and
+    /// removes those for payments no longer expected (paused, cancelled, deleted or moved
+    /// schedules). Delivered reminders of schedules no longer followed go too.
+    static func sync(_ ledger: Ledger, now: Date = Date()) async {
+        let center = UNUserNotificationCenter.current()
+        let wanted = plan(ledger, now: now)
+        let wantedIDs = Set(wanted.map(\.identifier))
+        let pending = await center.pendingNotificationRequests().filter { $0.identifier.hasPrefix(prefix) }
+        let stale = pending.map(\.identifier).filter { !wantedIDs.contains($0) }
+        if !stale.isEmpty { center.removePendingNotificationRequests(withIdentifiers: stale) }
+        let followed = Set(ledger.recurring.filter { $0.isTracking && $0.reminderDays != nil }.map(\.id))
+        let delivered = await center.deliveredNotifications().map(\.request).filter {
+            $0.identifier.hasPrefix(prefix) && !followed.contains($0.content.userInfo["recordID"] as? String ?? "")
+        }
+        if !delivered.isEmpty { center.removeDeliveredNotifications(withIdentifiers: delivered.map(\.identifier)) }
+        let current = Dictionary(pending.map { ($0.identifier, $0) }, uniquingKeysWith: { first, _ in first })
+        for item in wanted where !isCurrent(current[item.identifier], item) {
+            // The same identifier replaces a reminder that changed, so none is duplicated.
+            try? await center.add(request(item))
+        }
+    }
+    private static func isCurrent(_ request: UNNotificationRequest?, _ item: Planned) -> Bool {
+        guard let request, let trigger = request.trigger as? UNCalendarNotificationTrigger else { return false }
+        let wanted = item.components, has = trigger.dateComponents
+        return request.content.title == item.title && request.content.body == item.body
+            && has.year == wanted.year && has.month == wanted.month && has.day == wanted.day
+            && has.hour == wanted.hour && has.minute == wanted.minute
+    }
+    static func request(_ item: Planned) -> UNNotificationRequest {
+        let content = UNMutableNotificationContent()
+        content.title = item.title
+        content.body = item.body
+        content.sound = .default
+        content.threadIdentifier = "yueji.renewal"
+        content.userInfo = ["recordID": item.ruleID, "recordKind": "recurring"]
+        return UNNotificationRequest(identifier: item.identifier, content: content,
+                                     trigger: UNCalendarNotificationTrigger(dateMatching: item.components, repeats: false))
+    }
+    static func authorizationStatus() async -> UNAuthorizationStatus {
+        await UNUserNotificationCenter.current().notificationSettings().authorizationStatus
+    }
+    /// Asks for notification permission the first time a reminder is turned on.
+    static func requestPermissionIfNeeded() async {
+        let center = UNUserNotificationCenter.current()
+        guard await center.notificationSettings().authorizationStatus == .notDetermined else { return }
+        _ = try? await center.requestAuthorization(options: [.alert, .sound])
+    }
+}
+
 struct CustomCategory: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var name: String
@@ -654,6 +1387,15 @@ extension Ledger {
         guard tripID == nil || trips.contains(where: { $0.id == tripID }) else { throw LedgerError.invalid("Unknown trip") }
         guard expenseIDs.isSubset(of: Set(expenses.map(\.id))) else { throw LedgerError.invalid("Entry changed. Reopen it.") }
         for index in expenses.indices where expenseIDs.contains(expenses[index].id) { expenses[index].tripID = tripID }
+    }
+    /// Deletes a travel book. Its entries stay in the ledger and return to everyday spending
+    /// and the monthly budget; nothing else changes.
+    mutating func deleteTrip(_ id: String) throws {
+        guard let index = trips.firstIndex(where: { $0.id == id }) else {
+            throw reviewError("这个旅行账本已删除。", "This travel book was already deleted.", "Buku perjalanan ini telah dipadam.")
+        }
+        trips.remove(at: index)
+        for e in expenses.indices where expenses[e].tripID == id { expenses[e].tripID = nil }
     }
 }
 extension Ledger {

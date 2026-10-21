@@ -33,3 +33,13 @@ Validation added in EverydayFlowTests covers independent budgets, unchanged
 overall totals, returning entries to daily budgets, repayment/refund/claim
 semantics, backup round trips and invalid references. Windows static/syntax
 checks are available here; native compilation and XCTest still require macOS.
+
+Delete a travel book from its edit page: **Delete Travel Book** (删除旅行账本 / Padam Buku
+Perjalanan) is a red action at the bottom. The confirmation says exactly what happens: the book
+is deleted and can't be restored, while its entries stay in the ledger, go back to everyday
+spending and count towards the monthly budget again (`Ledger.deleteTrip`). After confirming,
+the editor closes, the page returns to the list, and only then is the book removed, so the
+page being left never shows emptied out. YueJi keeps no selected trip: the Overview card
+picks the trip under way, else the next, else the latest, so it moves to another book
+automatically. The ledger is stored on the device only (there is no cloud sync); earlier
+automatic snapshots and exported backups still contain the book if one is restored.

@@ -68,6 +68,9 @@ logo_metadata = json.loads((logo_asset / 'Contents.json').read_text())
 logo = logo_asset / logo_metadata['images'][0]['filename']
 assert logo_metadata['images'][0]['idiom'] == 'universal'
 assert logo.read_bytes() == icon.read_bytes(), 'Opening logo must use the app brand image'
+dark_logo = [item for item in logo_metadata['images'] if {'appearance': 'luminosity', 'value': 'dark'} in item.get('appearances', [])]
+assert len(dark_logo) == 1, 'In-app logo needs the dark icon as its dark appearance'
+assert (logo_asset / dark_logo[0]['filename']).read_bytes() == (icon.parent / 'Icon-dark.png').read_bytes(), 'Dark in-app logo must be the dark app icon'
 # Every static in-app image name must resolve to a bundled imageset. AppIcon is not a normal Image asset.
 for source in (root / 'YueJi').glob('*.swift'):
     for name in re.findall(r'\bImage\("([^"\\]+)"\)', source.read_text()):

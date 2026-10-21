@@ -269,8 +269,11 @@ def main():
             entry = {"appearances": [{"appearance": "luminosity", "value": appearance}], **entry}
         images.append(entry)
     (icons / "Contents.json").write_text(json.dumps({"images": images, "info": {"author": "xcode", "version": 1}}, indent=2) + "\n")
-    # The opening logo must be byte-identical to the 1024 icon.
-    (ROOT / "YueJi/Assets.xcassets/YueJiLogo.imageset/YueJiLogo.png").write_bytes((icons / "Icon.png").read_bytes())
+    # The in-app logo (banners, Settings) must be byte-identical to the 1024 icon, with the
+    # dark icon as its dark appearance so it matches the home screen in dark mode.
+    logo = ROOT / "YueJi/Assets.xcassets/YueJiLogo.imageset"
+    (logo / "YueJiLogo.png").write_bytes((icons / "Icon.png").read_bytes())
+    (logo / "YueJiLogo-dark.png").write_bytes((icons / "Icon-dark.png").read_bytes())
     for scale in (2, 3):
         master.resize((60 * scale, 60 * scale), Image.LANCZOS).save(ROOT / f"YueJi/YueJiIcon@{scale}x.png", optimize=True)
     for name, painter in THUMBNAILS.items():

@@ -12,7 +12,7 @@ struct ForegroundLedgerNotice: Identifiable, Equatable {
     init(title: String, message: String, userInfo: [AnyHashable: Any]) {
         self.title = title; self.message = message
         if let record = userInfo["recordID"] as? String, !record.isEmpty,
-           let kind = userInfo["recordKind"] as? String, ["expense", "notice"].contains(kind) {
+           let kind = userInfo["recordKind"] as? String, ["expense", "notice", "recurring"].contains(kind) {
             self.recordID = record; self.kind = kind
         } else { self.recordID = nil; self.kind = nil }
     }
