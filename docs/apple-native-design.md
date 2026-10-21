@@ -78,7 +78,8 @@ still the system's own; only layout and emphasis follow the kit.
   on coloured circles (`IslandIconTile`); people use monogram avatars.
 - Overview: month picker; the spending header with an eye button (SF Symbol replace
   transition) that hides amounts; quick actions; Needs attention; the budget card with
-  a native linear-capacity `Gauge`; where it went (donut and category rows); the
+  a native linear-capacity `Gauge`; travel books (the current trip against its own
+  budget; trips moved here from Ledger); where it went (donut and category rows); the
   six-month spending trend (Swift Charts bars in the tint, the selected month solid, a
   dashed average, tap a bar to select it); recent entries; savings; payment details.
   More tools is the toolbar's ellipsis.

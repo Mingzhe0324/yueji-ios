@@ -1,6 +1,8 @@
 # Travel books with separate budgets
 
-Open Ledger → Travel books. Create a trip with a name, destination, dates,
+Open Overview → Travel books, the card below Budget: trips have their own budgets,
+so they sit beside the monthly one. The card shows the trip under way (else the next,
+else the latest) with its spending against its budget. Create a trip with a name, destination, dates,
 MYR budget and optional companions. Companions are descriptive; adding names
 does not silently change the shares on existing entries.
 

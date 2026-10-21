@@ -614,6 +614,7 @@ struct DashboardView: View {
                 }
                 PendingBookkeepingCard()
                 budgetSection
+                travelSection
                 categoriesCard
                 trendSection
                 recentCard
@@ -823,6 +824,46 @@ struct DashboardView: View {
         } header: {
             Text(tr("预算", "Budget", "Bajet"))
         }
+    }
+    /// Trips keep their own budgets, so they sit beside the monthly budget: the trip under
+    /// way (else the next one, else the latest) against its budget, and every travel book.
+    private var travelSection: some View {
+        Section {
+            NavigationLink { TravelBooksView() } label: {
+                VStack(alignment: .leading, spacing: 10) {
+                    IslandRowLabel(title: tr("旅行账本", "Travel books", "Buku perjalanan"), symbol: "suitcase.rolling.fill", color: IslandPalette.sky)
+                    if let trip = featuredTrip {
+                        let spent = model.ledger.tripSpending(trip.id)
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(trip.name).lineLimit(1)
+                            Spacer(minLength: 8)
+                            Text(amountText(spent) + (trip.budget > 0 ? " / " + amountText(trip.budget) : "")).monospacedDigit()
+                        }.font(.subheadline)
+                        if trip.budget > 0 {
+                            SpendingMeter(value: spent, total: trip.budget, color: spent > trip.budget ? .orange : IslandPalette.sky)
+                        }
+                        Text((trip.destination.isEmpty ? "" : trip.destination + " · ") + dateLabel(trip.start) + " – " + dateLabel(trip.end))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    } else {
+                        Text(tr("给旅行单独的预算，不占日常月预算。", "Give a trip its own budget, apart from the monthly one.", "Beri perjalanan bajet sendiri, berasingan daripada bajet bulanan."))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 6)
+            }
+        }
+    }
+    /// The trip under way today, else the next one to start, else the one that ended last.
+    private var featuredTrip: TravelBook? {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let trips = model.ledger.trips
+        if let current = trips.first(where: { calendar.startOfDay(for: $0.start) <= today && today <= calendar.startOfDay(for: $0.end) }) {
+            return current
+        }
+        if let next = trips.filter({ calendar.startOfDay(for: $0.start) > today }).min(by: { $0.start < $1.start }) {
+            return next
+        }
+        return trips.max(by: { $0.end < $1.end })
     }
     private var savingsSection: some View {
         Section {
@@ -1363,11 +1404,6 @@ struct ExpensesView: View {
         let days = timeline.days
         NavigationStack(path: $path) {
             List {
-                Section {
-                    NavigationLink { TravelBooksView() } label: {
-                        IslandRowLabel(title: tr("旅行账本 · 独立预算", "Travel books · separate budgets", "Buku perjalanan · bajet berasingan"), symbol: "suitcase.rolling.fill", color: IslandPalette.sky)
-                    }
-                }
                 // The month and its total head the list like a balance; the payments follow
                 // as plain rows, as Messages lists conversations.
                 Section {
