@@ -87,18 +87,23 @@ which `testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
 
 ## Icon and notifications
 
-`scripts/generate_icon.py` draws the icon in Apple's iOS 26/27 Liquid Glass icon style: a
-vivid Apple-blue gradient matching the tint, a frosted glass ledger card (记, "record") with three entries and
-bright glass edges, and a gold crescent moon (月, "moon") layered in front with a soft
-shadow. Like Apple's own apps it ships the three home-screen appearances in a
-single-size AppIcon set (Xcode derives every smaller size): default, dark (the glass card
-and gold moon on graphite) and tinted (grayscale artwork on black that iOS recolours with
-the user's tint). It also writes the byte-identical opening logo and the
-`YueJiIcon@2x/@3x` fallbacks that AltStore and other sideloading tools read from
-`CFBundleIconFiles`. System notifications show this icon.
+`scripts/generate_icon.py` draws the icon to Apple's App Icon Template for iOS, iPadOS and
+watchOS 27: one idea centred on the template grid, built from its layers. On a vivid
+Apple-blue gradient matching the tint sits the moon (月, "moon") as a frosted Liquid Glass
+disc inside the template's 820 px circle, three white ledger entries (记, "record") on the
+glass, and the moon's lit crescent in gold in front, horns rounded. The AppIcon set holds
+flattened images, so the thin glass edges and soft layer shadows a layered Icon Composer
+icon would get from the system are drawn in. Like Apple's own apps it ships the three
+home-screen appearances in a single-size AppIcon set (Xcode derives every smaller size):
+default, dark (the same layers on graphite, the glass in the app blue) and tinted
+(grayscale on black, crescent and entries in white, which iOS recolours with the user's
+tint). It also writes the byte-identical opening logo and the `YueJiIcon@2x/@3x`
+fallbacks that AltStore and other sideloading tools read from `CFBundleIconFiles`.
+System notifications show this icon. A new icon needs a new version: AltStore and iOS
+keep showing the icon they cached for an already-installed version.
 
 It also writes four notification thumbnails in the same style — the blue background
-and a frosted glass card carrying one glyph — attached by `LedgerNotifications`:
+and the icon's glass moon carrying one white glyph — attached by `LedgerNotifications`:
 `YueJiNoticeRecorded` (check, automatic entry recorded), `YueJiNoticeReview` (alert,
 record needs review), `YueJiNoticeReminder` (the full icon artwork, daily reminder) and
 `YueJiNoticeBudget` (gauge, budget alert). Thumbnails are cosmetic: if an attachment

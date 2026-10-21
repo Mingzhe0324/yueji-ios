@@ -1,235 +1,259 @@
 """Draw the YueJi app icon and the notification thumbnails.
 
-Original artwork drawn from shapes (no downloaded assets). Run from the repo root:
+Original artwork drawn from shapes (no downloaded assets); needs Pillow and NumPy. Run
+from the repo root:
     python scripts/generate_icon.py
 Writes the single-size AppIcon set with Apple's three home-screen appearances (default,
 dark and tinted, opaque RGB, 1024 px; Xcode derives every smaller size), the identical
 YueJiLogo image, the YueJiIcon@2x/@3x fallbacks (the icon AltStore shows, read from
 CFBundleIconFiles) and the four notification thumbnails.
 
-The icon follows Apple's iOS 26/27 Liquid Glass icon style: a vivid Apple-blue gradient,
-a frosted glass ledger card (记, "record") with three entries and bright glass edges,
-and a gold crescent moon (月, "moon") layered in front with a soft shadow. The dark
-appearance keeps the glass and gold on graphite; the tinted one is grayscale artwork
-on black, which the system recolours with the user's tint, like Apple's own icons.
+The layout follows Apple's App Icon Template for iOS, iPadOS and watchOS 27: a full-bleed
+1024 px square that the system masks (no corners or outer shadow baked in), one idea
+centred on the template grid (eight 128 px steps; circles of 820, 512 and 204 px), built
+from the template's layers, back to front:
+
+    BG       Apple-blue gradient, the app tint (#0088FF), lighter at the top
+    Layer 1  the moon (月): a 737 px frosted Liquid Glass disc inside the 820 px circle
+    Layer 2  the ledger (记): three white entries on the glass
+    Layer 3  the lit crescent of the moon, in gold, with rounded horns
+
+The AppIcon set holds flattened images, which the system doesn't light the way it lights
+a layered Icon Composer icon, so the glass edges and soft layer shadows are drawn here,
+kept thin and crisp. Every shape is an exact signed distance, so edges are anti-aliased
+at any size. Dark keeps the layers on graphite with the glass in the app blue; tinted is
+grayscale on black with the crescent and entries in white, which the system recolours
+with the user's tint, like Apple's own icons.
 """
 from pathlib import Path
-from PIL import Image, ImageChops, ImageDraw, ImageFilter
 import json
+import math
+
+import numpy as np
+from PIL import Image, ImageFilter
 
 ROOT = Path(__file__).resolve().parents[1]
-SS = 3  # supersampling factor
 
 # Apple blue, matching the app tint (iOS 27 system blue #0088FF), lighter at the top.
-INDIGO_TOP = (52, 170, 255)
-INDIGO_BOTTOM = (0, 100, 226)
+BLUE_TOP = (52, 170, 255)
+BLUE_BOTTOM = (0, 100, 226)
+APP_BLUE = (0, 136, 255)
 SHEEN = (176, 222, 255)
+FROST = (200, 230, 255)
 GOLD_TOP = (255, 232, 170)
 GOLD_BOTTOM = (238, 168, 74)
+GRAPHITE_TOP = (40, 42, 52)
+GRAPHITE_BOTTOM = (10, 10, 14)
+SHADOW = (6, 26, 80)
 WHITE = (255, 255, 255)
+BLACK = (0, 0, 0)
+LIGHT = (-0.5, -0.866)  # towards the light: from above, a little to the left
+
+# The mark on the template grid, as fractions of the canvas (the crescent's as fractions
+# of the moon's radius).
+MOON_R = 0.36
+CUT_R, CUT_OFFSET, CUT_ANGLE = 0.98, 0.45, 38  # the dark side: up and to the right
+HORN_ROUNDING = 0.012
+ENTRY_Y, ENTRY_STEP, ENTRY_WIDTH, ENTRY_GAP = 0.465, 0.11, 0.052, 0.06
+ENTRY_LENGTHS = (0.34, 0.27, 0.20)
+GLASS = {"default": (FROST, 0.28), "dark": (APP_BLUE, 0.62), "tinted": (WHITE, 0.24)}
 
 
-def lerp(a, b, t):
-    return tuple(int(round(a[i] + (b[i] - a[i]) * t)) for i in range(3))
+class Canvas:
+    """An n x n float RGB image with pixel-centre coordinates, painted back to front."""
+
+    def __init__(self, n, top, bottom):
+        self.n = n
+        self.y, self.x = np.mgrid[0:n, 0:n].astype(np.float32) + 0.5
+        self.rgb = self.gradient(top, bottom, 0, n)
+
+    def gradient(self, top, bottom, y0, y1):
+        t = np.clip((self.y - y0) / (y1 - y0), 0, 1)[..., None]
+        return np.asarray(top, np.float32) * (1 - t) + np.asarray(bottom, np.float32) * t
+
+    def paint(self, color, alpha):
+        """Composite a colour, or an image the size of the canvas, with per-pixel alpha."""
+        a = np.clip(alpha, 0, 1)[..., None]
+        self.rgb = self.rgb * (1 - a) + np.asarray(color, np.float32) * a
+
+    def blurred(self, radius):
+        return np.asarray(self.image().filter(ImageFilter.GaussianBlur(radius)), np.float32)
+
+    def image(self):
+        return Image.fromarray(np.clip(self.rgb + 0.5, 0, 255).astype(np.uint8))
 
 
-def vertical(n, top, bottom):
-    img = Image.new("RGBA", (n, n))
-    d = ImageDraw.Draw(img)
-    for y in range(n):
-        d.line((0, y, n, y), fill=lerp(top, bottom, y / (n - 1)) + (255,))
-    return img
+# Shapes, as signed distances in pixels (negative inside).
+
+def circle(c, cx, cy, r):
+    return np.hypot(c.x - cx, c.y - cy) - r
 
 
-def glow(n, center, radius, color, alpha):
-    layer = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    x, y = center
-    ImageDraw.Draw(layer).ellipse((x - radius, y - radius, x + radius, y + radius), fill=color + (alpha,))
-    return layer.filter(ImageFilter.GaussianBlur(radius * 0.6))
+def crescent(c, cx, cy, r, cut, offset, angle, rounding):
+    """A disc minus a disc of radius `cut` whose centre is `offset` away towards `angle`
+    (degrees, anticlockwise from the right). Exact distance (after Inigo Quilez's sdMoon),
+    so growing it by `rounding` rounds the horns cleanly."""
+    r, cut = r - rounding, cut + rounding
+    t = math.radians(angle)
+    ux, uy = math.cos(t), -math.sin(t)
+    dx, dy = c.x - cx, c.y - cy
+    px, py = dx * ux + dy * uy, np.abs(dy * ux - dx * uy)
+    a = (r * r - cut * cut + offset * offset) / (2 * offset)
+    b = math.sqrt(max(r * r - a * a, 0.0))
+    horn = offset * (px * b - py * a) > offset * offset * np.maximum(b - py, 0)
+    body = np.maximum(np.hypot(px, py) - r, cut - np.hypot(px - offset, py))
+    return np.where(horn, np.hypot(px - a, py - b), body) - rounding
+
+
+def segment(c, ax, ay, bx, by, r):
+    """A stroke from a to b with round caps."""
+    px, py, vx, vy = c.x - ax, c.y - ay, bx - ax, by - ay
+    h = np.clip((px * vx + py * vy) / (vx * vx + vy * vy), 0, 1)
+    return np.hypot(px - vx * h, py - vy * h) - r
+
+
+def arc(c, cx, cy, r, start, end, w):
+    """A stroke along a circle between two angles (degrees, anticlockwise from the right)."""
+    angle = np.degrees(np.arctan2(cy - c.y, c.x - cx))
+    ring = np.abs(np.hypot(c.x - cx, c.y - cy) - r) - w
+    caps = [np.hypot(c.x - cx - r * math.cos(math.radians(a)), c.y - cy + r * math.sin(math.radians(a))) - w
+            for a in (start, end)]
+    inside = (angle >= min(start, end)) & (angle <= max(start, end))
+    return np.where(inside, ring, np.minimum(*caps))
+
+
+def coverage(sdf):
+    """Anti-aliased fill: one pixel of ramp across the edge."""
+    return np.clip(0.5 - sdf, 0, 1)
+
+
+# Layers.
+
+def shadow(c, cover, radius, dx, dy, alpha, color):
+    """A soft drop shadow: the shape blurred and moved down (and right)."""
+    soft = Image.fromarray(np.clip(cover * 255 + 0.5, 0, 255).astype(np.uint8))
+    soft = np.asarray(soft.filter(ImageFilter.GaussianBlur(radius)), np.float32) / 255
+    dx, dy = int(round(dx)), int(round(dy))
+    moved = np.zeros_like(soft)
+    moved[dy:, dx:] = soft[:c.n - dy, :c.n - dx]
+    c.paint(color, moved * alpha)
+
+
+def edge_light(c, sdf, width, strength, back=0.4):
+    """Liquid Glass edges: a thin specular rim where the edge faces the light, fainter opposite."""
+    gy, gx = np.gradient(sdf)
+    facing = (gx * LIGHT[0] + gy * LIGHT[1]) / (np.hypot(gx, gy) + 1e-6)
+    rim = np.clip(1 + sdf / width, 0, 1) ** 2 * coverage(sdf)
+    c.paint(WHITE, rim * strength * (np.clip(facing, 0, 1) ** 1.5 + back * np.clip(-facing, 0, 1) ** 1.5))
+
+
+def glass(c, sdf, mode, ink, top_light=0.12):
+    """A frosted Liquid Glass shape: soft shadow, the background seen through it, a light
+    from above fading towards the middle, and bright edges."""
+    n = c.n
+    tint, alpha = GLASS[mode]
+    cover = coverage(sdf)
+    behind = c.blurred(n * 0.03)  # the glass shows the background, not its own shadow
+    shadow(c, cover, n * 0.03, 0, n * 0.022, 0.30 if mode == "default" else 0.55, ink)
+    c.paint(behind * (1 - alpha) + np.asarray(tint, np.float32) * alpha, cover)
+    rows = np.nonzero(cover.max(axis=1))[0]
+    fade = np.clip(1 - (c.y - rows[0]) / (0.55 * (rows[-1] - rows[0])), 0, 1) ** 1.6
+    c.paint(WHITE, cover * top_light * fade)
+    edge_light(c, sdf, n * 0.012, 0.85 if mode == "default" else 0.6)
+
+
+def solid(c, sdf, color, ink, alpha=0.96):
+    """A flat foreground shape lifted by a small shadow."""
+    cover = coverage(sdf)
+    shadow(c, cover, c.n * 0.008, 0, c.n * 0.006, 0.18, ink)
+    c.paint(color, cover * alpha)
 
 
 def background(n, mode="default"):
     if mode == "tinted":
-        return Image.new("RGBA", (n, n), (0, 0, 0, 255))
-    if mode == "dark":
-        img = vertical(n, (46, 46, 56), (12, 12, 16))
-        img.alpha_composite(glow(n, (n * 0.30, n * 0.05), n * 0.55, INDIGO_TOP, 46))
-        return img
-    img = vertical(n, INDIGO_TOP, INDIGO_BOTTOM)
-    img.alpha_composite(glow(n, (n * 0.30, n * 0.05), n * 0.55, SHEEN, 70))
-    return img
-
-
-def card_mask(n, box, radius, angle=0.0, center=None):
-    mask = Image.new("L", (n, n), 0)
-    ImageDraw.Draw(mask).rounded_rectangle(box, radius=radius, fill=255)
-    return mask.rotate(angle, resample=Image.BICUBIC, center=center) if angle else mask
-
-
-def crescent_mask(n, cx, cy, r):
-    """A disc minus an offset disc: the crescent from the earlier icons, same proportions."""
-    mask = Image.new("L", (n, n), 0)
-    ImageDraw.Draw(mask).ellipse((cx - r, cy - r, cx + r, cy + r), fill=255)
-    cut = Image.new("L", (n, n), 0)
-    x, y, cr = cx + 0.42 * r, cy - 0.30 * r, 0.80 * r
-    ImageDraw.Draw(cut).ellipse((x - cr, y - cr, x + cr, y + cr), fill=255)
-    return ImageChops.subtract(mask, cut)
-
-
-def shadow(img, mask, blur, dy, alpha):
-    n = img.size[0]
-    layer = Image.new("RGBA", (n, n), (16, 12, 60, 0))
-    soft = mask.filter(ImageFilter.GaussianBlur(blur)).point(lambda v: int(v * alpha))
-    layer.putalpha(ImageChops.offset(soft, 0, int(dy)))
-    img.alpha_composite(layer)
-
-
-def rim(img, mask, width, strength=1.0):
-    """A specular edge, brightest at the top-left, like light catching glass."""
-    n = img.size[0]
-    inner = mask.filter(ImageFilter.MinFilter(int(width) * 2 + 1))
-    edge = ImageChops.subtract(mask, inner).filter(ImageFilter.GaussianBlur(width * 0.4))
-    light = Image.new("L", (n, n))
-    d = ImageDraw.Draw(light)
-    for k in range(2 * n - 1):
-        v = int(255 * strength * max(0.15, 1 - (k / (2 * n - 2)) * 1.3))
-        d.line((k, 0, 0, k) if k < n else (n - 1, k - n + 1, k - n + 1, n - 1), fill=v, width=2)
-    layer = Image.new("RGBA", (n, n), WHITE + (0,))
-    layer.putalpha(ImageChops.multiply(edge, light))
-    img.alpha_composite(layer)
-
-
-def frosted(img, mask, alpha=0.30, blur=0.03):
-    """Frosted glass: the background blurred and lightened inside the mask."""
-    n = img.size[0]
-    behind = img.filter(ImageFilter.GaussianBlur(n * blur))
-    behind.alpha_composite(Image.new("RGBA", (n, n), WHITE + (int(255 * alpha),)))
-    behind.putalpha(mask)
-    img.alpha_composite(behind)
-
-
-def fill(img, mask, top, bottom):
-    layer = vertical(img.size[0], top, bottom)
-    layer.putalpha(mask)
-    img.alpha_composite(layer)
-
-
-def highlight(img, mask, cx, cy, r, alpha):
-    n = img.size[0]
-    spot = Image.new("L", (n, n), 0)
-    ImageDraw.Draw(spot).ellipse((cx - r, cy - r, cx + r, cy + r), fill=int(255 * alpha))
-    layer = Image.new("RGBA", (n, n), WHITE + (0,))
-    layer.putalpha(ImageChops.multiply(spot.filter(ImageFilter.GaussianBlur(r * 0.5)), mask))
-    img.alpha_composite(layer)
-
-
-def entries(n, x0, y0, gap, w, lengths):
-    """Ledger entries: a bullet and a line each, in white."""
-    layer = Image.new("RGBA", (n, n), (0, 0, 0, 0))
-    d = ImageDraw.Draw(layer)
-    for i, length in enumerate(lengths):
-        y = y0 + i * gap
-        d.ellipse((x0 - w * 0.75, y - w * 0.75, x0 + w * 0.75, y + w * 0.75), fill=WHITE + (240,))
-        x1 = x0 + w * 1.7
-        d.rounded_rectangle((x1, y - w / 2, x1 + length, y + w / 2), radius=w / 2, fill=WHITE + (240,))
-    return layer
-
-
-def glass_card(img, box, radius, angle=0.0, center=None, alpha=0.30):
-    n = img.size[0]
-    mask = card_mask(n, box, radius, angle, center)
-    shadow(img, mask, n * 0.035, n * 0.03, 0.40)
-    frosted(img, mask, alpha=alpha)
-    rim(img, mask, n * 0.007)
-    return mask
-
-
-def gold_moon(img, cx, cy, r, top=GOLD_TOP, bottom=GOLD_BOTTOM):
-    n = img.size[0]
-    mask = crescent_mask(n, cx, cy, r)
-    shadow(img, mask, n * 0.025, n * 0.02, 0.45)
-    fill(img, mask, top, bottom)
-    highlight(img, mask, cx - r * 0.42, cy - r * 0.47, r * 0.53, 0.6)
-    rim(img, mask, n * 0.005, 0.9)
+        return Canvas(n, BLACK, BLACK)
+    dark = mode == "dark"
+    c = Canvas(n, *((GRAPHITE_TOP, GRAPHITE_BOTTOM) if dark else (BLUE_TOP, BLUE_BOTTOM)))
+    sheen = np.exp(-((c.x - n * 0.30) ** 2 + (c.y - n * 0.05) ** 2) / (2 * (n * 0.42) ** 2))
+    c.paint(BLUE_TOP if dark else SHEEN, sheen * (40 if dark else 70) / 255)
+    return c
 
 
 def icon(size=1024, mode="default"):
     """The icon in one of Apple's home-screen appearances: default, dark or tinted."""
-    n = size * SS
-    img = background(n, mode)
-    center = (n * 0.53, n * 0.50)
-    glass_card(img, (n * 0.25, n * 0.20, n * 0.81, n * 0.80), n * 0.115, -7, center,
-               alpha={"default": 0.30, "dark": 0.20, "tinted": 0.26}[mode])
-    img.alpha_composite(entries(n, n * 0.40, n * 0.43, n * 0.09, n * 0.032, (n * 0.25, n * 0.20, n * 0.14))
-                       .rotate(-7, resample=Image.BICUBIC, center=center))
-    if mode == "tinted":
-        gold_moon(img, n * 0.33, n * 0.69, n * 0.17, top=WHITE, bottom=(214, 214, 214))
-    else:
-        gold_moon(img, n * 0.33, n * 0.69, n * 0.17)
-    out = img.convert("RGB").resize((size, size), Image.LANCZOS)
+    n = size
+    c = background(n, mode)
+    ink = SHADOW if mode == "default" else BLACK
+    cx = cy = n / 2
+    r = n * MOON_R
+    cut, offset, t = r * CUT_R, r * CUT_OFFSET, math.radians(CUT_ANGLE)
+    ccx, ccy = cx + offset * math.cos(t), cy - offset * math.sin(t)
+
+    # Layer 1: the moon, a frosted glass disc.
+    glass(c, circle(c, cx, cy, r), mode, ink)
+
+    # Layer 2: the ledger, three entries left-aligned just clear of the crescent.
+    w = n * ENTRY_WIDTH
+    ys = [n * (ENTRY_Y + (i - 1) * ENTRY_STEP) for i in range(3)]
+    x0 = max(ccx - math.sqrt(max(0.0, cut * cut - (y - ccy) ** 2)) for y in ys) + n * ENTRY_GAP + w / 2
+    entries = np.min([segment(c, x0, y, x0 + n * length - w, y, w / 2) for y, length in zip(ys, ENTRY_LENGTHS)], axis=0)
+    solid(c, entries, WHITE, ink)
+
+    # Layer 3: the lit crescent.
+    moon = crescent(c, cx, cy, r, cut, offset, CUT_ANGLE, n * HORN_ROUNDING)
+    cover = coverage(moon)
+    shadow(c, cover, n * 0.018, n * 0.010, n * 0.018, 0.35, ink)
+    top, bottom = (WHITE, (210, 210, 210)) if mode == "tinted" else (GOLD_TOP, GOLD_BOTTOM)
+    c.paint(c.gradient(top, bottom, cy - r, cy + r), cover)
+    edge_light(c, moon, n * 0.012, 1.0, back=0.3)
+
+    out = c.image()
     # Tinted icons are grayscale: the system maps their brightness to the user's tint.
     return out.convert("L").convert("RGB") if mode == "tinted" else out
 
 
-# Notification thumbnails: the icon's indigo and glass card carrying one white glyph,
-# so every message looks like it comes from the same app.
+# Notification thumbnails: the icon's blue background and glass moon carrying one white
+# glyph, so every message looks like it comes from the same app.
 
 def thumbnail_base(n):
-    img = background(n)
-    glass_card(img, (n * 0.18, n * 0.18, n * 0.82, n * 0.82), n * 0.13)
-    return img
+    c = background(n)
+    glass(c, circle(c, n / 2, n / 2, n * 0.34), "default", SHADOW)
+    return c
 
 
 def thumbnail_recorded(n):
-    img = thumbnail_base(n)
-    d = ImageDraw.Draw(img)
-    w = int(n * 0.07)
-    pts = [(n * 0.33, n * 0.51), (n * 0.45, n * 0.63), (n * 0.68, n * 0.39)]
-    d.line(pts, fill=WHITE + (250,), width=w, joint="curve")
-    for x, y in (pts[0], pts[-1]):
-        d.ellipse((x - w / 2, y - w / 2, x + w / 2, y + w / 2), fill=WHITE + (250,))
-    return img
+    c = thumbnail_base(n)
+    w = n * 0.036
+    a, b, d = (n * 0.385, n * 0.515), (n * 0.465, n * 0.595), (n * 0.625, n * 0.425)
+    solid(c, np.minimum(segment(c, *a, *b, w), segment(c, *b, *d, w)), WHITE, SHADOW)
+    return c.image()
 
 
 def thumbnail_review(n):
-    img = thumbnail_base(n)
-    d = ImageDraw.Draw(img)
-    w = n * 0.085
-    d.rounded_rectangle((n / 2 - w / 2, n * 0.30, n / 2 + w / 2, n * 0.57), radius=w / 2, fill=WHITE + (250,))
-    d.ellipse((n / 2 - w * 0.6, n * 0.63, n / 2 + w * 0.6, n * 0.63 + w * 1.2), fill=WHITE + (250,))
-    return img
+    c = thumbnail_base(n)
+    w = n * 0.040
+    solid(c, np.minimum(segment(c, n / 2, n * 0.355, n / 2, n * 0.53, w), circle(c, n / 2, n * 0.625, w * 1.15)),
+          WHITE, SHADOW)
+    return c.image()
 
 
 def thumbnail_reminder(n):
-    img = background(n)
-    center = (n * 0.53, n * 0.50)
-    glass_card(img, (n * 0.25, n * 0.20, n * 0.81, n * 0.80), n * 0.115, -7, center)
-    img.alpha_composite(entries(n, n * 0.40, n * 0.43, n * 0.09, n * 0.032, (n * 0.25, n * 0.20, n * 0.14))
-                       .rotate(-7, resample=Image.BICUBIC, center=center))
-    gold_moon(img, n * 0.33, n * 0.69, n * 0.17)
-    return img
+    return icon(n)
 
 
 def thumbnail_budget(n):
-    img = thumbnail_base(n)
-    d = ImageDraw.Draw(img)
-    w = int(n * 0.06)
-    box = (n * 0.29, n * 0.34, n * 0.71, n * 0.76)
-    d.arc(box, 180, 360, fill=WHITE + (90,), width=w)
-    d.arc(box, 180, 318, fill=GOLD_TOP + (255,), width=w)
-    cx, cy = n * 0.50, n * 0.55
-    d.line((cx, cy, n * 0.62, n * 0.43), fill=WHITE + (250,), width=int(w * 0.6))
-    d.ellipse((cx - w * 0.7, cy - w * 0.7, cx + w * 0.7, cy + w * 0.7), fill=WHITE + (250,))
-    return img
+    c = thumbnail_base(n)
+    cx, cy, r, w = n / 2, n * 0.56, n * 0.17, n * 0.032
+    c.paint(WHITE, coverage(arc(c, cx, cy, r, 0, 180, w)) * 0.35)
+    solid(c, arc(c, cx, cy, r, 180, 40, w), (255, 214, 120), SHADOW, alpha=1.0)
+    t = math.radians(40)
+    needle = segment(c, cx, cy, cx + n * 0.115 * math.cos(t), cy - n * 0.115 * math.sin(t), w * 0.55)
+    solid(c, np.minimum(needle, circle(c, cx, cy, w * 1.05)), WHITE, SHADOW)
+    return c.image()
 
 
 THUMBNAILS = {"Recorded": thumbnail_recorded, "Review": thumbnail_review,
               "Reminder": thumbnail_reminder, "Budget": thumbnail_budget}
-
-
-def render(painter, size=300):
-    return painter(size * SS).convert("RGB").resize((size, size), Image.LANCZOS)
-
 
 APPEARANCES = {"default": ("Icon.png", None), "dark": ("Icon-dark.png", "dark"), "tinted": ("Icon-tinted.png", "tinted")}
 
@@ -250,7 +274,7 @@ def main():
     for scale in (2, 3):
         master.resize((60 * scale, 60 * scale), Image.LANCZOS).save(ROOT / f"YueJi/YueJiIcon@{scale}x.png", optimize=True)
     for name, painter in THUMBNAILS.items():
-        render(painter).save(ROOT / f"YueJi/YueJiNotice{name}.png", optimize=True)
+        painter(300).save(ROOT / f"YueJi/YueJiNotice{name}.png", optimize=True)
     print("Wrote app icons, logo, IPA/AltStore fallbacks and notification thumbnails.")
 
 
