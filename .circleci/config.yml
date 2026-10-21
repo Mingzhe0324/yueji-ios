@@ -1,7 +1,7 @@
 version: 2.1
 
-# Enable this parameter in CircleCI's Trigger Pipeline dialog to build an IPA.
-# Ordinary pushes do not start a paid-by-the-minute macOS job.
+# Enable this parameter in CircleCI's Trigger Pipeline dialog to build an IPA, on
+# any branch. Ordinary pushes do not start a paid-by-the-minute macOS job.
 parameters:
   run-ipa:
     type: boolean
@@ -102,7 +102,4 @@ workflows:
   yueji-unsigned-ipa:
     when: << pipeline.parameters.run-ipa >>
     jobs:
-      - build-unsigned-ipa:
-          filters:
-            branches:
-              only: main
+      - build-unsigned-ipa
