@@ -4121,6 +4121,47 @@ private struct NotificationBannerCard: View {
     }
 }
 
+/// The opening's steps, in order.
+private enum OpeningStage: Int, Comparable {
+    /// The first frame: only the background, as the system launch screen.
+    case start
+    /// Cosmos's mark: six dots on a ring.
+    case mark
+    /// The dots have burst into category tiles around the icon and wordmark.
+    case cosmos
+    /// The reveal: the tiles drift on and fade while the icon lifts.
+    case departing
+    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
+/// One dot of the opening's mark and the category tile it becomes: the six default
+/// categories, scattered at different sizes like the cards around Cosmos's name.
+private struct OpeningOrbiter: Identifiable {
+    let id: Int
+    let symbol: String
+    let color: Color
+    /// Where the tile settles: degrees clockwise from the trailing side, and points out.
+    let angle: Double
+    let distance: CGFloat
+    let size: CGFloat
+    /// The dot's place on the mark, the top one first, clockwise.
+    var ringAngle: Double { -90 + Double(id) * 60 }
+    static let all = [
+        OpeningOrbiter(id: 0, symbol: "fork.knife", color: IslandPalette.pumpkin, angle: -98, distance: 158, size: 56),
+        OpeningOrbiter(id: 1, symbol: "car.fill", color: IslandPalette.sky, angle: -24, distance: 150, size: 44),
+        OpeningOrbiter(id: 2, symbol: "bag.fill", color: IslandPalette.lavender, angle: 36, distance: 162, size: 62),
+        OpeningOrbiter(id: 3, symbol: "doc.text.fill", color: IslandPalette.lagoon, angle: 84, distance: 176, size: 46),
+        OpeningOrbiter(id: 4, symbol: "gamecontroller.fill", color: IslandPalette.berry, angle: 156, distance: 150, size: 58),
+        OpeningOrbiter(id: 5, symbol: "tag.fill", color: IslandPalette.coral, angle: 202, distance: 146, size: 40),
+    ]
+}
+
+/// The opening, after Cosmos's (Mobbin, "Cosmos iOS"): on the system background its mark
+/// of six dots turns into place, then bursts, each dot flying out to become a category
+/// tile around the app icon and the bold wordmark, as Cosmos scatters cards around its
+/// name. It waits for the ledger, then the tiles drift on and fade while the icon lifts
+/// and MainView fades the opening into the app. With Animations off or Reduce Motion
+/// only the icon and wordmark show.
 private struct OpeningAnimationView: View {
     @Environment(\.locale) private var uiLocale
     var sound = true
@@ -4131,26 +4172,27 @@ private struct OpeningAnimationView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("playfulAnimations") private var playful = true
     @State private var playedSound = false
-    // As Apple's apps launch: only the app icon on the system background. It settles in,
-    // waits for the ledger, then lifts slightly while MainView fades it into the app.
-    @State private var iconIn = false
-    @State private var lifting = false
+    @State private var stage = OpeningStage.start
     @State private var finished = false
     /// Mirrors `ready` so the running sequence sees updates while it waits.
     @State private var ledgerReady = false
     /// True from the moment the reveal starts (or the opening ends).
     @State private var revealed = false
     private var animates: Bool { playful && !reduceMotion }
+    private static let dotSize: CGFloat = 14
+    private static let ringRadius: CGFloat = 26
+    /// The tiles spread a little further vertically, to use the phone's height.
+    private static let stretch: CGFloat = 1.3
     var body: some View {
         let _ = uiLocale.identifier
         let still = !animates
         ZStack {
             Color("LaunchBackground")
-            Image("YueJiLogo").resizable().scaledToFit().frame(width: 120, height: 120)
-                .clipShape(RoundedRectangle(cornerRadius: 27, style: .continuous))
-                .shadow(color: .black.opacity(0.15), radius: 18, y: 8)
-                .scaleEffect(still || iconIn ? (lifting ? 1.08 : 1) : 0.9)
-                .opacity(still || iconIn ? 1 : 0)
+            if !still {
+                ForEach(OpeningOrbiter.all) { orbiter in tile(orbiter) }
+                mark
+            }
+            centre(still: still)
         }
         .ignoresSafeArea()
         // Skipping is handled by MainView: this layer never takes touches.
@@ -4164,11 +4206,14 @@ private struct OpeningAnimationView: View {
                     try await Task.sleep(for: .milliseconds(100))
                     finish(); return
                 }
-                withAnimation(.smooth(duration: 0.45)) { iconIn = true }
-                try await Task.sleep(for: .milliseconds(550))
+                // Each layer animates its own part of every step (see the views below).
+                stage = .mark
+                try await Task.sleep(for: .milliseconds(320))
+                stage = .cosmos
+                try await Task.sleep(for: .milliseconds(600))
                 // Hold while the ledger loads: the reveal only opens onto real content.
                 while !ledgerReady { try await Task.sleep(for: .milliseconds(50)) }
-                withAnimation(.smooth(duration: 0.3)) { lifting = true }
+                stage = .departing
                 finish()
             } catch { return }
         }
@@ -4190,6 +4235,62 @@ private struct OpeningAnimationView: View {
         finished = true
         revealed = true
         onFinished()
+    }
+    /// Cosmos's mark: six dots in the label colour on a ring that turns into place. On the
+    /// burst each dot flies out along its way, growing and fading into its tile.
+    private var mark: some View {
+        ZStack {
+            ForEach(OpeningOrbiter.all) { orbiter in
+                let out = stage >= .cosmos
+                Circle().fill(Color.primary)
+                    .frame(width: Self.dotSize, height: Self.dotSize)
+                    .scaleEffect(out ? 2.2 : 1)
+                    .opacity(out ? 0 : 1)
+                    .offset(out ? place(orbiter.angle, orbiter.distance, stretch: Self.stretch)
+                                : place(orbiter.ringAngle, Self.ringRadius))
+                    .animation(.spring(duration: 0.6, bounce: 0.22).delay(Double(orbiter.id) * 0.035), value: stage)
+            }
+        }
+        .rotationEffect(.degrees(stage == .start ? -60 : 0))
+        .scaleEffect(stage == .start ? 0.6 : 1)
+        .opacity(stage == .start ? 0 : 1)
+        .animation(.spring(duration: 0.45, bounce: 0.15), value: stage)
+    }
+    /// A category tile, the kit's tinted rounded square: it grows out of its dot on the
+    /// burst, settles among the others, then drifts further out and fades on the reveal.
+    private func tile(_ orbiter: OpeningOrbiter) -> some View {
+        let out = stage >= .cosmos
+        let departing = stage == .departing
+        return IslandIconTile(symbol: orbiter.symbol, color: orbiter.color, size: orbiter.size)
+            .scaleEffect(out ? (departing ? 1.1 : 1) : 0.25)
+            .opacity(stage == .cosmos ? 1 : 0)
+            .offset(out ? place(orbiter.angle, orbiter.distance * (departing ? 1.35 : 1), stretch: Self.stretch)
+                        : place(orbiter.ringAngle, Self.ringRadius))
+            .animation(departing ? Animation.smooth(duration: 0.45)
+                       : Animation.spring(duration: 0.6, bounce: 0.22).delay(Double(orbiter.id) * 0.035), value: stage)
+    }
+    /// The app icon with the wordmark beneath, set bold and wide like Cosmos's name. It
+    /// arrives with the burst and lifts slightly on the reveal.
+    private func centre(still: Bool) -> some View {
+        let shown = still || stage >= .cosmos
+        return ZStack {
+            Image("YueJiLogo").resizable().scaledToFit().frame(width: 96, height: 96)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .shadow(color: .black.opacity(0.15), radius: 18, y: 8)
+                .scaleEffect(shown ? (stage == .departing ? 1.06 : 1) : 0.85)
+            Text(tr("月记", "YueJi", "YueJi"))
+                .font(.system(size: 30, weight: .heavy)).fontWidth(.expanded)
+                .foregroundStyle(.primary)
+                .offset(y: 82)
+        }
+        .opacity(shown ? 1 : 0)
+        .animation(.smooth(duration: 0.45), value: stage)
+    }
+    /// A point at the angle (degrees clockwise from the trailing side) and distance from
+    /// the centre; `stretch` lengthens the vertical part.
+    private func place(_ angle: Double, _ distance: CGFloat, stretch: CGFloat = 1) -> CGSize {
+        let radians = angle * .pi / 180
+        return CGSize(width: CGFloat(cos(radians)) * distance, height: CGFloat(sin(radians)) * distance * stretch)
     }
 }
 

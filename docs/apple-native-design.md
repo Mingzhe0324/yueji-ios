@@ -133,11 +133,19 @@ UI tests launch with `-playfulAnimations NO`.
 
 ## Opening
 
-Like an Apple app launching: only the app icon on the system background. It settles in,
-waits for the ledger to load, then lifts slightly while it fades into the app, so it
-never opens onto a blank screen. Tapping skips it. The opening layer never takes
-touches, and it leaves the accessibility tree as soon as the reveal starts (or on skip),
-which `testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
+After the opening of Cosmos (Mobbin, "Cosmos iOS"), whose mark is six dots on a ring and
+whose welcome screen scatters cards of different sizes around its bold name. On the
+system background the six dots, in the label colour, turn into place at the centre.
+Then they burst: each dot flies out along its way and grows into one of the six default
+category tiles (Food, Transport, Shopping, Bills, Entertainment, Other, in the tinted
+style of the card rows), scattered at different sizes around the app icon and the bold,
+wide wordmark (月记 / YueJi). The opening waits for the ledger to load, then the tiles
+drift further out and fade while the icon lifts slightly and the opening fades into the
+app, so it never opens onto a blank screen. With the ledger ready it reaches the app in
+about 0.95 s; tapping skips it. With Animations off or Reduce Motion only the icon and
+wordmark show, briefly. The opening layer never takes touches, and it leaves the
+accessibility tree as soon as the reveal starts (or on skip), which
+`testFirstAddItemImmediatelyAfterLaunchWithOpening` relies on.
 
 ## Icon and notifications
 
