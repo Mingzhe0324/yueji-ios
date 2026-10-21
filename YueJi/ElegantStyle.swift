@@ -64,6 +64,55 @@ struct GlassIconButton: View {
     }
 }
 
+/// A round action with its name underneath, like the quick actions of the Mobile Banking
+/// app and the contact actions of Messages in the iOS 27 Builder kit: a Liquid Glass circle
+/// on iOS 26 and later, a soft tinted circle otherwise. VoiceOver reads it as one button
+/// named by its caption, and tapping the caption runs the action too.
+struct QuickActionButton: View {
+    let title: String
+    let symbol: String
+    var tint: Color = IslandTheme.accent
+    let action: () -> Void
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var enabled
+    var body: some View {
+        VStack(spacing: 7) {
+            circle
+            Text(title)
+                .font(.caption.weight(.medium))
+                .foregroundStyle(enabled ? Color.primary : Color.secondary)
+                .multilineTextAlignment(.center)
+                .lineLimit(2).minimumScaleFactor(0.8)
+                .accessibilityHidden(true)
+                .onTapGesture { if enabled { action() } }
+        }
+        .frame(maxWidth: .infinity)
+    }
+    private var icon: some View {
+        Image(systemName: symbol)
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(enabled ? tint : Color.secondary)
+            .frame(width: 30, height: 30)
+    }
+    @ViewBuilder private var circle: some View {
+        if #available(iOS 26.0, *), !reduceTransparency {
+            Button(action: action) { icon }
+                .buttonStyle(.glass).buttonBorderShape(.circle)
+                .controlSize(.large)
+                .accessibilityLabel(title)
+        } else {
+            Button(action: action) {
+                icon.frame(width: 54, height: 54)
+                    .background(Circle().fill(tint.opacity(scheme == .dark ? 0.22 : 0.12)))
+                    .contentShape(Circle())
+            }
+            .buttonStyle(ElegantPressStyle())
+            .accessibilityLabel(title)
+        }
+    }
+}
+
 /// Subtle press feedback for tappable panels: a slight dip and dim that springs back.
 struct ElegantPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -211,8 +260,9 @@ struct SpendingTrendPoint: Identifiable, Equatable {
 }
 
 /// Six months of personal spending as Swift Charts bars in the app tint, as in Apple's
-/// Health and Screen Time: the selected month is solid with its value above, the others
-/// lighter. Tapping a bar selects that month.
+/// Health and Screen Time and the bar chart of the iOS 27 Builder kit: the selected month
+/// is solid with its value above, the others lighter, and a dashed line marks the average
+/// of the months with spending. Tapping a bar selects that month.
 struct SpendingTrendChart: View {
     let points: [SpendingTrendPoint]
     let selected: Date
@@ -223,22 +273,41 @@ struct SpendingTrendChart: View {
     private func label(_ month: Date) -> String {
         month.formatted(.dateTime.month(.abbreviated).locale(Locale(identifier: AppLanguage.localeID)))
     }
+    /// In ringgit, like the bars; none until two months have spending.
+    private var average: Double? {
+        let spent = points.map(\.cents).filter { $0 > 0 }
+        guard spent.count >= 2 else { return nil }
+        return Double(spent.reduce(0, +)) / Double(spent.count) / 100
+    }
     var body: some View {
         let selectedKey = monthKey(selected)
-        Chart(points) { point in
-            let isSelected = point.id == selectedKey
-            BarMark(x: .value("Month", label(point.month)),
-                    y: .value("Spent", grown || reduceMotion ? Double(point.cents) / 100 : 0),
-                    width: .ratio(0.6))
-                .cornerRadius(6)
-                .foregroundStyle(isSelected ? IslandTheme.accent : IslandTheme.accent.opacity(0.28))
-                .annotation(position: .top, spacing: 4) {
-                    if isSelected && !hidden && point.cents > 0 {
-                        Text(money(point.cents))
-                            .font(.caption2.weight(.semibold)).monospacedDigit()
+        Chart {
+            ForEach(points) { point in
+                let isSelected = point.id == selectedKey
+                BarMark(x: .value("Month", label(point.month)),
+                        y: .value("Spent", grown || reduceMotion ? Double(point.cents) / 100 : 0),
+                        width: .ratio(0.6))
+                    .cornerRadius(6)
+                    .foregroundStyle(isSelected ? IslandTheme.accent : IslandTheme.accent.opacity(0.28))
+                    .annotation(position: .top, spacing: 4) {
+                        if isSelected && !hidden && point.cents > 0 {
+                            Text(money(point.cents))
+                                .font(.caption2.weight(.semibold)).monospacedDigit()
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+            }
+            if let average = average {
+                RuleMark(y: .value("Average", average))
+                    .lineStyle(StrokeStyle(lineWidth: 1, dash: [4, 3]))
+                    .foregroundStyle(Color.secondary)
+                    .annotation(position: .top, alignment: .leading, spacing: 2) {
+                        // Hidden amounts keep the line but not its value.
+                        Text(hidden ? tr("平均", "Avg", "Purata") : tr("平均 ", "Avg ", "Purata ") + money(Int((average * 100).rounded())))
+                            .font(.caption2.weight(.medium)).monospacedDigit()
                             .foregroundStyle(.secondary)
                     }
-                }
+            }
         }
         // Hidden amounts hide the value axis; the bars keep their shape.
         .chartYAxis(hidden ? .hidden : .automatic)
@@ -263,5 +332,46 @@ struct SpendingTrendChart: View {
             guard !grown else { return }
             if reduceMotion || !ElegantMotion.enabled { grown = true } else { withAnimation(YueJiMotion.meter) { grown = true } }
         }
+    }
+}
+
+// MARK: - Spending by category
+
+struct CategorySlice: Identifiable, Equatable {
+    let category: String
+    let cents: Int
+    let color: Color
+    var id: String { category }
+}
+
+/// Where the month's spending went, as the donut chart of the iOS 27 Builder kit (and the
+/// expenses card of its Mobile Banking app): one rounded sector per category in the
+/// category's colour, the total in the middle. Decorative for VoiceOver; the category rows
+/// beside it carry the same amounts.
+struct SpendingDonutChart: View {
+    @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let slices: [CategorySlice]
+    let total: Int
+    var body: some View {
+        let _ = uiLocale.identifier
+        ZStack {
+            Chart(slices) { slice in
+                SectorMark(angle: .value("Spent", Double(slice.cents) / 100),
+                           innerRadius: .ratio(0.64), angularInset: 2)
+                    .cornerRadius(5)
+                    .foregroundStyle(slice.color)
+            }
+            .chartLegend(.hidden)
+            VStack(spacing: 2) {
+                Text(tr("合计", "Total", "Jumlah")).font(.caption).foregroundStyle(.secondary)
+                AnimatedMoney(cents: total).font(.headline)
+                    .lineLimit(1).minimumScaleFactor(0.6)
+            }
+            .frame(width: 112)
+        }
+        .frame(height: 200)
+        .animation(reduceMotion ? nil : YueJiMotion.content, value: slices)
+        .accessibilityHidden(true)
     }
 }

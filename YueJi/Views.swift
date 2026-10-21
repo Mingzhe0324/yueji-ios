@@ -166,6 +166,17 @@ private struct YueJiListSurface: ViewModifier {
             .modifier(YueJiScrollEdge())
     }
 }
+/// Plain, edge-to-edge rows on the system background, as in Messages in the iOS 27 Builder
+/// kit: for the ledger's running list of payments.
+private struct YueJiPlainListSurface: ViewModifier {
+    func body(content: Content) -> some View {
+        content.listStyle(.plain)
+            .scrollDismissesKeyboard(.interactively)
+            .tint(IslandTheme.accent)
+            .modifier(YueJiBarAppearance())
+            .modifier(YueJiScrollEdge())
+    }
+}
 private struct YueJiScrollEdge: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @ViewBuilder func body(content: Content) -> some View {
@@ -178,6 +189,7 @@ private struct YueJiScrollEdge: ViewModifier {
 }
 extension View {
     func yuejiListSurface() -> some View { modifier(YueJiListSurface()) }
+    func yuejiPlainListSurface() -> some View { modifier(YueJiPlainListSurface()) }
     func yuejiPageSurface() -> some View {
         scrollDismissesKeyboard(.interactively)
             .background(IslandBackdrop())
@@ -506,6 +518,9 @@ struct MonthPicker: View {
         withTransaction(Transaction(animation: nil)) { month = shiftedMonth(month, by: n) }
     }
 }
+/// Pages the Overview's quick actions open.
+private enum OverviewRoute: Hashable { case receipt, automation, savings }
+
 struct DashboardView: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -515,6 +530,8 @@ struct DashboardView: View {
     @SceneStorage("overviewMonth") private var monthTimestamp = Date().timeIntervalSince1970
     /// Hides the spending summary's amounts and the trend values.
     @AppStorage("hideOverviewAmounts") private var hideAmounts = false
+    /// The header amount, larger than a title like a banking app's balance; scales with Dynamic Type.
+    @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 44
     @State private var path = NavigationPath()
     @State private var adding = false
     @State private var editingExpense: Expense?
@@ -578,43 +595,40 @@ struct DashboardView: View {
         NavigationStack(path: $path) {
             ScrollViewReader { guideScroll in
             List {
+                // The header sits on the page itself, like a banking app's balance: month,
+                // amount and quick actions, then the cards.
                 Section {
                     MonthPicker(month: monthBinding)
                         .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-                }
-                Section {
-                    spendingCard
+                    overviewHero
                         .modifier(MonthSummaryMotion(month: loadedSummary?.month))
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                    quickActions
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 10, leading: 8, bottom: 6, trailing: 8))
                 }
                 PendingBookkeepingCard()
-                recentCard
-                trendSection
-                quickActions
-                Section {
-                    NavigationLink { SavingsGoalsView() } label: {
-                        VStack(alignment: .leading, spacing: 10) {
-                            IslandRowLabel(title: tr("储蓄目标", "Savings goals", "Matlamat simpanan"), symbol: "target", color: IslandPalette.pumpkin)
-                            if let goal = model.ledger.savingsGoals.first(where: { $0.balance < $0.target }) ?? model.ledger.savingsGoals.first {
-                                HStack { Text(goal.name); Spacer(); Text(money(goal.balance)).monospacedDigit() }.font(.subheadline)
-                                SpendingMeter(value: goal.balance, total: max(1, goal.target),
-                                              color: goal.balance >= goal.target ? .green : ink)
-                            } else {
-                                Text(tr("为想做的事，存下第一笔。", "Set aside your first contribution.", "Asingkan simpanan pertama anda.")).font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }.padding(.vertical, 6)
-                    }
-                }
-                balancesCard
+                budgetSection
                 categoriesCard
-                Section {
-                    NavigationLink { OverviewToolsView(month: month) } label: {
-                        IslandRowLabel(title: tr("更多工具", "More tools", "Alat lain"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
-                    }
-                }
+                trendSection
+                recentCard
+                savingsSection
+                balancesCard
             }.yuejiListSurface()
             .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                 ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+            }
+            .navigationDestination(for: OverviewRoute.self) { route in
+                switch route {
+                case .receipt: ReceiptScanView()
+                case .automation: AutomationSetupView()
+                case .savings: SavingsGoalsView()
+                }
             }
             .task(id: summaryQuery) {
                 guard loadedSummary != summaryQuery else { return }
@@ -711,22 +725,36 @@ struct DashboardView: View {
             Text(tr("所选月份", "Selected month", "Bulan dipilih"))
         }
     }
+    /// Shortcuts as round glass buttons, like the quick actions of the kit's Mobile Banking app.
     private var quickActions: some View {
-        Section {
-            NavigationLink { ReceiptScanView() } label: {
-                SimpleSettingsRow(title: tr("扫描收据", "Scan receipt", "Imbas resit"), subtitle: tr("拍下，核对，记好", "Scan, review, save", "Imbas, semak, simpan"), symbol: "doc.viewfinder", color: IslandPalette.lagoon)
+        HStack(alignment: .top, spacing: 4) {
+            QuickActionButton(title: tr("扫描收据", "Scan receipt", "Imbas resit"), symbol: "doc.viewfinder", tint: IslandPalette.lagoon) {
+                path.append(OverviewRoute.receipt)
             }.guideTarget("dashboard.receipt")
-            NavigationLink { AutomationSetupView() } label: {
-                SimpleSettingsRow(title: tr("自动记账", "Automation", "Automasi"), subtitle: "TNG · Bank · Apple Pay", symbol: "bolt.fill", color: IslandPalette.sky)
+            QuickActionButton(title: tr("自动记账", "Automation", "Automasi"), symbol: "bolt.fill", tint: IslandPalette.sky) {
+                path.append(OverviewRoute.automation)
+            }
+            QuickActionButton(title: budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"),
+                              symbol: "gauge.with.dots.needle.67percent", tint: IslandPalette.pumpkin) {
+                editBudget()
+            }
+            QuickActionButton(title: tr("储蓄目标", "Savings", "Simpanan"), symbol: "target", tint: IslandPalette.berry) {
+                path.append(OverviewRoute.savings)
             }
         }
     }
-    /// A Health-style summary: tinted heading, the amount in large type and a native gauge.
-    private var spendingCard: some View {
-        VStack(alignment: .leading, spacing: 14) {
+    private func editBudget() {
+        budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""
+        budgeting = true
+    }
+    /// The month's personal spending as a banking app shows a balance (the kit's Mobile
+    /// Banking): a caption, the amount in large type, and what it already leaves out.
+    private var overviewHero: some View {
+        VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 8) {
-                Label(tr("本月个人消费", "Personal spending", "Belanja peribadi"), systemImage: "chart.pie.fill")
-                    .font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                Text(tr("本月个人消费", "Personal spending", "Belanja peribadi"))
+                    .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                    .textCase(.uppercase)
                 Spacer(minLength: 8)
                 Button {
                     withAnimation(reduceMotion ? nil : YueJiMotion.content) { hideAmounts.toggle() }
@@ -740,14 +768,51 @@ struct DashboardView: View {
                 .padding(.vertical, -12)
                 .accessibilityLabel(hideAmounts ? tr("显示金额", "Show amounts", "Tunjuk amaun") : tr("隐藏金额", "Hide amounts", "Sembunyi amaun"))
             }
-            VStack(alignment: .leading, spacing: 4) {
-                amount(personal)
-                    .font(.largeTitle.bold())
-                    .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
-                Text(summary.reimbursementClaimed > 0
-                     ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
-                     : tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
-                    .font(.footnote).foregroundStyle(.secondary)
+            amount(personal)
+                .font(.system(size: heroSize, weight: .bold))
+                .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
+            Text(summary.reimbursementClaimed > 0
+                 ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
+                 : tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
+                .font(.footnote).foregroundStyle(.secondary)
+            Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja"))
+                .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+    /// The month's budget as the system capacity gauge (the kit's progress bar), with travel
+    /// kept apart and claims still to come back.
+    private var budgetSection: some View {
+        Section {
+            if budget > 0 {
+                VStack(alignment: .leading, spacing: 12) {
+                    Gauge(value: Double(min(budgetSpent, budget)), in: 0...Double(max(budget, 1))) {
+                        Text(budgetSpent > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
+                    } currentValueLabel: {
+                        Text(amountText(abs(budget - budgetSpent))).monospacedDigit()
+                    }
+                    .gaugeStyle(.linearCapacity)
+                    .tint(budgetTint)
+                    .font(.subheadline)
+                    .animation(reduceMotion ? nil : YueJiMotion.meter, value: budgetSpent)
+                    HStack {
+                        Label(budgetStatus, systemImage: budgetSymbol).foregroundStyle(budgetTint)
+                        Spacer(minLength: 12)
+                        Text(budgetUsageText).monospacedDigit().foregroundStyle(.secondary)
+                    }
+                    .font(.footnote.weight(.medium))
+                    .contentTransition(.opacity)
+                }
+                .padding(.vertical, 6)
+                .animation(reduceMotion ? nil : YueJiMotion.tone, value: budgetTint)
+            } else {
+                Button(action: editBudget) {
+                    Label(tr("设置每月预算", "Set a monthly budget", "Tetapkan bajet bulanan"), systemImage: "gauge.with.dots.needle.33percent")
+                }
+            }
+            if personal != budgetSpent {
+                LabeledContent(tr("旅行消费 · 独立预算", "Travel · separate budget", "Perjalanan · bajet berasingan"), value: amountText(personal - budgetSpent))
+                    .font(.subheadline).foregroundStyle(.secondary)
             }
             if summary.reimbursementClaimed > 0 {
                 NavigationLink { ReimbursementsView() } label: {
@@ -755,38 +820,25 @@ struct DashboardView: View {
                         .font(.subheadline)
                 }
             }
-            if personal != budgetSpent {
-                LabeledContent(tr("旅行消费 · 独立预算", "Travel · separate budget", "Perjalanan · bajet berasingan"), value: amountText(personal - budgetSpent))
-                    .font(.subheadline).foregroundStyle(.secondary)
+        } header: {
+            Text(tr("预算", "Budget", "Bajet"))
+        }
+    }
+    private var savingsSection: some View {
+        Section {
+            NavigationLink { SavingsGoalsView() } label: {
+                VStack(alignment: .leading, spacing: 10) {
+                    IslandRowLabel(title: tr("储蓄目标", "Savings goals", "Matlamat simpanan"), symbol: "target", color: IslandPalette.berry)
+                    if let goal = model.ledger.savingsGoals.first(where: { $0.balance < $0.target }) ?? model.ledger.savingsGoals.first {
+                        HStack { Text(goal.name); Spacer(); Text(money(goal.balance)).monospacedDigit() }.font(.subheadline)
+                        SpendingMeter(value: goal.balance, total: max(1, goal.target),
+                                      color: goal.balance >= goal.target ? .green : ink)
+                    } else {
+                        Text(tr("为想做的事，存下第一笔。", "Set aside your first contribution.", "Asingkan simpanan pertama anda.")).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 6)
             }
-            if budget > 0 {
-                Gauge(value: Double(min(budgetSpent, budget)), in: 0...Double(max(budget, 1))) {
-                    Text(budgetSpent > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
-                } currentValueLabel: {
-                    Text(amountText(abs(budget - budgetSpent))).monospacedDigit()
-                }
-                .gaugeStyle(.linearCapacity)
-                .tint(budgetTint)
-                .font(.subheadline)
-                .animation(reduceMotion ? nil : YueJiMotion.meter, value: budgetSpent)
-                HStack {
-                    Label(budgetStatus, systemImage: budgetSymbol).foregroundStyle(budgetTint)
-                    Spacer(minLength: 12)
-                    Text(budgetUsageText).monospacedDigit().foregroundStyle(.secondary)
-                }
-                .font(.footnote.weight(.medium))
-                .contentTransition(.opacity)
-            }
-            HStack {
-                Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja")).font(.footnote).foregroundStyle(.secondary)
-                Spacer()
-                Button { budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""; budgeting = true } label: {
-                    Label(budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"), systemImage: "slider.horizontal.3")
-                        .font(.subheadline.weight(.medium)).frame(minHeight: 44)
-                }.buttonStyle(.borderless)
-            }
-        }.padding(.vertical, 6).frame(maxWidth: .infinity, alignment: .leading)
-            .animation(reduceMotion ? nil : YueJiMotion.tone, value: budgetTint)
+        }
     }
     private var trendSection: some View {
         Section {
@@ -862,21 +914,25 @@ private struct SpendingCategoryBreakdown: View {
                 Text(tr("记录消费后，这里会显示你的分类占比。", "Your category breakdown will appear here.", "Pecahan kategori anda akan dipaparkan di sini."))
                     .font(.subheadline).foregroundStyle(.secondary)
             } else {
-                AnimatedMoney(cents: total).font(.title2.weight(.semibold)).padding(.vertical, 6)
+                SpendingDonutChart(slices: slices, total: total).padding(.vertical, 8)
             }
+            // One row per category, as Messages lists conversations: the category's round
+            // icon, its name and share of the month, and the amount.
             ForEach(model.ledger.categoryNames, id: \.self) { category in
                 let value = totals[category] ?? 0
                 if value > 0 {
                     NavigationLink {
                         CategoryPaymentsView(category: category, month: month)
                     } label: {
-                        VStack(spacing: 9) {
-                            HStack {
-                                CategoryBadge(name: category)
-                                Spacer()
-                                AnimatedMoney(cents: value).fontWeight(.semibold)
-                            }.font(.subheadline)
-                            SpendingMeter(value: value, total: max(total, 1), color: model.ledger.categoryTint(category))
+                        HStack(spacing: 12) {
+                            IslandIconTile(symbol: model.ledger.categorySymbol(category), color: model.ledger.categoryTint(category), size: 36)
+                                .accessibilityHidden(true)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(categoryLabel(category)).font(.body.weight(.semibold))
+                                Text(share(value)).font(.subheadline).monospacedDigit().foregroundStyle(.secondary)
+                            }
+                            Spacer(minLength: 8)
+                            AnimatedMoney(cents: value).font(.body.weight(.semibold))
                         }.foregroundStyle(.primary).frame(minHeight: 44).contentShape(Rectangle())
                     }.buttonStyle(.borderless)
                         .accessibilityIdentifier("overview.category.select." + category)
@@ -884,6 +940,15 @@ private struct SpendingCategoryBreakdown: View {
                 }
             }
         }
+    }
+    private var slices: [CategorySlice] {
+        model.ledger.categoryNames.compactMap { category in
+            let value = totals[category] ?? 0
+            return value > 0 ? CategorySlice(category: category, cents: value, color: model.ledger.categoryTint(category)) : nil
+        }
+    }
+    private func share(_ value: Int) -> String {
+        String(format: "%.0f%%", Double(value) / Double(max(total, 1)) * 100)
     }
 }
 
@@ -1218,37 +1283,14 @@ private struct LedgerFilterChip: View {
     }
 }
 
-private struct LedgerInlineFilters: View {
+/// The filters in use, as chips under the ledger summary; each chip removes its filter.
+/// Filters are chosen from the toolbar's filter menu.
+private struct LedgerActiveFilters: View {
     @Environment(\.locale) private var uiLocale
-    @EnvironmentObject private var model: LedgerModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.dynamicTypeSize) private var typeSize
     @Binding var filter: LedgerFilter
     @Binding var provider: String
-    @Binding var expanded: Bool
-    let advanced: () -> Void
     var body: some View {
         let _ = uiLocale.identifier
-        if expanded {
-            VStack(spacing: 12) {
-                Picker(tr("分类", "Category", "Kategori"), selection: $filter.category) {
-                    Text(tr("全部", "All", "Semua")).tag("")
-                    ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
-                }.pickerStyle(.menu).accessibilityIdentifier("ledger.filters.category")
-                Picker(tr("来源", "Source", "Sumber"), selection: $provider) {
-                    Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
-                    ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
-                }.pickerStyle(.menu).accessibilityIdentifier("ledger.filters.source")
-                let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 12)) : AnyLayout(HStackLayout())
-                layout {
-                    Button(tr("金额与更多条件", "Amount & more filters", "Amaun dan penapis lain"), action: advanced)
-                        .accessibilityIdentifier("ledger.filters.advanced")
-                    if !typeSize.isAccessibilitySize { Spacer() }
-                    Button(tr("完成", "Done", "Selesai")) { collapse() }
-                }.buttonStyle(.borderless).font(.subheadline)
-            }.buttonStyle(.borderless).padding(.vertical, 6)
-                .transition(reduceMotion ? .opacity : .opacity.combined(with: .offset(y: -12)))
-        }
         if filter.active || provider != "all" {
             ScrollView(.horizontal) {
                 HStack(spacing: 8) {
@@ -1272,9 +1314,6 @@ private struct LedgerInlineFilters: View {
                 .transition(.opacity)
         }
     }
-    private func collapse() {
-        withAnimation(reduceMotion ? nil : YueJiMotion.rows) { expanded = false }
-    }
 }
 
 private enum LedgerSheetRoute: Identifiable {
@@ -1295,7 +1334,6 @@ struct ExpensesView: View {
     @EnvironmentObject var model: LedgerModel
     var isActive: Bool = true
     @State private var filter = LedgerFilter()
-    @State private var filtersExpanded = false
     @State private var providerFilter = "all"
     @State private var deletingNotice: TNGNotice?
     @Namespace private var expenseTransition
@@ -1314,6 +1352,10 @@ struct ExpensesView: View {
     private var query: LedgerTimelineQuery {
         LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: search, filter: filter, provider: providerFilter)
     }
+    private var filtering: Bool { filter.active || providerFilter != "all" }
+    private func clearFilters() {
+        withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filter = LedgerFilter(); providerFilter = "all" }
+    }
     var body: some View {
         let _ = uiLocale.identifier
         let requestedMonth = month
@@ -1326,11 +1368,15 @@ struct ExpensesView: View {
                         IslandRowLabel(title: tr("旅行账本 · 独立预算", "Travel books · separate budgets", "Buku perjalanan · bajet berasingan"), symbol: "suitcase.rolling.fill", color: IslandPalette.sky)
                     }
                 }
+                // The month and its total head the list like a balance; the payments follow
+                // as plain rows, as Messages lists conversations.
                 Section {
                     MonthPicker(month: monthBinding)
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(filter.active || !search.isEmpty || providerFilter != "all" ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
-                            .font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                        .listRowSeparator(.hidden)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(filtering || !search.isEmpty ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                            .textCase(.uppercase)
                         AnimatedMoney(cents: timeline.personal)
                             .font(.largeTitle.bold()).foregroundStyle(.primary)
                             .minimumScaleFactor(0.6).lineLimit(1)
@@ -1338,23 +1384,14 @@ struct ExpensesView: View {
                             Text(tr("待报销垫付款：", "Outstanding advances: ", "Pendahuluan belum diterima: ") + money(timeline.reimbursementOutstanding))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        HStack {
-                            Text(String(timeline.count) + tr(" 笔记录", " entries", " rekod")).font(.footnote).foregroundStyle(.secondary)
-                            Spacer()
-                            Button {
-                                withAnimation(reduceMotion ? nil : YueJiMotion.rows) { filtersExpanded.toggle() }
-                            } label: { Label(filter.active || providerFilter != "all" ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"), systemImage: "line.3.horizontal.decrease.circle") }
-                                .buttonStyle(.borderless).font(.subheadline).guideTarget("ledger.filter")
-                                .accessibilityIdentifier("ledger.filters.toggle")
-                                .accessibilityValue(filtersExpanded ? tr("已展开", "Expanded", "Dikembangkan") : tr("已收起", "Collapsed", "Diruntuhkan"))
-                        }
+                        Text(String(timeline.count) + tr(" 笔记录", " entries", " rekod")).font(.footnote).foregroundStyle(.secondary)
                     }.padding(.vertical, 6)
                     .modifier(MonthSummaryMotion(month: loadedQuery?.month))
-                    LedgerInlineFilters(filter: $filter, provider: $providerFilter, expanded: $filtersExpanded) {
-                        if sheet == nil { sheet = .filter }
-                    }
-                    .animation(reduceMotion ? nil : YueJiMotion.rows, value: filter)
-                    .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)
+                    .listRowSeparator(.hidden)
+                    LedgerActiveFilters(filter: $filter, provider: $providerFilter)
+                        .animation(reduceMotion ? nil : YueJiMotion.rows, value: filter)
+                        .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)
+                        .listRowSeparator(.hidden)
                 }
                 if timeline.count == 0 && loadedQuery != nil {
                     let filtered = filter.active || !search.isEmpty || providerFilter != "all"
@@ -1368,7 +1405,7 @@ struct ExpensesView: View {
                         } else {
                             Button(tr("记一笔", "Add entry", "Tambah rekod")) { if sheet == nil { sheet = .new(dateForNewExpense(in: month)) } }.yuejiPrimaryButton()
                         }
-                    }.listRowBackground(Color.clear).transition(.opacity)
+                    }.listRowBackground(Color.clear).listRowSeparator(.hidden).transition(.opacity)
                 }
                 ForEach(days) { day in
                     Section {
@@ -1389,10 +1426,14 @@ struct ExpensesView: View {
                                 ExpenseRow(entry: entry).foregroundStyle(.primary)
                             }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
+                                // Two round actions, as in the kit's Messages swipe actions.
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button { deleting = entry } label: {
                                         Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
                                     }.tint(.red)
+                                    Button { if sheet == nil { sheet = .edit(entry) } } label: {
+                                        Label(tr("编辑", "Edit", "Edit"), systemImage: "pencil")
+                                    }.tint(.indigo)
                                 }
                                 .modifier(ExpenseContextActions(entry: entry,
                                     edit: { if sheet == nil { sheet = .edit(entry) } },
@@ -1401,7 +1442,7 @@ struct ExpensesView: View {
                         }
                     } header: { Text(dateLabel(day.date)) }
                 }
-            }.listStyle(.insetGrouped)
+            }
                 .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                     ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
                 }
@@ -1449,10 +1490,41 @@ struct ExpensesView: View {
                     case .edit(let expense): ExpenseEditor(original: expense)
                     }
                 }
-                .yuejiListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large)
+                .yuejiPlainListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large)
                 .yuejiSubtitle(month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
                 .searchable(text: $search, prompt: tr("商户、分类、转账对象", "Merchant, category, transfer party", "Peniaga, kategori, pihak pindahan"))
                 .toolbar {
+                    // A glass menu with checkmarks, like the filter menu of the kit's Messages.
+                    ToolbarItem(placement: .topBarLeading) {
+                        Menu {
+                            Picker(selection: $filter.category) {
+                                Text(tr("全部分类", "All categories", "Semua kategori")).tag("")
+                                ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                            } label: {
+                                Label(tr("分类", "Category", "Kategori"), systemImage: "square.grid.2x2")
+                            }.pickerStyle(.menu)
+                            Picker(selection: $providerFilter) {
+                                Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
+                                ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
+                            } label: {
+                                Label(tr("来源", "Source", "Sumber"), systemImage: "tray.full")
+                            }.pickerStyle(.menu)
+                            Divider()
+                            Button { if sheet == nil { sheet = .filter } } label: {
+                                Label(tr("金额与更多条件", "Amount & more filters", "Amaun dan penapis lain"), systemImage: "slider.horizontal.3")
+                            }
+                            if filtering {
+                                Button(role: .destructive) { clearFilters() } label: {
+                                    Label(tr("清除筛选", "Clear filters", "Kosongkan penapis"), systemImage: "xmark.circle")
+                                }
+                            }
+                        } label: {
+                            Image(systemName: filtering ? "line.3.horizontal.decrease.circle.fill" : "line.3.horizontal.decrease.circle")
+                        }
+                        .accessibilityLabel(filtering ? tr("筛选已启用", "Filters active", "Penapis aktif") : tr("筛选", "Filter", "Tapis"))
+                        .accessibilityIdentifier("ledger.filters.toggle")
+                        .guideTarget("ledger.filter")
+                    }
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
                             NavigationLink(tr("银行 / TNG 通知", "Bank / TNG inbox", "Peti bank / TNG")) { TNGInboxView() }
@@ -1773,7 +1845,8 @@ private struct ExpenseDetailHero: View {
         let _ = uiLocale.identifier
         let motion = !reduceMotion
         VStack(spacing: 12) {
-            IslandIconTile(symbol: symbol, color: model.ledger.categoryTint(entry.category), size: 56)
+            // Large and round, like the contact photo in the kit's Messages details.
+            IslandIconTile(symbol: symbol, color: model.ledger.categoryTint(entry.category), size: 72)
                 .accessibilityHidden(true)
             Text(entry.paidByFriend == nil ? tr("实付总额", "Payment total", "Jumlah bayaran") : tr("我的份额", "My share", "Bahagian saya"))
                 .font(.caption).foregroundStyle(.secondary)
@@ -2558,18 +2631,20 @@ struct FriendsView: View {
         let _ = uiLocale.identifier
         NavigationStack {
             List {
+                // What friends owe, on the page itself like a balance (the kit's Mobile Banking).
                 Section {
-                    VStack(alignment: .leading, spacing: 10) {
+                    VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .center, spacing: 12) {
-                            Label(tr("朋友还欠你", "Friends owe you", "Rakan berhutang kepada anda"), systemImage: "person.2.fill")
-                                .font(.subheadline.weight(.semibold)).foregroundStyle(.tint)
+                            Text(tr("朋友还欠你", "Friends owe you", "Rakan berhutang kepada anda"))
+                                .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                                .textCase(.uppercase)
                             Spacer(minLength: 8)
                             let waiting = Array(balances.filter { $0.owed > 0 || $0.payable > 0 }.prefix(4))
                             if !waiting.isEmpty {
                                 HStack(spacing: -8) {
                                     ForEach(waiting) { friend in
                                         IslandAvatar(name: friend.name, size: 28)
-                                            .overlay(Circle().strokeBorder(IslandTheme.card, lineWidth: 2))
+                                            .overlay(Circle().strokeBorder(IslandTheme.paper, lineWidth: 2))
                                     }
                                 }.accessibilityHidden(true)
                             }
@@ -2583,8 +2658,10 @@ struct FriendsView: View {
                                 .font(.subheadline).foregroundStyle(.orange)
                         }
                         Text(tr("全部月份 · 点朋友查看明细和记录还款", "All months · tap a friend to settle up", "Semua bulan · ketik rakan untuk bayar balik"))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }.padding(.vertical, 8)
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                    .listRowBackground(Color.clear)
+                    .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
                 }
                 Section {
                     Picker(tr("显示", "Show", "Papar"), selection: $settled) {
@@ -2615,29 +2692,35 @@ struct FriendsView: View {
         }
     }
 }
+/// A friend as Messages lists a conversation: avatar, name with the net amount beside it,
+/// and one line saying who pays whom.
 struct FriendBalanceRow: View {
     @Environment(\.locale) private var uiLocale
     let friend: FriendBalance
+    private var net: Int { friend.owed - friend.payable }
+    private var settled: Bool { friend.owed == 0 && friend.payable == 0 }
+    private var netColor: Color { settled || net == 0 ? .secondary : (net > 0 ? .green : .orange) }
+    private var status: String {
+        if settled { return tr("已结清", "Settled", "Selesai") }
+        if friend.owed > 0 && friend.payable > 0 {
+            return tr("待收 ", "To collect ", "Belum diterima ") + money(friend.owed) + " · " + tr("我欠 ", "I owe ", "Saya berhutang ") + money(friend.payable)
+        }
+        return settlementDirection(net, name: friend.name)
+    }
     var body: some View {
         let _ = uiLocale.identifier
-        HStack(spacing: 14) {
-            IslandAvatar(name: friend.name, settled: friend.owed == 0 && friend.payable == 0)
+        HStack(spacing: 12) {
+            IslandAvatar(name: friend.name, settled: settled)
                 .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 6) {
-                Text(friend.name).font(.headline)
-                if friend.owed == 0 && friend.payable == 0 {
-                    Label(tr("已结清", "Settled", "Selesai"), systemImage: "checkmark.circle").font(.subheadline).foregroundStyle(.secondary)
-                } else {
-                    HStack { Text(tr("待收：", "To collect: ", "Belum diterima: ")); AnimatedMoney(cents: friend.owed) }
-                        .font(.subheadline).foregroundStyle(.secondary)
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Text(friend.name).font(.headline).lineLimit(1)
+                    Spacer(minLength: 8)
+                    AnimatedMoney(cents: abs(net)).font(.subheadline.weight(.semibold)).foregroundStyle(netColor)
                 }
-                HStack { Text(tr("我欠朋友：", "I owe them: ", "Saya berhutang: ")); AnimatedMoney(cents: friend.payable) }.font(.caption).foregroundStyle(.secondary)
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(settlementDirection(friend.owed - friend.payable, name: friend.name))
-                    AnimatedMoney(cents: abs(friend.owed - friend.payable))
-                }.font(.caption).foregroundStyle(.secondary)
+                Text(status).font(.subheadline).foregroundStyle(.secondary).lineLimit(2)
             }
-        }.padding(.vertical, 8)
+        }.padding(.vertical, 4)
     }
 }
 struct RepaymentView: View {
@@ -2732,17 +2815,20 @@ struct SettingsView: View {
             else if guideDestination == "about" { aboutPage }
             else {
             List {
+                // The app's own card, centred like the contact header in the kit's Messages.
                 Section {
-                    HStack(spacing: 16) {
-                        Image("YueJiLogo").renderingMode(.original).resizable().scaledToFit().frame(width: 60, height: 60)
-                            .clipShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 14, style: .continuous).strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
+                    VStack(spacing: 8) {
+                        Image("YueJiLogo").renderingMode(.original).resizable().scaledToFit().frame(width: 84, height: 84)
+                            .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
+                            .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
                             .accessibilityHidden(true)
-                        VStack(alignment: .leading, spacing: 5) {
-                            Text(tr("月记 YueJi", "YueJi", "YueJi")).font(.title3.weight(.semibold))
-                            Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod.")).font(.subheadline).foregroundStyle(.secondary)
-                        }
-                    }.padding(.vertical, 8)
+                        Text(tr("月记 YueJi", "YueJi", "YueJi")).font(.title2.bold())
+                        Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod.")).font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .listRowBackground(Color.clear)
                 }
 
 

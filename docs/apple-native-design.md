@@ -29,6 +29,33 @@ Apple Design Resources), page "Examples": Tab Bar 12740:24076, Toolbars - Top
 - Tab bar: the system Liquid Glass tab bar. (The kit's optional detached search tab
   is not used: search stays inside Ledger.)
 
+## Following the iOS 27 Builder kit
+
+The main screens also combine three frames of the community "iOS 27 Builder" kit (Figma
+file `pgyaa5ChobtGlxAR3HULeq`): the native components page "1. Native Components"
+(15:0), the Messages screens of "4. Free iOS Templates" (4308:2030: Inbox 6934:1496,
+Swipe Actions 6934:1965, Filters 6934:2279, Contact Details 6940:2363) and the Mobile
+Banking preview of "5. Free iOS UI Kits" (4226:1879, image 5185:6401). Every control is
+still the system's own; only layout and emphasis follow the kit.
+
+- Headers on the page, like Mobile Banking's balance: Overview, Ledger and Friends open
+  with an uppercase caption, the amount in large type (Overview at 44 pt, scaled with
+  Dynamic Type) and a line of context, on the page background rather than in a card.
+- Quick actions (`QuickActionButton`): round Liquid Glass buttons with a caption, as in
+  Mobile Banking and Messages' contact actions. Overview: Scan receipt, Automation,
+  Budget, Savings. A friend's page: Settle, Repayment, Statement.
+- Ledger as the Messages inbox: plain edge-to-edge rows on the system background
+  (`yuejiPlainListSurface`), round category icons, day headers. Filters live in a glass
+  menu at the top left (category and source pickers with checkmarks, Amount & more
+  filters, Clear filters), with chips for the filters in use. Swiping a payment shows
+  Edit (indigo) and Delete (red), like Messages' round swipe actions.
+- Contact-details pages: a friend's page and Settings centre the avatar or app icon with
+  the name beneath; entry details show the category icon at 72 pt.
+- Charts as the kit draws them: "Where it went" is a donut (`SpendingDonutChart`, one
+  rounded sector per category, the total inside) above one row per category with its
+  share; the spending trend's bars carry a dashed average line across the months with
+  spending.
+
 ## Colours and type
 
 - `IslandTheme` (the "Island" names are historical): `accent` = system blue, the
@@ -43,17 +70,18 @@ Apple Design Resources), page "Examples": Tab Bar 12740:24076, Toolbars - Top
 
 ## Components
 
-- Lists: `insetGrouped` on every tab with the system section spacing. Summary rows
-  follow Health and Wallet: a tinted SF Symbol heading, the amount in large type and
-  secondary detail text.
+- Lists: `insetGrouped` with the system section spacing on every tab except Ledger,
+  which uses plain rows like Messages. Summary headers sit on the page: an uppercase
+  caption, the amount in large type and secondary detail text.
 - Navigation rows: `SimpleSettingsRow` and `IslandRowLabel` with Settings-style
   rounded-square icons; categories and transactions use Apple Card-style white symbols
   on coloured circles (`IslandIconTile`); people use monogram avatars.
-- Overview: month picker; the spending summary with a native linear-capacity `Gauge`
-  for the budget and an eye button (SF Symbol replace transition) that hides amounts;
-  Needs attention; recent entries; the six-month spending trend (Swift Charts bars in
-  the tint, the selected month solid, tap a bar to select it); Scan receipt and
-  Automation; savings; payment details; where it went; More tools.
+- Overview: month picker; the spending header with an eye button (SF Symbol replace
+  transition) that hides amounts; quick actions; Needs attention; the budget card with
+  a native linear-capacity `Gauge`; where it went (donut and category rows); the
+  six-month spending trend (Swift Charts bars in the tint, the selected month solid, a
+  dashed average, tap a bar to select it); recent entries; savings; payment details.
+  More tools is the toolbar's ellipsis.
 - Progress: `SpendingMeter` is the system `ProgressView` tinted per category or goal.
 - Empty states: `IslandEmptyState` is `ContentUnavailableView`.
 - Liquid Glass on iOS 26+: system glass navigation and tab bars (MainView also applies

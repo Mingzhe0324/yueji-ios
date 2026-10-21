@@ -105,30 +105,50 @@ func settlementDirection(_ cents: Int, name: String) -> String {
     return tr("抵扣，无需转账", "Offset · no transfer", "Tolakan · tiada pindahan")
 }
 
+/// A friend's page laid out like the contact details in the iOS 27 Builder kit's Messages:
+/// avatar and name, where things stand, and the actions as round buttons beneath.
 struct FriendDetailView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Namespace private var expenseTransition
     let key: String
+    @State private var route: FriendRoute?
+    private enum FriendRoute: Hashable { case settle, repayment, statement }
     private var items: [FriendDebtItem] { model.debts(friend: key) }
     var body: some View {
         let _ = uiLocale.identifier
         List {
             if let friend = model.friends.first(where: { $0.id == key }) {
-                Section(friend.name) {
+                let net = friend.owed - friend.payable
+                let settled = friend.owed == 0 && friend.payable == 0
+                Section {
+                    VStack(spacing: 8) {
+                        IslandAvatar(name: friend.name, settled: settled, size: 84)
+                            .accessibilityHidden(true)
+                        Text(friend.name).font(.title.bold())
+                        Text(settled ? tr("已结清", "Settled", "Selesai") : settlementDirection(net, name: friend.name) + " · " + money(abs(net)))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                        HStack(alignment: .top, spacing: 8) {
+                            QuickActionButton(title: tr("结算", "Settle", "Selesaikan"), symbol: "arrow.left.arrow.right") {
+                                route = .settle
+                            }.disabled(settled).guideTarget("friend.repay")
+                            QuickActionButton(title: tr("记录还款", "Repayment", "Bayaran balik"), symbol: "checklist", tint: IslandPalette.mint) {
+                                route = .repayment
+                            }.disabled(friend.owed == 0)
+                            QuickActionButton(title: tr("分享账单", "Statement", "Penyata"), symbol: "square.and.arrow.up", tint: IslandPalette.lavender) {
+                                route = .statement
+                            }
+                        }.padding(.top, 8)
+                    }
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 4)
+                    .listRowBackground(Color.clear)
+                }
+                Section(tr("余额", "Balance", "Baki")) {
                     LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya")) { AnimatedMoney(cents: friend.owed) }
                     LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka")) { AnimatedMoney(cents: friend.payable) }
-                    if friend.owed > 0 {
-                        NavigationLink {
-                            SettlementSelectionView(friend: key, repaymentDirection: .incoming)
-                        } label: {
-                            Label(tr("记录朋友还款 · 选择账目", "Record repayment · choose expenses", "Rekod bayaran balik · pilih belanja"), systemImage: "checklist")
-                        }
-                    }
-                    LabeledContent(settlementDirection(friend.owed - friend.payable, name: friend.name)) { AnimatedMoney(cents: abs(friend.owed - friend.payable)) }
-                    NavigationLink { SettlementSelectionView(friend: key) } label: {
-                        Label(tr("结算", "Settle", "Selesaikan"), systemImage: "arrow.left.arrow.right")
-                    }.disabled(friend.owed == 0 && friend.payable == 0).guideTarget("friend.repay")
+                    LabeledContent(settlementDirection(net, name: friend.name)) { AnimatedMoney(cents: abs(net)) }
                 }
                 Section(tr("原始账目", "Original expenses", "Belanja asal")) {
                     ForEach(items) { item in
@@ -151,10 +171,16 @@ struct FriendDetailView: View {
                 }
                 Section {
                     NavigationLink(tr("消费概览 · 花在哪里", "Spending overview · by category", "Ringkasan belanja · mengikut kategori")) { FriendSpendingView(friend: key) }
-                    NavigationLink(tr("分享朋友账单", "Share friend statement", "Kongsi penyata rakan")) { FriendStatementView(key: key) }
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("朋友余额", "Friend balance", "Baki rakan")).navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(item: $route) { route in
+                switch route {
+                case .settle: SettlementSelectionView(friend: key)
+                case .repayment: SettlementSelectionView(friend: key, repaymentDirection: .incoming)
+                case .statement: FriendStatementView(key: key)
+                }
+            }
     }
 }
 
