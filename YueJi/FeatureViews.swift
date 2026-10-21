@@ -346,7 +346,7 @@ struct RecurringView: View {
                         RecurringScheduleRow(rule: rule, edit: { if editor == nil { editor = .edit(rule) } }, delete: { deleting = rule })
                     }
                 }
-            }.yuejiListSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
+            }.yuejiDashboardSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
                 .yuejiSubtitle(tr("\(activeCount) 项进行中", "\(activeCount) active", "\(activeCount) aktif"))
                 .toolbar { Button { if editor == nil { editor = .new } } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .sheet(item: $editor) { route in

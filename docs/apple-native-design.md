@@ -36,25 +36,48 @@ file `pgyaa5ChobtGlxAR3HULeq`): the native components page "1. Native Components
 (15:0), the Messages screens of "4. Free iOS Templates" (4308:2030: Inbox 6934:1496,
 Swipe Actions 6934:1965, Filters 6934:2279, Contact Details 6940:2363) and the Mobile
 Banking preview of "5. Free iOS UI Kits" (4226:1879, image 5185:6401). Every control is
-still the system's own; only layout and emphasis follow the kit.
+still the system's own; only layout and emphasis follow the kit. A second pass on the
+Mobile Banking preview (the same page in the copy `DDbIyPwGUmCBHv2MuiFc1g`) brought in
+its lit page, bold section headings, tinted card icons and the expenses card.
 
+- Mobile Banking's page: the tabs' root lists (Overview, Recurring, Friends, Settings) use
+  `yuejiDashboardSurface`, the grouped list over `AmbientGlowBackdrop`: the system grouped
+  background lit by three soft radial glows, rose at the top trailing corner, green on the
+  leading side and amber lower down. They are stronger in dark mode, where the page is
+  black and the cards #1C1C1E as in the kit. Reduce Transparency and Increase Contrast
+  keep the plain background; deeper pages and sheets stay plain.
 - Headers on the page, like Mobile Banking's balance: Overview, Ledger and Friends open
   with an uppercase caption, the amount in large type (Overview at 44 pt, scaled with
-  Dynamic Type) and a line of context, on the page background rather than in a card.
+  Dynamic Type) and a line of context, on the page background rather than in a card. On
+  the Overview the eye that hides amounts is a glass circle where the kit keeps the
+  account photo.
 - Quick actions (`QuickActionButton`): round Liquid Glass buttons with a caption, as in
   Mobile Banking and Messages' contact actions. Overview: Scan receipt, Automation,
-  Budget, Savings. A friend's page: Settle, Repayment, Statement.
+  Budget, Savings, over the hairline that ends the kit's header. A friend's page: Settle,
+  Repayment, Statement.
+- Section headings as Mobile Banking's "Cards" and "Other" (`DashboardSectionHeader`):
+  bold Title 3 in the label colour with a quiet secondary action at the trailing edge.
+  Overview: Budget › Edit (with a budget), Recent entries › View all (opens Ledger on the
+  same month), Travel books › View all (with trips), Savings goals › View all (with more
+  than one goal), Spending trend › Compare (Monthly comparison). Friends heads its list
+  Friends or Settled, and its tools Split tools. Settings keeps the system's small headers.
+- Card rows as Mobile Banking's cards: `IslandIconTile` draws the symbol in the category's
+  colour on a rounded-square tile tinted with it (stronger on dark cards and with Increase
+  Contrast), then the name, a secondary line and the amount. Travel books and Savings
+  goals each show one such row (the current trip, the goal being saved for).
 - Ledger as the Messages inbox: plain edge-to-edge rows on the system background
-  (`yuejiPlainListSurface`), round category icons, day headers. Filters live in a glass
+  (`yuejiPlainListSurface`), tinted category icons, day headers. Filters live in a glass
   menu at the top left (category and source pickers with checkmarks, Amount & more
   filters, Clear filters), with chips for the filters in use. Swiping a payment shows
   Edit (indigo) and Delete (red), like Messages' round swipe actions.
 - Contact-details pages: a friend's page and Settings centre the avatar or app icon with
   the name beneath; entry details show the category icon at 72 pt.
-- Charts as the kit draws them: "Where it went" is a donut (`SpendingDonutChart`, one
-  rounded sector per category, the total inside) above one row per category with its
-  share; the spending trend's bars carry a dashed average line across the months with
-  spending.
+- Charts as the kit draws them: "Where it went" is Mobile Banking's expenses card:
+  Spending, the month's dates (to today in the current month), the amount in bold Title
+  type (masked with the eye) beside a donut (`SpendingDonutChart`, a thick ring with one
+  rounded sector per category, nothing inside), then `CategoryShareChip`s ("45% Food",
+  largest first) and one row per category with its share. The spending trend's bars carry
+  a dashed average line across the months with spending.
 
 ## Colours and type
 
@@ -71,18 +94,20 @@ still the system's own; only layout and emphasis follow the kit.
 ## Components
 
 - Lists: `insetGrouped` with the system section spacing on every tab except Ledger,
-  which uses plain rows like Messages. Summary headers sit on the page: an uppercase
-  caption, the amount in large type and secondary detail text.
-- Navigation rows: `SimpleSettingsRow` and `IslandRowLabel` with Settings-style
-  rounded-square icons; categories and transactions use Apple Card-style white symbols
-  on coloured circles (`IslandIconTile`); people use monogram avatars.
-- Overview: month picker; the spending header with an eye button (SF Symbol replace
-  transition) that hides amounts; quick actions; Needs attention; recent entries; the
-  budget card with a native linear-capacity `Gauge`; travel books (the current trip
-  against its own budget; trips moved here from Ledger); where it went (donut and
-  category rows); the six-month spending trend (Swift Charts bars in the tint, the
-  selected month solid, a dashed average, tap a bar to select it); savings; payment
-  details. More tools is the toolbar's ellipsis.
+  which uses plain rows like Messages; the tabs' root lists sit on the lit page. Summary
+  headers sit on the page: an uppercase caption, the amount in large type and secondary
+  detail text.
+- Navigation rows: `SimpleSettingsRow` and `IslandRowLabel` with Settings-style solid
+  rounded-square icons; categories and transactions use tinted rounded-square tiles
+  (`IslandIconTile`); people use monogram avatars.
+- Overview: month picker; the spending header with a glass eye button (SF Symbol replace
+  transition) that hides amounts; quick actions; the budget card with a native
+  linear-capacity `Gauge`; recent entries; travel books (the current trip against its own
+  budget; trips moved here from Ledger); where it went (the expenses card and category
+  rows); the six-month spending trend (Swift Charts bars in the tint, the selected month
+  solid, a dashed average, tap a bar to select it); savings; payment details. Needs
+  attention is no longer on the Overview: pending bank / TNG notices are under Automatic
+  recording › Recent automatic entries. More tools is the toolbar's ellipsis.
 - Progress: `SpendingMeter` is the system `ProgressView` tinted per category or goal.
 - Empty states: `IslandEmptyState` is `ContentUnavailableView`.
 - Liquid Glass on iOS 26+: system glass navigation and tab bars (MainView also applies

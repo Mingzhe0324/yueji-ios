@@ -3,7 +3,8 @@ import UIKit
 import Charts
 
 /// Shared presentation pieces in Apple's own style: flat grouped panels, glass icon buttons,
-/// icon tiles, row labels, avatars, empty and loading states, and the spending trend chart.
+/// icon tiles, row labels, avatars, dashboard section headers and share chips, empty and
+/// loading states, and the spending charts.
 /// Presentation only; no ledger behaviour lives here. Motion is the system's, and the few
 /// content animations honour Reduce Motion and the "playfulAnimations" setting (shown in
 /// Settings as "Animations").
@@ -36,7 +37,8 @@ extension View {
 }
 
 /// A round icon button. On iOS 26 and later it is Apple's own Liquid Glass circle, so its
-/// press, glow and morphing are exactly the system's; otherwise a soft tinted circle.
+/// press, glow and morphing are exactly the system's; otherwise a soft tinted circle. A
+/// changed symbol swaps with the system's replace effect.
 struct GlassIconButton: View {
     let symbol: String
     let action: () -> Void
@@ -47,6 +49,7 @@ struct GlassIconButton: View {
             Button(action: action) {
                 Image(systemName: symbol).font(.subheadline.weight(.semibold))
                     .foregroundStyle(Color.primary)
+                    .contentTransition(.symbolEffect(.replace))
                     .frame(width: 22, height: 22)
             }
             .buttonStyle(.glass).buttonBorderShape(.circle)
@@ -55,6 +58,7 @@ struct GlassIconButton: View {
             Button(action: action) {
                 Image(systemName: symbol).font(.subheadline.weight(.semibold))
                     .foregroundStyle(IslandTheme.accent)
+                    .contentTransition(.symbolEffect(.replace))
                     .frame(width: 40, height: 40)
                     .background(Circle().fill(IslandTheme.accent.opacity(scheme == .dark ? 0.16 : 0.08)))
                     .frame(width: 44, height: 44).contentShape(Circle())
@@ -133,23 +137,30 @@ private struct ElegantPressBody: View {
 
 // MARK: - Icons, rows and avatars
 
-/// Category and transaction icons as Apple Card draws them: a white symbol on a coloured
-/// circle. `filled` gives the rounded-square tile of Settings rows instead.
+/// Category and transaction icons as the kit's Mobile Banking app draws its cards: the
+/// symbol in the category's colour on a rounded-square tile tinted with that colour.
+/// `filled` gives the solid tile with a white symbol of Settings rows instead.
 struct IslandIconTile: View {
     let symbol: String
     let color: Color
     var size: CGFloat = 44
     var filled = false
+    @Environment(\.colorScheme) private var scheme
+    @Environment(\.colorSchemeContrast) private var contrast
+    /// Stronger on dark cards, as in the kit, and with Increase Contrast.
+    private var tintOpacity: Double {
+        (scheme == .dark ? 0.24 : 0.14) + (contrast == .increased ? 0.12 : 0)
+    }
     var body: some View {
         Image(systemName: symbol)
             .font(.system(size: size * (filled ? 0.44 : 0.42), weight: .semibold))
-            .foregroundStyle(.white)
+            .foregroundStyle(filled ? Color.white : color)
             .frame(width: size, height: size)
             .background {
                 if filled {
                     RoundedRectangle(cornerRadius: size * 0.24, style: .continuous).fill(color.gradient)
                 } else {
-                    Circle().fill(color.gradient)
+                    RoundedRectangle(cornerRadius: size * 0.3, style: .continuous).fill(color.opacity(tintOpacity))
                 }
             }
     }
@@ -195,6 +206,53 @@ struct IslandAvatar: View {
                         .offset(x: 3, y: 3)
                 }
             }
+    }
+}
+
+// MARK: - Dashboard sections
+
+/// A section heading as the kit's Mobile Banking app sets them ("Cards", "Other"): the name
+/// in bold at the leading edge and, when there is more to see, a quiet action such as
+/// "View all" at the trailing edge. Keeps the case it is given.
+struct DashboardSectionHeader: View {
+    let title: String
+    var actionTitle: String? = nil
+    var action: () -> Void = {}
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text(title)
+                .font(.title3.weight(.bold))
+                .foregroundStyle(.primary)
+                .accessibilityAddTraits(.isHeader)
+            Spacer(minLength: 12)
+            if let actionTitle {
+                Button(action: action) {
+                    Text(actionTitle).font(.body).foregroundStyle(.secondary)
+                        .frame(minHeight: 44).contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(actionTitle + tr("：", ": ", ": ") + title)
+            }
+        }
+        .textCase(nil)
+    }
+}
+
+/// A category's share of the month, as the chips under the kit's Mobile Banking expenses
+/// card: "45% Food" beside a dot of the category's colour, on a capsule tinted with it.
+struct CategoryShareChip: View {
+    let text: String
+    let color: Color
+    @Environment(\.colorScheme) private var scheme
+    var body: some View {
+        HStack(spacing: 6) {
+            Circle().fill(color).frame(width: 8, height: 8)
+            Text(text).lineLimit(1)
+        }
+        .font(.footnote.weight(.semibold)).monospacedDigit()
+        .foregroundStyle(.primary)
+        .padding(.horizontal, 12).padding(.vertical, 7)
+        .background(color.opacity(scheme == .dark ? 0.22 : 0.12), in: Capsule())
     }
 }
 
@@ -344,33 +402,23 @@ struct CategorySlice: Identifiable, Equatable {
     var id: String { category }
 }
 
-/// Where the month's spending went, as the donut chart of the iOS 27 Builder kit (and the
-/// expenses card of its Mobile Banking app): one rounded sector per category in the
-/// category's colour, the total in the middle. Decorative for VoiceOver; the category rows
-/// beside it carry the same amounts.
+/// Where the month's spending went, as the donut beside the expenses card's amount in the
+/// kit's Mobile Banking app: a thick ring with one rounded sector per category in the
+/// category's colour, nothing in the middle. Decorative for VoiceOver; the card's amount
+/// and the category rows carry the same figures.
 struct SpendingDonutChart: View {
-    @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let slices: [CategorySlice]
-    let total: Int
+    var size: CGFloat = 116
     var body: some View {
-        let _ = uiLocale.identifier
-        ZStack {
-            Chart(slices) { slice in
-                SectorMark(angle: .value("Spent", Double(slice.cents) / 100),
-                           innerRadius: .ratio(0.64), angularInset: 2)
-                    .cornerRadius(5)
-                    .foregroundStyle(slice.color)
-            }
-            .chartLegend(.hidden)
-            VStack(spacing: 2) {
-                Text(tr("合计", "Total", "Jumlah")).font(.caption).foregroundStyle(.secondary)
-                AnimatedMoney(cents: total).font(.headline)
-                    .lineLimit(1).minimumScaleFactor(0.6)
-            }
-            .frame(width: 112)
+        Chart(slices) { slice in
+            SectorMark(angle: .value("Spent", Double(slice.cents) / 100),
+                       innerRadius: .ratio(0.6), angularInset: 1.5)
+                .cornerRadius(4)
+                .foregroundStyle(slice.color)
         }
-        .frame(height: 200)
+        .chartLegend(.hidden)
+        .frame(width: size, height: size)
         .animation(reduceMotion ? nil : YueJiMotion.content, value: slices)
         .accessibilityHidden(true)
     }
