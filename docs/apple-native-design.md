@@ -77,12 +77,12 @@ still the system's own; only layout and emphasis follow the kit.
   rounded-square icons; categories and transactions use Apple Card-style white symbols
   on coloured circles (`IslandIconTile`); people use monogram avatars.
 - Overview: month picker; the spending header with an eye button (SF Symbol replace
-  transition) that hides amounts; quick actions; Needs attention; the budget card with
-  a native linear-capacity `Gauge`; travel books (the current trip against its own
-  budget; trips moved here from Ledger); where it went (donut and category rows); the
-  six-month spending trend (Swift Charts bars in the tint, the selected month solid, a
-  dashed average, tap a bar to select it); recent entries; savings; payment details.
-  More tools is the toolbar's ellipsis.
+  transition) that hides amounts; quick actions; Needs attention; recent entries; the
+  budget card with a native linear-capacity `Gauge`; travel books (the current trip
+  against its own budget; trips moved here from Ledger); where it went (donut and
+  category rows); the six-month spending trend (Swift Charts bars in the tint, the
+  selected month solid, a dashed average, tap a bar to select it); savings; payment
+  details. More tools is the toolbar's ellipsis.
 - Progress: `SpendingMeter` is the system `ProgressView` tinted per category or goal.
 - Empty states: `IslandEmptyState` is `ContentUnavailableView`.
 - Liquid Glass on iOS 26+: system glass navigation and tab bars (MainView also applies

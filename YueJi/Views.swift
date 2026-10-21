@@ -613,11 +613,13 @@ struct DashboardView: View {
                         .listRowInsets(EdgeInsets(top: 10, leading: 8, bottom: 6, trailing: 8))
                 }
                 PendingBookkeepingCard()
+                // The latest entries come first, as Mobile Banking lists its cards right
+                // under the actions; the budgets and charts follow.
+                recentCard
                 budgetSection
                 travelSection
                 categoriesCard
                 trendSection
-                recentCard
                 savingsSection
                 balancesCard
             }.yuejiListSurface()
