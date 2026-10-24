@@ -6,7 +6,28 @@ enum LedgerError: LocalizedError {
     var errorDescription: String? { switch self { case .invalid(let text): return localizedError(text) } }
 }
 let categories = ["餐饮", "交通", "购物", "账单", "娱乐", "其他"]
-func money(_ cents: Int) -> String { String(format: "RM %.2f", Double(cents) / 100) }
+/// Ringgit for reading: "RM 14,700.00", "RM -0.50". Thousands are grouped with commas, as
+/// Malaysian banks write them; text fields use `Currency.input`, which never groups.
+func money(_ cents: Int) -> String { "RM " + decimalAmount(cents) }
+/// Whole digits in groups of three: 1234567 → "1,234,567".
+func groupedDigits(_ value: Int) -> String {
+    let digits = String(value.magnitude)
+    var grouped = ""
+    for (index, digit) in digits.enumerated() {
+        if index > 0 && (digits.count - index) % 3 == 0 { grouped.append(",") }
+        grouped.append(digit)
+    }
+    let sign = value < 0 ? "-" : ""
+    return sign + grouped
+}
+/// An amount in hundredths with two decimals and grouped thousands: 123456 → "1,234.56".
+func decimalAmount(_ minor: Int) -> String {
+    let magnitude = minor.magnitude
+    let sign = minor < 0 ? "-" : ""
+    let hundredths = String(magnitude % 100)
+    let fraction = hundredths.count < 2 ? "0" + hundredths : hundredths
+    return sign + groupedDigits(Int(magnitude / 100)) + "." + fraction
+}
 /// Direction of actual money in my account, independent of entry source or debt ownership.
 enum AccountDirection: String {
     case incoming, outgoing, neutral
@@ -789,6 +810,14 @@ struct LedgerDayGroup: Identifiable {
     let date: Date
     let entries: [LedgerTimelineItem]
     var id: Date { date }
+    /// The day's personal spending: its expenses counted as the month's total counts them,
+    /// so the days of a month add up to it. Transfers, settlements and income don't count.
+    var spending: Int {
+        entries.reduce(0) { sum, item in
+            if case .expense(let entry) = item { return sum + entry.personalSpending }
+            return sum
+        }
+    }
 }
 
 extension LedgerTimelineItem {

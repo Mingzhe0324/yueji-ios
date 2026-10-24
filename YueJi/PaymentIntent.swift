@@ -23,6 +23,7 @@ struct RecordApplePayIntent: AppIntent {
         do {
             let result = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
+            await UnusualSpendingNotifier.shared.check()
             if result.expenseID != nil { return .result(dialog: "已保存到月记。") }
             if result.noticeID != nil { return .result(dialog: "疑似重复，已保留待确认。") }
             return .result(dialog: "这笔付款已处理，没有重复入账。")
@@ -48,6 +49,7 @@ struct PostRecurringIntent: AppIntent {
             throw failure
         }
         await BudgetAlertService.shared.check()
+        await UnusualSpendingNotifier.shared.check()
         if let ledger = try? LocalStore.shared.read() { await RenewalReminders.sync(ledger) }
         return .result(dialog: "已检查到期项目。缺少汇率的项目仍保留待记。")
     }
@@ -79,6 +81,7 @@ struct RecordTNGIntent: AppIntent {
         do {
             _ = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
+            await UnusualSpendingNotifier.shared.check()
             return .result()
         } catch {
             try? LocalStore.shared.change { $0.logAutomation(source: "银行 / TNG", outcome: "failed", detail: error.localizedDescription) }

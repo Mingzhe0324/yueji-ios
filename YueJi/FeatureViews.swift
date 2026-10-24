@@ -696,7 +696,7 @@ struct RecurringEditor: View {
                     if rateBusy { ProgressView() }
                     if !rateStatus.isEmpty { Text(rateStatus).font(.caption).foregroundStyle(.secondary) }
                     TextField(tr("金额", "Amount", "Amaun"), text: $amount).keyboardType(.decimalPad)
-                    Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                    Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) } }
                 }
                 Section {
                     Picker(tr("付款周期", "Billing cycle", "Kitaran bil"), selection: $cycle) {
@@ -1617,6 +1617,7 @@ struct NotificationSettingsView: View {
     @AppStorage("budgetAlerts") private var budgetAlerts = false
     @AppStorage("budgetAlertPercent") private var budgetPercent = 100
     @AppStorage("hideNotificationDetails") private var hideDetails = false
+    @AppStorage(UnusualSpendingNotifier.enabledKey) private var unusualAlerts = true
     @State private var time = Date()
     @State private var busy = false
     @State private var message: String?
@@ -1657,6 +1658,15 @@ struct NotificationSettingsView: View {
                 Text(tr("预算提醒自动保存。按本月个人消费计算，每月最多提醒一次。", "Budget preferences save automatically. Based on your personal spending, with at most one alert a month.", "Pilihan bajet disimpan automatik. Berdasarkan belanja peribadi, paling banyak sekali sebulan."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            Section {
+                Toggle(tr("消费异常时提醒", "Alert me to unusual spending", "Maklum belanja luar biasa"), isOn: $unusualAlerts)
+            } header: {
+                Text(tr("异常消费", "Unusual spending", "Belanja luar biasa"))
+            } footer: {
+                Text(tr("当本月某类消费明显高于前 3 个月同期时提醒，每天最多一次。概览的「值得留意」始终显示。",
+                        "When a category is well above the same days of the last 3 months. At most one a day. Worth a look on the Overview always shows them.",
+                        "Apabila sesuatu kategori jauh melebihi hari yang sama dalam 3 bulan lalu. Paling banyak sekali sehari. Perlu perhatian di Ringkasan sentiasa menunjukkannya."))
+            }
             IncomeAutoAllocationSection()
             Section {
                 LabeledContent(tr("通知状态", "Notifications", "Notifikasi"), value: permission)
@@ -1682,6 +1692,9 @@ struct NotificationSettingsView: View {
             }
             .onChange(of: budgetPercent) { _, _ in
                 Task { await BudgetAlertService.shared.check() }
+            }
+            .onChange(of: unusualAlerts) { _, enabled in
+                if enabled { Task { await UnusualSpendingNotifier.shared.check() } }
             }
             .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refreshPermission() } } }
             .alert(tr("通知设置", "Notification settings", "Tetapan notifikasi"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK") {} } message: { Text(message ?? "") }
@@ -1933,7 +1946,7 @@ struct LedgerFilterEditor: View {
             Form {
                 Picker(tr("分类", "Category", "Kategori"), selection: $value.category) {
                     Text(tr("全部", "All", "Semua")).tag("")
-                    ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                    ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) }
                 }
                 Picker(tr("来源", "Source", "Sumber"), selection: $value.source) {
                     Text(tr("全部", "All", "Semua")).tag("")
@@ -2341,7 +2354,7 @@ struct TNGNoticeView: View {
                             .accessibilityIdentifier("notice.description")
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date)
-                        Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) } }
                         Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant in future", "Gunakan kategori ini untuk peniaga ini pada masa depan"), isOn: $rememberCategory)
                         Button(tr("计入消费", "Record expense", "Rekod belanja")) { confirming = true }
                     }
@@ -3782,6 +3795,8 @@ private struct SavingsGoalDetail: View {
     @State private var amount = ""
     @State private var error: String?
     @State private var celebrated = false
+    /// Whole steps of the gold sweep run around the ring (one per goal reached).
+    @State private var sweep: CGFloat = 0
     private var goal: SavingsGoal? { model.ledger.savingsGoals.first { $0.id == id } }
     var body: some View {
         let _ = uiLocale.identifier
@@ -3798,10 +3813,17 @@ private struct SavingsGoalDetail: View {
                                         style: StrokeStyle(lineWidth: 14, lineCap: .round))
                                 .rotationEffect(.degrees(-90))
                                 .animation(reduceMotion ? nil : YueJiMotion.meter, value: goal.balance)
+                            // A goal reached: one gold sweep around the ring.
+                            RingSweep(progress: sweep)
+                                .stroke(MoonGold.gradient, style: StrokeStyle(lineWidth: 14, lineCap: .round))
+                                .rotationEffect(.degrees(-90))
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
                             VStack(spacing: 2) {
                                 Image(systemName: reached ? "checkmark.seal.fill" : "target")
                                     .font(.title3.weight(.semibold))
                                     .foregroundStyle(reached ? IslandPalette.mint : IslandTheme.accent)
+                                    .modifier(AttentionBounce(trigger: celebrated))
                                     .padding(.bottom, 4).accessibilityHidden(true)
                                 Text("\(Int(goal.progress * 100))%").font(.system(.largeTitle, weight: .bold)).monospacedDigit()
                                     .contentTransition(.numericText())
@@ -3891,6 +3913,9 @@ private struct SavingsGoalDetail: View {
                 return !before && ledger.savingsGoals[index].balance >= ledger.savingsGoals[index].target
             }, completion: { reached in
                 withAnimation(reduceMotion ? nil : YueJiMotion.pop) { celebrated = reached }
+                if reached && !reduceMotion && ElegantMotion.enabled {
+                    withAnimation(.easeInOut(duration: 1.1).delay(0.15)) { sweep += 1 }
+                }
                 model.showSaved(message: reached ? tr("目标完成！", "Goal complete!", "Matlamat tercapai!") :
                     (withdrawal ? tr("已取出 ", "Withdrawn ", "Dikeluarkan ") : tr("已存入 ", "Deposited ", "Disimpan ")) + money(cents),
                     sound: reached ? .goal : (withdrawal ? .saved : .deposit))
@@ -4043,7 +4068,7 @@ struct FinancialNoticeReviewView: View {
                     TextField("MYR", text: $amount).keyboardType(.decimalPad)
                     DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date, in: ...Date())
                     if purpose == "expense" {
-                        Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) } }
+                        Picker(tr("分类", "Category", "Kategori"), selection: $category) { ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) } }
                         Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant in future", "Gunakan kategori ini untuk peniaga ini pada masa depan"), isOn: $remember)
                     }
                     if purpose == "income" {
@@ -4201,7 +4226,7 @@ struct ExpenseItemsFields: View {
                 // Native navigation controls must each own a Form row.
                 // Two links inside one VStack can both activate on one tap.
                 Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
-                    ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                    ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) }
                 }.pickerStyle(.navigationLink)
                     .accessibilityIdentifier("transaction.item.category")
                 NavigationLink {

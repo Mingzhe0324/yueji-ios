@@ -243,6 +243,8 @@ struct DashboardSectionHeader: View {
 struct CategoryShareChip: View {
     let text: String
     let color: Color
+    /// The category picked in the donut: a stronger tint and an outline.
+    var selected = false
     @Environment(\.colorScheme) private var scheme
     var body: some View {
         HStack(spacing: 6) {
@@ -252,7 +254,10 @@ struct CategoryShareChip: View {
         .font(.footnote.weight(.semibold)).monospacedDigit()
         .foregroundStyle(.primary)
         .padding(.horizontal, 12).padding(.vertical, 7)
-        .background(color.opacity(scheme == .dark ? 0.22 : 0.12), in: Capsule())
+        .background(color.opacity(selected ? (scheme == .dark ? 0.4 : 0.26) : (scheme == .dark ? 0.22 : 0.12)), in: Capsule())
+        .overlay {
+            if selected { Capsule().strokeBorder(color, lineWidth: 1.5) }
+        }
     }
 }
 
@@ -293,14 +298,12 @@ extension IslandEmptyState where Actions == EmptyView {
     }
 }
 
-/// Shown while the ledger loads when the opening is turned off.
+/// Shown while the ledger loads when the opening is turned off: the icon's moon, its
+/// crescent waxing and waning until the ledger is ready.
 struct YueJiLoadingView: View {
     var body: some View {
         VStack(spacing: 16) {
-            Image("YueJiLogo").resizable().scaledToFit().frame(width: 64, height: 64)
-                .clipShape(RoundedRectangle(cornerRadius: 15, style: .continuous))
-                .accessibilityHidden(true)
-            ProgressView().controlSize(.regular)
+            WaxingMoonIndicator(size: 56)
             Text(tr("正在读取账本", "Loading ledger", "Memuatkan lejar"))
                 .font(.subheadline).foregroundStyle(.secondary)
         }
@@ -320,7 +323,8 @@ struct SpendingTrendPoint: Identifiable, Equatable {
 /// Six months of personal spending as Swift Charts bars in the app tint, as in Apple's
 /// Health and Screen Time and the bar chart of the iOS 27 Builder kit: the selected month
 /// is solid with its value above, the others lighter, and a dashed line marks the average
-/// of the months with spending. Tapping a bar selects that month.
+/// of the months with spending. Sliding a finger across the bars shows each month's value
+/// with a light tick; letting go (or tapping) selects that month.
 struct SpendingTrendChart: View {
     let points: [SpendingTrendPoint]
     let selected: Date
@@ -328,6 +332,8 @@ struct SpendingTrendChart: View {
     var onSelect: (Date) -> Void = { _ in }
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var grown = false
+    /// The bar under the finger while scrubbing; it stands in for the selected month.
+    @GestureState private var scrubbed: String?
     private func label(_ month: Date) -> String {
         month.formatted(.dateTime.month(.abbreviated).locale(Locale(identifier: AppLanguage.localeID)))
     }
@@ -339,9 +345,10 @@ struct SpendingTrendChart: View {
     }
     var body: some View {
         let selectedKey = monthKey(selected)
+        let emphasized = scrubbed ?? selectedKey
         Chart {
             ForEach(points) { point in
-                let isSelected = point.id == selectedKey
+                let isSelected = point.id == emphasized
                 BarMark(x: .value("Month", label(point.month)),
                         y: .value("Spent", grown || reduceMotion ? Double(point.cents) / 100 : 0),
                         width: .ratio(0.6))
@@ -371,25 +378,63 @@ struct SpendingTrendChart: View {
         .chartYAxis(hidden ? .hidden : .automatic)
         .chartOverlay { proxy in
             GeometryReader { geometry in
+                // Simultaneous, so a vertical drag that starts on the chart still scrolls the page.
                 Rectangle().fill(Color.clear).contentShape(Rectangle())
-                    .onTapGesture { location in
-                        guard let plot = proxy.plotFrame else { return }
-                        let x = location.x - geometry[plot].origin.x
-                        guard let name: String = proxy.value(atX: x),
-                              let point = points.first(where: { label($0.month) == name }) else { return }
-                        FeedbackHaptics.selection()
-                        onSelect(point.month)
-                    }
+                    .simultaneousGesture(DragGesture(minimumDistance: 0)
+                        .updating($scrubbed) { value, state, _ in
+                            state = isChartScrub(value.translation) ? pointID(at: value.location, proxy: proxy, geometry: geometry) : nil
+                        }
+                        .onEnded { value in
+                            guard isChartScrub(value.translation),
+                                  let id = pointID(at: value.location, proxy: proxy, geometry: geometry),
+                                  let point = points.first(where: { $0.id == id }) else { return }
+                            onSelect(point.month)
+                        })
                     .accessibilityHidden(true)
             }
         }
         .frame(height: 180)
+        .onChange(of: scrubbed) { _, value in if value != nil { FeedbackHaptics.selection() } }
         .animation(reduceMotion ? nil : YueJiMotion.content, value: selectedKey)
+        .animation(reduceMotion ? nil : .smooth(duration: 0.16), value: scrubbed)
         .animation(reduceMotion ? nil : YueJiMotion.content, value: points)
         .onAppear {
             guard !grown else { return }
             if reduceMotion || !ElegantMotion.enabled { grown = true } else { withAnimation(YueJiMotion.meter) { grown = true } }
         }
+    }
+    /// The month (its key) of the bar under a point of the chart.
+    private func pointID(at location: CGPoint, proxy: ChartProxy, geometry: GeometryProxy) -> String? {
+        guard let plot = proxy.plotFrame else { return nil }
+        let x = location.x - geometry[plot].origin.x
+        guard let name: String = proxy.value(atX: x) else { return nil }
+        return points.first { label($0.month) == name }?.id
+    }
+}
+
+/// A drag that is mostly sideways, or a tap: a chart scrub. A mostly vertical drag is the
+/// page scrolling and leaves the chart alone.
+func isChartScrub(_ translation: CGSize) -> Bool {
+    abs(translation.height) <= max(10, abs(translation.width))
+}
+
+/// Which sector of a donut a tap landed on. Sectors run clockwise from twelve o'clock in
+/// the order given; the middle and the corners hit nothing.
+enum DonutHitTest {
+    static func sector(at location: CGPoint, in plot: CGRect, sectors: [(id: String, cents: Int)], innerRatio: CGFloat = 0.5) -> String? {
+        let total = sectors.reduce(0) { $0 + $1.cents }
+        let dx = location.x - plot.midX, dy = location.y - plot.midY
+        let radius = min(plot.width, plot.height) / 2
+        let distance = (dx * dx + dy * dy).squareRoot()
+        guard total > 0, distance <= radius, distance >= radius * innerRatio else { return nil }
+        var angle = atan2(Double(dx), Double(-dy))
+        if angle < 0 { angle += 2 * .pi }
+        var remaining = angle / (2 * .pi) * Double(total)
+        for sector in sectors {
+            remaining -= Double(sector.cents)
+            if remaining < 0 { return sector.id }
+        }
+        return nil
     }
 }
 
@@ -404,22 +449,60 @@ struct CategorySlice: Identifiable, Equatable {
 
 /// Where the month's spending went, as the donut beside the expenses card's amount in the
 /// kit's Mobile Banking app: a thick ring with one rounded sector per category in the
-/// category's colour, nothing in the middle. Decorative for VoiceOver; the card's amount
-/// and the category rows carry the same figures.
+/// category's colour. Tapping a sector picks its category (tap it again, or the middle, to
+/// clear): the others fade and the middle shows its share. Decorative for VoiceOver; the
+/// card's amount and the category rows carry the same figures.
 struct SpendingDonutChart: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let slices: [CategorySlice]
     var size: CGFloat = 116
+    /// The picked category, if any.
+    var selection: String? = nil
+    /// Called with the tapped category, or nil to clear. Without it the ring only shows.
+    var onSelect: ((String?) -> Void)? = nil
+    private var total: Int { slices.reduce(0) { $0 + $1.cents } }
     var body: some View {
         Chart(slices) { slice in
             SectorMark(angle: .value("Spent", Double(slice.cents) / 100),
                        innerRadius: .ratio(0.6), angularInset: 1.5)
                 .cornerRadius(4)
                 .foregroundStyle(slice.color)
+                .opacity(selection == nil || selection == slice.category ? 1 : 0.3)
         }
         .chartLegend(.hidden)
+        .chartOverlay { proxy in
+            GeometryReader { geometry in
+                if let onSelect {
+                    Rectangle().fill(Color.clear).contentShape(Rectangle())
+                        .onTapGesture { location in
+                            guard let plot = proxy.plotFrame else { return }
+                            let picked = DonutHitTest.sector(at: location, in: geometry[plot],
+                                                             sectors: slices.map { (id: $0.category, cents: $0.cents) })
+                            let next = picked == selection ? nil : picked
+                            guard next != selection else { return }
+                            FeedbackHaptics.selection()
+                            onSelect(next)
+                        }
+                }
+            }
+        }
+        .overlay {
+            if let picked = slices.first(where: { $0.category == selection }) {
+                VStack(spacing: 0) {
+                    Text(String(format: "%.0f%%", Double(picked.cents) / Double(max(total, 1)) * 100))
+                        .font(.subheadline.weight(.bold)).monospacedDigit()
+                    Text(categoryLabel(picked.category))
+                        .font(.caption2).foregroundStyle(.secondary)
+                        .lineLimit(1).minimumScaleFactor(0.7)
+                }
+                .frame(width: size * 0.5)
+                .allowsHitTesting(false)
+                .transition(.opacity)
+            }
+        }
         .frame(width: size, height: size)
         .animation(reduceMotion ? nil : YueJiMotion.content, value: slices)
+        .animation(reduceMotion ? nil : YueJiMotion.standard, value: selection)
         .accessibilityHidden(true)
     }
 }
@@ -547,20 +630,7 @@ struct MerchantDonutChart: View {
     }
     /// The sector under a tap on the ring; the middle and the corners clear the selection.
     private func select(at location: CGPoint, in plot: CGRect) {
-        let dx = location.x - plot.midX, dy = location.y - plot.midY
-        let radius = min(plot.width, plot.height) / 2
-        let distance = (dx * dx + dy * dy).squareRoot()
-        var picked: String?
-        if total > 0, distance <= radius, distance >= radius * 0.5 {
-            // Sectors run clockwise from twelve o'clock, in the order of `slices`.
-            var angle = atan2(Double(dx), Double(-dy))
-            if angle < 0 { angle += 2 * .pi }
-            var remaining = angle / (2 * .pi) * Double(total)
-            for slice in slices {
-                remaining -= Double(slice.cents)
-                if remaining < 0 { picked = slice.id; break }
-            }
-        }
+        let picked = DonutHitTest.sector(at: location, in: plot, sectors: slices.map { (id: $0.id, cents: $0.cents) })
         let next = picked == selection ? nil : picked
         guard next != selection else { return }
         FeedbackHaptics.selection()
