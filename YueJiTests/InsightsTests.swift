@@ -75,7 +75,7 @@ final class YearReviewTests: XCTestCase {
         XCTAssertEqual(few.level(2500), 3)
         XCTAssertEqual(few.level(4000), 4)
         // One huge day does not wash the others out.
-        let many = SpendingHeatScale(amounts: (1...8).map { $0 * 100 } + [100_000])
+        let many = SpendingHeatScale(amounts: [100, 200, 300, 400, 500, 600, 700, 800, 100_000])
         XCTAssertEqual(many.level(100), 1)
         XCTAssertEqual(many.level(400), 2)
         XCTAssertEqual(many.level(600), 3)
@@ -102,14 +102,16 @@ final class SpendingAlertTests: XCTestCase {
     /// a like-for-like comparison on the 24th must leave out; RM 20 of transport and a RM 50
     /// shopping purchase each month.
     private func history() -> [Expense] {
-        [7, 8, 9].flatMap { month in [
-            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 3), category: "餐饮"),
-            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 12), category: "餐饮"),
-            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 20), category: "餐饮"),
-            Expense(merchant: "Steakhouse", cents: 50000, date: day(2026, month, 28), category: "餐饮"),
-            Expense(merchant: "Grab", cents: 2000, date: day(2026, month, 5), category: "交通"),
-            Expense(merchant: "Shopee", cents: 5000, date: day(2026, month, 8), category: "购物"),
-        ] }
+        var entries: [Expense] = []
+        for month in [7, 8, 9] {
+            entries.append(Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 3), category: "餐饮"))
+            entries.append(Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 12), category: "餐饮"))
+            entries.append(Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 20), category: "餐饮"))
+            entries.append(Expense(merchant: "Steakhouse", cents: 50000, date: day(2026, month, 28), category: "餐饮"))
+            entries.append(Expense(merchant: "Grab", cents: 2000, date: day(2026, month, 5), category: "交通"))
+            entries.append(Expense(merchant: "Shopee", cents: 5000, date: day(2026, month, 8), category: "购物"))
+        }
+        return entries
     }
 
     func testCategoryAheadOfItsUsualPaceBySameDay() async throws {

@@ -41,6 +41,41 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
+      # Compiler errors and failed tests become annotations on the run (and its summary), so
+      # they can be read without downloading the log.
+      - name: Report compiler errors and test failures
+        if: failure()
+        run: |
+          python3 - <<'PYCODE'
+          import os, re
+          from pathlib import Path
+          log = Path('build-test.log')
+          if not log.exists():
+              raise SystemExit(0)
+          root = os.environ.get('GITHUB_WORKSPACE', '') + '/'
+          pattern = re.compile(r'^(/[^:\n]+):(\d+):(?:(\d+):)? error: (.+)$')
+          seen, found = set(), []
+          for line in log.read_text(errors='replace').splitlines():
+              match = pattern.match(line.strip())
+              if match and match.group(0) not in seen:
+                  seen.add(match.group(0))
+                  found.append(match.groups())
+          def text(value):
+              return value.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
+          def prop(value):
+              return text(value).replace(':', '%3A').replace(',', '%2C')
+          for path, line, col, message in found[:9]:
+              rel = path[len(root):] if path.startswith(root) else path
+              where = 'file=' + prop(rel) + ',line=' + line + (',col=' + col if col else '')
+              print('::error ' + where + '::' + text(message))
+          if len(found) > 9:
+              rest = [p.split('/')[-1] + ':' + l + ': ' + m for p, l, c, m in found[9:60]]
+              print('::error title=More errors::' + text('\n'.join(rest)))
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('### Compiler errors and test failures\n\n')
+              for path, line, col, message in found[:60]:
+                  summary.write('- `' + path.split('/')[-1] + ':' + line + '` ' + message + '\n')
+          PYCODE
       - name: Build unsigned device app
         run: |
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
