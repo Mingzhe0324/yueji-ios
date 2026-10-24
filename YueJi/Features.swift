@@ -18,7 +18,11 @@ enum Currency {
         return cents
     }
     static func input(_ minor: Int, _ code: String) -> String { scale(code) == 1 ? String(minor) : String(format: "%.2f", Double(minor) / 100) }
-    static func display(_ minor: Int, _ code: String) -> String { "\(code) \(input(minor, code))" }
+    /// For reading, with grouped thousands: "JPY 12,000", "USD 1,234.56".
+    static func display(_ minor: Int, _ code: String) -> String {
+        let amount = scale(code) == 1 ? groupedDigits(minor) : decimalAmount(minor)
+        return code + " " + amount
+    }
 }
 struct RateQuote: Codable, Equatable {
     var value: Decimal // MYR per 1 unit of foreign currency, never the inverse.

@@ -96,6 +96,20 @@ struct RestoredLedgerFeedback {
         guard !Task.isCancelled, revision == ledgerRevision, totals.count == months.count else { throw CancellationError() }
         return zip(months, totals).map { SpendingTrendPoint(month: $0, cents: $1) }
     }
+    /// A year of personal spending for the year in review.
+    func preparedYear(_ year: Int) async throws -> YearSnapshot {
+        let revision = ledgerRevision
+        let result = try await projectionWorker.year(ledger: ledger, year: year)
+        guard !Task.isCancelled, revision == ledgerRevision else { throw CancellationError() }
+        return result
+    }
+    /// What is unusual about a month's spending, for the Overview.
+    func preparedSpendingAlerts(month: Date) async throws -> [SpendingAlert] {
+        let revision = ledgerRevision
+        let result = try await projectionWorker.spendingAlerts(ledger: ledger, month: month)
+        guard !Task.isCancelled, revision == ledgerRevision else { throw CancellationError() }
+        return result
+    }
     func preparedStatement(friend: String, month: Date?) async throws -> String {
         let revision = ledgerRevision
         let result = try await projectionWorker.statement(ledger: ledger, friend: friend, month: month)
@@ -270,6 +284,7 @@ struct RestoredLedgerFeedback {
         refreshSignature = snapshot.signature
         if !loaded { loaded = true }
         Task { await BudgetAlertService.shared.check() }
+        Task { await UnusualSpendingNotifier.shared.check() }
         // Edits, matched payments and restores move expected payments; reminders follow.
         Task { await RenewalReminders.sync(fresh) }
     }

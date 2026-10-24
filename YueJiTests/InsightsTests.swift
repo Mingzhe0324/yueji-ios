@@ -1,0 +1,311 @@
+import XCTest
+@testable import YueJi
+
+final class YearReviewTests: XCTestCase {
+    private let calendar = InsightCalendar.make()
+    private func day(_ year: Int, _ month: Int, _ day: Int, hour: Int = 12) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day, hour: hour))!
+    }
+
+    func testYearCountsSpendingExactlyAsTheOverviewDoes() throws {
+        let ledger = Ledger(expenses: [
+            Expense(merchant: "Lunch", cents: 4000, date: day(2026, 1, 5), category: "餐饮"),
+            // Ali's share is not my spending.
+            Expense(merchant: "Dinner", cents: 9000, date: day(2026, 1, 5, hour: 20), category: "餐饮",
+                    shares: [Share(name: "Ali", cents: 3000)]),
+            Expense(merchant: "Aeon", cents: 3200, date: day(2026, 3, 9),
+                    items: [ExpenseItem(name: "Lunch", cents: 1600, category: "餐饮"),
+                            ExpenseItem(name: "Paper", cents: 1600, category: "购物")]),
+            Expense(merchant: "Grab", cents: 1500, date: day(2026, 10, 2), category: "交通"),
+            Expense(merchant: "Last year", cents: 9900, date: day(2025, 12, 31)),
+        ])
+        let year = YearSnapshot(ledger: ledger, year: 2026, now: day(2026, 10, 24))
+        for month in 1...12 {
+            XCTAssertEqual(year.months[month - 1], OverviewSnapshot(ledger: ledger, month: day(2026, month, 1)).personal, "Month \(month)")
+        }
+        XCTAssertEqual(year.total, 4000 + 6000 + 3200 + 1500)
+        XCTAssertEqual(year.entries, 4)
+        let fifth = calendar.startOfDay(for: day(2026, 1, 5))
+        XCTAssertEqual(year.days[fifth], SpendingDay(cents: 10000, entries: 2))
+        XCTAssertEqual(year.biggestDay, fifth)
+        XCTAssertEqual(year.busiestMonth, 1)
+        // Items spread over their categories, as in the Overview.
+        XCTAssertEqual(year.categories.first { $0.category == "餐饮" }?.cents, 4000 + 6000 + 1600)
+        XCTAssertEqual(year.categories.first { $0.category == "购物" }?.cents, 1600)
+        XCTAssertEqual(year.merchants.map(\.name), ["Dinner", "Lunch", "Aeon", "Grab"])
+        XCTAssertEqual(year.earliestYear, 2025)
+        // 1 January to 24 October 2026, with spending on three of those days.
+        XCTAssertEqual(year.trackedDays, 297)
+        XCTAssertEqual(year.noSpendDays, 294)
+        XCTAssertEqual(year.trackedMonths, 10)
+        XCTAssertEqual(year.monthlyAverage, 1470)
+        // Records only began on the last day of 2025: no comparison with a part-year.
+        XCTAssertNil(year.previousSamePeriod)
+        XCTAssertNil(year.change)
+    }
+
+    func testComparesWithTheSameDatesOfTheYearBefore() throws {
+        let ledger = Ledger(expenses: [
+            Expense(merchant: "A", cents: 1000, date: day(2025, 1, 10)),
+            Expense(merchant: "B", cents: 2000, date: day(2025, 10, 24)),
+            Expense(merchant: "After the same date", cents: 5000, date: day(2025, 11, 3)),
+            Expense(merchant: "C", cents: 4500, date: day(2026, 2, 1)),
+        ])
+        let year = YearSnapshot(ledger: ledger, year: 2026, now: day(2026, 10, 24))
+        XCTAssertEqual(year.previousSamePeriod, 3000)
+        XCTAssertEqual(try XCTUnwrap(year.change), 0.5, accuracy: 0.0001)
+
+        let last = YearSnapshot(ledger: ledger, year: 2025, now: day(2026, 10, 24))
+        XCTAssertEqual(last.total, 8000)
+        XCTAssertNil(last.previousSamePeriod)
+        // A past year counts from its first entry to its end.
+        XCTAssertEqual(last.trackedFrom, calendar.startOfDay(for: day(2025, 1, 10)))
+        XCTAssertEqual(last.trackedDays, 356)
+
+        let future = YearSnapshot(ledger: ledger, year: 2027, now: day(2026, 10, 24))
+        XCTAssertEqual(future.total, 0)
+        XCTAssertEqual(future.trackedDays, 0)
+        XCTAssertNil(future.previousSamePeriod)
+    }
+
+    func testHeatStepsUseQuartilesAndTheLargestDayIsDarkest() {
+        let few = SpendingHeatScale(amounts: [0, 1000, 4000])
+        XCTAssertEqual(few.level(0), 0)
+        XCTAssertEqual(few.level(1000), 1)
+        XCTAssertEqual(few.level(2500), 3)
+        XCTAssertEqual(few.level(4000), 4)
+        // One huge day does not wash the others out.
+        let many = SpendingHeatScale(amounts: (1...8).map { $0 * 100 } + [100_000])
+        XCTAssertEqual(many.level(100), 1)
+        XCTAssertEqual(many.level(400), 2)
+        XCTAssertEqual(many.level(600), 3)
+        XCTAssertEqual(many.level(800), 4)
+        XCTAssertEqual(many.level(100_000), 4)
+    }
+
+    func testProjectionWorkerPreparesTheSameYear() async throws {
+        let ledger = Ledger(expenses: [Expense(merchant: "Tea", cents: 800, date: day(2026, 4, 2))])
+        let now = day(2026, 10, 24)
+        let prepared = try await LedgerProjectionWorker().year(ledger: ledger, year: 2026, now: now)
+        XCTAssertEqual(prepared, YearSnapshot(ledger: ledger, year: 2026, now: now))
+    }
+}
+
+final class SpendingAlertTests: XCTestCase {
+    private let calendar = InsightCalendar.make()
+    private func day(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
+    }
+    private var now: Date { day(2026, 10, 24) }
+
+    /// July to September: RM 300 of food by the 24th and a RM 500 dinner on the 28th, which
+    /// a like-for-like comparison on the 24th must leave out; RM 20 of transport and a RM 50
+    /// shopping purchase each month.
+    private func history() -> [Expense] {
+        [7, 8, 9].flatMap { month in [
+            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 3), category: "餐饮"),
+            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 12), category: "餐饮"),
+            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, month, 20), category: "餐饮"),
+            Expense(merchant: "Steakhouse", cents: 50000, date: day(2026, month, 28), category: "餐饮"),
+            Expense(merchant: "Grab", cents: 2000, date: day(2026, month, 5), category: "交通"),
+            Expense(merchant: "Shopee", cents: 5000, date: day(2026, month, 8), category: "购物"),
+        ] }
+    }
+
+    func testCategoryAheadOfItsUsualPaceBySameDay() async throws {
+        let ledger = Ledger(expenses: history() + [
+            Expense(merchant: "Kopitiam", cents: 20000, date: day(2026, 10, 2), category: "餐饮"),
+            Expense(merchant: "Kopitiam", cents: 20000, date: day(2026, 10, 9), category: "餐饮"),
+            Expense(merchant: "Kopitiam", cents: 20000, date: day(2026, 10, 18), category: "餐饮"),
+        ])
+        let alerts = SpendingAlerts.make(ledger: ledger, month: now, now: now)
+        let food = try XCTUnwrap(alerts.first { $0.kind == .category })
+        XCTAssertEqual(food.category, "餐饮")
+        XCTAssertEqual(food.cents, 60000)
+        XCTAssertEqual(food.usual, 30000)
+        XCTAssertEqual(food.rise, 100)
+        XCTAssertEqual(food.throughDay, 24)
+        // All spending is ahead as well, and comes first: RM 600 against RM 370 by the 24th.
+        XCTAssertEqual(alerts.first?.kind, .overall)
+        XCTAssertEqual(alerts.first?.usual, 37000)
+        // RM 200 meals are twice a typical one: not a large purchase.
+        XCTAssertFalse(alerts.contains { $0.kind == .purchase })
+        XCTAssertFalse(alerts.contains { $0.category == "交通" || $0.category == "购物" })
+        // The Overview's projection gives the same answer.
+        let prepared = try await LedgerProjectionWorker().spendingAlerts(ledger: ledger, month: now, now: now)
+        XCTAssertEqual(prepared, alerts)
+    }
+
+    func testQuietWithoutTwoEarlierMonthsOfRecords() {
+        let ledger = Ledger(expenses: [
+            Expense(merchant: "Kopitiam", cents: 10000, date: day(2026, 9, 3), category: "餐饮"),
+            Expense(merchant: "Banquet", cents: 90000, date: day(2026, 10, 10), category: "餐饮"),
+        ])
+        XCTAssertTrue(SpendingAlerts.make(ledger: ledger, month: now, now: now).isEmpty)
+        // A month still to come has nothing to say either.
+        XCTAssertTrue(SpendingAlerts.make(ledger: Ledger(expenses: history()), month: day(2026, 12, 1), now: now).isEmpty)
+    }
+
+    func testEarlyInTheMonthOnlyALargePurchaseStandsOut() throws {
+        let early = day(2026, 10, 3)
+        let ledger = Ledger(expenses: history() + [
+            Expense(id: "big", merchant: "Ikea", cents: 45000, date: day(2026, 10, 2), category: "购物"),
+        ])
+        let alerts = SpendingAlerts.make(ledger: ledger, month: early, now: early)
+        XCTAssertEqual(alerts.count, 1)
+        let purchase = try XCTUnwrap(alerts.first)
+        XCTAssertEqual(purchase.kind, .purchase)
+        XCTAssertEqual(purchase.expenseID, "big")
+        XCTAssertEqual(purchase.merchant, "Ikea")
+        XCTAssertEqual(purchase.usual, 5000)
+        XCTAssertEqual(purchase.multipleText, "9")
+    }
+
+    func testPurchaseExplainsItsCategoryAndScheduledOrTravelSpendingIsLeftOut() {
+        let ledger = Ledger(expenses: history() + [
+            Expense(id: "sofa", merchant: "Ikea", cents: 60000, date: day(2026, 10, 15), category: "购物"),
+            // A renewal is expected, never a surprising purchase.
+            Expense(merchant: "Annual plan", cents: 60000, date: day(2026, 10, 16), category: "娱乐", recurringKey: "plan:3"),
+            // Travel books have budgets of their own.
+            Expense(merchant: "Hotel", cents: 90000, date: day(2026, 10, 17), category: "其他", tripID: "trip"),
+        ])
+        let alerts = SpendingAlerts.make(ledger: ledger, month: now, now: now)
+        XCTAssertTrue(alerts.contains { $0.kind == .purchase && $0.expenseID == "sofa" })
+        XCTAssertFalse(alerts.contains { $0.kind == .category && $0.category == "购物" })
+        XCTAssertFalse(alerts.contains { $0.category == "其他" })
+        XCTAssertFalse(alerts.contains { $0.kind == .purchase && $0.category == "娱乐" })
+        XCTAssertTrue(alerts.contains { $0.kind == .newCategory && $0.category == "娱乐" })
+        // Hotel spending is not in the overall pace: RM 1,200 of the RM 2,100 recorded.
+        XCTAssertEqual(alerts.first { $0.kind == .overall }?.cents, 120000)
+    }
+
+    func testHiddenAlertsAreKeptPerMonth() {
+        let month = monthKey(Date())
+        var stored = SpendingAlerts.dismissing("category:餐饮", month: month, in: "")
+        stored = SpendingAlerts.dismissing("overall", month: month, in: stored)
+        stored = SpendingAlerts.dismissing("overall", month: month, in: stored)
+        XCTAssertEqual(SpendingAlerts.dismissed(stored, month: month), ["category:餐饮", "overall"])
+        XCTAssertTrue(SpendingAlerts.dismissed(stored, month: "1999-01").isEmpty)
+        XCTAssertFalse(SpendingAlerts.dismissing("overall", month: month, in: "1999-01|overall").contains("1999-01"))
+    }
+
+    func testNotificationsAtMostDailyEachOnceAndNeverForPurchases() {
+        let month = "2026-10"
+        let purchase = SpendingAlert(kind: .purchase, category: "购物", cents: 45000, usual: 5000, expenseID: "big")
+        let food = SpendingAlert(kind: .category, category: "餐饮", cents: 60000, usual: 30000, throughDay: 24)
+        let overall = SpendingAlert(kind: .overall, cents: 90000, usual: 50000, throughDay: 24)
+        XCTAssertEqual(UnusualSpendingNotifier.next([purchase, food], month: month, sent: [], lastSent: nil, now: now), food)
+        XCTAssertEqual(UnusualSpendingNotifier.next([overall, food], month: month, sent: ["2026-10|overall"], lastSent: nil, now: now), food)
+        XCTAssertNil(UnusualSpendingNotifier.next([food], month: month, sent: [], lastSent: now.addingTimeInterval(-3600), now: now))
+        XCTAssertEqual(UnusualSpendingNotifier.next([food], month: month, sent: [], lastSent: now.addingTimeInterval(-21 * 3600), now: now), food)
+        XCTAssertNil(UnusualSpendingNotifier.next([purchase], month: month, sent: [], lastSent: nil, now: now))
+    }
+
+    func testAlertTextInEnglish() {
+        let defaults = UserDefaults.standard
+        let previous = defaults.object(forKey: "appLanguage")
+        defer {
+            if let previous { defaults.set(previous, forKey: "appLanguage") }
+            else { defaults.removeObject(forKey: "appLanguage") }
+        }
+        defaults.set("en", forKey: "appLanguage")
+        let food = SpendingAlert(kind: .category, category: "餐饮", cents: 60000, usual: 30000, throughDay: 24)
+        XCTAssertEqual(food.title(), "Food is up 100%")
+        XCTAssertEqual(food.detail(), "RM 600.00 by day 24; usually about RM 300.00")
+        XCTAssertEqual(food.detail(hidden: true), "Compared with days 1–24 of recent months")
+        XCTAssertEqual(food.badge, "+100%")
+        let purchase = SpendingAlert(kind: .purchase, category: "购物", cents: 45000, usual: 10000, expenseID: "x", merchant: "Ikea")
+        XCTAssertEqual(purchase.title(), "RM 450.00 at Ikea")
+        XCTAssertEqual(purchase.title(hidden: true), "A large purchase at Ikea")
+        XCTAssertEqual(purchase.detail(), "About 4.5× a typical Shopping purchase")
+        XCTAssertEqual(SpendingAlert(kind: .newCategory, category: "娱乐", cents: 12000, usual: 0).badge, "New")
+    }
+
+}
+
+final class AutoBackupTests: XCTestCase {
+    func testCopiesAreNamedByTimeAndOnlyAutomaticCopiesExpire() {
+        let zone = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        let date = calendar.date(from: DateComponents(year: 2026, month: 10, day: 24, hour: 18, minute: 30, second: 5))!
+        XCTAssertEqual(AutoBackupFiles.name(for: date, timeZone: zone), "YueJi-auto-2026-10-24-183005.json")
+        let entries = ["YueJi-auto-2026-10-20-090000.json", ".YueJi-auto-2026-10-21-090000.json.icloud",
+                       "YueJi-auto-2026-10-22-090000.json", "YueJi-2026-10.json", "notes.txt", "YueJi-auto-broken.json"]
+        // iCloud Drive lists a copy that is only in the cloud as a placeholder.
+        XCTAssertEqual(AutoBackupFiles.backupName(of: ".YueJi-auto-2026-10-21-090000.json.icloud"), "YueJi-auto-2026-10-21-090000.json")
+        XCTAssertNil(AutoBackupFiles.backupName(of: "YueJi-auto-broken.json"))
+        XCTAssertNil(AutoBackupFiles.backupName(of: "YueJi-2026-10.json"))
+        XCTAssertEqual(AutoBackupFiles.expired(entries, keep: 2), ["YueJi-auto-2026-10-20-090000.json"])
+        XCTAssertEqual(Set(AutoBackupFiles.expired(entries, keep: 1)),
+                       ["YueJi-auto-2026-10-20-090000.json", ".YueJi-auto-2026-10-21-090000.json.icloud"])
+        // The newest copy is never removed.
+        XCTAssertEqual(AutoBackupFiles.expired(entries, keep: 0).count, 2)
+    }
+
+    func testDueOncePerPeriodAndAfterTheClockMovesBack() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: nil, frequency: .daily))
+        XCTAssertFalse(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(-3600), frequency: .daily))
+        XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(-21 * 3600), frequency: .daily))
+        XCTAssertFalse(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(-3 * 86400), frequency: .weekly))
+        XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(-7 * 86400), frequency: .weekly))
+        XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(3600), frequency: .weekly))
+    }
+
+    func testCopyRestoresTheLedgerAndLeavesOtherFilesAlone() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let notes = folder.appendingPathComponent("notes.txt")
+        try Data("keep me".utf8).write(to: notes)
+        let ledger = Ledger(expenses: [Expense(merchant: "Lunch", cents: 1250, date: Date(timeIntervalSince1970: 1_790_000_000))])
+        let data = try LocalStore.exportData(ledger)
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var names: [String] = []
+        for offset in 0..<4 {
+            names.append(try AutoBackupWriter.write(data, into: folder, now: start.addingTimeInterval(Double(offset) * 86400), keep: 2))
+        }
+        let remaining = try FileManager.default.contentsOfDirectory(atPath: folder.path).sorted()
+        XCTAssertEqual(remaining, (Array(names.suffix(2)) + ["notes.txt"]).sorted())
+        XCTAssertEqual(try Data(contentsOf: notes), Data("keep me".utf8))
+        // The same file "Restore from a backup file" reads.
+        let restored = try RestorePreview(data: Data(contentsOf: folder.appendingPathComponent(names[3])))
+        XCTAssertEqual(restored.ledger.expenses, ledger.expenses)
+    }
+
+    func testWriterSkipsAnUnchangedLedgerUntilItChanges() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let folder = root.appendingPathComponent("Backups")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = LocalStore(folder: root.appendingPathComponent("Data"))
+        try store.change { $0.expenses = [Expense(merchant: "Lunch", cents: 1250, date: Date(timeIntervalSince1970: 1_790_000_000))] }
+        let writer = AutoBackupWriter(store: store)
+        let bookmark = try folder.bookmarkData(options: .minimalBookmark, includingResourceValuesForKeys: nil, relativeTo: nil)
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func job(force: Bool = false, hash: String?, days: Double) -> AutoBackupJob {
+            AutoBackupJob(bookmark: bookmark, force: force, lastHash: hash, keep: 14, now: now.addingTimeInterval(days * 86400))
+        }
+
+        let first = await writer.perform(job(hash: nil, days: 0))
+        guard case .saved(let name) = first.outcome else { return XCTFail("Expected a copy, got \(first.outcome)") }
+        let again = await writer.perform(job(hash: first.hash, days: 1))
+        XCTAssertEqual(again.outcome, .unchanged)
+        // "Back up now" always writes one.
+        let forced = await writer.perform(job(force: true, hash: first.hash, days: 2))
+        guard case .saved = forced.outcome else { return XCTFail("Expected a forced copy, got \(forced.outcome)") }
+
+        try store.change { $0.expenses.append(Expense(merchant: "Dinner", cents: 3000, date: Date(timeIntervalSince1970: 1_790_100_000))) }
+        let changed = await writer.perform(job(hash: first.hash, days: 3))
+        guard case .saved(let latest) = changed.outcome else { return XCTFail("Expected a copy of the change, got \(changed.outcome)") }
+        XCTAssertNotEqual(changed.hash, first.hash)
+        XCTAssertEqual(try LocalStore.decode(Data(contentsOf: folder.appendingPathComponent(latest))).expenses.count, 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.appendingPathComponent(name).path))
+
+        // A folder that has gone is reported, never silently skipped.
+        try FileManager.default.removeItem(at: folder)
+        let missing = await writer.perform(job(force: true, hash: changed.hash, days: 4))
+        guard case .failed = missing.outcome else { return XCTFail("Expected a failure, got \(missing.outcome)") }
+    }
+}

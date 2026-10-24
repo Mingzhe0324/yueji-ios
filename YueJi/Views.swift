@@ -241,7 +241,8 @@ extension View {
     func yuejiUpdating(_ updating: Bool) -> some View {
         overlay(alignment: .topTrailing) {
             if updating {
-                ProgressView().controlSize(.small).padding(12)
+                WaxingMoonIndicator(size: 18).padding(12)
+                    .accessibilityElement(children: .ignore)
                     .accessibilityLabel(tr("正在更新", "Updating", "Mengemas kini"))
                     .allowsHitTesting(false)
             }
@@ -303,6 +304,7 @@ struct MainView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("completedUsageGuide") private var completedGuide = false
     @AppStorage("openingAnimationEnabled") private var openingEnabled = true
+    @AppStorage("playfulAnimations") private var playful = true
     @AppStorage("appAppearance") private var appearance = "system"
     @State private var showingGuide = false
     @State private var selectedTab = 0
@@ -311,6 +313,12 @@ struct MainView: View {
     @State private var pendingInbox = false
     @State private var notificationDestination: NotificationDestination?
     @State private var logoFinished = false
+    /// A new entry from the quick-add bar above the tab bar (iOS 26).
+    @State private var quickAdding = false
+    /// The app appears through the opening's moon; a plain fade without animations.
+    private var openingExit: AnyTransition {
+        reduceMotion || !playful ? .opacity : .openingIris
+    }
     private func finishLaunchIfReady() {
         withAnimation(reduceMotion ? nil : YueJiMotion.standard) {
             _ = model.finishLaunchIfReady(openingEnabled: openingEnabled, openingFinished: logoFinished)
@@ -377,6 +385,7 @@ struct MainView: View {
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
         }.tint(ink).modifier(YueJiTabBarMotion())
+            .modifier(QuickAddAccessory { if !quickAdding { quickAdding = true } })
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -397,11 +406,13 @@ struct MainView: View {
                     logoFinished = true
                     finishLaunchIfReady()
                 }
+                // Full screen before the reveal, so its iris centres on the moon.
+                .ignoresSafeArea()
                 // The departing visual layer must not intercept the ready toolbar, for
                 // touches or for accessibility hit-testing.
                 .allowsHitTesting(false)
                 .accessibilityHidden(logoFinished)
-                .transition(.opacity).zIndex(1)
+                .transition(openingExit).zIndex(1)
                 // Tap anywhere to skip. This catcher is separate from the fading layer and
                 // leaves instantly (identity transition) when the app is ready, so it can
                 // never cover the toolbar. Before the ledger loads, skipping just ends the
@@ -446,6 +457,12 @@ struct MainView: View {
                 guard !Task.isCancelled else { return }
                 await model.refresh(postRecurring: false)
                 openPendingNotification()
+                // A copy outside the app, when one is due and something changed.
+                await AutoBackup.run()
+            }
+            .onChange(of: phase) { _, value in
+                // Leaving the app is the other moment worth a copy: the day's entries are in.
+                if value == .background, model.didFinishLaunch, !model.isPreview { AutoBackup.runInBackground() }
             }
             .onChange(of: model.didFinishLaunch) { _, finished in
                 if finished && !completedGuide && UserDefaults.standard.object(forKey: "pendingNotificationDestination") == nil { showingGuide = true }
@@ -478,6 +495,10 @@ struct MainView: View {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
                     Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { showingNewTNG = false }
                 } } }.yuejiSheetSurface().ledgerFeedback(modal: true)
+            }
+            // The quick-add bar's new entry, over whichever tab is showing.
+            .sheet(isPresented: $quickAdding, onDismiss: { openPendingNotification(); openPendingInbox() }) {
+                ExpenseEditor(original: nil, initialDate: Date())
             }
             .task(id: undoExpirationPaused) { model.pauseUndoExpiry(undoExpirationPaused) }
             .task(id: savedExpiration) {
@@ -591,11 +612,12 @@ struct MonthPicker: View {
     }
 }
 /// Pages the Overview's quick actions and section links open.
-private enum OverviewRoute: Hashable { case receipt, automation, savings, travel, comparison(Date) }
+private enum OverviewRoute: Hashable { case receipt, automation, savings, travel, comparison(Date), year(Date) }
 
 struct DashboardView: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
     var guideFocus: String? = nil
     /// Shows Ledger on the given month; "View all" on the recent entries calls it.
     var openLedger: (Date) -> Void = { _ in }
@@ -619,6 +641,14 @@ struct DashboardView: View {
     @State private var loadedSummary: LedgerTimelineQuery?
     @State private var trend: [SpendingTrendPoint] = []
     @State private var loadedTrend: LedgerTimelineQuery?
+    /// What is unusual about the month's spending, and the month it was found for.
+    @State private var alerts: [SpendingAlert] = []
+    @State private var alertsMonth: String?
+    /// The total while it counts up as the app opens; nil the rest of the time.
+    @State private var countingCents: Double?
+    /// Bumped when this month's budget passes 80%, is reached or is exceeded, so the status
+    /// symbol wiggles once. Not on a month change or the first load.
+    @State private var budgetAlertBeat = 0
     private var entries: [Expense] { summary.entries }
     private var personal: Int { summary.personal }
     private var budgetSpent: Int { entries.filter { $0.tripID == nil }.reduce(0) { $0 + $1.personalSpending } }
@@ -639,8 +669,51 @@ struct DashboardView: View {
     private var budgetSymbol: String {
         budgetSpent >= budget ? "exclamationmark.circle.fill" : (Double(budgetSpent) / Double(max(budget, 1)) >= 0.8 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
     }
-    private var budgetUsageText: String {
-        String(budget > 0 ? budgetSpent * 100 / budget : 0) + tr("% 已使用", "% used", "% digunakan")
+    private var budgetUsedPercent: Int { budget > 0 ? budgetSpent * 100 / budget : 0 }
+    private struct BudgetStage: Equatable {
+        let month: String
+        let loaded: Bool
+        /// 0 below 80%, 1 from 80%, 2 reached, 3 over.
+        let level: Int
+    }
+    private var budgetStage: BudgetStage {
+        var level = 0
+        if budget > 0 {
+            if budgetSpent > budget { level = 3 }
+            else if budgetSpent == budget { level = 2 }
+            else if budgetSpent * 5 >= budget * 4 { level = 1 }
+        }
+        let key = monthKey(month)
+        return BudgetStage(month: key, loaded: loadedSummary?.month == key, level: level)
+    }
+    /// How far through the month: "77% of the month gone", or that spending is ahead of it.
+    private func paceText(_ pace: BudgetPace) -> String {
+        let gone = Int((pace.elapsed * 100).rounded())
+        if !pace.ongoing {
+            return pace.daysPassed >= pace.days ? tr("本月已结束", "Month ended", "Bulan telah berakhir")
+                : tr("本月尚未开始", "Month not started", "Bulan belum bermula")
+        }
+        if pace.ahead {
+            return tr("花得比时间快 · 本月已过 \(gone)%", "Ahead of the month · \(gone)% gone", "Mendahului bulan · \(gone)% berlalu")
+        }
+        return tr("本月已过 \(gone)%", "\(gone)% of the month gone", "\(gone)% bulan berlalu")
+    }
+    /// The dial beside its figures; stacked at accessibility text sizes.
+    private var dialLayout: AnyLayout {
+        typeSize.isAccessibilitySize
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
+            : AnyLayout(HStackLayout(alignment: .center, spacing: 18))
+    }
+    /// The launch hand-off: the total counts up from zero as the opening reveals the app.
+    private func countUp(to cents: Int) {
+        guard cents > 0, !hideAmounts, !reduceMotion, ElegantMotion.enabled else { return }
+        countingCents = 0
+        Task {
+            do { try await Task.sleep(for: .milliseconds(150)) } catch { countingCents = nil; return }
+            withAnimation(.easeOut(duration: 0.9)) { countingCents = Double(cents) }
+            do { try await Task.sleep(for: .milliseconds(950)) } catch {}
+            countingCents = nil
+        }
     }
     private var owed: Int { summary.owed }
     /// The trend shows the latest six months while the selected month is among them, so
@@ -694,6 +767,8 @@ struct DashboardView: View {
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
                 budgetSection
+                // Only when something stands out; otherwise the card is absent.
+                UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
                 recentCard
                 travelSection
                 categoriesCard
@@ -711,6 +786,7 @@ struct DashboardView: View {
                 case .savings: SavingsGoalsView()
                 case .travel: TravelBooksView()
                 case .comparison(let month): SpendingComparisonView(month: month)
+                case .year(let month): YearReviewView(month: month)
                 }
             }
             .task(id: summaryQuery) {
@@ -729,8 +805,24 @@ struct DashboardView: View {
                     withAnimation(!reduceMotion && (changingMonth || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
                         summary = fresh; loadedSummary = summaryQuery
                     }
+                    if !OverviewCountUp.played, !model.isPreview {
+                        OverviewCountUp.played = true
+                        countUp(to: fresh.personal)
+                    }
                 } catch is CancellationError { return }
                 catch { model.error = error.localizedDescription }
+            }
+            .task(id: summaryQuery) {
+                do {
+                    let found = try await model.preparedSpendingAlerts(month: requestedMonth)
+                    guard !Task.isCancelled, model.overviewQuery(month: month) == summaryQuery else { return }
+                    withAnimation(reduceMotion || alertsMonth != summaryQuery.month ? nil : YueJiMotion.rows) {
+                        alerts = found; alertsMonth = summaryQuery.month
+                    }
+                } catch {
+                    // Supplementary, like the trend: the monthly summary reports ledger errors.
+                    return
+                }
             }
             .task(id: trendQuery) {
                 guard loadedTrend != trendQuery else { return }
@@ -750,6 +842,10 @@ struct DashboardView: View {
                 guard model.isPreview, let guideFocus else { return }
                 do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
                 withAnimation(.easeInOut(duration: 0.85)) { guideScroll.scrollTo(guideFocus, anchor: .center) }
+            }
+            .onChange(of: budgetStage) { old, new in
+                // Only a change within the month already shown: new spending, not navigation.
+                if old.month == new.month, old.loaded, new.loaded, new.level > old.level { budgetAlertBeat += 1 }
             }
             .navigationTitle(tr("概览", "Overview", "Ringkasan")).navigationBarTitleDisplayMode(.large)
             .yuejiSubtitle(Date().formatted(.dateTime.weekday(.wide).day().month(.wide).locale(Locale(identifier: AppLanguage.localeID))))
@@ -854,7 +950,7 @@ struct DashboardView: View {
                     Text(tr("本月个人消费", "Personal spending", "Belanja peribadi"))
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         .textCase(.uppercase)
-                    amount(personal)
+                    heroAmount
                         .font(.system(size: heroSize, weight: .bold))
                         .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
                 }
@@ -863,6 +959,7 @@ struct DashboardView: View {
                     withAnimation(reduceMotion ? nil : YueJiMotion.content) { hideAmounts.toggle() }
                     FeedbackHaptics.selection()
                 }
+                .modifier(AttentionBounce(trigger: hideAmounts))
                 .accessibilityLabel(hideAmounts ? tr("显示金额", "Show amounts", "Tunjuk amaun") : tr("隐藏金额", "Hide amounts", "Sembunyi amaun"))
             }
             Text(summary.reimbursementClaimed > 0
@@ -874,28 +971,49 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    /// The month's budget as the system capacity gauge (the kit's progress bar), with travel
-    /// kept apart and claims still to come back.
+    /// The month's total; once a launch it counts up from zero as the opening hands over.
+    @ViewBuilder private var heroAmount: some View {
+        if let countingCents, !hideAmounts {
+            CountingMoney(cents: countingCents)
+        } else {
+            amount(personal)
+        }
+    }
+    /// The month's budget as the month dial: the budget used inside, the month's days around
+    /// it, so it shows at a glance whether the money is going faster than the month. Travel
+    /// is kept apart and claims still to come back are listed.
     private var budgetSection: some View {
         Section {
             if budget > 0 {
                 VStack(alignment: .leading, spacing: 12) {
-                    Gauge(value: Double(min(budgetSpent, budget)), in: 0...Double(max(budget, 1))) {
-                        Text(budgetSpent > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
-                    } currentValueLabel: {
-                        Text(amountText(abs(budget - budgetSpent))).monospacedDigit()
+                    let pace = BudgetPace(spent: budgetSpent, budget: budget, month: month)
+                    dialLayout {
+                        MonthBudgetDial(pace: pace, tint: budgetTint) {
+                            VStack(spacing: 0) {
+                                Text(String(budgetUsedPercent) + "%")
+                                    .font(.title3.weight(.bold)).monospacedDigit()
+                                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(budgetUsedPercent)))
+                                Text(tr("已用", "used", "digunakan"))
+                                    .font(.caption2).foregroundStyle(.secondary)
+                            }
+                            .lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(budgetSpent > budget ? tr("超出预算", "Over budget", "Melebihi bajet") : tr("预算剩余", "Remaining", "Baki bajet"))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            amount(abs(budget - budgetSpent))
+                                .font(.title2.weight(.bold)).lineLimit(1).minimumScaleFactor(0.6)
+                            Label(budgetStatus, systemImage: budgetSymbol)
+                                .font(.footnote.weight(.medium))
+                                .foregroundStyle(budgetTint)
+                                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
+                                .modifier(AttentionWiggle(trigger: budgetAlertBeat))
+                            Text(paceText(pace))
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
-                    .gaugeStyle(.linearCapacity)
-                    .tint(budgetTint)
-                    .font(.subheadline)
-                    .animation(reduceMotion ? nil : YueJiMotion.meter, value: budgetSpent)
-                    HStack {
-                        Label(budgetStatus, systemImage: budgetSymbol).foregroundStyle(budgetTint)
-                        Spacer(minLength: 12)
-                        Text(budgetUsageText).monospacedDigit().foregroundStyle(.secondary)
-                    }
-                    .font(.footnote.weight(.medium))
-                    .contentTransition(.opacity)
+                    .accessibilityElement(children: .combine)
                     if monthBudget.income > 0 {
                         // Base + income added − eligible spending = remaining.
                         MonthlyBudgetBreakdown(budget: monthBudget, spent: budgetSpent, amount: amountText)
@@ -1034,6 +1152,10 @@ struct DashboardView: View {
                 .accessibilityLabel(tr("消费趋势", "Spending trend", "Trend perbelanjaan"))
                 .accessibilityValue(trendAccessibilityValue)
             }
+            Button { path.append(OverviewRoute.year(month)) } label: {
+                Label(yearReviewTitle, systemImage: "calendar")
+            }
+            .accessibilityIdentifier("overview.yearReview")
         } header: {
             DashboardSectionHeader(title: tr("消费趋势", "Spending trend", "Trend perbelanjaan"),
                                    actionTitle: tr("对比", "Compare", "Banding")) {
@@ -1042,6 +1164,11 @@ struct DashboardView: View {
         } footer: {
             Text(tr("近六个月 · 点按柱形查看该月", "Six months · tap a bar to view that month", "Enam bulan · ketik bar untuk melihat bulan itu"))
         }
+    }
+    /// "See the whole year · 2026", for the selected month's year.
+    private var yearReviewTitle: String {
+        let year = String(InsightCalendar.make().component(.year, from: month))
+        return tr("看看整年 · ", "See the whole year · ", "Lihat setahun · ") + year
     }
     private var trendAccessibilityValue: String {
         guard !hideAmounts else { return hiddenAmountLabel }
@@ -1093,6 +1220,16 @@ private struct SpendingCategoryBreakdown: View {
     let month: Date
     /// The Overview's eye: masks the card's amount like the header's.
     var hidden = false
+    /// The category picked in the donut or its chips.
+    @State private var selectedCategory: String?
+    /// The pick, while that category still has spending this month.
+    private var activeSelection: String? {
+        guard let selectedCategory, slices.contains(where: { $0.category == selectedCategory }) else { return nil }
+        return selectedCategory
+    }
+    private func pick(_ category: String?) {
+        withAnimation(reduceMotion ? nil : YueJiMotion.standard) { selectedCategory = category }
+    }
     var body: some View {
         let _ = uiLocale.identifier
         Section {
@@ -1122,12 +1259,19 @@ private struct SpendingCategoryBreakdown: View {
                         }
                         .accessibilityElement(children: .combine)
                         if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-                        SpendingDonutChart(slices: slices)
+                        SpendingDonutChart(slices: slices, selection: activeSelection) { next in pick(next) }
                     }
                     ScrollView(.horizontal) {
                         HStack(spacing: 8) {
                             ForEach(slices.sorted { $0.cents > $1.cents }) { slice in
-                                CategoryShareChip(text: share(slice.cents) + " " + categoryLabel(slice.category), color: slice.color)
+                                Button {
+                                    FeedbackHaptics.selection()
+                                    pick(activeSelection == slice.category ? nil : slice.category)
+                                } label: {
+                                    CategoryShareChip(text: share(slice.cents) + " " + categoryLabel(slice.category), color: slice.color,
+                                                      selected: activeSelection == slice.category)
+                                }
+                                .buttonStyle(.plain)
                             }
                         }
                     }
@@ -1136,6 +1280,8 @@ private struct SpendingCategoryBreakdown: View {
                     .accessibilityHidden(true)
                 }
                 .padding(.vertical, 8)
+                // Another month starts with nothing picked.
+                .onChange(of: monthKey(month)) { _, _ in selectedCategory = nil }
             }
             // One row per category, as Messages lists conversations: the category's tinted
             // icon, its name and share of the month, and the amount.
@@ -1346,6 +1492,7 @@ struct OverviewToolsView: View {
                 NavigationLink { AutomationSetupView() } label: { IslandRowLabel(title: tr("自动记账", "Automatic recording", "Rekod automatik"), symbol: "bolt.fill", color: IslandPalette.sky) }
             }
             Section(tr("分析", "Insights", "Analisis")) {
+                NavigationLink { YearReviewView(month: month) } label: { IslandRowLabel(title: tr("年度回顾", "Year in review", "Imbasan tahunan"), symbol: "calendar.badge.clock", color: IslandPalette.leaf) }
                 NavigationLink { SpendingComparisonView(month: month) } label: { IslandRowLabel(title: tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), symbol: "chart.bar.xaxis", color: IslandPalette.mint) }
                 NavigationLink { UpcomingView(initialMonth: month) } label: { IslandRowLabel(title: tr("固定消费预览", "Upcoming bills", "Bil akan datang"), symbol: "calendar", color: IslandPalette.pumpkin) }
                 NavigationLink { DuplicateReviewView() } label: { IslandRowLabel(title: tr("检查重复账目", "Review duplicates", "Semak pendua"), symbol: "doc.on.doc.fill", color: IslandPalette.berry) }
@@ -1645,6 +1792,23 @@ private enum LedgerSheetRoute: Identifiable {
 }
 private struct LedgerExpenseDestination: Hashable { let id: String }
 
+/// A day of the Ledger: its date and what it cost me. The same personal spending the
+/// month's total adds up, so the days of a month add up to it.
+private struct LedgerDayHeader: View {
+    let day: LedgerDayGroup
+    var body: some View {
+        let spent = day.spending
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(dateLabel(day.date))
+            Spacer(minLength: 8)
+            if spent > 0 {
+                Text(money(spent)).monospacedDigit()
+            }
+        }
+        .accessibilityElement(children: .combine)
+    }
+}
+
 struct ExpensesView: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1765,7 +1929,7 @@ struct ExpensesView: View {
                                     delete: { deleting = entry }))
                             }
                         }
-                    } header: { Text(dateLabel(day.date)) }
+                    } header: { LedgerDayHeader(day: day) }
                     .listRowBackground(Color.clear)
                 }
             }
@@ -1826,7 +1990,7 @@ struct ExpensesView: View {
                         Menu {
                             Picker(selection: $filter.category) {
                                 Text(tr("全部分类", "All categories", "Semua kategori")).tag("")
-                                ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                                ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) }
                             } label: {
                                 Label(tr("分类", "Category", "Kategori"), systemImage: "square.grid.2x2")
                             }.pickerStyle(.menu)
@@ -2787,7 +2951,7 @@ struct ExpenseEditor: View {
             // Removing it in the same Form update can invalidate native navigation.
             Picker(tr("分类", "Category", "Kategori"), selection: $category) {
                 ForEach(model.ledger.categoryNames, id: \.self) { item in
-                    Text(categoryLabel(item)).tag(item)
+                    model.ledger.categoryChoice(item).tag(item)
                 }
             }.pickerStyle(.navigationLink).disabled(!itemDrafts.isEmpty)
                 .accessibilityIdentifier("transaction.category")
@@ -3179,6 +3343,8 @@ struct SettingsView: View {
     @AppStorage("playfulAnimations") private var playful = true
     @AppStorage("animationSounds") private var sounds = true
     @AppStorage("feedbackHaptics") private var haptics = true
+    @AppStorage(AutoBackupKeys.folderName) private var autoBackupFolder = ""
+    @AppStorage(AutoBackupKeys.lastError) private var autoBackupError = ""
     @State private var exporting = false
     @State private var importing = false
     @State private var document: LedgerDocument?
@@ -3234,7 +3400,7 @@ struct SettingsView: View {
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
                     NavigationLink { backupPage } label: {
-                        SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: tr("备份、恢复、导出账单", "Save, restore and export", "Simpan, pulih dan eksport"), symbol: "externaldrive.fill", color: IslandPalette.lavender)
+                        SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: backupSubtitle, symbol: "externaldrive.fill", color: IslandPalette.lavender)
                     }.guideTarget("settings.backup")
                     NavigationLink { aboutPage } label: {
                         SimpleSettingsRow(title: tr("关于月记", "About YueJi", "Tentang YueJi"), subtitle: installedVersionLabel, symbol: "info.circle.fill", color: IslandPalette.pebble)
@@ -3257,6 +3423,12 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+    /// Whether a copy of the ledger is kept outside the app.
+    private var backupSubtitle: String {
+        if autoBackupFolder.isEmpty { return tr("自动备份未开启", "Automatic backup is off", "Sandaran automatik dimatikan") }
+        if !autoBackupError.isEmpty { return tr("自动备份需要处理", "Automatic backup needs attention", "Sandaran automatik perlu perhatian") }
+        return tr("自动备份到「\(autoBackupFolder)」", "Backing up to \(autoBackupFolder)", "Sandaran ke \(autoBackupFolder)")
     }
     private var appearancePage: some View {
         Form {
@@ -3291,6 +3463,7 @@ struct SettingsView: View {
     }
     private var backupPage: some View {
         Form {
+                AutoBackupSection()
                 Section(tr("保管好你的账本", "Keep your ledger safe", "Simpan lejar dengan selamat")) {
                     Text(tr("换手机或卸载前，请先把完整备份存到「文件」或 iCloud Drive。", "Save a complete backup to Files or iCloud Drive before changing phones or uninstalling.", "Simpan sandaran lengkap ke Files atau iCloud Drive sebelum menukar telefon atau menyahpasang.")).font(.footnote)
                     NavigationLink(tr("导出账单表格", "Export a spreadsheet", "Eksport hamparan")) { CSVExportView() }
@@ -4242,19 +4415,27 @@ private struct NotificationBannerCard: View {
     /// The app logo, like a system notification, with the status symbol as a small badge.
     @ViewBuilder private var badge: some View {
         if typeSize.isAccessibilitySize {
-            Image(systemName: symbol).font(.title3.weight(.semibold)).foregroundStyle(color)
+            status(size: 20, color: color, font: .title3.weight(.semibold))
                 .frame(width: 28, height: 32)
         } else {
             Image("YueJiLogo").resizable().scaledToFit().frame(width: 38, height: 38)
                 .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay(alignment: .bottomTrailing) {
-                    Image(systemName: symbol).font(.system(size: 9, weight: .bold)).foregroundStyle(.white)
+                    status(size: 9, color: .white)
                         .frame(width: 18, height: 18)
                         .background(Circle().fill(color))
                         .overlay(Circle().strokeBorder(IslandTheme.card, lineWidth: 2))
                         .offset(x: 5, y: 5)
                 }
                 .padding(.trailing, 4).padding(.bottom, 4)
+        }
+    }
+    /// "Saved" draws its checkmark as the banner appears; other notices show their symbol.
+    @ViewBuilder private func status(size: CGFloat, color: Color, font: Font? = nil) -> some View {
+        if symbol == "checkmark" {
+            DrawnCheckmark(lineWidth: max(1.6, size * 0.2), color: color).frame(width: size, height: size)
+        } else {
+            Image(systemName: symbol).font(font ?? .system(size: size, weight: .bold)).foregroundStyle(color)
         }
     }
     private var label: some View {
@@ -4299,250 +4480,6 @@ private struct NotificationBannerCard: View {
             }.buttonStyle(.plain).foregroundStyle(Color.accentColor).disabled(!actionEnabled)
                 .accessibilityAction { if actionEnabled && !interaction.exiting { action() } }
         }
-    }
-}
-
-/// The opening's steps, in order.
-private enum OpeningStage: Int, Comparable {
-    /// The first frame: only the background, as the system launch screen.
-    case start
-    /// Blue Liquid Glass droplets form around the centre.
-    case drops
-    /// The droplets flow together into one glass moon, the moon of the app icon.
-    case merged
-    /// The icon's gold crescent and three entries appear on the glass and the wordmark
-    /// sharpens in from a blur.
-    case moon
-    /// The reveal: the moon and wordmark zoom towards the viewer as the app fades in.
-    case departing
-    static func < (lhs: Self, rhs: Self) -> Bool { lhs.rawValue < rhs.rawValue }
-}
-
-/// One Liquid Glass droplet of the opening. The first is the core that swells into the
-/// moon; the others form around it and flow into it.
-private struct OpeningDrop: Identifiable {
-    let id: Int
-    /// Where it forms: degrees clockwise from the trailing side, and points out.
-    let angle: Double
-    let distance: CGFloat
-    let size: CGFloat
-    static let all = [
-        OpeningDrop(id: 0, angle: 0, distance: 0, size: 30),
-        OpeningDrop(id: 1, angle: -112, distance: 112, size: 30),
-        OpeningDrop(id: 2, angle: -38, distance: 96, size: 20),
-        OpeningDrop(id: 3, angle: 18, distance: 124, size: 36),
-        OpeningDrop(id: 4, angle: 82, distance: 100, size: 24),
-        OpeningDrop(id: 5, angle: 146, distance: 118, size: 32),
-        OpeningDrop(id: 6, angle: 208, distance: 90, size: 18),
-    ]
-}
-
-/// The icon's lit crescent (月): the moon's disc minus a disc of 0.98 its radius, centred
-/// 0.45 of its radius away up and to the right (38°), as `generate_icon.py` draws it.
-/// Inset by `rounding`, so a round-joined stroke twice that wide rounds the horns.
-private struct OpeningCrescent: Shape {
-    var rounding: CGFloat = 0
-    func path(in rect: CGRect) -> Path {
-        let r = min(rect.width, rect.height) / 2
-        let angle = 38 * Double.pi / 180
-        let disc = Self.circle(CGPoint(x: rect.midX, y: rect.midY), r - rounding)
-        let cut = Self.circle(CGPoint(x: rect.midX + r * 0.45 * CGFloat(cos(angle)),
-                                      y: rect.midY - r * 0.45 * CGFloat(sin(angle))), r * 0.98 + rounding)
-        return disc.subtracting(cut)
-    }
-    private static func circle(_ centre: CGPoint, _ radius: CGFloat) -> Path {
-        Path(ellipseIn: CGRect(x: centre.x - radius, y: centre.y - radius, width: radius * 2, height: radius * 2))
-    }
-}
-
-/// The opening, in the Liquid Glass of iOS 26/27, about 1 s to the reveal: on the tabs'
-/// softly lit page, blue glass droplets form around the centre and flow together into the
-/// glass moon of the app icon, merging like liquid because they share one glass container.
-/// The icon's gold crescent and three white entries appear on the glass while the wordmark
-/// sharpens in from a blur. Once the ledger has loaded, the moon and wordmark zoom towards
-/// the viewer and MainView fades the opening into the app. Before iOS 26, and with Reduce
-/// Transparency, the droplets are solid blue; with Animations off or Reduce Motion only the
-/// finished moon and wordmark show.
-private struct OpeningAnimationView: View {
-    @Environment(\.locale) private var uiLocale
-    var sound = true
-    /// Whether the ledger has loaded. The reveal waits for it, so it never opens onto a blank screen.
-    var ready = true
-    var onFinished: () -> Void
-    @Environment(\.scenePhase) private var phase
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @AppStorage("playfulAnimations") private var playful = true
-    @State private var playedSound = false
-    @State private var stage = OpeningStage.start
-    @State private var finished = false
-    /// Mirrors `ready` so the running sequence sees updates while it waits.
-    @State private var ledgerReady = false
-    /// True from the moment the reveal starts (or the opening ends).
-    @State private var revealed = false
-    private var animates: Bool { playful && !reduceMotion }
-    /// The step to draw: without animation, the finished moon straight away.
-    private var shown: OpeningStage { animates ? stage : .moon }
-    /// The moon's diameter once the droplets have merged.
-    private static let moonSize: CGFloat = 116
-    /// The icon's three entries in units of the moon's radius: rows from the centre,
-    /// lengths, thickness and their shared leading edge (from `generate_icon.py`).
-    private static let entryRows: [CGFloat] = [-0.403, -0.097, 0.208]
-    private static let entryLengths: [CGFloat] = [0.944, 0.75, 0.556]
-    private static let entryThickness: CGFloat = 0.144
-    private static let entryLeading: CGFloat = -0.33
-    /// The icon's shadow colour and gold.
-    private static let ink = Color(red: 6 / 255, green: 26 / 255, blue: 80 / 255)
-    private static let gold = LinearGradient(colors: [Color(red: 1, green: 232 / 255, blue: 170 / 255),
-                                                      Color(red: 238 / 255, green: 168 / 255, blue: 74 / 255)],
-                                             startPoint: .top, endPoint: .bottom)
-    var body: some View {
-        let _ = uiLocale.identifier
-        ZStack {
-            Color("LaunchBackground")
-            // The tabs' lit page, so the opening hands over to the Overview seamlessly.
-            AmbientGlowBackdrop()
-                .opacity(shown > .start ? 1 : 0)
-                .animation(.smooth(duration: 0.45), value: shown)
-            ZStack {
-                droplets
-                moonDetail(shown: shown >= .moon)
-                wordmark(shown: shown >= .moon)
-                    .offset(y: Self.moonSize / 2 + 44)
-            }
-            // The zoom into the app.
-            .scaleEffect(stage == .departing ? 2.2 : 1)
-            .opacity(stage == .departing ? 0 : 1)
-            .animation(.easeIn(duration: 0.28), value: stage)
-        }
-        .ignoresSafeArea()
-        // Skipping is handled by MainView: this layer never takes touches.
-        .onChange(of: ready, initial: true) { _, value in ledgerReady = value }
-        .task {
-            // Finishing the optional opening must not depend on scene callbacks.
-            // Give the initial frame time to appear without blocking the UI.
-            do {
-                try await Task.sleep(for: .milliseconds(30))
-                guard animates else {
-                    try await Task.sleep(for: .milliseconds(100))
-                    finish(); return
-                }
-                // Each layer animates its own part of every step (see the views below).
-                stage = .drops
-                try await Task.sleep(for: .milliseconds(210))
-                stage = .merged
-                try await Task.sleep(for: .milliseconds(360))
-                stage = .moon
-                try await Task.sleep(for: .milliseconds(400))
-                // Hold while the ledger loads: the reveal only opens onto real content.
-                while !ledgerReady { try await Task.sleep(for: .milliseconds(50)) }
-                stage = .departing
-                // Let the zoom get going before MainView fades the opening into the app.
-                try await Task.sleep(for: .milliseconds(70))
-                finish()
-            } catch { return }
-        }
-        .task(id: phase) {
-            // Sound still waits for foreground activation; screen readiness does not.
-            guard phase == .active, sound, !playedSound else { return }
-            FeedbackSounds.shared.play(.launch)
-            playedSound = true
-        }
-        .accessibilityElement(children: .ignore).accessibilityLabel(tr("月记 YueJi", "YueJi", "YueJi"))
-        .accessibilityAction { finish() }
-        // Once the app is being revealed, leave the accessibility tree immediately. Otherwise
-        // the full-screen element lingers during the fade-out and makes the newly mounted
-        // toolbar (Add Entry) look covered to accessibility hit-testing and UI tests.
-        .accessibilityHidden(revealed)
-    }
-    private func finish() {
-        guard !finished else { return }
-        finished = true
-        revealed = true
-        onFinished()
-    }
-    /// The droplets share one glass container on iOS 26 and later, so they blend and merge
-    /// like liquid as they meet, exactly as the system's own glass does; solid blue circles
-    /// otherwise.
-    @ViewBuilder private var droplets: some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            GlassEffectContainer(spacing: 24) {
-                dropletField { size in
-                    Color.clear.frame(width: size, height: size)
-                        .glassEffect(.regular.tint(IslandTheme.accent), in: Circle())
-                }
-            }
-        } else {
-            dropletField { size in
-                Circle().fill(IslandTheme.accent.gradient).frame(width: size, height: size)
-            }
-        }
-    }
-    /// Lays the droplets out for the current step: they pop up around the centre, then flow
-    /// into it, the core swelling into the moon with a slight wobble while the others sink in.
-    private func dropletField<Drop: View>(@ViewBuilder _ drop: @escaping (CGFloat) -> Drop) -> some View {
-        ZStack {
-            ForEach(OpeningDrop.all) { item in
-                drop(dropSize(item))
-                    .offset(shown < .merged ? place(item.angle, item.distance) : .zero)
-                    // Solid droplets sink beneath the core instead of showing through it.
-                    .zIndex(item.id == 0 ? 1 : 0)
-                    .animation(shown == .drops
-                               ? Animation.spring(duration: 0.32, bounce: 0.32).delay(Double(item.id) * 0.015)
-                               : Animation.spring(duration: 0.48, bounce: 0.22).delay(Double(item.id) * 0.02), value: shown)
-            }
-        }
-        // Room for every droplet, so the glass container never clips one.
-        .frame(width: 320, height: 320)
-    }
-    private func dropSize(_ drop: OpeningDrop) -> CGFloat {
-        if shown < .drops { return 0 }
-        if shown < .merged { return drop.size }
-        return drop.id == 0 ? Self.moonSize : drop.size * 0.6
-    }
-    /// The icon's moon on the glass: three white entries (记) left-aligned just clear of the
-    /// gold crescent (月) in front, placed as in the icon.
-    private func moonDetail(shown: Bool) -> some View {
-        let r = Self.moonSize / 2
-        let rounding = r * 0.033
-        return ZStack {
-            ForEach(0..<3, id: \.self) { index in
-                let length = r * Self.entryLengths[index]
-                Capsule().fill(Color.white)
-                    .frame(width: length, height: r * Self.entryThickness)
-                    .shadow(color: Self.ink.opacity(0.25), radius: 2, y: 1)
-                    .position(x: r + r * Self.entryLeading + length / 2, y: r + r * Self.entryRows[index])
-                    .offset(x: shown ? 0 : -10)
-                    .opacity(shown ? 1 : 0)
-                    .animation(.smooth(duration: 0.3).delay(0.04 + Double(index) * 0.04), value: shown)
-            }
-            OpeningCrescent(rounding: rounding)
-                .fill(Self.gold)
-                .overlay {
-                    OpeningCrescent(rounding: rounding)
-                        .stroke(Self.gold, style: StrokeStyle(lineWidth: rounding * 2, lineJoin: .round))
-                }
-                .shadow(color: Self.ink.opacity(0.35), radius: r * 0.05, x: r * 0.028, y: r * 0.05)
-                .scaleEffect(shown ? 1 : 0.8)
-                .opacity(shown ? 1 : 0)
-                .animation(.spring(duration: 0.4, bounce: 0.18), value: shown)
-        }
-        .frame(width: Self.moonSize, height: Self.moonSize)
-    }
-    /// The name, sharpening in from a blur as the moon completes.
-    private func wordmark(shown: Bool) -> some View {
-        Text(tr("月记", "YueJi", "YueJi"))
-            .font(.system(size: 34, weight: .bold))
-            .foregroundStyle(.primary)
-            .blur(radius: shown ? 0 : 10)
-            .scaleEffect(shown ? 1 : 1.08)
-            .opacity(shown ? 1 : 0)
-            .animation(.smooth(duration: 0.4), value: shown)
-    }
-    /// A point at the angle (degrees clockwise from the trailing side) and distance from the centre.
-    private func place(_ angle: Double, _ distance: CGFloat) -> CGSize {
-        let radians = angle * .pi / 180
-        return CGSize(width: CGFloat(cos(radians)) * distance, height: CGFloat(sin(radians)) * distance)
     }
 }
 
