@@ -327,6 +327,61 @@ struct RestoredLedgerFeedback {
     func change(_ action: @escaping @Sendable (inout Ledger) throws -> Void) {
         perform(key: UUID().uuidString, action: action)
     }
+
+    /// The compact prompt after income is saved or confirmed, or the one confirmation when the
+    /// automatic setting already added part of it. Never shown for anything that isn't income.
+    @Published private(set) var incomePrompt: IncomeBudgetPrompt?
+    /// The amount sheet, presented by the screen that showed the prompt (`presenter`).
+    @Published var allocationRequest: IncomeAllocationRequest?
+    func presentIncomeOutcome(_ outcome: IncomeBudgetOutcome) {
+        // This replaces the plain "Saved" banner: it already says the income was recorded.
+        savedNotice = nil
+        let prompt = IncomeBudgetPrompt(outcome: outcome)
+        incomePrompt = prompt
+        guard !isPreview else { return }
+        FeedbackSounds.shared.play(.deposit); FeedbackHaptics.success()
+        if UIAccessibility.isVoiceOverRunning {
+            UIAccessibility.post(notification: .announcement, argument: prompt.title + ". " + prompt.message)
+        }
+    }
+    func dismissIncomePrompt(id: UUID) {
+        guard incomePrompt?.id == id else { return }
+        incomePrompt = nil
+    }
+    /// "Choose amount", "Review" or "Change": opens the amount sheet over the current screen.
+    func chooseIncomeAmount(_ prompt: IncomeBudgetPrompt) {
+        dismissIncomePrompt(id: prompt.id)
+        // The prompt is only reachable when no amount sheet covers it, so this replaces any
+        // request that never got a screen rather than being blocked by it.
+        allocationRequest = IncomeAllocationRequest(source: prompt.outcome.source, presenter: feedbackOwners.modals.last)
+    }
+    /// "Add all": whatever is left of the income goes to the prompt's month in one write. A
+    /// second tap finds nothing left, so it can never add the same money twice.
+    func addAllIncome(_ prompt: IncomeBudgetPrompt) {
+        let source = prompt.outcome.source, month = prompt.outcome.month
+        perform(key: "allocation-" + source, action: { (ledger: inout Ledger) throws -> Int in
+            let current = ledger.allocations(for: source).first(where: { $0.month == month })?.cents ?? 0
+            let left = ledger.unallocated(for: source)
+            guard left > 0 else {
+                throw reviewError("这笔收入已全部加入预算。", "All of this income is already in a budget.", "Semua pendapatan ini sudah dalam bajet.")
+            }
+            try ledger.setIncomeAllocation(source: source, month: month, cents: current + left, expected: current)
+            return left
+        }, completion: { added in
+            self.dismissIncomePrompt(id: prompt.id)
+            self.showSaved(message: incomeAddedMessage(added, month: month), sound: .deposit)
+        }, failure: { error in
+            self.dismissIncomePrompt(id: prompt.id)
+            self.error = error.localizedDescription
+        })
+    }
+    func deleteIncome(_ entry: IncomeEntry) async throws {
+        guard !isPreview else { return }
+        guard !deletionInFlight else { throw reviewError("请等待当前操作完成。", "Please wait for the current action.", "Tunggu tindakan semasa selesai.") }
+        deletionInFlight = true; defer { deletionInFlight = false }
+        let deletion = try await mutate({ try $0.deleteIncome(entry) }, postRecurring: false)
+        finishDeletion(deletion)
+    }
 }
 
 /// Ambient audio respects silent mode, mixes with music, and never requests a microphone.

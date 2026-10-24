@@ -1554,12 +1554,13 @@ struct LedgerTimelineSnapshot {
     var expenses: [Expense] = []
     var transfers: [TNGNotice] = []
     var settlements: [FriendSettlement] = []
+    var incomes: [IncomeEntry] = []
     var days: [LedgerDayGroup] = []
     var personal = 0
     var reimbursementOutstanding = 0
     var sources: [String] = []
     var repaymentPreviews: [String: RepaymentPurchasePreview] = [:]
-    var count: Int { expenses.count + transfers.count + settlements.count }
+    var count: Int { expenses.count + transfers.count + settlements.count + incomes.count }
 
     init() {}
     init(ledger: Ledger, month: Date, query: LedgerTimelineQuery) throws {
@@ -1590,8 +1591,15 @@ struct LedgerTimelineSnapshot {
         }
         if query.provider == "all" || query.provider == "手动" {
             settlements = try ledger.ledgerSettlements(in: month, search: query.search, filter: query.filter)
+            // Manual income has no spending category; amount filters still apply.
+            if query.filter.category.isEmpty {
+                let low = try optionalMoney(query.filter.minimum), high = try optionalMoney(query.filter.maximum)
+                incomes = ledger.incomeEntries(in: month, search: query.search).filter { entry in
+                    (low.map { entry.cents >= $0 } ?? true) && (high.map { entry.cents <= $0 } ?? true)
+                }
+            }
         }
-        days = LedgerTimelineItem.grouped(expenses: expenses, transfers: transfers, settlements: settlements)
+        days = LedgerTimelineItem.grouped(expenses: expenses, transfers: transfers, settlements: settlements, incomes: incomes)
         personal = expenses.reduce(0) { $0 + $1.personalSpending }
         reimbursementOutstanding = expenses.reduce(0) { $0 + ($1.reimbursement?.outstanding ?? 0) }
         sources = ledger.availableSources
@@ -1837,7 +1845,9 @@ struct BudgetAlertCandidate {
     let budget: Int
     static func make(ledger: Ledger, now: Date = Date(), percent: Int = 100) -> BudgetAlertCandidate? {
         let key = monthKey(now)
-        guard let budget = ledger.budgets[key], budget > 0 else { return nil }
+        // Base budget plus the income the person added to this month.
+        let budget = ledger.monthlyBudget(key).total
+        guard budget > 0 else { return nil }
         let spent = ledger.dailyBudgetSpending(in: now)
         guard (1...200).contains(percent), spent * 100 >= budget * percent else { return nil }
         return BudgetAlertCandidate(month: key, spent: spent, budget: budget)

@@ -27,13 +27,14 @@ struct BannerExpirationKey: Hashable {
     let paused: Bool
 }
 
-enum LedgerBannerKind: Equatable { case undo, foreground, imported, saved }
+enum LedgerBannerKind: Equatable { case undo, foreground, income, imported, saved }
 
 extension LedgerModel {
     /// Presentation and expiry use the same priority so hidden messages keep their time.
     var activeBanner: LedgerBannerKind? {
         if !undoEntries.isEmpty { return .undo }
         if foregroundNotice != nil { return .foreground }
+        if incomePrompt != nil { return .income }
         if newTNGCount > 0 { return .imported }
         if savedNotice != nil { return .saved }
         return nil
@@ -43,6 +44,8 @@ extension LedgerModel {
 @MainActor enum BannerTiming {
     // Give VoiceOver time to read the message and reach its actions.
     static var duration: TimeInterval { UIAccessibility.isVoiceOverRunning ? 12 : 4 }
+    /// A prompt with choices stays longer; letting it go is the same as "Not now".
+    static var promptDuration: TimeInterval { UIAccessibility.isVoiceOverRunning ? 30 : 12 }
 }
 
 enum BannerSwipePolicy {

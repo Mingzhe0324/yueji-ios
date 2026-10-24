@@ -1,6 +1,8 @@
 # 月记 YueJi
 
-**版本 / Version：1.62.2 · Build 92**
+**版本 / Version：1.67.0 · Build 97**
+
+Build 97 lets income raise a month's budget. After manual income is saved, or a Bank/TNG receipt is confirmed as income, a compact prompt offers **Add all**, **Choose amount** or **Not now**. Any amount up to what's left can be allocated, and later reduced or removed from the income's details. The budget is base + income allocations − eligible spending. Repayments, own transfers, top-ups, refunds and receipts still under review never qualify. Allocations are tied to their income and month. Duplicate taps, imports, cross-source copies and merged backups can't count the same money twice. Edits, deletion and reclassification explain the budget change first. Optional automatic allocation is off by default. Local syntax and project checks pass; native compilation, the 16 new XCTest cases and device checks are pending. See [income to budget allocation](docs/income-budget-allocation.md).
 
 In-app feedback now uses one compact, readable banner at a time, with a quieter surface, shorter previews and a clear Undo action. Waiting notices retain their display time. See [notification visual refinement](docs/notification-visual-refinement.md) for behavior and pending device checks.
 

@@ -327,7 +327,7 @@ struct MainView: View {
         }
     }
     private func openPendingNotification() {
-        guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil,
+        guard model.loaded, model.didFinishLaunch, !showingGuide, !showingNewTNG, notificationDestination == nil, model.allocationRequest == nil,
               model.feedbackOwners.isVisible(nil),
               let value = UserDefaults.standard.dictionary(forKey: "pendingNotificationDestination"),
               let recordID = value["recordID"] as? String, let kind = value["kind"] as? String else { return }
@@ -336,7 +336,7 @@ struct MainView: View {
     }
     private func openPendingInbox() {
         guard pendingInbox, model.didFinishLaunch, !showingGuide, !showingNewTNG,
-              notificationDestination == nil, model.feedbackOwners.isVisible(nil) else { return }
+              notificationDestination == nil, model.allocationRequest == nil, model.feedbackOwners.isVisible(nil) else { return }
         pendingInbox = false; showingNewTNG = true
     }
     private var savedExpiration: BannerExpirationKey {
@@ -351,6 +351,15 @@ struct MainView: View {
         BannerExpirationKey(id: model.foregroundNotice?.id, paused: phase != .active || !model.didFinishLaunch || model.error != nil ||
             model.activeBanner != .foreground ||
             model.bannerInteraction == model.foregroundNotice?.id.uuidString)
+    }
+    private var incomePromptExpiration: BannerExpirationKey {
+        BannerExpirationKey(id: model.incomePrompt?.id, paused: phase != .active || !model.didFinishLaunch || model.error != nil ||
+            model.activeBanner != .income || model.bannerInteraction == model.incomePrompt?.id.uuidString)
+    }
+    /// The income amount sheet over the main screens; modal screens present their own.
+    private var rootAllocation: Binding<IncomeAllocationRequest?> {
+        Binding(get: { model.allocationRequest.flatMap { $0.presenter == nil ? $0 : nil } },
+                set: { if $0 == nil, model.allocationRequest?.presenter == nil { model.allocationRequest = nil } })
     }
     private var importedExpiration: BannerExpirationKey {
         BannerExpirationKey(id: model.newTNGCount > 0 ? model.newTNGToken : nil,
@@ -486,6 +495,15 @@ struct MainView: View {
                 do { try await Task.sleep(for: .seconds(BannerTiming.duration)) } catch { return }
                 model.dismissNewTNG(id: token)
             }
+            // An unanswered income prompt leaves quietly: the same as "Not now".
+            .task(id: incomePromptExpiration) {
+                guard !incomePromptExpiration.paused, let token = incomePromptExpiration.id else { return }
+                do { try await Task.sleep(for: .seconds(BannerTiming.promptDuration)) } catch { return }
+                model.dismissIncomePrompt(id: token)
+            }
+            .sheet(item: rootAllocation, onDismiss: { openPendingNotification(); openPendingInbox() }) { request in
+                IncomeAllocationSheet(request: request).environmentObject(model)
+            }
             .alert(tr("月记", "YueJi", "YueJi"), isPresented: Binding(get: { model.error != nil }, set: { if !$0 { model.error = nil } })) {
                 if !model.loaded {
                     Button(tr("重试", "Retry", "Cuba lagi")) {
@@ -594,6 +612,7 @@ struct DashboardView: View {
     @State private var deletingExpense: Expense?
     @State private var budgetText = ""
     @State private var budgeting = false
+    @State private var recordingIncome = false
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
     private var monthBinding: Binding<Date> { Binding(get: { month }, set: { monthTimestamp = $0.timeIntervalSince1970 }) }
     @State private var summary = OverviewSnapshot()
@@ -603,7 +622,9 @@ struct DashboardView: View {
     private var entries: [Expense] { summary.entries }
     private var personal: Int { summary.personal }
     private var budgetSpent: Int { entries.filter { $0.tripID == nil }.reduce(0) { $0 + $1.personalSpending } }
-    private var budget: Int { model.ledger.budgets[monthKey(month)] ?? 0 }
+    private var monthBudget: MonthlyBudget { model.ledger.monthlyBudget(monthKey(month)) }
+    /// Base monthly budget plus the income the person added to this month.
+    private var budget: Int { monthBudget.total }
     private var budgetTint: Color {
         guard budget > 0 else { return ink }
         if budgetSpent > budget { return .red }
@@ -761,7 +782,12 @@ struct DashboardView: View {
                 Button(tr("保存", "Save", "Simpan")) { do { let n = try toCents(budgetText); let key = monthKey(month); model.change { $0.budgets[key] = n } } catch { model.error = error.localizedDescription } }
                 Button(tr("移除预算", "Remove budget", "Buang bajet"), role: .destructive) { let key = monthKey(month); model.change { $0.budgets.removeValue(forKey: key) } }
                 Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+            } message: {
+                if monthBudget.income > 0 {
+                    Text(tr("这是基本预算。本月加入的收入 " + money(monthBudget.income) + " 另外计算，不受影响。", "This is the base budget. Income added this month (" + money(monthBudget.income) + ") stays on top of it.", "Ini bajet asas. Pendapatan yang ditambah bulan ini (" + money(monthBudget.income) + ") kekal di atasnya."))
+                }
             }
+            .sheet(isPresented: $recordingIncome) { IncomeEditor() }
             }
         }
     }
@@ -801,7 +827,7 @@ struct DashboardView: View {
             QuickActionButton(title: tr("自动记账", "Automation", "Automasi"), symbol: "bolt.fill", tint: IslandPalette.sky) {
                 path.append(OverviewRoute.automation)
             }
-            QuickActionButton(title: budget > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"),
+            QuickActionButton(title: monthBudget.base > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"),
                               symbol: "gauge.with.dots.needle.67percent", tint: IslandPalette.pumpkin) {
                 editBudget()
             }
@@ -813,7 +839,9 @@ struct DashboardView: View {
         .overlay(alignment: .bottom) { Divider().padding(.horizontal, 12).accessibilityHidden(true) }
     }
     private func editBudget() {
-        budgetText = budget > 0 ? Currency.input(budget, "MYR") : ""
+        // Only the base is edited here; income added to the month stays as allocated.
+        let base = monthBudget.base
+        budgetText = base > 0 ? Currency.input(base, "MYR") : ""
         budgeting = true
     }
     /// The month's personal spending as a banking app shows a balance (the kit's Mobile
@@ -868,14 +896,25 @@ struct DashboardView: View {
                     }
                     .font(.footnote.weight(.medium))
                     .contentTransition(.opacity)
+                    if monthBudget.income > 0 {
+                        // Base + income added − eligible spending = remaining.
+                        MonthlyBudgetBreakdown(budget: monthBudget, spent: budgetSpent, amount: amountText)
+                            .transition(.opacity)
+                    }
                 }
                 .padding(.vertical, 6)
                 .animation(reduceMotion ? nil : YueJiMotion.tone, value: budgetTint)
+                .animation(reduceMotion ? nil : YueJiMotion.content, value: monthBudget)
             } else {
                 Button(action: editBudget) {
                     Label(tr("设置每月预算", "Set a monthly budget", "Tetapkan bajet bulanan"), systemImage: "gauge.with.dots.needle.33percent")
                 }
             }
+            Button { recordingIncome = true } label: {
+                Label(tr("记录收入", "Record income", "Rekod pendapatan"), systemImage: "plus.circle.fill")
+            }
+            .foregroundStyle(IncomeStyle.tint)
+            .accessibilityIdentifier("overview.recordIncome")
             if personal != budgetSpent {
                 LabeledContent(tr("旅行消费 · 独立预算", "Travel · separate budget", "Perjalanan · bajet berasingan"), value: amountText(personal - budgetSpent))
                     .font(.subheadline).foregroundStyle(.secondary)
@@ -1594,12 +1633,13 @@ private struct LedgerActiveFilters: View {
 }
 
 private enum LedgerSheetRoute: Identifiable {
-    case new(Date), filter, edit(Expense)
+    case new(Date), filter, edit(Expense), income
     var id: String {
         switch self {
         case .new: return "manual-entry"
         case .filter: return "filters"
         case .edit(let entry): return "edit-" + entry.id
+        case .income: return "manual-income"
         }
     }
 }
@@ -1615,6 +1655,7 @@ struct ExpensesView: View {
     @State private var filter = LedgerFilter()
     @State private var providerFilter = "all"
     @State private var deletingNotice: TNGNotice?
+    @State private var deletingIncome: IncomeEntry?
     @Namespace private var expenseTransition
     @State private var sheet: LedgerSheetRoute?
     @State private var path = NavigationPath()
@@ -1696,6 +1737,15 @@ struct ExpensesView: View {
                                         .modifier(RestoredRecordHighlight(recordID: notice.id, notice: true))
                                 }
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
+                            case .income(let entry):
+                                NavigationLink { IncomeDetailView(id: entry.id) } label: {
+                                    IncomeRow(entry: entry)
+                                }
+                                .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                                    Button { deletingIncome = entry } label: {
+                                        Label(tr("删除", "Delete", "Padam"), systemImage: "trash")
+                                    }.tint(.red)
+                                }
                             case .expense(let entry):
                             NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                                 ExpenseRow(entry: entry).foregroundStyle(.primary)
@@ -1764,6 +1814,7 @@ struct ExpensesView: View {
                             .ledgerFeedback(modal: true)
                     case .new(let date): ExpenseEditor(original: nil, initialDate: date)
                     case .edit(let expense): ExpenseEditor(original: expense)
+                    case .income: IncomeEditor()
                     }
                 }
                 .yuejiPlainListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large)
@@ -1803,6 +1854,9 @@ struct ExpensesView: View {
                     }
                     ToolbarItem(placement: .topBarTrailing) {
                         Menu {
+                            Button { if sheet == nil { sheet = .income } } label: {
+                                Label(tr("记录收入", "Record income", "Rekod pendapatan"), systemImage: "plus.circle.fill")
+                            }
                             NavigationLink(tr("银行 / TNG 通知", "Bank / TNG inbox", "Peti bank / TNG")) { TNGInboxView() }
                             NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
                         } label: { Image(systemName: "ellipsis.circle") }
@@ -1816,6 +1870,7 @@ struct ExpensesView: View {
                 }
                 .modifier(ExpenseDeletionConfirmation(expense: $deleting))
                 .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
+                .modifier(IncomeDeletionConfirmation(entry: $deletingIncome))
                 .onChange(of: monthRequest.wrappedValue, initial: true) { _, request in
                     guard let request else { return }
                     path = NavigationPath()
@@ -4510,6 +4565,7 @@ private struct LedgerFeedbackHost: ViewModifier {
         guard visible, model.didFinishLaunch else { return nil }
         if model.activeBanner == .undo { return model.undoToken.uuidString }
         if let notice = model.foregroundNotice { return notice.id.uuidString }
+        if let prompt = model.incomePrompt { return prompt.id.uuidString }
         if model.newTNGCount > 0 { return model.newTNGToken.uuidString }
         if model.undoEntries.isEmpty { return model.savedNotice?.uuidString }
         return nil
@@ -4522,7 +4578,19 @@ private struct LedgerFeedbackHost: ViewModifier {
                     .animation(reduceMotion ? .easeOut(duration: 0.14) : YueJiMotion.banner, value: topIdentity)
             }
             .onAppear { if modal { model.feedbackOwners.present(owner) } }
-            .onDisappear { if modal { model.feedbackOwners.dismiss(owner) } }
+            .onDisappear {
+                guard modal else { return }
+                model.feedbackOwners.dismiss(owner)
+                // A screen that closed before showing the income amount sheet hands it to the
+                // screen now on top, so the request is never left without a presenter.
+                if model.allocationRequest?.presenter == owner { model.allocationRequest?.presenter = model.feedbackOwners.modals.last }
+            }
+            // The income amount sheet opens over the modal screen whose prompt asked for it.
+            .sheet(item: modalAllocation) { request in IncomeAllocationSheet(request: request).environmentObject(model) }
+    }
+    private var modalAllocation: Binding<IncomeAllocationRequest?> {
+        Binding(get: { modal ? model.allocationRequest.flatMap { $0.presenter == owner ? $0 : nil } : nil },
+                set: { if $0 == nil, modal, model.allocationRequest?.presenter == owner { model.allocationRequest = nil } })
     }
     @ViewBuilder private var topBanner: some View {
         if visible, model.didFinishLaunch {
@@ -4546,6 +4614,11 @@ private struct LedgerFeedbackHost: ViewModifier {
                             NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil)
                         })
                 }.id(notice.id).transition(bannerTransition)
+            } else if let prompt = model.incomePrompt {
+                SwipeDismissBanner(onDismiss: { model.dismissIncomePrompt(id: prompt.id) },
+                    onInteraction: { model.setBannerInteraction(id: prompt.id.uuidString, active: $0) }) { interaction in
+                    IncomeBudgetPromptCard(prompt: prompt, interaction: interaction)
+                }.id(prompt.id).transition(bannerTransition)
             } else if model.newTNGCount > 0 {
                 let token = model.newTNGToken
                 SwipeDismissBanner(onDismiss: { model.dismissNewTNG(id: token) },

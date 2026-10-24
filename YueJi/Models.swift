@@ -197,11 +197,15 @@ struct Ledger: Codable {
     var savingsGoals: [SavingsGoal] = []
     var tngNotices: [TNGNotice] = []
     var settlements: [FriendSettlement] = []
+    /// Income recorded by hand. Bank/TNG income stays an incoming notice confirmed as income.
+    var incomes: [IncomeEntry] = []
+    /// Income the person chose to add to a month's budget, each tied to its income and month.
+    var budgetAllocations: [BudgetAllocation] = []
     init(version: Int = 6, expenses: [Expense] = [], budgets: [String: Int] = [:], seenEvents: Set<String> = [], rates: [String: RateQuote] = [:], recurring: [RecurringExpense] = [], postedRecurring: Set<String> = []) {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         let v = try c.decode(Int.self, forKey: .version)
@@ -224,6 +228,10 @@ struct Ledger: Codable {
         savingsGoals = try c.decodeIfPresent([SavingsGoal].self, forKey: .savingsGoals) ?? []
         tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
         settlements = try c.decodeIfPresent([FriendSettlement].self, forKey: .settlements) ?? []
+        incomes = try c.decodeIfPresent([IncomeEntry].self, forKey: .incomes) ?? []
+        budgetAllocations = try c.decodeIfPresent([BudgetAllocation].self, forKey: .budgetAllocations) ?? []
+        // A restored or merged backup can never make the same income count twice.
+        self = reconcilingBudgetAllocations()
     }
     func validated() throws -> Ledger {
         try validateTrips()
@@ -284,6 +292,7 @@ struct Ledger: Codable {
             guard e.personal >= 0 else { throw LedgerError.invalid("朋友份额超过实际付款。") }
         }
         try validateSettlements()
+        try validateIncomeBudget()
         return try migratingLegacyCategorySplits()
     }
     mutating func restoreDeletedExpenses(_ entries: [Expense]) throws {
@@ -383,6 +392,8 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var bankReference: String? = nil
     var note: String? = nil
     var settlementID: String? = nil
+    /// The `IncomeKind` chosen when this incoming payment was confirmed as income.
+    var incomeKind: String? = nil
     var provider: String { sourceBank ?? "TNG" }
     var accountDirection: AccountDirection {
         switch kind { case "incoming": return .incoming; case "payment", "transfer": return .outgoing; default: return .neutral }
@@ -590,7 +601,7 @@ extension Ledger {
         }
         tngNotices.append(notice)
         if let eventKey { seenEvents.insert(eventKey) }
-        if notice.kind == "incoming" { return tr("收款已显示在账本，待确认用途；尚未抵扣欠款或计入收入。", "Incoming money is in your ledger for review; no debt or income changed.", "Wang diterima menunggu semakan; hutang dan pendapatan belum berubah.") }
+        if notice.kind == "incoming" { return tr("收款已显示在账本，待确认用途；尚未抵扣欠款或计入收入。若是收入，确认后可加入本月预算。", "Incoming money is in your ledger for review; no debt or income changed. If it's income, confirm it to add it to this month's budget.", "Wang diterima menunggu semakan; hutang dan pendapatan belum berubah. Jika ia pendapatan, sahkan untuk menambahnya ke bajet bulan ini.") }
         if duplicate || crossSourceDuplicate { return tr("疑似重复，已保留待确认，未再次计入消费。", "Possible duplicate retained for review, not added to spending.", "Kemungkinan pendua disimpan untuk semakan, tidak ditambah kepada belanja.") }
         if notice.status == "recorded", let expenseID = notice.expenseID,
            let entry = expenses.first(where: { $0.id == expenseID }) {
@@ -655,7 +666,7 @@ extension Ledger {
 }
 
 extension Ledger {
-    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil) throws {
+    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil, incomeKind: IncomeKind? = nil) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].kind == "incoming",
               tngNotices[i].status == "pending", let cents = tngNotices[i].cents,
               ["repayment", "income", "ownTransfer", "ignored"].contains(purpose),
@@ -675,8 +686,11 @@ extension Ledger {
         }
         copy.tngNotices[i].date = date
         copy.tngNotices[i].status = purpose
+        copy.tngNotices[i].incomeKind = purpose == "income" ? (incomeKind ?? .other).rawValue : nil
         self = try copy.validated()
     }
+    /// Reopening for review also takes the income out of any budget; the detail screen explains
+    /// the budget change before the person confirms.
     mutating func reopenTNGIncoming(id: String) throws {
         guard tngNotices.first(where: { $0.id == id })?.settlementID == nil else { throw settlementError("请先在结算详情撤销结算。", "Undo the settlement from its details first.", "Batalkan penyelesaian daripada butirannya dahulu.") }
         if tngNotices.first(where: { $0.id == id })?.resolution != nil {
@@ -691,6 +705,8 @@ extension Ledger {
             }
         }
         copy.tngNotices[i].repaymentIDs = nil; copy.tngNotices[i].resolvedFriend = nil; copy.tngNotices[i].status = "pending"
+        copy.tngNotices[i].incomeKind = nil
+        copy.budgetAllocations.removeAll { $0.source == IncomeSourceKey.notice(id) }
         self = try copy.validated()
     }
 }
@@ -765,9 +781,9 @@ struct TNGReviewTracker {
 }
 
 enum LedgerTimelineItem: Identifiable {
-    case expense(Expense), transfer(TNGNotice), settlement(FriendSettlement)
-    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id; case .settlement(let s): return "settlement:" + s.id } }
-    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date; case .settlement(let s): return s.date } }
+    case expense(Expense), transfer(TNGNotice), settlement(FriendSettlement), income(IncomeEntry)
+    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id; case .settlement(let s): return "settlement:" + s.id; case .income(let i): return "income:" + i.id } }
+    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date; case .settlement(let s): return s.date; case .income(let i): return i.date } }
 }
 struct LedgerDayGroup: Identifiable {
     let date: Date
@@ -776,10 +792,10 @@ struct LedgerDayGroup: Identifiable {
 }
 
 extension LedgerTimelineItem {
-    static func grouped(expenses: [Expense], transfers: [TNGNotice], settlements: [FriendSettlement] = []) -> [LedgerDayGroup] {
+    static func grouped(expenses: [Expense], transfers: [TNGNotice], settlements: [FriendSettlement] = [], incomes: [IncomeEntry] = []) -> [LedgerDayGroup] {
         // A linked bank receipt already represents the payment. Never show a second cash record.
         let manual = settlements.filter { $0.active && $0.paymentNoticeID == nil }
-        let items = expenses.map(Self.expense) + transfers.map(Self.transfer) + manual.map(Self.settlement)
+        let items = expenses.map(Self.expense) + transfers.map(Self.transfer) + manual.map(Self.settlement) + incomes.map(Self.income)
         return Dictionary(grouping: items, by: { Calendar.current.startOfDay(for: $0.date) })
             .map { LedgerDayGroup(date: $0.key, entries: $0.value.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }) }
             .sorted { $0.date > $1.date }
@@ -877,6 +893,9 @@ struct DeletedLedgerRecord {
     var notices: [TNGNotice]
     var before: [Expense]
     var after: [Expense]
+    var incomes: [IncomeEntry] = []
+    /// Budget allocations of deleted income; undo restores them with it.
+    var allocations: [BudgetAllocation] = []
 }
 extension Ledger {
     mutating func deleteAutomaticRecord(_ expected: TNGNotice) throws -> DeletedLedgerRecord {
@@ -903,8 +922,12 @@ extension Ledger {
         }
         let ids = Set(notices.map(\.id))
         copy.tngNotices.removeAll { ids.contains($0.id) }
+        // Deleted income leaves every budget it was added to.
+        let incomeKeys = Set(ids.map(IncomeSourceKey.notice))
+        let allocations = copy.budgetAllocations.filter { incomeKeys.contains($0.source) }
+        copy.budgetAllocations.removeAll { incomeKeys.contains($0.source) }
         let affectedIDs = Set(affected.map(\.id))
-        let delta = DeletedLedgerRecord(notices: notices, before: affected, after: copy.expenses.filter { affectedIDs.contains($0.id) })
+        let delta = DeletedLedgerRecord(notices: notices, before: affected, after: copy.expenses.filter { affectedIDs.contains($0.id) }, allocations: allocations)
         self = try copy.validated()
         return delta
     }
@@ -914,12 +937,16 @@ extension Ledger {
             let ids = Set(record.before.map(\.id))
             let current = copy.expenses.filter { ids.contains($0.id) }
             guard current.count == record.after.count, current.allSatisfy({ record.after.contains($0) }),
-                  !copy.tngNotices.contains(where: { n in record.notices.contains { $0.id == n.id } }) else {
+                  !copy.tngNotices.contains(where: { n in record.notices.contains { $0.id == n.id } }),
+                  !copy.incomes.contains(where: { entry in record.incomes.contains { $0.id == entry.id } }),
+                  !copy.budgetAllocations.contains(where: { existing in record.allocations.contains { $0.id == existing.id || ($0.source == existing.source && $0.month == existing.month) } }) else {
                 throw LedgerError.invalid(tr("关联账目已改变，无法安全撤销删除。", "Related entries changed; deletion cannot be safely undone.", "Rekod berkaitan berubah; pemadaman tidak dapat dibatalkan dengan selamat."))
             }
             copy.expenses.removeAll { ids.contains($0.id) }
             copy.expenses.append(contentsOf: record.before)
             copy.tngNotices.append(contentsOf: record.notices)
+            copy.incomes.append(contentsOf: record.incomes)
+            copy.budgetAllocations.append(contentsOf: record.allocations)
         }
         self = try copy.validated()
     }
@@ -950,7 +977,7 @@ func notificationReference(_ body: String) -> String? {
 extension Ledger {
     /// Atomic user-confirmed resolution. Original notification text is retained.
     mutating func resolveNotice(id: String, purpose: String, party: String, cents: Int, date: Date,
-                                category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = []) throws {
+                                category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = [], incomeKind: IncomeKind? = nil) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }),
               ["pending", "transfer"].contains(tngNotices[i].status), tngNotices[i].expenseID == nil,
               cents > 0, cents <= 10_000_000_000, date.timeIntervalSince1970 >= 0, date <= Date(),
@@ -968,7 +995,7 @@ extension Ledger {
         case "income":
             copy.tngNotices[i].kind = "incoming"
             copy.tngNotices[i].status = "pending"
-            try copy.resolveTNGIncoming(id: id, purpose: "income", date: date, distinctConfirmed: true)
+            try copy.resolveTNGIncoming(id: id, purpose: "income", date: date, distinctConfirmed: true, incomeKind: incomeKind)
         case "ownTransfer":
             copy.tngNotices[i].status = "ignored"
             copy.tngNotices[i].resolution = "ownTransfer"
