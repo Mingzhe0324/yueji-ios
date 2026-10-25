@@ -27,15 +27,21 @@ jobs:
           PYCODE
       - name: Show Xcode version
         run: xcodebuild -version
-      - name: Choose installed iPhone simulator
+      # The same simulator Azure picks on this image (iPhone 17, iOS 26), where the UI tests
+      # pass. The first iPhone listed depends on the image, so it isn't used.
+      - name: Choose an iOS 26 iPhone simulator
         run: |
           xcrun simctl list devices available --json > /tmp/devices.json
           python3 - <<'PY'
           import json, os
           data=json.load(open('/tmp/devices.json'))
-          phones=[d for runtime,ds in data['devices'].items() if 'iOS' in runtime for d in ds if d.get('isAvailable') and 'iPhone' in d['name']]
-          if not phones: raise SystemExit('No available iPhone simulator')
-          with open(os.environ['GITHUB_ENV'],'a') as f: f.write('SIMULATOR_ID='+phones[0]['udid']+'\n')
+          phones=[(runtime,d) for runtime,ds in data['devices'].items() if 'iOS-26-' in runtime for d in ds if d.get('isAvailable') and 'iPhone' in d['name']]
+          if not phones: raise SystemExit('No available iOS 26 iPhone simulator')
+          phones.sort(key=lambda item: (item[1]['name'] != 'iPhone 17', item[0], item[1]['name']))
+          runtime, phone = phones[0]
+          print('Testing '+phone['name']+' on '+runtime)
+          with open(os.environ['GITHUB_ENV'],'a') as f: f.write('SIMULATOR_ID='+phone['udid']+'\n')
+          with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('Test simulator: '+phone['name']+' ('+runtime+')\n')
           PY
       - name: Build and test
         run: |
@@ -54,8 +60,9 @@ jobs:
               raise SystemExit(0)
           root = os.environ.get('GITHUB_WORKSPACE', '') + '/'
           pattern = re.compile(r'^(/[^:\n]+):(\d+):(?:(\d+):)? error: (.+)$')
+          lines = log.read_text(errors='replace').splitlines()
           seen, found = set(), []
-          for line in log.read_text(errors='replace').splitlines():
+          for line in lines:
               match = pattern.match(line.strip())
               if match and match.group(0) not in seen:
                   seen.add(match.group(0))
@@ -75,6 +82,23 @@ jobs:
               summary.write('### Compiler errors and test failures\n\n')
               for path, line, col, message in found[:60]:
                   summary.write('- `' + path.split('/')[-1] + ':' + line + '` ' + message + '\n')
+          # A failing UI case prints the app's accessibility hierarchy. Its windows, bars,
+          # sheets and alerts show what was on screen, so keep those as one warning per case.
+          landmark = re.compile(r"\b(Window|Sheet|NavigationBar|Alert|Keyboard|TabBar|Toolbar)\b|Grabber|Unsaved draft")
+          case, shown = '', 0
+          for index, line in enumerate(lines):
+              if line.startswith("Test Case '") and line.endswith("' started."):
+                  case = line[len("Test Case '"):-len("' started.")]
+              if not line.startswith('UI failure: app state') or shown >= 4:
+                  continue
+              kept = [line]
+              for detail in lines[index + 1:index + 2000]:
+                  if detail.lstrip().startswith('t =') or detail.startswith('Test Case '):
+                      break
+                  if landmark.search(detail):
+                      kept.append(detail)
+              print('::warning title=Screen at failure ' + prop(case) + '::' + text('\n'.join(kept[:120])[:12000]))
+              shown += 1
           PYCODE
       - name: Build unsigned device app
         run: |

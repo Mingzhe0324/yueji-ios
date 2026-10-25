@@ -644,9 +644,11 @@ enum SubscriptionDetector {
             guard late <= (cycle == .weekly ? 28 : cycle == .monthly ? 92 : 365) else { return nil }
             overdue = late > cycle.paymentWindow.upperBound
         }
+        // Spacing typed into the merchant isn't part of the name a schedule would take.
+        let name = last.displayName.split(whereSeparator: \.isWhitespace).joined(separator: " ")
         return SubscriptionCandidate(
             id: [first.merchantKey, first.chargedCurrency, first.id].joined(separator: "|"),
-            merchantKey: last.merchantKey, name: last.displayName, kind: known ?? .recurring,
+            merchantKey: last.merchantKey, name: name, kind: known ?? .recurring,
             minor: last.chargedMinor, currency: last.chargedCurrency, previousMinor: run.previousMinor,
             category: last.category, cycle: run.cycle, billingDay: anchor, lastDate: last.date,
             expenseIDs: run.charges.map(\.id), overdue: overdue)

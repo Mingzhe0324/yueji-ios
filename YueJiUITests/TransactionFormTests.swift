@@ -62,6 +62,10 @@ final class TransactionFormTests: XCTestCase {
                                // opening layer itself is still shown and must hand over the toolbar
                                // correctly; only its animation is skipped.
                                "-playfulAnimations", "NO",
+                               // A case that fails with a dirty New entry leaves its draft in the
+                               // simulator's defaults, and every later New entry offers it back with
+                               // Save disabled. Shadow the stored draft so each case starts empty.
+                               "-expense-draft-v1.new", "none",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
         let addEntry = app.buttons["overview.manualEntry"].firstMatch
@@ -225,6 +229,8 @@ final class TransactionFormTests: XCTestCase {
                                "-openingAnimationEnabled", opening ? "YES" : "NO",
                                // Decorative motion off for functional runs (see verifySavedItemEditing).
                                "-playfulAnimations", "NO",
+                               // No draft left by an earlier failed case (see verifySavedItemEditing).
+                               "-expense-draft-v1.new", "none",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
         // The native toolbar exposes this identifier on both an Other wrapper
