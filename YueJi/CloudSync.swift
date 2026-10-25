@@ -31,9 +31,15 @@ struct CloudConfiguration: Equatable {
 }
 
 enum CloudFailure: LocalizedError {
+    case transport(code: Int, endpoint: String)
+    case server(status: Int, endpoint: String)
     case configuration, database, connection, session, accountMismatch, changed, conflict, invalidResponse, keychain, rateLimit, email, authentication
     var errorDescription: String? {
         switch self {
+        case let .transport(code, endpoint):
+            return tr("网络请求未完成", "Network request did not complete", "Permintaan rangkaian tidak selesai") + " (\(endpoint), URL \(code)). " + tr("请将此提示提供给开发者。本机账本仍保留。", "Share this message with the developer. Your local ledger is retained.", "Kongsi mesej ini dengan pembangun. Lejar setempat dikekalkan.")
+        case let .server(status, endpoint):
+            return tr("云端服务返回错误", "Cloud service returned an error", "Perkhidmatan awan mengembalikan ralat") + " (\(endpoint), HTTP \(status))."
         case .configuration: return tr("此版本尚未配置有效的云端连接，账本仍保留在本机。", "Cloud connection is not configured in this build. Your ledger stays on this device.", "Sambungan awan belum dikonfigurasi dalam binaan ini. Lejar kekal pada peranti.")
         case .database: return tr("已连接服务，但账本数据库尚未初始化。请完成云端数据库设置。", "Service reached, but the ledger database is not initialized. Complete cloud database setup.", "Perkhidmatan disambung tetapi pangkalan data lejar belum disediakan.")
         case .connection: return tr("暂时无法连接云端。未同步的更改仍保留在本机，请联网后重试。", "Cannot reach the cloud. Unsynced changes remain on this device; retry when online.", "Tidak dapat mencapai awan. Perubahan belum disegerakkan kekal pada peranti; cuba semula apabila dalam talian.")
@@ -161,6 +167,10 @@ actor SupabaseCloudService: CloudRemote {
         let data: Data; let response: URLResponse
         do { (data, response) = try await http.data(for: request) }
         catch is CancellationError { throw CancellationError() }
+        catch let error as URLError {
+            if error.code == .cancelled { throw CancellationError() }
+            throw CloudFailure.transport(code: error.code.rawValue, endpoint: url.path)
+        }
         catch { throw CloudFailure.connection }
         guard let response = response as? HTTPURLResponse else { throw CloudFailure.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
@@ -174,7 +184,7 @@ actor SupabaseCloudService: CloudRemote {
             if response.statusCode == 401 { throw authenticated ? CloudFailure.session : CloudFailure.configuration }
             if response.statusCode == 403 { throw CloudFailure.configuration }
             if path.contains("/otp") { throw CloudFailure.email }
-            throw CloudFailure.connection
+            throw CloudFailure.server(status: response.statusCode, endpoint: url.path)
         }
         guard data.count <= 25_000_000 else { throw CloudFailure.invalidResponse }
         return data

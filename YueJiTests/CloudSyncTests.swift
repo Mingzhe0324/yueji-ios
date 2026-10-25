@@ -224,7 +224,10 @@ final class CloudHTTPTests: XCTestCase {
     func testServerOutageDoesNotBecomeAnExpiredSessionOrDropCachedToken() async throws {
         let (api, host) = try service(replies: [(503, "{}"), (200, "[]")], signedIn: true)
         do { _ = try await api.refresh(); XCTFail("Expected server outage") }
-        catch CloudFailure.connection {}
+        catch CloudFailure.server(let status, let endpoint) {
+            XCTAssertEqual(status, 503)
+            XCTAssertEqual(endpoint, "/auth/v1/token")
+        }
         _ = try await api.load()
         XCTAssertEqual(CloudHTTPStub.requests(host: host).last?.value(forHTTPHeaderField: "Authorization"), "Bearer access-fixture")
         let (expired, _) = try service(replies: [(400, #"{"error_code":"refresh_token_not_found"}"#)], signedIn: true)
