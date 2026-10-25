@@ -49,8 +49,13 @@ jobs:
       - name: Show Xcode version
         run: xcodebuild -version
       - name: Build unsigned iPhone app
+        env:
+          YUEJI_SUPABASE_URL: ${{ vars.YUEJI_SUPABASE_URL }}
+          YUEJI_SUPABASE_PUBLIC_KEY: ${{ vars.YUEJI_SUPABASE_PUBLIC_KEY }}
+          YUEJI_REQUIRE_CLOUD: ${{ vars.YUEJI_REQUIRE_CLOUD }}
         run: |
-          set -o pipefail
+          set -euo pipefail
+          python3 scripts/configure_cloud.py
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi -configuration Release \
             -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device \
             CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-device.log

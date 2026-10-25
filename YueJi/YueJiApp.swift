@@ -15,7 +15,7 @@ struct YueJiApp: App {
     }
     init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
     // Typography is the system's SF Pro throughout: clean and elegant, with no overrides.
-    var body: some Scene { WindowGroup { MainView().font(.body).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
+    var body: some Scene { WindowGroup { CloudEntryView().font(.body).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
 }
 struct RestoredLedgerFeedback {
     let id = UUID()

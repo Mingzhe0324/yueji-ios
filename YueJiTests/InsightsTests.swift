@@ -247,6 +247,7 @@ final class AutoBackupTests: XCTestCase {
 
     func testDueOncePerPeriodAndAfterTheClockMovesBack() {
         let now = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: now, frequency: .everyChange))
         XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: nil, frequency: .daily))
         XCTAssertFalse(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(-3600), frequency: .daily))
         XCTAssertTrue(AutoBackupPolicy.isDue(now: now, last: now.addingTimeInterval(-21 * 3600), frequency: .daily))
@@ -309,5 +310,65 @@ final class AutoBackupTests: XCTestCase {
         try FileManager.default.removeItem(at: folder)
         let missing = await writer.perform(job(force: true, hash: changed.hash, days: 4))
         guard case .failed = missing.outcome else { return XCTFail("Expected a failure, got \(missing.outcome)") }
+    }
+
+    func testRapidBackupsNeverOverwriteAndMalformedDataCannotRotateGoodCopies() throws {
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let now = Date(timeIntervalSince1970: 1_800_000_000.125)
+        let first = Ledger(expenses: [Expense(merchant: "Lunch", cents: 1250, date: now)])
+        var second = first
+        second.expenses.append(Expense(merchant: "Dinner", cents: 3000, date: now))
+        let a = try AutoBackupWriter.write(LocalStore.exportData(first), into: folder, now: now, keep: 14)
+        let b = try AutoBackupWriter.write(LocalStore.exportData(second), into: folder, now: now, keep: 14)
+        XCTAssertNotEqual(a, b)
+        XCTAssertEqual(AutoBackupFiles.backupName(of: a), a)
+        XCTAssertEqual(AutoBackupFiles.backupName(of: "." + b + ".icloud"), b)
+        XCTAssertNil(AutoBackupFiles.backupName(of: "YueJi-auto-xxxx-xx-xx-xxxxxx.json"))
+        XCTAssertEqual(try LocalStore.decode(Data(contentsOf: folder.appendingPathComponent(a))).expenses.count, 1)
+        XCTAssertEqual(try LocalStore.decode(Data(contentsOf: folder.appendingPathComponent(b))).expenses.count, 2)
+        XCTAssertThrowsError(try AutoBackupWriter.write(Data("broken".utf8), into: folder, now: now, keep: 1))
+        XCTAssertEqual(Set(try FileManager.default.contentsOfDirectory(atPath: folder.path)), [a, b])
+    }
+
+    func testExternalBackupRestoresAfterAppStorageIsDeleted() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let external = root.appendingPathComponent("iCloudFolder")
+        let sandbox = root.appendingPathComponent("AppData")
+        try FileManager.default.createDirectory(at: external, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let original = LocalStore(folder: sandbox)
+        try original.change {
+            $0.expenses = [Expense(merchant: "Lunch", cents: 1250, date: Date(timeIntervalSince1970: 1_790_000_000))]
+            $0.budgets = ["2026-10": 100000]
+            $0.merchantCategories = ["lunch": "餐饮"]
+            $0.seenEvents = ["delivery:previous"]
+        }
+        let expected = try original.read()
+        let name = try AutoBackupWriter.write(LocalStore.exportData(expected), into: external, now: Date(), keep: 14)
+        // Simulate uninstall: no app files or remembered folder bookmarks survive.
+        try FileManager.default.removeItem(at: sandbox)
+        let reinstalled = LocalStore(folder: sandbox)
+        XCTAssertTrue(try reinstalled.read().expenses.isEmpty)
+        let writer = AutoBackupWriter(store: reinstalled)
+        do {
+            try await writer.validateDestination(external)
+            XCTFail("A fresh install must restore before reusing an existing backup folder")
+        } catch {
+            XCTAssertTrue(FileManager.default.fileExists(atPath: external.appendingPathComponent(name).path))
+        }
+        let worker = LedgerRefreshWorker(store: reinstalled)
+        let preview = try await worker.preview(url: external.appendingPathComponent(name))
+        // Selecting and previewing a backup must not change the new installation.
+        XCTAssertTrue(try reinstalled.read().expenses.isEmpty)
+        try await worker.restore(data: preview.data)
+        let restored = try reinstalled.read()
+        XCTAssertEqual(restored.expenses, expected.expenses)
+        XCTAssertEqual(restored.budgets, expected.budgets)
+        XCTAssertEqual(restored.merchantCategories, expected.merchantCategories)
+        XCTAssertEqual(restored.seenEvents, expected.seenEvents)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: external.appendingPathComponent(name).path))
+        try await writer.validateDestination(external)
     }
 }

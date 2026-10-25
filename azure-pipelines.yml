@@ -122,6 +122,7 @@ jobs:
         displayName: Verify project and record source version
       - bash: |
           set -euo pipefail
+          python3 scripts/configure_cloud.py
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi \
             -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' \
             -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO \

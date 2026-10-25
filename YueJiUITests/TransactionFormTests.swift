@@ -39,6 +39,23 @@ final class TransactionFormTests: XCTestCase {
         verifyFirstAddItem(opening: true)
     }
 
+    func testFreshLaunchOffersRecoveryBeforeUsageGuide() {
+        let app = XCUIApplication()
+        runningApp = app
+        app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "NO",
+                               "-openingAnimationEnabled", "NO", "-playfulAnimations", "NO",
+                               "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
+        app.launch()
+        let restore = app.buttons["backup.recover"]
+        XCTAssertTrue(restore.waitForExistence(timeout: 20))
+        XCTAssertTrue(restore.isHittable)
+        app.buttons["backup.welcome.continue"].tap()
+        let close = app.buttons["Close guide"]
+        XCTAssertTrue(close.waitForExistence(timeout: 10))
+        close.tap()
+        XCTAssertTrue(app.buttons["overview.manualEntry"].firstMatch.waitForExistence(timeout: 10))
+    }
+
     func testFirstAddItemImmediatelyAfterLaunchWithoutOpening() {
         verifyFirstAddItem(opening: false)
     }

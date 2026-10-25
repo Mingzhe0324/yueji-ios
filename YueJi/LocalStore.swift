@@ -225,9 +225,19 @@ actor LedgerRefreshWorker {
         try Task.checkCancellation()
         let access = url.startAccessingSecurityScopedResource()
         defer { if access { url.stopAccessingSecurityScopedResource() } }
-        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size <= 20_000_000 else { throw reviewError("备份不能超过 20 MB。", "Backup must not exceed 20 MB.", "Sandaran tidak boleh melebihi 20 MB.") }
-        return try RestorePreview(data: Data(contentsOf: url))
+        // Coordinate cloud-backed reads so Files can make the selected document available.
+        var result: Result<RestorePreview, Error>?
+        var error: NSError?
+        NSFileCoordinator().coordinate(readingItemAt: url, options: [], error: &error) { actual in
+            result = Result {
+                let size = try actual.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size <= 20_000_000 else { throw reviewError("备份不能超过 20 MB。", "Backup must not exceed 20 MB.", "Sandaran tidak boleh melebihi 20 MB.") }
+                return try RestorePreview(data: Data(contentsOf: actual))
+            }
+        }
+        if let error { throw error }
+        guard let result else { throw LedgerError.invalid("无法读取备份。") }
+        return try result.get()
     }
     func restore(data: Data) throws { try Task.checkCancellation(); try store.restore(data) }
     func mutate<T>(postRecurring: Bool = true, _ action: @Sendable (inout Ledger) throws -> T) throws -> T {
@@ -313,6 +323,22 @@ final class LocalStore {
     }
     @discardableResult func change<T>(_ action: (inout Ledger) throws -> T) throws -> T {
         try prepare()
+        if self === LocalStore.shared, let link = try cloudLink() {
+            guard let credential = try CloudCredentials.read(), link.accepts(userID: credential.session.user.id, server: credential.server) else {
+                throw CloudFailure.session
+            }
+        }
+        var committed = false
+        defer {
+            // After file coordination releases its lock; isolated test/preview stores do
+            // not trigger external writes. A cloud failure never rolls back local money.
+            if committed, self === LocalStore.shared {
+                Task { @MainActor in
+                    AutoBackup.ledgerDidChange()
+                    CloudAccount.shared.ledgerDidChange()
+                }
+            }
+        }
         var output: Result<T, Error> = .failure(LedgerError.invalid("账本正忙，请重试。"))
         var error: NSError?
         NSFileCoordinator().coordinate(writingItemAt: file, options: .forMerging, error: &error) { _ in
@@ -327,6 +353,7 @@ final class LocalStore {
                     let name = "\(Int(Date().timeIntervalSince1970 * 1000))-\(UUID().uuidString).json"
                     try Self.exportData(try Self.decode(previous)).write(to: self.backupFolder.appendingPathComponent(name), options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
                     try next.write(to: self.file, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+                    committed = true
                     let backups = try self.backups()
                     for old in backups.dropFirst(30) { try? FileManager.default.removeItem(at: old) }
                 }
@@ -344,6 +371,36 @@ final class LocalStore {
             try Self.exportData(ledger).write(to: recoveryFile, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
             var next = imported; next.seenEvents.formUnion(ledger.seenEvents)
             next.postedRecurring.formUnion(ledger.postedRecurring); ledger = next
+        }
+    }
+
+    func cloudLink() throws -> CloudLink? {
+        let url = folder.appendingPathComponent("cloud-link.json")
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try JSONDecoder().decode(CloudLink.self, from: Data(contentsOf: url))
+    }
+    func writeCloudLink(_ link: CloudLink) throws {
+        try prepare()
+        let url = folder.appendingPathComponent("cloud-link.json")
+        var failure: Error?
+        var coordinationError: NSError?
+        NSFileCoordinator().coordinate(writingItemAt: url, options: .forReplacing, error: &coordinationError) { actual in
+            do {
+                if let previous = try self.cloudLink(), !previous.accepts(userID: link.userID, server: link.server) { throw CloudFailure.accountMismatch }
+                try JSONEncoder().encode(link).write(to: actual, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            } catch { failure = error }
+        }
+        if let coordinationError { throw coordinationError }
+        if let failure { throw failure }
+    }
+    func replaceFromCloud(_ imported: Ledger, expectedFingerprint: String) throws {
+        let imported = try imported.validated()
+        try change { ledger in
+            // Recheck under the write lock so a payment arriving during the download
+            // cannot be silently replaced. Cloud restores never merge unrelated IDs.
+            guard try CloudFingerprint.make(ledger) == expectedFingerprint else { throw CloudFailure.changed }
+            try Self.exportData(ledger).write(to: recoveryFile, options: [.atomic, .completeFileProtectionUntilFirstUserAuthentication])
+            ledger = imported
         }
     }
 }

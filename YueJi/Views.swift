@@ -307,6 +307,7 @@ struct MainView: View {
     @AppStorage("playfulAnimations") private var playful = true
     @AppStorage("appAppearance") private var appearance = "system"
     @State private var showingGuide = false
+    @State private var showingBackupWelcome = true
     @State private var selectedTab = 0
     @State private var ledgerMonthRequest: LedgerMonthRequest?
     @State private var showingNewTNG = false
@@ -469,7 +470,11 @@ struct MainView: View {
                 if finished { openPendingNotification() }
             }
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification(); openPendingInbox() }) {
-                UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true)
+                if showingBackupWelcome {
+                    BackupWelcomeView { showingBackupWelcome = false }.yuejiSheetSurface().ledgerFeedback(modal: true)
+                } else {
+                    UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true)
+                }
             }
             .onChange(of: selectedTab) { _, _ in
                 FeedbackHaptics.selection()
@@ -3334,6 +3339,7 @@ struct LedgerDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 struct SettingsView: View {
+    @ObservedObject private var cloudAccount = CloudAccount.shared
     @Environment(\.locale) private var uiLocale
     @State private var showingUsageGuide = false
     var guideDestination: String? = nil
@@ -3346,7 +3352,6 @@ struct SettingsView: View {
     @AppStorage(AutoBackupKeys.folderName) private var autoBackupFolder = ""
     @AppStorage(AutoBackupKeys.lastError) private var autoBackupError = ""
     @State private var exporting = false
-    @State private var importing = false
     @State private var document: LedgerDocument?
     @State private var restorePreview: RestorePreview?
     @State private var backups: [URL] = []
@@ -3399,6 +3404,11 @@ struct SettingsView: View {
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
+                    NavigationLink { CloudAccountView() } label: {
+                        SimpleSettingsRow(title: tr("账号与同步", "Account & sync", "Akaun & penyegerakan"), subtitle: cloudAccount.status, symbol: "person.crop.circle.badge.checkmark", color: IslandPalette.sky)
+                    }.accessibilityIdentifier("settings.account")
+                }
+                Section {
                     NavigationLink { backupPage } label: {
                         SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: backupSubtitle, symbol: "externaldrive.fill", color: IslandPalette.lavender)
                     }.guideTarget("settings.backup")
@@ -3414,9 +3424,6 @@ struct SettingsView: View {
                 } header: { Text(tr("备份与帮助", "Backups & help", "Sandaran & bantuan")) }
             }.yuejiDashboardSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.large)
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
-                .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                    do { previewBackup(try result.get()) } catch { model.error = error.localizedDescription }
-                }
                 .sheet(isPresented: $showingUsageGuide) { UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true) }
                 .sheet(item: $restorePreview) { preview in
                     RestorePreviewView(preview: preview) { loadBackups() }.ledgerFeedback(modal: true)
@@ -3463,12 +3470,12 @@ struct SettingsView: View {
     }
     private var backupPage: some View {
         Form {
+                BackupRecoverySection { loadBackups() }
                 AutoBackupSection()
                 Section(tr("保管好你的账本", "Keep your ledger safe", "Simpan lejar dengan selamat")) {
                     Text(tr("换手机或卸载前，请先把完整备份存到「文件」或 iCloud Drive。", "Save a complete backup to Files or iCloud Drive before changing phones or uninstalling.", "Simpan sandaran lengkap ke Files atau iCloud Drive sebelum menukar telefon atau menyahpasang.")).font(.footnote)
                     NavigationLink(tr("导出账单表格", "Export a spreadsheet", "Eksport hamparan")) { CSVExportView() }
                     Button(tr("保存一份完整备份", "Save a complete backup", "Simpan sandaran lengkap")) { exportBackup() }
-                    Button(tr("从备份文件恢复", "Restore from a backup file", "Pulihkan daripada fail sandaran")) { if !backupBusy { importing = true } }
                     if FileManager.default.fileExists(atPath: LocalStore.shared.recoveryFile.path) {
                         Button(tr("恢复上次导入前的数据", "Recover data before last restore", "Pulihkan data sebelum pemulihan terakhir")) {
                             previewBackup(LocalStore.shared.recoveryFile)
