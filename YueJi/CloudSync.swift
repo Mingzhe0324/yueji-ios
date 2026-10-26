@@ -31,11 +31,15 @@ struct CloudConfiguration: Equatable {
 }
 
 enum CloudFailure: LocalizedError {
+    case password, credentials, googleUnavailable
     case transport(code: Int, endpoint: String)
     case server(status: Int, endpoint: String)
     case configuration, database, connection, session, accountMismatch, changed, conflict, invalidResponse, keychain, rateLimit, email, authentication
     var errorDescription: String? {
         switch self {
+        case .googleUnavailable: return tr("Google 登录尚未启用。请先完成 Supabase 的 Google Provider 和回调地址设置。", "Google sign-in is not enabled. Complete the Supabase Google provider and callback setup.", "Log masuk Google belum diaktifkan. Lengkapkan tetapan Google dan panggil balik Supabase.")
+        case .password: return tr("密码至少需要 8 个字符，且两次输入必须一致。服务器也可能要求更强的密码。", "Use at least 8 characters and matching passwords. The server may require a stronger password.", "Gunakan sekurang-kurangnya 8 aksara dan kata laluan sepadan.")
+        case .credentials: return tr("邮箱或密码不正确，或邮箱尚未验证。已有验证码账号可通过忘记密码设置密码。", "Email or password is incorrect, or email is unconfirmed. Existing email-code accounts can set a password using Forgot password.", "E-mel atau kata laluan salah, atau e-mel belum disahkan. Akaun kod e-mel boleh menggunakan Lupa kata laluan.")
         case let .transport(code, endpoint):
             return tr("网络请求未完成", "Network request did not complete", "Permintaan rangkaian tidak selesai") + " (\(endpoint), URL \(code)). " + tr("请将此提示提供给开发者。本机账本仍保留。", "Share this message with the developer. Your local ledger is retained.", "Kongsi mesej ini dengan pembangun. Lejar setempat dikekalkan.")
         case let .server(status, endpoint):
@@ -66,6 +70,17 @@ struct CloudCredential: Codable {
     let server: String
     let session: CloudSession
 }
+enum CloudInstallation {
+    static let key = "cloudInstallationInitialized.v1"
+    static func prepare(defaults: UserDefaults = .standard, hasExistingLink: Bool,
+                        clearCredentials: () throws -> Void) throws {
+        guard !defaults.bool(forKey: key) else { return }
+        // A pre-marker installation with a bound ledger is an ordinary upgrade.
+        if !hasExistingLink { try clearCredentials() }
+        defaults.set(true, forKey: key)
+    }
+}
+
 enum CloudCredentials {
     private static let query: [String: Any] = [kSecClass as String: kSecClassGenericPassword,
         kSecAttrService as String: "YueJi.AccountSync.v2", kSecAttrAccount as String: "session"]
@@ -179,11 +194,13 @@ actor SupabaseCloudService: CloudRemote {
             if code == "40001" { throw CloudFailure.changed }
             if ["42P01", "42883", "PGRST202", "PGRST205"].contains(code) { throw CloudFailure.database }
             if response.statusCode == 429 { throw CloudFailure.rateLimit }
+            if code == "weak_password" || code == "same_password" { throw CloudFailure.password }
+            if path.contains("grant_type=password"), [400, 401, 422].contains(response.statusCode) { throw CloudFailure.credentials }
             if path.contains("grant_type=refresh_token"), [400, 401].contains(response.statusCode) { throw CloudFailure.session }
             if path.contains("/verify"), [400, 401].contains(response.statusCode) { throw CloudFailure.authentication }
             if response.statusCode == 401 { throw authenticated ? CloudFailure.session : CloudFailure.configuration }
             if response.statusCode == 403 { throw CloudFailure.configuration }
-            if path.contains("/otp") { throw CloudFailure.email }
+            if path.contains("/otp") || path.contains("/signup") || path.contains("/recover") { throw CloudFailure.email }
             throw CloudFailure.server(status: response.statusCode, endpoint: url.path)
         }
         guard data.count <= 25_000_000 else { throw CloudFailure.invalidResponse }
@@ -197,8 +214,33 @@ actor SupabaseCloudService: CloudRemote {
     func sendCode(email: String, createAccount: Bool = true) async throws {
         _ = try await request("/auth/v1/otp", body: ["email": email, "create_user": createAccount])
     }
-    func verify(email: String, code: String) async throws -> CloudSession {
-        let data = try await request("/auth/v1/verify", body: ["email": email, "token": code, "type": "email"])
+    func signUp(email: String, password: String) async throws -> CloudSession? {
+        let data = try await request("/auth/v1/signup", body: ["email": email, "password": password])
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        if object?["access_token"] != nil { return try JSONDecoder().decode(CloudSession.self, from: data) }
+        return nil
+    }
+    func signIn(email: String, password: String) async throws -> CloudSession {
+        let data = try await request("/auth/v1/token?grant_type=password", body: ["email": email, "password": password])
+        return try JSONDecoder().decode(CloudSession.self, from: data)
+    }
+    func recover(email: String) async throws {
+        _ = try await request("/auth/v1/recover", body: ["email": email])
+    }
+    func exchangeGoogleCode(_ code: String, verifier: String) async throws -> CloudSession {
+        let data = try await request("/auth/v1/token?grant_type=pkce", body: ["auth_code": code, "code_verifier": verifier])
+        return try JSONDecoder().decode(CloudSession.self, from: data)
+    }
+    func checkGoogleProvider() async throws {
+        let data = try await request("/auth/v1/settings", method: "GET")
+        let settings = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        guard (settings?["external"] as? [String: Any])?["google"] as? Bool == true else { throw CloudFailure.googleUnavailable }
+    }
+    func updatePassword(_ password: String) async throws {
+        _ = try await request("/auth/v1/user", method: "PUT", body: ["password": password], authenticated: true)
+    }
+    func verify(email: String, code: String, type: String = "email") async throws -> CloudSession {
+        let data = try await request("/auth/v1/verify", body: ["email": email, "token": code, "type": type])
         return try JSONDecoder().decode(CloudSession.self, from: data)
     }
     func use(_ value: CloudSession) { session = value }

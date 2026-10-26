@@ -194,6 +194,47 @@ private final class CloudHTTPStub: URLProtocol {
 }
 
 final class CloudHTTPTests: XCTestCase {
+    private var sessionJSON: String {
+        #"{"access_token":"fixture-access","refresh_token":"fixture-refresh","user":{"id":"00000000-0000-0000-0000-000000000001","email":"test@example.invalid"}}"#
+    }
+    func testPasswordRegistrationWaitsForEmailAndLoginReturnsSession() async throws {
+        let (api, host) = try service(replies: [(200, "{}"), (200, sessionJSON)])
+        let pending = try await api.signUp(email: "test@example.invalid", password: "fixture-password")
+        XCTAssertNil(pending)
+        let session = try await api.signIn(email: "test@example.invalid", password: "fixture-password")
+        XCTAssertEqual(session.access_token, "fixture-access")
+        let requests = CloudHTTPStub.requests(host: host)
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/auth/v1/signup", "/auth/v1/token"])
+        XCTAssertEqual(requests.last?.url?.query, "grant_type=password")
+        XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
+    }
+    func testRecoveryRequiresVerifiedSessionBeforePasswordUpdate() async throws {
+        let (api, host) = try service(replies: [(200, "{}"), (200, sessionJSON), (200, "{}")])
+        do { try await api.updatePassword("fixture-password"); XCTFail("An anonymous request must not update a password") }
+        catch CloudFailure.session {}
+        XCTAssertTrue(CloudHTTPStub.requests(host: host).isEmpty)
+        try await api.recover(email: "test@example.invalid")
+        let verified = try await api.verify(email: "test@example.invalid", code: "123456", type: "recovery")
+        await api.use(verified)
+        try await api.updatePassword("fixture-password")
+        let requests = CloudHTTPStub.requests(host: host)
+        XCTAssertEqual(requests.map { $0.url?.path }, ["/auth/v1/recover", "/auth/v1/verify", "/auth/v1/user"])
+        XCTAssertEqual(requests.last?.httpMethod, "PUT")
+        XCTAssertEqual(requests.last?.value(forHTTPHeaderField: "Authorization"), "Bearer fixture-access")
+    }
+    func testGoogleDisabledAndPasswordFailureHaveSpecificErrors() async throws {
+        let (api, _) = try service(replies: [(200, #"{"external":{"google":false}}"#), (400, #"{"error_code":"invalid_credentials"}"#)])
+        do { try await api.checkGoogleProvider(); XCTFail("Disabled provider must stop before opening the browser") }
+        catch CloudFailure.googleUnavailable {}
+        do { _ = try await api.signIn(email: "test@example.invalid", password: "wrong"); XCTFail("Expected credential error") }
+        catch CloudFailure.credentials {}
+    }
+    func testGoogleExchangesAuthorizationCodeWithPKCE() async throws {
+        let (api, host) = try service(replies: [(200, sessionJSON)])
+        let result = try await api.exchangeGoogleCode("test-code", verifier: "test-verifier")
+        XCTAssertEqual(result.access_token, "fixture-access")
+        XCTAssertEqual(CloudHTTPStub.requests(host: host).first?.url?.query, "grant_type=pkce")
+    }
     private func service(replies: [(Int, String)], signedIn: Bool = false) throws -> (SupabaseCloudService, String) {
         let host = UUID().uuidString.lowercased() + ".invalid"
         CloudHTTPStub.install(host: host, replies: replies)
@@ -256,5 +297,33 @@ final class CloudHTTPTests: XCTestCase {
         let (expired, _) = try service(replies: [(400, #"{"error_code":"refresh_token_not_found"}"#)], signedIn: true)
         do { _ = try await expired.refresh(); XCTFail("Expected expired session") }
         catch CloudFailure.session {}
+    }
+}
+
+final class CloudInstallationTests: XCTestCase {
+    private func defaults() -> UserDefaults {
+        let name = "installation-test-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: name)!
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        return defaults
+    }
+    func testFreshInstallationClearsCredentialsOnceAndReinstallClearsAgain() throws {
+        let defaults = defaults(); var clears = 0
+        try CloudInstallation.prepare(defaults: defaults, hasExistingLink: false) { clears += 1 }
+        try CloudInstallation.prepare(defaults: defaults, hasExistingLink: false) { clears += 1 }
+        XCTAssertEqual(clears, 1)
+        defaults.removeObject(forKey: CloudInstallation.key)
+        try CloudInstallation.prepare(defaults: defaults, hasExistingLink: false) { clears += 1 }
+        XCTAssertEqual(clears, 2)
+    }
+    func testExistingBoundLedgerMigratesWithoutLoggingOut() throws {
+        let defaults = defaults()
+        try CloudInstallation.prepare(defaults: defaults, hasExistingLink: true) { XCTFail("Upgrade must retain login") }
+        XCTAssertTrue(defaults.bool(forKey: CloudInstallation.key))
+    }
+    func testKeychainFailureDoesNotMarkInstallationPrepared() {
+        let defaults = defaults()
+        XCTAssertThrowsError(try CloudInstallation.prepare(defaults: defaults, hasExistingLink: false) { throw CloudFailure.keychain })
+        XCTAssertFalse(defaults.bool(forKey: CloudInstallation.key))
     }
 }

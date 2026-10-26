@@ -1,5 +1,8 @@
 import SwiftUI
 import UIKit
+import AuthenticationServices
+import CryptoKit
+import Security
 
 @MainActor final class CloudAccount: ObservableObject {
     static let shared = CloudAccount()
@@ -11,6 +14,9 @@ import UIKit
     @Published private(set) var link: CloudLink?
     @Published private(set) var conflict: CloudConflict?
     @Published private(set) var codeSent = false
+    @Published private(set) var resettingPassword = false
+    private var verificationType = "signup"
+    private var recoverySession: CloudSession?
     @Published private(set) var dirty = false
     @Published private(set) var lastSyncFailed = false
     @Published private(set) var cloudRestored = UUID()
@@ -22,6 +28,7 @@ import UIKit
     private var resyncRequested = false
     private var initializationFailed = false
     private var initializing = false
+    private let googleBrowser = GoogleAccountBrowser()
     var configured: Bool { CloudConfiguration.bundled != nil }
     var canEnter: Bool {
         guard loaded, !initializationFailed else { return false }
@@ -44,6 +51,7 @@ import UIKit
         // No network is needed to open a previously synced account's local ledger.
         do {
             link = try await synchronizer.localLink()
+            try CloudInstallation.prepare(hasExistingLink: link != nil, clearCredentials: CloudCredentials.clear)
             if let config = CloudConfiguration.bundled, let credential = try CloudCredentials.read(),
                credential.server == config.server,
                link == nil || link!.accepts(userID: credential.session.user.id, server: credential.server) {
@@ -70,39 +78,99 @@ import UIKit
             message = tr("账号服务和账本数据库连接正常。", "Account service and ledger database are reachable.", "Perkhidmatan akaun dan pangkalan data lejar boleh dicapai.")
         } catch { report(error) }
     }
-    func sendCode(to address: String, createAccount: Bool = true) async {
-        guard !busy else { return }
-        busy = true; defer { finishWork() }
-        let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        do {
-            guard address.contains("@"), address.count <= 254 else { throw CloudFailure.email }
-            let api = try connectedService()
-            // Diagnose missing schema before asking the person to wait for an email.
-            try await api.checkConnection()
-            try await api.sendCode(email: address, createAccount: createAccount)
-            email = address; codeSent = true
-            message = tr("验证码已发送，请查看邮箱并输入。", "Code sent. Check your email and enter it here.", "Kod dihantar. Semak e-mel dan masukkannya di sini.")
-        } catch { report(error) }
-    }
     func verify(code: String) async {
         guard !busy, codeSent else { return }
         busy = true; defer { finishWork() }
         do {
             let api = try connectedService()
-            let value = try await api.verify(email: email, code: code.trimmingCharacters(in: .whitespacesAndNewlines))
-            let config = await api.configuration
-            let existing = try await synchronizer.localLink()
-            if let existing, !existing.accepts(userID: value.user.id, server: config.server) { throw CloudFailure.accountMismatch }
-            try CloudCredentials.save(CloudCredential(server: config.server, session: value))
-            await api.use(value)
-            session = value; signedIn = true; codeSent = false; email = value.user.email ?? email
-            initializationFailed = false; usingLocal = false
-            try await synchronize(api, refresh: false)
+            let value = try await api.verify(email: email, code: code.trimmingCharacters(in: .whitespacesAndNewlines), type: verificationType)
+            if verificationType == "recovery" {
+                let config = await api.configuration
+                let existing = try await synchronizer.localLink()
+                if let existing, !existing.accepts(userID: value.user.id, server: config.server) { throw CloudFailure.accountMismatch }
+                recoverySession = value; resettingPassword = true; codeSent = false; message = ""
+            } else { try await accept(value, api: api) }
         } catch { await reloadLink(); report(error) }
+    }
+    private func accept(_ value: CloudSession, api: SupabaseCloudService) async throws {
+        let config = await api.configuration
+        let existing = try await synchronizer.localLink()
+        if let existing, !existing.accepts(userID: value.user.id, server: config.server) { throw CloudFailure.accountMismatch }
+        try CloudCredentials.save(CloudCredential(server: config.server, session: value))
+        await api.use(value)
+        session = value; signedIn = true; codeSent = false; email = value.user.email ?? email
+        recoverySession = nil; resettingPassword = false
+        initializationFailed = false; usingLocal = false
+        try await synchronize(api, refresh: false)
+    }
+    func signInWithGoogle() async {
+        guard !busy else { return }
+        busy = true; defer { finishWork() }
+        do {
+            let api = try connectedService()
+            try await api.checkGoogleProvider()
+            let config = await api.configuration
+            let result = try await googleBrowser.authorize(server: config.server)
+            let value = try await api.exchangeGoogleCode(result.code, verifier: result.verifier)
+            try await accept(value, api: api)
+        } catch is CancellationError { }
+        catch { await reloadLink(); report(error) }
+    }
+    func authenticate(address: String, password: String, confirmation: String, creating: Bool) async {
+        guard !busy else { return }
+        busy = true; defer { finishWork() }
+        do {
+            let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard address.contains("@"), !password.isEmpty else { throw CloudFailure.credentials }
+            if creating { guard password.count >= 8, password == confirmation else { throw CloudFailure.password } }
+            let api = try connectedService()
+            try await api.checkConnection()
+            if creating {
+                if let value = try await api.signUp(email: address, password: password) {
+                    try await accept(value, api: api)
+                } else {
+                    email = address; verificationType = "signup"; codeSent = true
+                    message = tr("请查收注册验证码。若邮箱已有账号，请返回登录或重设密码。", "Check for your signup code. If you already have an account, sign in or reset your password.", "Semak kod pendaftaran. Jika sudah ada akaun, log masuk atau tetapkan semula kata laluan.")
+                }
+            } else {
+                let value = try await api.signIn(email: address, password: password)
+                try await accept(value, api: api)
+            }
+        } catch { await reloadLink(); report(error) }
+    }
+    func requestPasswordReset(address: String) async {
+        guard !busy else { return }
+        busy = true; defer { finishWork() }
+        do {
+            let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard address.contains("@") else { throw CloudFailure.email }
+            try await connectedService().recover(email: address)
+            email = address; verificationType = "recovery"; codeSent = true
+            message = tr("如果账号存在，将收到重设密码验证码。", "If the account exists, a password reset code will arrive.", "Jika akaun wujud, kod tetapan semula akan dihantar.")
+        } catch { report(error) }
+    }
+    func savePassword(_ password: String, confirmation: String) async {
+        guard !busy, signedIn || recoverySession != nil else { return }
+        busy = true; defer { finishWork() }
+        do {
+            guard password.count >= 8, password == confirmation else { throw CloudFailure.password }
+            let api = try connectedService()
+            if let recoverySession {
+                await api.use(recoverySession)
+                try await api.updatePassword(password)
+                try await accept(recoverySession, api: api)
+            } else {
+                let refreshed = try await api.refresh()
+                try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+                session = refreshed
+                try await api.updatePassword(password)
+                message = tr("密码已更新。下次可使用邮箱和密码登录。", "Password updated. Use email and password next time.", "Kata laluan dikemas kini. Gunakan e-mel dan kata laluan lain kali.")
+            }
+        } catch { report(error) }
     }
     func changeEmail() {
         guard !busy, !signedIn else { return }
-        codeSent = false; message = ""
+        codeSent = false; resettingPassword = false; recoverySession = nil; message = ""
     }
     private func reloadLink() async {
         do { link = try await synchronizer.localLink() }
@@ -193,6 +261,52 @@ import UIKit
         let token = BackgroundTaskToken()
         token.begin()
         Task { await sync(); token.end() }
+    }
+}
+
+@MainActor private final class GoogleAccountBrowser: NSObject, ASWebAuthenticationPresentationContextProviding {
+    private var browser: ASWebAuthenticationSession?
+    private var anchor: UIWindow?
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        anchor ?? ASPresentationAnchor()
+    }
+    func authorize(server: String) async throws -> (code: String, verifier: String) {
+        var bytes = [UInt8](repeating: 0, count: 32)
+        guard SecRandomCopyBytes(kSecRandomDefault, bytes.count, &bytes) == errSecSuccess else { throw CloudFailure.keychain }
+        func base64URL(_ data: Data) -> String {
+            data.base64EncodedString().replacingOccurrences(of: "+", with: "-").replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: "=", with: "")
+        }
+        let verifier = base64URL(Data(bytes))
+        let challenge = base64URL(Data(SHA256.hash(data: Data(verifier.utf8))))
+        guard var url = URLComponents(string: server + "/auth/v1/authorize") else { throw CloudFailure.configuration }
+        url.queryItems = [URLQueryItem(name: "provider", value: "google"),
+                         URLQueryItem(name: "redirect_to", value: "yueji-auth://auth/callback"),
+                         URLQueryItem(name: "code_challenge", value: challenge),
+                         URLQueryItem(name: "code_challenge_method", value: "s256")]
+        guard let start = url.url else { throw CloudFailure.configuration }
+        anchor = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+            .filter { $0.activationState == .foregroundActive }.flatMap(\.windows).first(where: \.isKeyWindow)
+        guard anchor != nil else { throw CloudFailure.connection }
+        defer { browser = nil; anchor = nil }
+        let callback: URL = try await withCheckedThrowingContinuation { continuation in
+            let session = ASWebAuthenticationSession(url: start, callbackURLScheme: "yueji-auth") { url, error in
+                if let error = error as? ASWebAuthenticationSessionError, error.code == .canceledLogin {
+                    continuation.resume(throwing: CancellationError())
+                } else if let url { continuation.resume(returning: url) }
+                else { continuation.resume(throwing: CloudFailure.connection) }
+            }
+            session.presentationContextProvider = self
+            session.prefersEphemeralWebBrowserSession = true
+            browser = session
+            if !session.start() { continuation.resume(throwing: CloudFailure.connection) }
+        }
+        guard callback.scheme == "yueji-auth", callback.host == "auth", callback.path == "/callback",
+              let components = URLComponents(url: callback, resolvingAgainstBaseURL: false),
+              components.queryItems?.contains(where: { $0.name == "error" }) != true,
+              let code = components.queryItems?.first(where: { $0.name == "code" })?.value, !code.isEmpty else {
+            throw CloudFailure.authentication
+        }
+        return (code, verifier)
     }
 }
 
@@ -298,10 +412,13 @@ private struct CloudWelcomeView: View {
     private var subtitle: String {
         if cloud.codeSent { return tr("验证码已发送至", "We sent a code to", "Kod dihantar ke") + " " + cloud.email }
         if mode == nil { return tr("收好每一笔生活。登录并同步，让账本随你去下一站。", "Keep a little of every day. Sign in and sync to take your ledger with you.", "Simpan setiap detik harian. Log masuk dan segerakkan untuk membawa lejar bersama.") }
-        return creating ? tr("用邮箱创建账号，无需设置密码。验证后，将本机账本关联到你的账号。", "Create an account with email, no password needed. Verification links this ledger to your account.", "Cipta akaun melalui e-mel tanpa kata laluan. Pengesahan memautkan lejar kepada akaunmu.") : tr("使用原来的邮箱，验证后找回已同步的账本。", "Use your original email to recover your synced ledger.", "Gunakan e-mel asal untuk memulihkan lejar yang disegerakkan.")
+        return creating ? tr("使用邮箱和密码创建账号，验证邮箱后开始同步。", "Create an account with email and password, then verify your email to start syncing.", "Cipta akaun dengan e-mel dan kata laluan, kemudian sahkan e-mel untuk menyegerakkan.") : tr("使用原来的邮箱和密码，找回已同步的账本。", "Use your original email and password to recover your synced ledger.", "Gunakan e-mel asal dan kata laluan untuk memulihkan lejar.")
     }
     private var welcomeActions: some View {
         VStack(spacing: 14) {
+            Button { Task { await cloud.signInWithGoogle() } } label: {
+                actionLabel(tr("通过 Google 继续", "Continue with Google", "Teruskan dengan Google"), symbol: "person.crop.circle")
+            }.buttonStyle(MoonWelcomeButton(primary: false)).disabled(!cloud.configured || cloud.busy)
             if cloud.link == nil {
                 Button { selectMode(true) } label: {
                     actionLabel(tr("创建账户", "Create account", "Cipta akaun"), symbol: "sparkles")
@@ -313,51 +430,127 @@ private struct CloudWelcomeView: View {
         }
     }
     private var emailForm: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Text(cloud.codeSent ? tr("邮箱验证码", "Email code", "Kod e-mel") : tr("你的邮箱", "Your email", "E-mel anda"))
-                .font(.caption.weight(.semibold)).foregroundStyle(gold)
-            if cloud.codeSent {
-                TextField("", text: $code, prompt: Text(tr("输入验证码", "Enter code", "Masukkan kod")).foregroundStyle(.white.opacity(0.5)))
-                    .keyboardType(.numberPad).textContentType(.oneTimeCode).focused($field, equals: .code)
-                    .font(.title2.monospacedDigit()).padding(18).background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
-                    .accessibilityLabel(tr("邮箱验证码", "Email code", "Kod e-mel"))
-                Button {
-                    field = nil; Task { await cloud.verify(code: code); code = "" }
-                } label: {
-                    actionLabel(creating ? tr("验证并开始", "Verify and begin", "Sahkan dan mula") : tr("登录并继续", "Sign in and continue", "Log masuk dan teruskan"), symbol: "arrow.right")
-                }.buttonStyle(MoonWelcomeButton(primary: true)).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                Button(tr("换个邮箱 / 重新发送", "Change email / resend", "Tukar e-mel / hantar semula")) {
-                    cloud.changeEmail(); code = ""; field = .email
-                }.font(.subheadline).frame(minHeight: 44)
-            } else {
-                TextField("", text: $address, prompt: Text("you@example.com").foregroundStyle(.white.opacity(0.5)))
-                    .keyboardType(.emailAddress).textContentType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .focused($field, equals: .email).submitLabel(.send).onSubmit { send() }
-                    .padding(18).background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
-                    .accessibilityLabel(tr("邮箱", "Email", "E-mel"))
-                Button { send() } label: {
-                    actionLabel(tr("发送验证码", "Send code", "Hantar kod"), symbol: "envelope")
-                }.buttonStyle(MoonWelcomeButton(primary: true)).disabled(!address.contains("@") || !cloud.configured)
-                if cloud.link == nil {
-                    Button(creating ? tr("已有账户？登录", "Have an account? Sign in", "Ada akaun? Log masuk") : tr("第一次来？创建账户", "New here? Create account", "Baharu di sini? Cipta akaun")) {
-                        selectMode(!creating)
-                    }.font(.subheadline).frame(minHeight: 44)
-                }
-            }
-        }.disabled(cloud.busy)
+        CloudPasswordForm(creating: creating)
     }
     private func selectMode(_ create: Bool) {
         cloud.changeEmail(); code = ""
         withAnimation(motion ? .easeInOut(duration: 0.3) : nil) { mode = create }
     }
-    private func send() {
-        guard !cloud.busy, address.contains("@"), cloud.configured else { return }
-        field = nil; Task { await cloud.sendCode(to: address, createAccount: creating) }
-    }
     private func actionLabel(_ text: String, symbol: String) -> some View {
         HStack { Text(text).multilineTextAlignment(.leading); Spacer(minLength: 12); Image(systemName: symbol) }
             .font(.body.weight(.semibold)).padding(20).frame(maxWidth: .infinity, minHeight: 58)
     }
+}
+
+private struct CloudRegistrationView: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    @Environment(\.dismiss) private var dismiss
+    var body: some View {
+        Form {
+            CloudPasswordForm(creating: true)
+            if !cloud.message.isEmpty { Text(cloud.message).font(.footnote) }
+        }
+        .navigationTitle(tr("创建账户", "Create account", "Cipta akaun"))
+        .onChange(of: cloud.signedIn) { _, value in if value { dismiss() } }
+    }
+}
+
+private struct CloudPasswordForm: View {
+    let creating: Bool
+    var changingPassword = false
+    @ObservedObject private var cloud = CloudAccount.shared
+    @State private var address = ""
+    @State private var password = ""
+    @State private var confirmation = ""
+    @State private var code = ""
+    @State private var recovering = false
+    @FocusState private var focused: Field?
+    private enum Field: Hashable { case email, password, confirmation, code }
+    private var newPassword: Bool { creating || cloud.resettingPassword || changingPassword }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            if cloud.codeSent && !changingPassword {
+                Text(cloud.email).font(.footnote)
+                TextField(tr("邮件验证码", "Email code", "Kod e-mel"), text: $code)
+                    .textContentType(.oneTimeCode).keyboardType(.numberPad).focused($focused, equals: .code)
+                    .padding(14).background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+                Button(tr("验证邮箱", "Verify email", "Sahkan e-mel")) {
+                    focused = nil; Task { await cloud.verify(code: code); code = "" }
+                }.buttonStyle(.borderedProminent).disabled(code.isEmpty)
+                Button(tr("返回 / 重新发送", "Back / resend", "Kembali / hantar semula")) { cloud.changeEmail(); code = "" }
+            } else {
+                if !cloud.resettingPassword && !changingPassword {
+                    TextField(tr("邮箱", "Email", "E-mel"), text: $address)
+                        .textContentType(.username).keyboardType(.emailAddress)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().focused($focused, equals: .email)
+                        .padding(14).background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+                }
+                if !recovering || cloud.resettingPassword || changingPassword {
+                    SecureField(newPassword ? tr("新密码（至少 8 个字符）", "New password (at least 8 characters)", "Kata laluan baharu (sekurang-kurangnya 8 aksara)") : tr("密码", "Password", "Kata laluan"), text: $password)
+                        .textContentType(newPassword ? .newPassword : .password)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled().focused($focused, equals: .password)
+                        .padding(14).background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+                    if newPassword {
+                        SecureField(tr("再次输入密码", "Confirm password", "Sahkan kata laluan"), text: $confirmation)
+                            .textContentType(.newPassword).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .focused($focused, equals: .confirmation)
+                            .padding(14).background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+                        if !confirmation.isEmpty && password != confirmation {
+                            Text(tr("两次密码不一致", "Passwords do not match", "Kata laluan tidak sepadan")).font(.footnote)
+                        }
+                    }
+                }
+                Button(action: submit) {
+                    HStack {
+                        Text(buttonTitle).fontWeight(.semibold)
+                        Spacer()
+                        if cloud.busy { ProgressView() } else { Image(systemName: "arrow.right") }
+                    }.padding(.vertical, 8)
+                }.buttonStyle(.borderedProminent).disabled(!valid)
+                if !creating && !changingPassword && !cloud.resettingPassword {
+                    Button(recovering ? tr("返回密码登录", "Back to password sign-in", "Kembali ke log masuk") : tr("忘记密码 / 首次设置密码", "Forgot password / Set first password", "Lupa kata laluan / Tetapkan kali pertama")) {
+                        password = ""; confirmation = ""; recovering.toggle(); focused = .email
+                    }.frame(minHeight: 44)
+                    if !recovering {
+                        Button(tr("通过 Google 继续", "Continue with Google", "Teruskan dengan Google")) {
+                            focused = nil; clearSecrets(); Task { await cloud.signInWithGoogle() }
+                        }.frame(minHeight: 44)
+                    }
+                }
+                if cloud.resettingPassword {
+                    Button(tr("取消", "Cancel", "Batal")) { cloud.changeEmail(); clearSecrets(); recovering = false }
+                }
+            }
+        }
+        .disabled(cloud.busy || !cloud.configured)
+        .onAppear { address = cloud.email }
+        .onChange(of: creating) { _, _ in clearSecrets(); recovering = false; cloud.changeEmail() }
+        .onChange(of: cloud.codeSent) { _, value in if value { clearSecrets(); focused = .code } }
+        .onChange(of: cloud.resettingPassword) { _, value in if value { clearSecrets(); focused = .password } }
+        .onDisappear { clearSecrets() }
+    }
+    private var valid: Bool {
+        if changingPassword || cloud.resettingPassword { return password.count >= 8 && password == confirmation }
+        if !address.contains("@") { return false }
+        if recovering { return true }
+        return creating ? password.count >= 8 && password == confirmation : !password.isEmpty
+    }
+    private var buttonTitle: String {
+        if changingPassword || cloud.resettingPassword { return tr("保存密码", "Save password", "Simpan kata laluan") }
+        if recovering { return tr("发送重设验证码", "Send reset code", "Hantar kod tetapan semula") }
+        return creating ? tr("创建账户", "Create account", "Cipta akaun") : tr("登录", "Sign in", "Log masuk")
+    }
+    private func submit() {
+        guard valid, !cloud.busy else { return }
+        focused = nil
+        Task {
+            if changingPassword || cloud.resettingPassword { await cloud.savePassword(password, confirmation: confirmation) }
+            else if recovering { await cloud.requestPasswordReset(address: address) }
+            else { await cloud.authenticate(address: address, password: password, confirmation: confirmation, creating: creating) }
+            clearSecrets()
+        }
+    }
+    private func clearSecrets() { password = ""; confirmation = ""; code = "" }
 }
 
 private struct MoonWelcomeButton: ButtonStyle {
@@ -427,20 +620,12 @@ struct CloudAccountView: View {
                     Text(CloudFailure.configuration.localizedDescription)
                 }
             } else if !cloud.signedIn {
-                Section(tr("邮箱登录", "Email sign-in", "Log masuk e-mel")) {
-                    TextField(tr("邮箱", "Email", "E-mel"), text: $address)
-                        .keyboardType(.emailAddress).textContentType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        .disabled(cloud.codeSent)
-                    Button(tr("发送登录验证码", "Send sign-in code", "Hantar kod log masuk")) { Task { await cloud.sendCode(to: address) } }
-                        .disabled(cloud.busy || !address.contains("@"))
-                    if cloud.codeSent {
-                        TextField(tr("邮件验证码", "Email code", "Kod e-mel"), text: $code).textContentType(.oneTimeCode).keyboardType(.numberPad)
-                        Button(tr("登录并恢复账本", "Sign in and recover ledger", "Log masuk dan pulihkan lejar")) {
-                            Task { await cloud.verify(code: code); code = "" }
-                        }.disabled(cloud.busy || code.isEmpty)
-                        Button(tr("更换邮箱", "Change email", "Tukar e-mel")) { code = ""; cloud.changeEmail() }
-                    }
-                }.disabled(cloud.busy)
+                Section {
+                    CloudPasswordForm(creating: false)
+                    NavigationLink { CloudRegistrationView() } label: {
+                        Label(tr("创建账户", "Create account", "Cipta akaun"), systemImage: "person.badge.plus")
+                    }.disabled(cloud.busy || cloud.codeSent || cloud.resettingPassword || cloud.link != nil)
+                }
             } else {
                 Section(tr("账号", "Account", "Akaun")) {
                     Text(cloud.email)
@@ -450,6 +635,9 @@ struct CloudAccountView: View {
                     }
                     Button(tr("立即同步", "Sync now", "Segerakkan sekarang")) { Task { await cloud.sync() } }.disabled(cloud.busy)
                     Button(tr("退出登录", "Sign out", "Log keluar"), role: .destructive) { signingOut = true }.disabled(cloud.busy)
+                }
+                Section(tr("设置 / 修改密码", "Set / change password", "Tetapkan / tukar kata laluan")) {
+                    CloudPasswordForm(creating: false, changingPassword: true)
                 }
                 if let conflict = cloud.conflict {
                     Section(tr("选择保留的账本", "Choose the ledger to keep", "Pilih lejar untuk dikekalkan")) {
