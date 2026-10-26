@@ -1111,19 +1111,17 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         content.title = tr("今天的消费记好了吗？", "Have you recorded today's spending?", "Sudah rekod belanja hari ini?")
         content.body = tr("打开月记，补上今天的消费，也检查自动记账有没有遗漏。", "Open YueJi to record today's spending and check for missing automatic entries.", "Buka YueJi untuk merekod belanja hari ini dan semak rekod automatik yang terlepas.")
         content.sound = LedgerNotifications.automationSound
-        attachThumbnail("Reminder", to: content)
         var components = DateComponents(); components.hour = hour; components.minute = minute
         let trigger = UNCalendarNotificationTrigger(dateMatching: components, repeats: true)
         return UNNotificationRequest(identifier: dailyID, content: content, trigger: trigger)
     }
     /// The build and language the pending daily reminder was scheduled with.
     private static var dailyReminderVersion: String {
-        (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + "|" + AppLanguage.code
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "") + "|" + AppLanguage.code + "|no-attachments-v1"
     }
-    /// A repeating reminder keeps the content it was scheduled with: iOS copies its thumbnail
-    /// (the full app icon) once, so a reminder saved under an older build keeps showing that
-    /// build's icon, and its text stays in the old language. After an update or a language
-    /// change, schedule it again at the same time; the same identifier replaces the old one.
+    /// Replace saved reminder content after a build, language or presentation change.
+    /// The presentation version also removes old attachments when the build number is unchanged.
+    /// Keep the user's existing time; the same identifier replaces the pending request.
     static func refreshDailyReminder() async {
         let defaults = UserDefaults.standard
         let version = dailyReminderVersion
@@ -1136,20 +1134,6 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
             do { try await center.add(dailyReminderRequest(hour: hour, minute: minute)) } catch { return }
         }
         defaults.set(version, forKey: "dailyReminderVersion")
-    }
-    /// Adds the status thumbnail for each kind of message, drawn in the app's colours:
-    /// "Recorded", "Review", "Reminder" or "Budget". Cosmetic only: any failure leaves
-    /// the notification unchanged.
-    static func attachThumbnail(_ kind: String, to content: UNMutableNotificationContent) {
-        guard let source = Bundle.main.url(forResource: "YueJiNotice" + kind, withExtension: "png") else { return }
-        // The system moves attachment files into its own store, so attach a fresh copy.
-        let copy = FileManager.default.temporaryDirectory.appendingPathComponent("yueji-notice-" + UUID().uuidString + ".png")
-        do {
-            try FileManager.default.copyItem(at: source, to: copy)
-            content.attachments = [try UNNotificationAttachment(identifier: "yueji.thumbnail", url: copy, options: nil)]
-        } catch {
-            try? FileManager.default.removeItem(at: copy)
-        }
     }
     static func prepareAutomaticResultsAuthorization() async {
         // Requested migration: enable system result alerts once on this update.
@@ -1181,7 +1165,6 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = systemSound(for: sound)
         registerActions()
         // Recorded results get a check; records needing review a gentle alert.
-        attachThumbnail(expenseID == nil && noticeID != nil ? "Review" : "Recorded", to: content)
         if let expenseID {
             content.categoryIdentifier = "yueji.expense"
             content.userInfo = ["recordID": expenseID, "recordKind": "expense"]
@@ -1886,7 +1869,6 @@ actor BudgetAlertService {
             : tr("个人消费：", "Personal spending: ", "Belanja peribadi: ") + money(candidate.spent)
                 + tr("；预算：", "; budget: ", "; bajet: ") + money(candidate.budget)
         content.sound = LedgerNotifications.automationSound
-        LedgerNotifications.attachThumbnail("Budget", to: content)
         do {
             try await center.add(UNNotificationRequest(identifier: "yueji.budget." + candidate.month, content: content, trigger: nil))
             defaults.set(true, forKey: key)
