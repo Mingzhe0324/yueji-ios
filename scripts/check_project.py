@@ -108,7 +108,10 @@ for scale in (2, 3):
     assert name in resources, f'Missing icon fallback resource: {name}'
     assert png_header(root / 'YueJi' / name) == ((60 * scale, 60 * scale), 2), f'Icon fallback must be opaque {60 * scale}px: {name}'
 notifications = (root / 'YueJi/Features.swift').read_text()
-assert 'UNNotificationAttachment' not in notifications, 'System notifications must not add a right-side thumbnail.'
+for source in (root / 'YueJi').rglob('*.swift'):
+    text = source.read_text(encoding='utf-8')
+    assert 'UNNotificationAttachment' not in text, f'Unexpected notification attachment in {source.name}'
+    assert 'attachThumbnail' not in text, f'Removed thumbnail API still referenced in {source.name}'
 assert 'no-attachments-v1' in notifications, 'Existing daily reminders must migrate away from attachments.'
 print('PASS: IPA/AltStore icon fallbacks are bundled; notification thumbnails are disabled.')
 

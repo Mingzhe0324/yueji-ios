@@ -548,7 +548,6 @@ actor UnusualSpendingNotifier {
             content.body = alert.detail()
         }
         content.sound = LedgerNotifications.automationSound
-        LedgerNotifications.attachThumbnail("Budget", to: content)
         do {
             try await center.add(UNNotificationRequest(identifier: "yueji.unusual." + month + "." + alert.id, content: content, trigger: nil))
             // Only this month's lines are kept.
