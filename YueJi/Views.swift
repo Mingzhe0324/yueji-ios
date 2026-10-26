@@ -2553,6 +2553,11 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: Controller, coordinator: ()) { controller.uninstall() }
 
     final class Controller: UIViewController, UIAdaptivePresentationControllerDelegate {
+        // Navigation destinations live inside the same presented sheet. Their
+        // observers must not replace the root editor's dirty-state callback.
+        // A separately presented child sheet has its own presentation controller.
+        private static let owners = NSMapTable<UIPresentationController, Controller>(
+            keyOptions: .weakMemory, valueOptions: .weakMemory)
         var blocked = false
         var attempted: (() -> Void)?
         private weak var observed: UIPresentationController?
@@ -2573,9 +2578,13 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
                    presenter.presentedViewController === candidate,
                    let presentation = candidate.presentationController,
                    presentation.presentedViewController === candidate {
+                    if let owner = Self.owners.object(forKey: presentation), owner !== self {
+                        return
+                    }
                     if observed !== presentation {
                         restore()
                         observed = presentation
+                        Self.owners.setObject(self, forKey: presentation)
                         previous = presentation.delegate
                         previousModalInPresentation = candidate.isModalInPresentation
                         #if DEBUG
@@ -2600,10 +2609,15 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
             attempted = nil
         }
         private func restore() {
+            if let observed, Self.owners.object(forKey: observed) === self {
+                Self.owners.removeObject(forKey: observed)
+            }
             if let observed, observed.delegate === self {
                 observed.delegate = previous
                 observed.presentedViewController.isModalInPresentation = previousModalInPresentation
             }
+            observed = nil
+            previous = nil
         }
         func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool { !blocked }
         func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {

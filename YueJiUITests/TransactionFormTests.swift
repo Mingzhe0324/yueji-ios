@@ -333,7 +333,8 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertEqual(itemAmount.value as? String, "35.00")
         dragSheetToDismiss(in: app)
         let discardAlert = app.alerts["Discard changes?"]
-        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5))
+        XCTAssertTrue(discardAlert.waitForExistence(timeout: 5),
+                      "After returning from category and ownership, the root editor must still handle a rejected dismissal and offer Keep editing")
         let keepDraft = discardAlert.buttons["Keep editing"]
         XCTAssertTrue(keepDraft.waitForExistence(timeout: 5))
         keepDraft.tap()

@@ -69,3 +69,9 @@ No frame-rate improvement, zero-hitch result, physical touch-layout pass or succ
 - Today's spending moved from the bottom tab accessory to the Overview header below the monthly summary, shown only for the current month. The amount still follows the privacy toggle and the existing personal-spending calculation. Existing toolbar entry buttons remain available.
 - Project and syntax checks pass. Added an HTTP fixture test for sign-in versus account creation. Native compilation, XCTest execution, VoiceOver, keyboard, and physical-device visual verification still require macOS/iOS. This design change does not resolve the outstanding device connection failure.
 
+# Run 80 — Dismissal confirmation after nested navigation
+
+The supplied `YueJi-diagnostics-run80.zip` shows the first-add-item case failing at the discard-alert assertion after returning from category and ownership. The failure hierarchy still contains New entry, Lunch and 35.00, with no alert: the form remained open, rather than crashing or losing the visible draft. Four other UI cases passed.
+
+Code review identified competing dismissal observers: navigation destinations and their root editor can target the same presentation controller. The observer now registers a weak owner per presentation so a nested destination cannot replace the root editor's callback or dirty-state restriction. Independent child sheets retain independent ownership; dismantling restores the original delegate. The existing gesture and confirmation assertions remain enabled, with a more specific failure message. Project and Swift syntax validation pass; a fresh native CI run is still required to establish that this resolves run 80.
+
