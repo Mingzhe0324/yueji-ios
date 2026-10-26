@@ -194,8 +194,8 @@ actor SupabaseCloudService: CloudRemote {
         let health = try await request("/rest/v1/rpc/yueji_sync_health", body: [:])
         guard (try? JSONDecoder().decode(Int.self, from: health)) == 1 else { throw CloudFailure.database }
     }
-    func sendCode(email: String) async throws {
-        _ = try await request("/auth/v1/otp", body: ["email": email, "create_user": true])
+    func sendCode(email: String, createAccount: Bool = true) async throws {
+        _ = try await request("/auth/v1/otp", body: ["email": email, "create_user": createAccount])
     }
     func verify(email: String, code: String) async throws -> CloudSession {
         let data = try await request("/auth/v1/verify", body: ["email": email, "token": code, "type": "email"])

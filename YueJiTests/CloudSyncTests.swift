@@ -213,6 +213,29 @@ final class CloudHTTPTests: XCTestCase {
         XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "Authorization") == nil })
         XCTAssertTrue(requests.allSatisfy { $0.value(forHTTPHeaderField: "apikey") == "sb_publishable_test_fixture" })
     }
+    func testSignInDoesNotCreateAccountButRegistrationDoes() async throws {
+        let (api, host) = try service(replies: [(200, "{}"), (200, "{}")])
+        try await api.sendCode(email: "returning@example.invalid", createAccount: false)
+        try await api.sendCode(email: "new@example.invalid", createAccount: true)
+        let requests = CloudHTTPStub.requests(host: host)
+        XCTAssertEqual(requests.count, 2)
+        let bodies = try requests.map { request -> [String: Any] in
+            let data = try XCTUnwrap(request.httpBody ?? request.httpBodyStream.map { stream in
+                stream.open(); defer { stream.close() }
+                var data = Data(); var buffer = [UInt8](repeating: 0, count: 1024)
+                while stream.hasBytesAvailable {
+                    let count = stream.read(&buffer, maxLength: buffer.count)
+                    if count <= 0 { break }
+                    data.append(contentsOf: buffer.prefix(count))
+                }
+                return data
+            })
+            return try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        }
+        XCTAssertEqual(bodies[0]["create_user"] as? Bool, false)
+        XCTAssertEqual(bodies[1]["create_user"] as? Bool, true)
+        XCTAssertTrue(requests.allSatisfy { $0.url?.path == "/auth/v1/otp" })
+    }
     func testMissingDatabaseIsDifferentFromRejectedKey() async throws {
         let (missing, _) = try service(replies: [(200, "{}"), (404, #"{"code":"PGRST202"}"#)])
         do { try await missing.checkConnection(); XCTFail("Expected missing schema") }

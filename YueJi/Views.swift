@@ -315,7 +315,6 @@ struct MainView: View {
     @State private var notificationDestination: NotificationDestination?
     @State private var logoFinished = false
     /// A new entry from the quick-add bar above the tab bar (iOS 26).
-    @State private var quickAdding = false
     /// The app appears through the opening's moon; a plain fade without animations.
     private var openingExit: AnyTransition {
         reduceMotion || !playful ? .opacity : .openingIris
@@ -386,7 +385,6 @@ struct MainView: View {
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
         }.tint(ink).modifier(YueJiTabBarMotion())
-            .modifier(QuickAddAccessory { if !quickAdding { quickAdding = true } })
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -500,10 +498,6 @@ struct MainView: View {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
                     Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { showingNewTNG = false }
                 } } }.yuejiSheetSurface().ledgerFeedback(modal: true)
-            }
-            // The quick-add bar's new entry, over whichever tab is showing.
-            .sheet(isPresented: $quickAdding, onDismiss: { openPendingNotification(); openPendingInbox() }) {
-                ExpenseEditor(original: nil, initialDate: Date())
             }
             .task(id: undoExpirationPaused) { model.pauseUndoExpiry(undoExpirationPaused) }
             .task(id: savedExpiration) {
@@ -973,6 +967,9 @@ struct DashboardView: View {
                 .font(.footnote).foregroundStyle(.secondary)
             Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja"))
                 .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            if Calendar.current.isDate(month, equalTo: Date(), toGranularity: .month) {
+                TodaySpendingRow().padding(.top, 12)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }

@@ -62,3 +62,10 @@ Run the complete YueJi scheme on an iPhone simulator first. Then use a Release b
 Use [SwiftUI Instruments and Time Profiler](https://developer.apple.com/documentation/Xcode/understanding-and-improving-swiftui-performance) together with Animation Hitches. Compare builds 86 and 87 under the same data/device conditions, including 10,000+ expenses, many splits/settlements, large receipts and large backups. Inspect long body updates, main-thread IO/CPU, image decode/render cost, update causes, frame deadlines and memory. Capture the twenty push/pop cycles, cancelled gestures, background automatic arrivals and repeated saves.
 
 No frame-rate improvement, zero-hitch result, physical touch-layout pass or successful IPA build is claimed by this source review. Any remaining runtime bottleneck needs an actual trace; longer animations or added input delays are not substitutes.
+# 2026-10-26 — Welcome and today's spending
+
+- First-run account entry now uses a midnight-blue and warm-gold welcome screen with a floating moon, softly twinkling stars, and a ledger illustration. Create account and returning sign-in lead to email-code forms; returning sign-in does not implicitly create an account.
+- Motion pauses in the background and respects Reduce Motion and the app animation preference. Forms scroll for keyboard access and larger text, with email/code autofill and Chinese, English, and Malay copy. Local-only entry remains available for unbound ledgers; account ownership and sync conflict handling remain intact.
+- Today's spending moved from the bottom tab accessory to the Overview header below the monthly summary, shown only for the current month. The amount still follows the privacy toggle and the existing personal-spending calculation. Existing toolbar entry buttons remain available.
+- Project and syntax checks pass. Added an HTTP fixture test for sign-in versus account creation. Native compilation, XCTest execution, VoiceOver, keyboard, and physical-device visual verification still require macOS/iOS. This design change does not resolve the outstanding device connection failure.
+

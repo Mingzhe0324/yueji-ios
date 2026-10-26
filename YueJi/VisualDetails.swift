@@ -279,28 +279,13 @@ extension Ledger {
     }
 }
 
-// MARK: - Quick add above the tab bar
+// MARK: - Today's spending in the overview header
 
-/// iOS 26's bar above the tab bar, where Music keeps its player: today's spending and a new
-/// entry, on every tab. The system places it and keeps it clear of the tabs. Nothing before
-/// iOS 26.
-struct QuickAddAccessory: ViewModifier {
-    let onAdd: () -> Void
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            content.tabViewBottomAccessory { QuickAddBar(onAdd: onAdd) }
-        } else {
-            content
-        }
-    }
-}
-
-private struct QuickAddBar: View {
+struct TodaySpendingRow: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
     /// The Overview's eye hides this amount too.
     @AppStorage("hideOverviewAmounts") private var hidden = false
-    let onAdd: () -> Void
     /// Today's personal spending, counted as the Overview counts the month.
     private var today: Int {
         let calendar = Calendar.current
@@ -311,29 +296,23 @@ private struct QuickAddBar: View {
     var body: some View {
         let _ = uiLocale.identifier
         let spent = today
-        Button(action: onAdd) {
             HStack(spacing: 8) {
-                Text(tr("今天", "Today", "Hari ini")).foregroundStyle(.secondary)
+                Image(systemName: "sun.horizon").foregroundStyle(IslandTheme.accent)
+                Text(tr("今日消费", "Spent today", "Belanja hari ini")).foregroundStyle(.secondary)
+                Spacer(minLength: 8)
                 Group {
                     if hidden { Text(DashboardView.maskedAmount) } else { AnimatedMoney(cents: spent) }
                 }
                 .fontWeight(.semibold)
                 .lineLimit(1).minimumScaleFactor(0.7)
-                Spacer(minLength: 8)
-                Image(systemName: "plus.circle.fill")
-                    .font(.title3)
-                    .foregroundStyle(IslandTheme.accent)
             }
             .font(.subheadline)
-            .padding(.horizontal, 16)
-            .frame(maxHeight: .infinity)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
+            .padding(14)
+            .background(IslandTheme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 16))
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(tr("记一笔", "Add entry", "Tambah rekod"))
+        .accessibilityLabel(tr("今日消费", "Spent today", "Belanja hari ini"))
         .accessibilityValue(hidden ? tr("今天的金额已隐藏", "Today's amount hidden", "Amaun hari ini disembunyikan")
             : tr("今天 ", "Today ", "Hari ini ") + money(spent))
-        .accessibilityIdentifier("accessory.quickAdd")
+        .accessibilityIdentifier("overview.todaySpending")
     }
 }

@@ -70,7 +70,7 @@ import UIKit
             message = tr("账号服务和账本数据库连接正常。", "Account service and ledger database are reachable.", "Perkhidmatan akaun dan pangkalan data lejar boleh dicapai.")
         } catch { report(error) }
     }
-    func sendCode(to address: String) async {
+    func sendCode(to address: String, createAccount: Bool = true) async {
         guard !busy else { return }
         busy = true; defer { finishWork() }
         let address = address.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -79,7 +79,7 @@ import UIKit
             let api = try connectedService()
             // Diagnose missing schema before asking the person to wait for an email.
             try await api.checkConnection()
-            try await api.sendCode(email: address)
+            try await api.sendCode(email: address, createAccount: createAccount)
             email = address; codeSent = true
             message = tr("验证码已发送，请查看邮箱并输入。", "Code sent. Check your email and enter it here.", "Kod dihantar. Semak e-mel dan masukkannya di sini.")
         } catch { report(error) }
@@ -204,13 +204,204 @@ struct CloudEntryView: View {
         Group {
             if !cloud.loaded { ProgressView() }
             else if cloud.canEnter { MainView() }
-            else { NavigationStack { CloudAccountView(isEntry: true) } }
+            else { NavigationStack {
+                if cloud.signedIn { CloudAccountView(isEntry: true) }
+                else { CloudWelcomeView() }
+            } }
         }
         .task { await cloud.initialize() }
         .onChange(of: cloud.cloudRestored) { _, _ in Task { await model.refresh(postRecurring: false) } }
         .onChange(of: phase) { _, value in
             if value == .active { Task { await cloud.sync() } }
             if value == .background { cloud.syncInBackground() }
+        }
+    }
+}
+
+/// First-run moonrise. The signed-in account/conflict screen remains available above.
+private struct CloudWelcomeView: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var phase
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var mode: Bool? // true: create account; false: returning account
+    @State private var address = ""
+    @State private var code = ""
+    @FocusState private var field: Field?
+    private enum Field: Hashable { case email, code }
+    private let gold = Color(red: 0.96, green: 0.79, blue: 0.49)
+    private var motion: Bool { !reduceMotion && playful && phase == .active }
+    private var creating: Bool { mode == true }
+    private var title: String {
+        if cloud.codeSent { return tr("一封信，\n开启你的月记。", "A little code.\nA new chapter.", "Satu kod.\nBab baharu.") }
+        if mode == nil { return tr("把日子，\n记成自己的光。", "Little moments.\nYour own light.", "Detik kecil.\nCahaya milikmu.") }
+        return creating ? tr("你好，\n新的开始。", "Hello,\nnew beginnings.", "Helo,\npermulaan baharu.") : tr("欢迎回来，\n继续你的故事。", "Welcome back.\nYour story continues.", "Selamat kembali.\nKisahmu diteruskan.")
+    }
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.06, green: 0.10, blue: 0.20), Color(red: 0.13, green: 0.20, blue: 0.32)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 26) {
+                    HStack {
+                        Label("YUEJI / 月记", systemImage: "moon.fill")
+                            .font(.caption.weight(.semibold)).tracking(3).foregroundStyle(gold)
+                        Spacer()
+                        if mode != nil {
+                            Button {
+                                field = nil; cloud.changeEmail(); code = ""
+                                withAnimation(motion ? .easeInOut(duration: 0.3) : nil) { mode = nil }
+                            } label: { Image(systemName: "arrow.left").frame(width: 44, height: 44) }
+                                .accessibilityLabel(tr("返回欢迎页", "Back to welcome", "Kembali ke alu-aluan"))
+                                .disabled(cloud.busy)
+                        }
+                    }
+                    MoonWelcomeArtwork(animated: motion).frame(height: mode == nil ? 240 : 150)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text(title).font(.system(.largeTitle, design: .serif, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+                        Text(subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.78))
+                            .fixedSize(horizontal: false, vertical: true).lineSpacing(4)
+                    }
+                    if mode == nil { welcomeActions }
+                    else { emailForm.transition(.opacity) }
+                    if cloud.busy {
+                        ProgressView(tr("正在连接…", "Connecting…", "Menyambung…")).tint(gold)
+                    }
+                    if !cloud.message.isEmpty {
+                        VStack(alignment: .leading, spacing: 12) {
+                            Text(cloud.message).font(.footnote).textSelection(.enabled)
+                            Button(tr("检查云端连接", "Check cloud connection", "Semak sambungan awan")) {
+                                field = nil; Task { await cloud.checkConnection() }
+                            }.font(.footnote.weight(.semibold)).disabled(cloud.busy || !cloud.configured)
+                        }.padding(18).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
+                    }
+                    if !cloud.configured { Text(CloudFailure.configuration.localizedDescription).font(.footnote) }
+                    if cloud.link == nil {
+                        Button(tr("先逛逛，使用本机账本", "Explore with a local ledger", "Teroka dengan lejar setempat")) {
+                            field = nil; cloud.usingLocal = true
+                        }.font(.subheadline).frame(maxWidth: .infinity, minHeight: 44).disabled(cloud.busy)
+                        Text(tr("本机模式不会上传账本；登录并同步后才能跨设备恢复。", "Local mode stays on this device. Sign in and sync to restore on another device.", "Mod setempat kekal pada peranti ini. Log masuk dan segerakkan untuk pulih pada peranti lain."))
+                            .font(.caption).foregroundStyle(.white.opacity(0.65)).multilineTextAlignment(.center)
+                    }
+                }.padding(28).frame(maxWidth: 520).frame(maxWidth: .infinity)
+            }.scrollDismissesKeyboard(.interactively)
+        }
+        .foregroundStyle(.white).tint(gold).preferredColorScheme(.dark)
+        .toolbar(.hidden, for: .navigationBar)
+        .onAppear {
+            address = cloud.email
+            if cloud.link != nil || cloud.codeSent { mode = false }
+        }
+        .onChange(of: cloud.codeSent) { _, sent in if sent { field = .code } }
+    }
+    private var subtitle: String {
+        if cloud.codeSent { return tr("验证码已发送至", "We sent a code to", "Kod dihantar ke") + " " + cloud.email }
+        if mode == nil { return tr("收好每一笔生活。登录并同步，让账本随你去下一站。", "Keep a little of every day. Sign in and sync to take your ledger with you.", "Simpan setiap detik harian. Log masuk dan segerakkan untuk membawa lejar bersama.") }
+        return creating ? tr("用邮箱创建账号，无需设置密码。验证后，将本机账本关联到你的账号。", "Create an account with email, no password needed. Verification links this ledger to your account.", "Cipta akaun melalui e-mel tanpa kata laluan. Pengesahan memautkan lejar kepada akaunmu.") : tr("使用原来的邮箱，验证后找回已同步的账本。", "Use your original email to recover your synced ledger.", "Gunakan e-mel asal untuk memulihkan lejar yang disegerakkan.")
+    }
+    private var welcomeActions: some View {
+        VStack(spacing: 14) {
+            if cloud.link == nil {
+                Button { selectMode(true) } label: {
+                    actionLabel(tr("创建账户", "Create account", "Cipta akaun"), symbol: "sparkles")
+                }.buttonStyle(MoonWelcomeButton(primary: true)).disabled(!cloud.configured || cloud.busy)
+            }
+            Button { selectMode(false) } label: {
+                actionLabel(tr("已有账户 · 登录", "Already a member? Sign in", "Sudah ada akaun? Log masuk"), symbol: "arrow.right")
+            }.buttonStyle(MoonWelcomeButton(primary: false)).disabled(!cloud.configured || cloud.busy)
+        }
+    }
+    private var emailForm: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text(cloud.codeSent ? tr("邮箱验证码", "Email code", "Kod e-mel") : tr("你的邮箱", "Your email", "E-mel anda"))
+                .font(.caption.weight(.semibold)).foregroundStyle(gold)
+            if cloud.codeSent {
+                TextField("", text: $code, prompt: Text(tr("输入验证码", "Enter code", "Masukkan kod")).foregroundStyle(.white.opacity(0.5)))
+                    .keyboardType(.numberPad).textContentType(.oneTimeCode).focused($field, equals: .code)
+                    .font(.title2.monospacedDigit()).padding(18).background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
+                    .accessibilityLabel(tr("邮箱验证码", "Email code", "Kod e-mel"))
+                Button {
+                    field = nil; Task { await cloud.verify(code: code); code = "" }
+                } label: {
+                    actionLabel(creating ? tr("验证并开始", "Verify and begin", "Sahkan dan mula") : tr("登录并继续", "Sign in and continue", "Log masuk dan teruskan"), symbol: "arrow.right")
+                }.buttonStyle(MoonWelcomeButton(primary: true)).disabled(code.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                Button(tr("换个邮箱 / 重新发送", "Change email / resend", "Tukar e-mel / hantar semula")) {
+                    cloud.changeEmail(); code = ""; field = .email
+                }.font(.subheadline).frame(minHeight: 44)
+            } else {
+                TextField("", text: $address, prompt: Text("you@example.com").foregroundStyle(.white.opacity(0.5)))
+                    .keyboardType(.emailAddress).textContentType(.emailAddress).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .focused($field, equals: .email).submitLabel(.send).onSubmit { send() }
+                    .padding(18).background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 16))
+                    .accessibilityLabel(tr("邮箱", "Email", "E-mel"))
+                Button { send() } label: {
+                    actionLabel(tr("发送验证码", "Send code", "Hantar kod"), symbol: "envelope")
+                }.buttonStyle(MoonWelcomeButton(primary: true)).disabled(!address.contains("@") || !cloud.configured)
+                if cloud.link == nil {
+                    Button(creating ? tr("已有账户？登录", "Have an account? Sign in", "Ada akaun? Log masuk") : tr("第一次来？创建账户", "New here? Create account", "Baharu di sini? Cipta akaun")) {
+                        selectMode(!creating)
+                    }.font(.subheadline).frame(minHeight: 44)
+                }
+            }
+        }.disabled(cloud.busy)
+    }
+    private func selectMode(_ create: Bool) {
+        cloud.changeEmail(); code = ""
+        withAnimation(motion ? .easeInOut(duration: 0.3) : nil) { mode = create }
+    }
+    private func send() {
+        guard !cloud.busy, address.contains("@"), cloud.configured else { return }
+        field = nil; Task { await cloud.sendCode(to: address, createAccount: creating) }
+    }
+    private func actionLabel(_ text: String, symbol: String) -> some View {
+        HStack { Text(text).multilineTextAlignment(.leading); Spacer(minLength: 12); Image(systemName: symbol) }
+            .font(.body.weight(.semibold)).padding(20).frame(maxWidth: .infinity, minHeight: 58)
+    }
+}
+
+private struct MoonWelcomeButton: ButtonStyle {
+    let primary: Bool
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(primary ? Color(red: 0.12, green: 0.16, blue: 0.24) : .white)
+            .background(primary ? Color(red: 0.96, green: 0.79, blue: 0.49) : .white.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(primary ? 0 : 0.22)))
+            .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
+            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.98 : 1)
+    }
+}
+
+private struct MoonWelcomeArtwork: View {
+    let animated: Bool
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 30, paused: !animated)) { context in
+            let time = animated ? context.date.timeIntervalSinceReferenceDate : 0
+            let drift = sin(time * 0.65)
+            ZStack {
+                Circle().fill(Color.orange.opacity(0.10)).frame(width: 190, height: 190).blur(radius: 30)
+                Circle().strokeBorder(.white.opacity(0.13), lineWidth: 1).frame(width: 230, height: 230)
+                    .scaleEffect(y: 0.54).rotationEffect(.degrees(-24))
+                Image(systemName: "moon.fill")
+                    .font(.system(size: 104, weight: .ultraLight))
+                    .foregroundStyle(LinearGradient(colors: [Color(red: 1, green: 0.9, blue: 0.66), Color(red: 0.80, green: 0.57, blue: 0.30)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .rotationEffect(.degrees(-18 + drift * 3)).offset(y: drift * 6)
+                    .shadow(color: .orange.opacity(0.15), radius: 18, y: 8)
+                ForEach(0..<7) { index in
+                    let angle = Double(index) * 2.399
+                    Image(systemName: index.isMultiple(of: 3) ? "sparkle" : "circle.fill")
+                        .font(.system(size: index.isMultiple(of: 3) ? 12 : 3))
+                        .foregroundStyle(Color(red: 0.96, green: 0.79, blue: 0.49))
+                        .opacity(0.55 + 0.35 * sin(time * 0.8 + Double(index)))
+                        .offset(x: cos(angle) * 113, y: sin(angle) * 66 + drift * 3)
+                }
+                Image(systemName: "book.closed.fill").font(.system(size: 20))
+                    .foregroundStyle(Color(red: 0.96, green: 0.79, blue: 0.49))
+                    .padding(14).background(Color(red: 0.19, green: 0.26, blue: 0.36), in: RoundedRectangle(cornerRadius: 18))
+                    .rotationEffect(.degrees(9)).offset(x: 76, y: 42 - drift * 5)
+            }.frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 }
