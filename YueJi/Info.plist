@@ -2,6 +2,15 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+    <key>CFBundleURLTypes</key>
+    <array><dict>
+        <key>CFBundleURLName</key><string>com.yueji.auth</string>
+        <key>CFBundleURLSchemes</key><array><string>yueji-auth</string></array>
+    </dict></array>
+    <key>YueJiSupabaseURL</key>
+    <string></string>
+    <key>YueJiSupabasePublicKey</key>
+    <string></string>
     <key>NSLocationWhenInUseUsageDescription</key>
     <string>为新账目添加当前位置作为消费地点。你可以修改或删除地点；不允许定位也能记账。</string>
 	<key>CFBundleDisplayName</key>

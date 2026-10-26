@@ -5,6 +5,12 @@
 	};
 	"objectVersion" = 56;
 	"objects" = {
+        "CF6000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "CloudSync.swift"; "sourceTree" = "<group>"; };
+        "CF6000000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF6000000000000000000001"; };
+        "CF6000000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "CloudAccount.swift"; "sourceTree" = "<group>"; };
+        "CF6000000000000000000004" = { "isa" = "PBXBuildFile"; "fileRef" = "CF6000000000000000000003"; };
+        "CF6000000000000000000005" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "CloudSyncTests.swift"; "sourceTree" = "<group>"; };
+        "CF6000000000000000000006" = { "isa" = "PBXBuildFile"; "fileRef" = "CF6000000000000000000005"; };
         "CB9400000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "ExpenseCharges.swift"; "sourceTree" = "<group>"; };
         "CB9400000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CB9400000000000000000001"; };
         "CB9400000000000000000003" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "ExpenseChargeViews.swift"; "sourceTree" = "<group>"; };
@@ -166,6 +172,8 @@
                 "CF3000000000000000000001",
                 "CF3000000000000000000003",
                 "CF4000000000000000000001",
+                  "CF6000000000000000000001",
+                  "CF6000000000000000000003",
                 "CF4000000000000000000003",
                 "CF4000000000000000000005",
                 "CF4000000000000000000007",
@@ -204,6 +212,7 @@
 				"A56472E961F58FFFAE622D5B",
 				"CF3000000000000000000005",
 				"CF4000000000000000000009",
+                "CF6000000000000000000005",
 				"CF5000000000000000000003",
 			);
 			"path" = "YueJiTests";
@@ -240,6 +249,8 @@
                 "CF3000000000000000000002",
                 "CF3000000000000000000004",
                 "CF4000000000000000000002",
+                  "CF6000000000000000000002",
+                  "CF6000000000000000000004",
                 "CF4000000000000000000004",
                 "CF4000000000000000000006",
                 "CF4000000000000000000008",
@@ -291,6 +302,7 @@
 				"587854A59EFBF8969CAFD37F",
 				"CF3000000000000000000006",
 				"CF4000000000000000000010",
+                "CF6000000000000000000006",
 				"CF5000000000000000000004",
 			);
 			"runOnlyForDeploymentPostprocessing" = 0;

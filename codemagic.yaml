@@ -55,6 +55,7 @@ workflows:
       - name: Build unsigned iPhone app
         script: |
           set -euo pipefail
+          python3 scripts/configure_cloud.py
           python3 -u - <<'PY'
           from scripts.run_simulator_tests import run_stage
           command = ['xcodebuild', 'build', '-project', 'YueJi.xcodeproj', '-scheme', 'YueJi',

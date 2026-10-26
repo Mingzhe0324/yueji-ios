@@ -307,6 +307,7 @@ struct MainView: View {
     @AppStorage("playfulAnimations") private var playful = true
     @AppStorage("appAppearance") private var appearance = "system"
     @State private var showingGuide = false
+    @State private var showingBackupWelcome = true
     @State private var selectedTab = 0
     @State private var ledgerMonthRequest: LedgerMonthRequest?
     @State private var showingNewTNG = false
@@ -314,7 +315,6 @@ struct MainView: View {
     @State private var notificationDestination: NotificationDestination?
     @State private var logoFinished = false
     /// A new entry from the quick-add bar above the tab bar (iOS 26).
-    @State private var quickAdding = false
     /// The app appears through the opening's moon; a plain fade without animations.
     private var openingExit: AnyTransition {
         reduceMotion || !playful ? .opacity : .openingIris
@@ -385,7 +385,6 @@ struct MainView: View {
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
         }.tint(ink).modifier(YueJiTabBarMotion())
-            .modifier(QuickAddAccessory { if !quickAdding { quickAdding = true } })
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -469,7 +468,11 @@ struct MainView: View {
                 if finished { openPendingNotification() }
             }
             .sheet(isPresented: $showingGuide, onDismiss: { completedGuide = true; openPendingNotification(); openPendingInbox() }) {
-                UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true)
+                if showingBackupWelcome {
+                    BackupWelcomeView { showingBackupWelcome = false }.yuejiSheetSurface().ledgerFeedback(modal: true)
+                } else {
+                    UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true)
+                }
             }
             .onChange(of: selectedTab) { _, _ in
                 FeedbackHaptics.selection()
@@ -495,10 +498,6 @@ struct MainView: View {
                 NavigationStack { TNGInboxView().toolbar { ToolbarItem(placement: .confirmationAction) {
                     Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { showingNewTNG = false }
                 } } }.yuejiSheetSurface().ledgerFeedback(modal: true)
-            }
-            // The quick-add bar's new entry, over whichever tab is showing.
-            .sheet(isPresented: $quickAdding, onDismiss: { openPendingNotification(); openPendingInbox() }) {
-                ExpenseEditor(original: nil, initialDate: Date())
             }
             .task(id: undoExpirationPaused) { model.pauseUndoExpiry(undoExpirationPaused) }
             .task(id: savedExpiration) {
@@ -968,6 +967,9 @@ struct DashboardView: View {
                 .font(.footnote).foregroundStyle(.secondary)
             Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja"))
                 .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
+            if Calendar.current.isDate(month, equalTo: Date(), toGranularity: .month) {
+                TodaySpendingRow().padding(.top, 12)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -2551,6 +2553,11 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
     static func dismantleUIViewController(_ controller: Controller, coordinator: ()) { controller.uninstall() }
 
     final class Controller: UIViewController, UIAdaptivePresentationControllerDelegate {
+        // Navigation destinations live inside the same presented sheet. Their
+        // observers must not replace the root editor's dirty-state callback.
+        // A separately presented child sheet has its own presentation controller.
+        private static let owners = NSMapTable<UIPresentationController, Controller>(
+            keyOptions: .weakMemory, valueOptions: .weakMemory)
         var blocked = false
         var attempted: (() -> Void)?
         private weak var observed: UIPresentationController?
@@ -2571,9 +2578,13 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
                    presenter.presentedViewController === candidate,
                    let presentation = candidate.presentationController,
                    presentation.presentedViewController === candidate {
+                    if let owner = Self.owners.object(forKey: presentation), owner !== self {
+                        return
+                    }
                     if observed !== presentation {
                         restore()
                         observed = presentation
+                        Self.owners.setObject(self, forKey: presentation)
                         previous = presentation.delegate
                         previousModalInPresentation = candidate.isModalInPresentation
                         #if DEBUG
@@ -2598,10 +2609,15 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
             attempted = nil
         }
         private func restore() {
+            if let observed, Self.owners.object(forKey: observed) === self {
+                Self.owners.removeObject(forKey: observed)
+            }
             if let observed, observed.delegate === self {
                 observed.delegate = previous
                 observed.presentedViewController.isModalInPresentation = previousModalInPresentation
             }
+            observed = nil
+            previous = nil
         }
         func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool { !blocked }
         func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
@@ -3334,6 +3350,7 @@ struct LedgerDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 struct SettingsView: View {
+    @ObservedObject private var cloudAccount = CloudAccount.shared
     @Environment(\.locale) private var uiLocale
     @State private var showingUsageGuide = false
     var guideDestination: String? = nil
@@ -3346,7 +3363,6 @@ struct SettingsView: View {
     @AppStorage(AutoBackupKeys.folderName) private var autoBackupFolder = ""
     @AppStorage(AutoBackupKeys.lastError) private var autoBackupError = ""
     @State private var exporting = false
-    @State private var importing = false
     @State private var document: LedgerDocument?
     @State private var restorePreview: RestorePreview?
     @State private var backups: [URL] = []
@@ -3399,6 +3415,11 @@ struct SettingsView: View {
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
                 Section {
+                    NavigationLink { CloudAccountView() } label: {
+                        SimpleSettingsRow(title: tr("账号与同步", "Account & sync", "Akaun & penyegerakan"), subtitle: cloudAccount.status, symbol: "person.crop.circle.badge.checkmark", color: IslandPalette.sky)
+                    }.accessibilityIdentifier("settings.account")
+                }
+                Section {
                     NavigationLink { backupPage } label: {
                         SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: backupSubtitle, symbol: "externaldrive.fill", color: IslandPalette.lavender)
                     }.guideTarget("settings.backup")
@@ -3414,9 +3435,6 @@ struct SettingsView: View {
                 } header: { Text(tr("备份与帮助", "Backups & help", "Sandaran & bantuan")) }
             }.yuejiDashboardSurface().navigationTitle(tr("设置", "Settings", "Tetapan")).navigationBarTitleDisplayMode(.large)
                 .fileExporter(isPresented: $exporting, document: document, contentType: .json, defaultFilename: "YueJi-\(monthKey(Date()))") { if case .failure(let e) = $0 { model.error = e.localizedDescription } }
-                .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
-                    do { previewBackup(try result.get()) } catch { model.error = error.localizedDescription }
-                }
                 .sheet(isPresented: $showingUsageGuide) { UsageGuideView().yuejiSheetSurface().ledgerFeedback(modal: true) }
                 .sheet(item: $restorePreview) { preview in
                     RestorePreviewView(preview: preview) { loadBackups() }.ledgerFeedback(modal: true)
@@ -3463,12 +3481,12 @@ struct SettingsView: View {
     }
     private var backupPage: some View {
         Form {
+                BackupRecoverySection { loadBackups() }
                 AutoBackupSection()
                 Section(tr("保管好你的账本", "Keep your ledger safe", "Simpan lejar dengan selamat")) {
                     Text(tr("换手机或卸载前，请先把完整备份存到「文件」或 iCloud Drive。", "Save a complete backup to Files or iCloud Drive before changing phones or uninstalling.", "Simpan sandaran lengkap ke Files atau iCloud Drive sebelum menukar telefon atau menyahpasang.")).font(.footnote)
                     NavigationLink(tr("导出账单表格", "Export a spreadsheet", "Eksport hamparan")) { CSVExportView() }
                     Button(tr("保存一份完整备份", "Save a complete backup", "Simpan sandaran lengkap")) { exportBackup() }
-                    Button(tr("从备份文件恢复", "Restore from a backup file", "Pulihkan daripada fail sandaran")) { if !backupBusy { importing = true } }
                     if FileManager.default.fileExists(atPath: LocalStore.shared.recoveryFile.path) {
                         Button(tr("恢复上次导入前的数据", "Recover data before last restore", "Pulihkan data sebelum pemulihan terakhir")) {
                             previewBackup(LocalStore.shared.recoveryFile)

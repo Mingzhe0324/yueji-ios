@@ -47,9 +47,14 @@ struct SpendingHeatScale: Equatable {
         largest = spent.last ?? 0
         guard !spent.isEmpty else { bounds = []; return }
         if spent.count < 8 {
-            bounds = [largest / 4, largest / 2, largest * 3 / 4]
+            let top = spent[spent.count - 1]
+            bounds = [top / 4, top / 2, top * 3 / 4]
         } else {
-            bounds = [0.25, 0.5, 0.75].map { spent[Int((Double(spent.count - 1) * $0).rounded())] }
+            let last = Double(spent.count - 1)
+            let quarter: Int = spent[Int((last * 0.25).rounded())]
+            let half: Int = spent[Int((last * 0.5).rounded())]
+            let threeQuarters: Int = spent[Int((last * 0.75).rounded())]
+            bounds = [quarter, half, threeQuarters]
         }
     }
     /// 0 for no spending, then 1 (lightest) to 4 (heaviest).
@@ -90,18 +95,34 @@ struct YearSnapshot: Equatable {
 
     var daysWithSpending: Int { days.values.filter { $0.cents > 0 }.count }
     var noSpendDays: Int { max(0, trackedDays - daysWithSpending) }
-    var monthlyAverage: Int { trackedMonths > 0 ? Int((Double(total) / Double(trackedMonths)).rounded()) : 0 }
+    var monthlyAverage: Int {
+        guard trackedMonths > 0 else { return 0 }
+        let average = Double(total) / Double(trackedMonths)
+        return Int(average.rounded())
+    }
     /// The month (1–12) with the most spending; the earlier one on a tie.
     var busiestMonth: Int? {
         var best: Int?
-        for index in months.indices where months[index] > 0 && months[index] > (best.map { months[$0 - 1] } ?? 0) {
+        var most = 0
+        for (index, cents) in months.enumerated() where cents > most {
             best = index + 1
+            most = cents
         }
         return best
     }
     /// The day with the most spending; the earlier one on a tie.
     var biggestDay: Date? {
-        days.max { $0.value.cents != $1.value.cents ? $0.value.cents < $1.value.cents : $0.key > $1.key }?.key
+        var best: Date?
+        var most = 0
+        for (day, cell) in days where cell.cents > 0 {
+            if cell.cents > most {
+                best = day
+                most = cell.cents
+            } else if cell.cents == most, let current = best, day < current {
+                best = day
+            }
+        }
+        return best
     }
     /// Change on the same period of the previous year, as a fraction (0.12 is 12% more).
     var change: Double? {
@@ -116,8 +137,12 @@ struct YearSnapshot: Equatable {
 
     init(ledger: Ledger, year: Int, now: Date = Date(), calendar: Calendar = InsightCalendar.make()) {
         self.year = year
-        let earliest = ledger.expenses.map(\.date).min()
-        earliestYear = earliest.map { calendar.component(.year, from: $0) } ?? calendar.component(.year, from: now)
+        let firstEntry: Date? = ledger.expenses.map(\.date).min()
+        if let firstEntry {
+            earliestYear = calendar.component(.year, from: firstEntry)
+        } else {
+            earliestYear = calendar.component(.year, from: now)
+        }
         guard let start = calendar.date(from: DateComponents(year: year, month: 1, day: 1)),
               let end = calendar.date(byAdding: .year, value: 1, to: start) else { return }
         var categoryTotals: [String: Int] = [:]
@@ -142,17 +167,30 @@ struct YearSnapshot: Equatable {
             merchant.payments += 1
             merchantTotals[key] = merchant
         }
-        categories = categoryTotals.filter { $0.value > 0 }
-            .map { YearCategoryTotal(category: $0.key, cents: $0.value) }
-            .sorted { $0.cents == $1.cents ? $0.category < $1.category : $0.cents > $1.cents }
-        merchants = Array(merchantTotals
-            .map { YearMerchantTotal(id: $0.key, name: $0.value.name, cents: $0.value.cents, payments: $0.value.payments) }
-            .sorted { $0.cents == $1.cents ? $0.name < $1.name : $0.cents > $1.cents }
-            .prefix(5))
-        scale = SpendingHeatScale(amounts: days.values.map(\.cents))
+        var categoryList: [YearCategoryTotal] = []
+        for (category, cents) in categoryTotals where cents > 0 {
+            categoryList.append(YearCategoryTotal(category: category, cents: cents))
+        }
+        categoryList.sort { left, right in
+            if left.cents != right.cents { return left.cents > right.cents }
+            return left.category < right.category
+        }
+        categories = categoryList
+        var merchantList: [YearMerchantTotal] = []
+        for (key, merchant) in merchantTotals {
+            merchantList.append(YearMerchantTotal(id: key, name: merchant.name, cents: merchant.cents, payments: merchant.payments))
+        }
+        merchantList.sort { left, right in
+            if left.cents != right.cents { return left.cents > right.cents }
+            return left.name < right.name
+        }
+        merchants = Array(merchantList.prefix(5))
+        var dayAmounts: [Int] = []
+        for cell in days.values { dayAmounts.append(cell.cents) }
+        scale = SpendingHeatScale(amounts: dayAmounts)
 
         // The year so far: up to the end of today, or all of it once it has ended.
-        guard let earliest, start <= now else { return }
+        guard let earliest = firstEntry, start <= now else { return }
         let tomorrow = calendar.date(byAdding: .day, value: 1, to: calendar.startOfDay(for: now)) ?? now
         let cutoff = min(end, tomorrow)
         let from = max(start, calendar.startOfDay(for: earliest))
@@ -165,9 +203,11 @@ struct YearSnapshot: Equatable {
         if let previousStart = calendar.date(byAdding: .year, value: -1, to: start),
            let previousEnd = calendar.date(byAdding: .year, value: -1, to: cutoff),
            let grace = calendar.date(byAdding: .day, value: 31, to: previousStart), earliest < grace {
-            previousSamePeriod = ledger.expenses.reduce(0) { sum, entry in
-                entry.date >= previousStart && entry.date < previousEnd ? sum + max(0, entry.personalSpending) : sum
+            var previousTotal = 0
+            for entry in ledger.expenses where entry.date >= previousStart && entry.date < previousEnd {
+                previousTotal += max(0, entry.personalSpending)
             }
+            previousSamePeriod = previousTotal
         }
     }
 }
@@ -261,16 +301,19 @@ enum SpendingAlerts {
         let ongoing = now < current.end
         let today = calendar.startOfDay(for: now)
         // Days so far, today included, while the month is under way.
-        let throughDay = ongoing ? (calendar.dateComponents([.day], from: current.start, to: today).day ?? 0) + 1 : nil
+        let throughDay: Int? = ongoing ? (calendar.dateComponents([.day], from: current.start, to: today).day ?? 0) + 1 : nil
         let periodEnd = ongoing ? (calendar.date(byAdding: .day, value: 1, to: today) ?? current.end) : current.end
         var previous: [(full: DateInterval, compared: Date)] = []
         for offset in 1...monthsCompared {
             guard let start = calendar.date(byAdding: .month, value: -offset, to: current.start),
                   let full = calendar.dateInterval(of: .month, for: start) else { continue }
-            let cut = throughDay.flatMap { calendar.date(byAdding: .day, value: $0, to: full.start) }
-            previous.append((full: full, compared: min(cut ?? full.end, full.end)))
+            var compared = full.end
+            if let throughDay, let cut = calendar.date(byAdding: .day, value: throughDay, to: full.start), cut < full.end {
+                compared = cut
+            }
+            previous.append((full: full, compared: compared))
         }
-        guard let earliest = previous.map({ $0.full.start }).min() else { return [] }
+        guard let earliest = previous.last?.full.start else { return [] }
 
         var tracked = Set<Int>()
         var spent = 0, usualSum = 0
@@ -297,21 +340,19 @@ enum SpendingAlerts {
             }
             if oneOff { history[entry.category, default: []].append(personal) }
         }
-        guard tracked.count >= minimumMonthsWithEntries else { return [] }
-        func usual(_ sum: Int) -> Int { Int((Double(sum) / Double(tracked.count)).rounded()) }
-        func isUp(_ cents: Int, over usual: Int, rise: Double, extra: Int) -> Bool {
-            Double(cents) >= Double(usual) * (1 + rise) && cents - usual >= extra
-        }
+        let monthsKept = tracked.count
+        guard monthsKept >= minimumMonthsWithEntries else { return [] }
 
         var overall: [SpendingAlert] = []
         var others: [SpendingAlert] = []
-        if (throughDay ?? earliestDay) >= earliestDay {
-            let usualSpent = usual(usualSum)
+        let paceDay: Int = throughDay ?? earliestDay
+        if paceDay >= earliestDay {
+            let usualSpent = average(usualSum, over: monthsKept)
             if usualSpent > 0, isUp(spent, over: usualSpent, rise: overallRise, extra: overallExtra) {
                 overall.append(SpendingAlert(kind: .overall, cents: spent, usual: usualSpent, throughDay: throughDay))
             }
             for (category, cents) in spentByCategory {
-                let usualCents = usual(usualByCategory[category] ?? 0)
+                let usualCents = average(usualByCategory[category] ?? 0, over: monthsKept)
                 if usualCents == 0 {
                     if cents >= newCategoryMinimum {
                         others.append(SpendingAlert(kind: .newCategory, category: category, cents: cents, usual: 0, throughDay: throughDay))
@@ -332,34 +373,60 @@ enum SpendingAlerts {
                                            throughDay: throughDay, expenseID: entry.id, merchant: entry.displayName))
         }
         // A large purchase explains its category: show the purchase rather than both.
-        let explained = Set(purchases.map(\.category))
-        others.removeAll { explained.contains($0.category) }
-        let ranked = (others + purchases).sorted { $0.extra == $1.extra ? $0.id < $1.id : $0.extra > $1.extra }
+        var explained = Set<String>()
+        for purchase in purchases { explained.insert(purchase.category) }
+        var ranked: [SpendingAlert] = []
+        for alert in others where !explained.contains(alert.category) { ranked.append(alert) }
+        ranked.append(contentsOf: purchases)
+        ranked.sort { left, right in
+            if left.extra != right.extra { return left.extra > right.extra }
+            return left.id < right.id
+        }
         return overall + Array(ranked.prefix(limit))
+    }
+
+    /// A monthly average over the months kept, rounded to the sen.
+    private static func average(_ sum: Int, over months: Int) -> Int {
+        guard months > 0 else { return 0 }
+        let value = Double(sum) / Double(months)
+        return Int(value.rounded())
+    }
+
+    /// Whether an amount is at least `rise` (a fraction) and `extra` (cents) above usual.
+    private static func isUp(_ cents: Int, over usual: Int, rise: Double, extra: Int) -> Bool {
+        let threshold = Double(usual) * (1 + rise)
+        return Double(cents) >= threshold && cents - usual >= extra
     }
 
     static func median(_ values: [Int]) -> Int {
         let sorted = values.sorted()
         guard !sorted.isEmpty else { return 0 }
         let middle = sorted.count / 2
-        return sorted.count % 2 == 1 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+        if sorted.count % 2 == 1 { return sorted[middle] }
+        return (sorted[middle - 1] + sorted[middle]) / 2
     }
 
     /// The alerts the person hid for a month, from the stored lines.
     static func dismissed(_ stored: String, month: String) -> Set<String> {
-        Set(stored.split(separator: "\n").compactMap { line -> String? in
+        var result = Set<String>()
+        for line in stored.split(separator: "\n") {
             let parts = line.split(separator: "|", maxSplits: 1)
-            return parts.count == 2 && parts[0] == month ? String(parts[1]) : nil
-        })
+            if parts.count == 2 && String(parts[0]) == month { result.insert(String(parts[1])) }
+        }
+        return result
     }
     /// The stored lines with one more alert hidden; months older than the last few are dropped.
     static func dismissing(_ id: String, month: String, in stored: String) -> String {
-        let keep = stored.split(separator: "\n").map(String.init).filter { line in
-            guard let prefix = line.split(separator: "|", maxSplits: 1).first else { return false }
-            return String(prefix) >= monthKey(Date().addingTimeInterval(-100 * 24 * 3600))
+        let oldest = monthKey(Date().addingTimeInterval(-100 * 24 * 3600))
+        var lines: [String] = []
+        for line in stored.split(separator: "\n") {
+            let text = String(line)
+            guard let prefix = text.split(separator: "|", maxSplits: 1).first, String(prefix) >= oldest else { continue }
+            lines.append(text)
         }
-        let line = month + "|" + id
-        return (keep.contains(line) ? keep : keep + [line]).joined(separator: "\n")
+        let added = month + "|" + id
+        if !lines.contains(added) { lines.append(added) }
+        return lines.joined(separator: "\n")
     }
 }
 
@@ -421,8 +488,9 @@ extension SpendingAlert {
     }
     /// The multiple to one decimal, without a trailing ".0".
     var multipleText: String {
-        let rounded = (multiple * 10).rounded() / 10
-        return rounded == rounded.rounded() ? String(Int(rounded)) : String(format: "%.1f", rounded)
+        let tenths = Int((multiple * 10).rounded())
+        if tenths % 10 == 0 { return String(tenths / 10) }
+        return String(tenths / 10) + "." + String(tenths % 10)
     }
 }
 
@@ -449,7 +517,10 @@ actor UnusualSpendingNotifier {
     /// in the last 20 hours.
     static func next(_ alerts: [SpendingAlert], month: String, sent: Set<String>, lastSent: Date?, now: Date) -> SpendingAlert? {
         guard !resting(lastSent: lastSent, now: now) else { return nil }
-        return alerts.first { $0.kind != .purchase && !sent.contains(month + "|" + $0.id) }
+        for alert in alerts where alert.kind != .purchase && !sent.contains(month + "|" + alert.id) {
+            return alert
+        }
+        return nil
     }
 
     func check(now: Date = Date()) async {
@@ -462,7 +533,8 @@ actor UnusualSpendingNotifier {
         // Runs after every refresh: once today's notification is out, don't read the ledger at all.
         guard !Self.resting(lastSent: lastSent, now: now), let ledger = try? LocalStore.shared.read() else { return }
         let alerts = SpendingAlerts.make(ledger: ledger, month: now, now: now)
-        let sent = Set((defaults.stringArray(forKey: Self.sentKey) ?? []).filter { $0.hasPrefix(month + "|") })
+        let stored: [String] = defaults.stringArray(forKey: Self.sentKey) ?? []
+        let sent = Set(stored.filter { $0.hasPrefix(month + "|") })
         guard let alert = Self.next(alerts, month: month, sent: sent, lastSent: lastSent, now: now) else { return }
         let center = UNUserNotificationCenter.current()
         let settings = await center.notificationSettings()
@@ -476,7 +548,6 @@ actor UnusualSpendingNotifier {
             content.body = alert.detail()
         }
         content.sound = LedgerNotifications.automationSound
-        LedgerNotifications.attachThumbnail("Budget", to: content)
         do {
             try await center.add(UNNotificationRequest(identifier: "yueji.unusual." + month + "." + alert.id, content: content, trigger: nil))
             // Only this month's lines are kept.

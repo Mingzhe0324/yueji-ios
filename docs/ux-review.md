@@ -1,5 +1,9 @@
 # YueJi complete UX review — 1.59.0, build 87
 
+Later backup changes: [reinstall recovery](reinstall-recovery.md) documents the new first-launch restore entry and backup-after-change behavior. The build 87 findings below remain historical; native/device validation for the new recovery flow is still required.
+
+Account-based recovery is now implemented separately; see [CloudSetup.md](../CloudSetup.md) for service configuration, automatic restore behavior, offline/conflict handling and pending native/backend tests. Public client configuration is saved for device builds. After database initialization, a 2026-10-25 read-only recheck confirmed Auth and schema health are reachable; email setup and end-to-end verification remain pending.
+
 This is a source review and implementation record. Native compilation, XCTest execution, touch geometry, animation frame timing and physical-device navigation have not been verified on this Windows workstation. A fresh CI run from the new `main` commit is required; rerunning an old failed job uses its old sources.
 
 The user-supplied Azure test summary for build 87 shows native compilation completed and 207 tests executed, with one unexpected failure in `testPreparedFriendAndInboxIndexMatchesLedgerBeforeAndAfterSettlement`. Its two incoming-notice fixtures omitted the required sender (`party`), causing accounting validation to reject the fixture before index assertions. Both senders are now supplied, the fixture is validated explicitly, and its date uses the fixed settlement example date. App code and validation remain unchanged. A new CI run is required to confirm this correction; no successful rerun or physical-device performance verification is claimed.
@@ -58,3 +62,16 @@ Run the complete YueJi scheme on an iPhone simulator first. Then use a Release b
 Use [SwiftUI Instruments and Time Profiler](https://developer.apple.com/documentation/Xcode/understanding-and-improving-swiftui-performance) together with Animation Hitches. Compare builds 86 and 87 under the same data/device conditions, including 10,000+ expenses, many splits/settlements, large receipts and large backups. Inspect long body updates, main-thread IO/CPU, image decode/render cost, update causes, frame deadlines and memory. Capture the twenty push/pop cycles, cancelled gestures, background automatic arrivals and repeated saves.
 
 No frame-rate improvement, zero-hitch result, physical touch-layout pass or successful IPA build is claimed by this source review. Any remaining runtime bottleneck needs an actual trace; longer animations or added input delays are not substitutes.
+# 2026-10-26 — Welcome and today's spending
+
+- First-run account entry now uses a midnight-blue and warm-gold welcome screen with a floating moon, softly twinkling stars, and a ledger illustration. Create account and returning sign-in lead to email-code forms; returning sign-in does not implicitly create an account.
+- Motion pauses in the background and respects Reduce Motion and the app animation preference. Forms scroll for keyboard access and larger text, with email/code autofill and Chinese, English, and Malay copy. Local-only entry remains available for unbound ledgers; account ownership and sync conflict handling remain intact.
+- Today's spending moved from the bottom tab accessory to the Overview header below the monthly summary, shown only for the current month. The amount still follows the privacy toggle and the existing personal-spending calculation. Existing toolbar entry buttons remain available.
+- Project and syntax checks pass. Added an HTTP fixture test for sign-in versus account creation. Native compilation, XCTest execution, VoiceOver, keyboard, and physical-device visual verification still require macOS/iOS. This design change does not resolve the outstanding device connection failure.
+
+# Run 80 — Dismissal confirmation after nested navigation
+
+The supplied `YueJi-diagnostics-run80.zip` shows the first-add-item case failing at the discard-alert assertion after returning from category and ownership. The failure hierarchy still contains New entry, Lunch and 35.00, with no alert: the form remained open, rather than crashing or losing the visible draft. Four other UI cases passed.
+
+Code review identified competing dismissal observers: navigation destinations and their root editor can target the same presentation controller. The observer now registers a weak owner per presentation so a nested destination cannot replace the root editor's callback or dirty-state restriction. Independent child sheets retain independent ownership; dismantling restores the original delegate. The existing gesture and confirmation assertions remain enabled, with a more specific failure message. Project and Swift syntax validation pass; a fresh native CI run is still required to establish that this resolves run 80.
+
