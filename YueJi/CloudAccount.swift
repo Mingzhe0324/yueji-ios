@@ -369,7 +369,11 @@ private struct CloudWelcomeView: View {
                                 .disabled(cloud.busy)
                         }
                     }
-                    MoonWelcomeArtwork(animated: motion).frame(height: mode == nil ? 240 : 150)
+                    ZStack {
+                        MoonWelcomeArtwork(animated: motion).opacity(0.45)
+                        YueJiCharacter(animated: motion, style: 0)
+                            .frame(width: mode == nil ? 180 : 130, height: mode == nil ? 180 : 130)
+                    }.frame(height: mode == nil ? 240 : 150)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 14) {
                         Text(title).font(.system(.largeTitle, design: .serif, weight: .medium)).fixedSize(horizontal: false, vertical: true)
@@ -599,6 +603,107 @@ private struct MoonWelcomeArtwork: View {
     }
 }
 
+/// Original vector character; no access to the user's Apple ID or personal Memoji.
+private struct YueJiCharacter: View {
+    var animated = false
+    var style = 0
+    private var shirt: Color { [Color.indigo, .teal, .orange][min(max(style, 0), 2)] }
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !animated)) { context in
+            let time = animated ? context.date.timeIntervalSinceReferenceDate : 0
+            let blink = animated && time.truncatingRemainder(dividingBy: 4.8) < 0.16
+            GeometryReader { geometry in
+                let size = min(geometry.size.width, geometry.size.height)
+                ZStack {
+                    Circle().fill(LinearGradient(colors: [shirt.opacity(0.18), shirt.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Ellipse().fill(shirt.gradient).frame(width: size * 0.76, height: size * 0.52).offset(y: size * 0.40)
+                    RoundedRectangle(cornerRadius: size * 0.08).fill(Color(red: 0.78, green: 0.49, blue: 0.32))
+                        .frame(width: size * 0.19, height: size * 0.22).offset(y: size * 0.21)
+                    Ellipse().fill(Color(red: 0.17, green: 0.11, blue: 0.10).gradient)
+                        .frame(width: size * 0.59, height: size * 0.65).offset(y: -size * 0.09)
+                    Ellipse().fill(LinearGradient(colors: [Color(red: 1, green: 0.79, blue: 0.59), Color(red: 0.84, green: 0.55, blue: 0.37)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        .frame(width: size * 0.51, height: size * 0.56).offset(y: -size * 0.015)
+                    Ellipse().fill(Color(red: 0.22, green: 0.14, blue: 0.11).gradient)
+                        .frame(width: size * 0.49, height: size * 0.20).rotationEffect(.degrees(-14)).offset(x: -size * 0.035, y: -size * 0.24)
+                    HStack(spacing: size * 0.15) {
+                        ForEach(0..<2) { _ in
+                            Capsule().fill(Color(red: 0.16, green: 0.10, blue: 0.10))
+                                .frame(width: size * 0.04, height: size * (blink ? 0.012 : 0.065))
+                        }
+                    }.offset(y: -size * 0.015)
+                    Capsule().fill(Color(red: 0.69, green: 0.36, blue: 0.24).opacity(0.5))
+                        .frame(width: size * 0.045, height: size * 0.065).offset(y: size * 0.055)
+                    Ellipse().trim(from: 0, to: 0.5).stroke(Color(red: 0.42, green: 0.19, blue: 0.15), style: StrokeStyle(lineWidth: size * 0.018, lineCap: .round))
+                        .frame(width: size * 0.16, height: size * 0.09).offset(y: size * 0.10)
+                    Image(systemName: "moon.fill").font(.system(size: size * 0.11)).foregroundStyle(.yellow).offset(y: size * 0.36)
+                    Image(systemName: "hand.wave.fill").font(.system(size: size * 0.27)).foregroundStyle(Color(red: 1, green: 0.76, blue: 0.53))
+                        .rotationEffect(.degrees(animated ? sin(time * 3) * 13 : -8), anchor: .bottom)
+                        .offset(x: size * 0.33, y: size * 0.18)
+                }.frame(width: size, height: size).clipShape(Circle())
+                    .offset(y: animated ? sin(time * 0.8) * 2 : 0)
+            }
+        }.accessibilityHidden(true)
+    }
+}
+
+private struct AccountProfileHeader: View {
+    let email: String
+    @AppStorage private var nickname: String
+    @AppStorage private var avatarStyle: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var phase
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var editing = false
+    @State private var draft = ""
+    @State private var draftStyle = 0
+    init(accountID: String, email: String) {
+        self.email = email
+        _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
+        _avatarStyle = AppStorage(wrappedValue: 0, "accountProfile.avatar." + accountID)
+    }
+    var body: some View {
+        VStack(spacing: 10) {
+            YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: avatarStyle)
+                .frame(width: 100, height: 100)
+            Text(nickname.isEmpty ? tr("月记用户", "YueJi member", "Pengguna YueJi") : nickname)
+                .font(.title2.weight(.semibold)).multilineTextAlignment(.center)
+            Text(email).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
+            Button(tr("编辑头像与昵称", "Edit avatar and name", "Edit avatar dan nama")) {
+                draft = nickname; draftStyle = avatarStyle; editing = true
+            }.font(.subheadline).frame(minHeight: 44)
+        }.frame(maxWidth: .infinity).padding(.vertical, 12)
+        .sheet(isPresented: $editing) {
+            NavigationStack {
+                Form {
+                    Section {
+                        HStack { Spacer(); YueJiCharacter(style: draftStyle).frame(width: 120, height: 120); Spacer() }
+                        Picker(tr("头像配色", "Avatar colour", "Warna avatar"), selection: $draftStyle) {
+                            Text(tr("靛蓝", "Indigo", "Indigo")).tag(0)
+                            Text(tr("青绿", "Teal", "Biru kehijauan")).tag(1)
+                            Text(tr("暖橙", "Orange", "Jingga")).tag(2)
+                        }
+                        TextField(tr("昵称", "Display name", "Nama paparan"), text: $draft)
+                            .textContentType(.nickname)
+                            .onChange(of: draft) { _, value in if value.count > 40 { draft = String(value.prefix(40)) } }
+                    } footer: {
+                        Text(tr("头像和昵称保存在这台设备，不会更改登录邮箱。", "Your avatar and name are saved on this device. Your sign-in email stays the same.", "Avatar dan nama disimpan pada peranti ini. E-mel log masuk tidak berubah."))
+                    }
+                }
+                .navigationTitle(tr("个人资料", "Profile", "Profil"))
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { editing = false } }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(tr("保存", "Save", "Simpan")) {
+                            nickname = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+                            avatarStyle = draftStyle; editing = false
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 struct CloudAccountView: View {
     var isEntry = false
     @ObservedObject private var cloud = CloudAccount.shared
@@ -628,7 +733,8 @@ struct CloudAccountView: View {
                 }
             } else {
                 Section(tr("账号", "Account", "Akaun")) {
-                    Text(cloud.email)
+                    AccountProfileHeader(accountID: cloud.link?.userID.uuidString ?? cloud.email, email: cloud.email)
+                        .id(cloud.link?.userID.uuidString ?? cloud.email)
                     Label(cloud.status, systemImage: cloud.dirty ? "icloud.and.arrow.up" : "icloud")
                     if let date = cloud.link?.lastSync {
                         LabeledContent(tr("上次同步", "Last sync", "Segerak terakhir"), value: dateLabel(date, time: true))
