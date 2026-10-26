@@ -72,8 +72,11 @@ struct CloudCredential: Codable {
 }
 enum CloudInstallation {
     static let key = "cloudInstallationInitialized.v1"
-    static func prepare(defaults: UserDefaults = .standard, hasExistingLink: Bool,
+    static func prepare(defaults: UserDefaults = .standard, cloudConfigured: Bool = true, hasExistingLink: Bool,
                         clearCredentials: () throws -> Void) throws {
+        // Local-only builds must neither depend on Keychain availability nor mark
+        // credentials handled: a later cloud-enabled build still needs cleanup.
+        guard cloudConfigured else { return }
         guard !defaults.bool(forKey: key) else { return }
         // A pre-marker installation with a bound ledger is an ordinary upgrade.
         if !hasExistingLink { try clearCredentials() }

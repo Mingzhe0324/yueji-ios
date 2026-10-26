@@ -51,7 +51,8 @@ import Security
         // No network is needed to open a previously synced account's local ledger.
         do {
             link = try await synchronizer.localLink()
-            try CloudInstallation.prepare(hasExistingLink: link != nil, clearCredentials: CloudCredentials.clear)
+            try CloudInstallation.prepare(cloudConfigured: configured, hasExistingLink: link != nil,
+                                          clearCredentials: CloudCredentials.clear)
             if let config = CloudConfiguration.bundled, let credential = try CloudCredentials.read(),
                credential.server == config.server,
                link == nil || link!.accepts(userID: credential.session.user.id, server: credential.server) {

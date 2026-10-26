@@ -301,6 +301,18 @@ final class CloudHTTPTests: XCTestCase {
 }
 
 final class CloudInstallationTests: XCTestCase {
+    func testLocalModeDoesNotTouchKeychainOrSkipFutureCloudCleanup() throws {
+        let defaults = defaults()
+        try CloudInstallation.prepare(defaults: defaults, cloudConfigured: false, hasExistingLink: false) {
+            XCTFail("A local-only launch must not access Keychain")
+            throw CloudFailure.keychain
+        }
+        XCTAssertFalse(defaults.bool(forKey: CloudInstallation.key))
+        var cleared = false
+        try CloudInstallation.prepare(defaults: defaults, cloudConfigured: true, hasExistingLink: false) { cleared = true }
+        XCTAssertTrue(cleared)
+        XCTAssertTrue(defaults.bool(forKey: CloudInstallation.key))
+    }
     private func defaults() -> UserDefaults {
         let name = "installation-test-" + UUID().uuidString
         let defaults = UserDefaults(suiteName: name)!
