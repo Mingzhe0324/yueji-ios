@@ -712,7 +712,7 @@ private struct MoonWelcomeArtwork: View {
 /// Packed avatar choices retain compatibility with earlier profile values.
 private struct AvatarLook {
     let rawValue: Int
-    private var safe: Int { min(max(rawValue, 0), 11519) }
+    private var safe: Int { min(max(rawValue, 0), 933119) }
     var shirt: Int { safe % 3 }
     var skin: Int { (safe / 3) % 5 }
     var hair: Int { (safe / 15) % 4 }
@@ -721,6 +721,10 @@ private struct AvatarLook {
     var face: Int { (safe / 720) % 2 }
     var beard: Int { (safe / 1440) % 2 }
     var expression: Int { (safe / 2880) % 4 }
+    var eyeColor: Int { (safe / 11520) % 3 }
+    var nose: Int { (safe / 34560) % 3 }
+    var brows: Int { (safe / 103680) % 3 }
+    var earrings: Int { (safe / 311040) % 3 }
     func replacing(divisor: Int, count: Int, with value: Int) -> Int {
         safe + (min(max(value, 0), count - 1) - (safe / divisor) % count) * divisor
     }
@@ -838,6 +842,18 @@ private struct AvatarSceneView: UIViewRepresentable {
         ball(head, SCNVector3(0, 0, 0), SCNVector3(look.face == 0 ? 0.64 : 0.59, 0.83, 0.55), skin)
         for x in [Float(-0.64), Float(0.64)] {
             ball(head, SCNVector3(x, -0.02, 0), SCNVector3(0.12, 0.21, 0.12), skin)
+            if look.earrings == 1 {
+                ball(head, SCNVector3(x, -0.17, 0.13), SCNVector3(0.045, 0.045, 0.035), material(.systemYellow, roughness: 0.22))
+            } else if look.earrings == 2 {
+                let hoop = SCNTorus(ringRadius: 0.075, pipeRadius: 0.018)
+                let metal = material(.lightGray, roughness: 0.2)
+                metal.metalness.contents = 0.85
+                hoop.firstMaterial = metal
+                let node = SCNNode(geometry: hoop)
+                node.position = SCNVector3(x, -0.23, 0.10)
+                node.eulerAngles.x = .pi / 2
+                head.addChildNode(node)
+            }
         }
         if look.hair != 3 {
             ball(head, SCNVector3(0, 0.48, -0.12), SCNVector3(0.67, 0.48, 0.54), hair)
@@ -856,12 +872,13 @@ private struct AvatarSceneView: UIViewRepresentable {
             let wink = look.expression == 2 && i == 1
             ball(eye, SCNVector3Zero, SCNVector3(0.18, wink ? 0.025 : 0.14, 0.085), material(wink ? .brown : .white))
             if !wink {
-                ball(eye, SCNVector3(0, 0, 0.078), SCNVector3(0.078, 0.095, 0.025), material(.brown))
+                ball(eye, SCNVector3(0, 0, 0.078), SCNVector3(0.078, 0.095, 0.025), material([UIColor.brown, .systemBlue, .systemGreen][look.eyeColor]))
                 ball(eye, SCNVector3(0, 0, 0.10), SCNVector3(0.043, 0.065, 0.014), material(.black))
                 ball(eye, SCNVector3(-0.025, 0.035, 0.115), SCNVector3(0.019, 0.024, 0.01), material(.white))
             }
-            let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.18, 0.035, 0.04), hair)
-            brow.eulerAngles.z = i == 0 ? 0.08 : -0.08
+            let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.18, look.brows == 1 ? 0.055 : 0.035, 0.04), hair)
+            let angle: Float = look.brows == 2 ? 0.26 : 0.08
+            brow.eulerAngles.z = i == 0 ? angle : -angle
             if look.glasses != 0 {
                 let path = UIBezierPath(roundedRect: CGRect(x: -0.22, y: -0.18, width: 0.44, height: 0.36), cornerRadius: look.glasses == 1 ? 0.17 : 0.07)
                 let inner = UIBezierPath(roundedRect: CGRect(x: -0.18, y: -0.14, width: 0.36, height: 0.28), cornerRadius: look.glasses == 1 ? 0.13 : 0.045)
@@ -872,7 +889,8 @@ private struct AvatarSceneView: UIViewRepresentable {
             }
         }
         if look.glasses != 0 { ball(head, SCNVector3(0, 0.16, 0.66), SCNVector3(0.09, 0.025, 0.025), material(.darkGray)) }
-        ball(head, SCNVector3(0, -0.12, 0.55), SCNVector3(0.105, 0.13, 0.14), skin)
+        let noseScale = [SCNVector3(0.105, 0.13, 0.14), SCNVector3(0.08, 0.16, 0.17), SCNVector3(0.14, 0.105, 0.12)][look.nose]
+        ball(head, SCNVector3(0, -0.12, 0.55), noseScale, skin)
         let open = look.expression == 1 || look.expression == 3
         let lips = material(UIColor(red: 0.40, green: 0.10, blue: 0.12, alpha: 1))
         if open {
@@ -997,12 +1015,16 @@ private struct AccountProfileHeader: View {
                                 if avatarTab == 0 {
                                     avatarPicker(tr("肤色", "Skin tone", "Tona kulit"), options: [tr("浅色", "Light", "Cerah"), tr("暖浅色", "Warm light", "Cerah hangat"), tr("中等", "Medium", "Sederhana"), tr("棕色", "Brown", "Coklat"), tr("深色", "Deep", "Gelap")], divisor: 3)
                                     avatarPicker(tr("脸型", "Face shape", "Bentuk muka"), options: [tr("圆润", "Round", "Bulat"), tr("椭圆", "Oval", "Bujur")], divisor: 720)
+                                    avatarPicker(tr("眼睛颜色", "Eye colour", "Warna mata"), options: [tr("棕色", "Brown", "Coklat"), tr("蓝色", "Blue", "Biru"), tr("绿色", "Green", "Hijau")], divisor: 11520)
+                                    avatarPicker(tr("鼻型", "Nose shape", "Bentuk hidung"), options: [tr("柔和", "Soft", "Lembut"), tr("挺拔", "Defined", "Tegas"), tr("圆翘", "Rounded", "Bulat")], divisor: 34560)
+                                    avatarPicker(tr("眉型", "Eyebrows", "Kening"), options: [tr("自然", "Natural", "Semula jadi"), tr("浓眉", "Full", "Tebal"), tr("上扬", "Angled", "Bersudut")], divisor: 103680)
                                 } else if avatarTab == 1 {
                                     avatarPicker(tr("发型", "Hairstyle", "Gaya rambut"), options: [tr("短发", "Short", "Pendek"), tr("长发", "Long", "Panjang"), tr("卷发", "Curly", "Keriting"), tr("光头", "Shaved", "Botak")], divisor: 15)
                                     avatarPicker(tr("发色", "Hair colour", "Warna rambut"), options: [tr("黑色", "Black", "Hitam"), tr("棕色", "Brown", "Coklat"), tr("金色", "Blond", "Perang"), tr("银色", "Silver", "Perak")], divisor: 60)
                                     avatarPicker(tr("胡须", "Facial hair", "Janggut"), options: [tr("无", "None", "Tiada"), tr("短胡须", "Short beard", "Janggut pendek")], divisor: 1440)
                                 } else if avatarTab == 2 {
                                     avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
+                                    avatarPicker(tr("耳饰", "Earrings", "Anting-anting"), options: [tr("无", "None", "Tiada"), tr("金色耳钉", "Gold studs", "Subang emas"), tr("银色耳环", "Silver hoops", "Gelung perak")], divisor: 311040)
                                 } else if avatarTab == 3 {
                                     avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("靛蓝", "Indigo", "Indigo"), tr("青绿", "Teal", "Biru kehijauan"), tr("暖橙", "Orange", "Jingga")], divisor: 1)
                                 } else {
