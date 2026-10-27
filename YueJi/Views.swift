@@ -3350,7 +3350,6 @@ struct LedgerDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 struct SettingsView: View {
-    @ObservedObject private var cloudAccount = CloudAccount.shared
     @Environment(\.locale) private var uiLocale
     @State private var showingUsageGuide = false
     var guideDestination: String? = nil
@@ -3378,22 +3377,9 @@ struct SettingsView: View {
             else if guideDestination == "about" { aboutPage }
             else {
             List {
-                // The app's own card, centred like the contact header in the kit's Messages.
                 Section {
-                    VStack(spacing: 8) {
-                        Image("YueJiLogo").renderingMode(.original).resizable().scaledToFit().frame(width: 84, height: 84)
-                            .clipShape(RoundedRectangle(cornerRadius: 19, style: .continuous))
-                            .overlay(RoundedRectangle(cornerRadius: 19, style: .continuous).strokeBorder(Color.primary.opacity(0.10), lineWidth: 0.5))
-                            .accessibilityHidden(true)
-                        Text(tr("月记 YueJi", "YueJi", "YueJi")).font(.title2.bold())
-                        Text(tr("让每一笔，都清楚。", "Clarity in every entry.", "Jelas dalam setiap rekod.")).font(.subheadline).foregroundStyle(.secondary)
-                    }
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 4)
-                    .listRowBackground(Color.clear)
+                    AccountSettingsCard()
                 }
-
 
                 Section {
                     NavigationLink { appearancePage } label: {
@@ -3414,11 +3400,6 @@ struct SettingsView: View {
                         SimpleSettingsRow(title: tr("外币记账", "Foreign currency", "Mata wang asing"), subtitle: tr("把外币消费换算成马币", "Convert spending to ringgit", "Tukar belanja kepada ringgit"), symbol: "globe", color: IslandPalette.mint)
                     }
                 } header: { Text(tr("记账设置", "Recording", "Rekod")) }
-                Section {
-                    NavigationLink { CloudAccountView() } label: {
-                        SimpleSettingsRow(title: tr("账号与同步", "Account & sync", "Akaun & penyegerakan"), subtitle: cloudAccount.status, symbol: "person.crop.circle.badge.checkmark", color: IslandPalette.sky)
-                    }.accessibilityIdentifier("settings.account")
-                }
                 Section {
                     NavigationLink { backupPage } label: {
                         SimpleSettingsRow(title: tr("备份与导出", "Backups & export", "Sandaran & eksport"), subtitle: backupSubtitle, symbol: "externaldrive.fill", color: IslandPalette.lavender)

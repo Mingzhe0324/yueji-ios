@@ -8,6 +8,7 @@ import Security
     static let shared = CloudAccount()
     @Published private(set) var loaded = false
     @Published private(set) var signedIn = false
+    @Published private(set) var needsSignInAgain = false
     @Published private(set) var email = ""
     @Published private(set) var busy = false
     @Published private(set) var message = ""
@@ -100,6 +101,7 @@ import Security
         try CloudCredentials.save(CloudCredential(server: config.server, session: value))
         await api.use(value)
         session = value; signedIn = true; codeSent = false; email = value.user.email ?? email
+        needsSignInAgain = false
         recoverySession = nil; resettingPassword = false
         initializationFailed = false; usingLocal = false
         try await synchronize(api, refresh: false)
@@ -243,6 +245,7 @@ import Security
         lastSyncFailed = true
         message = error.localizedDescription
         if case CloudFailure.session = error {
+            needsSignInAgain = true
             // Do not discard local data or ownership when refresh is rejected.
             signedIn = false; session = nil; usingLocal = false; pending?.cancel()
             try? CloudCredentials.clear(); service = nil
@@ -254,6 +257,7 @@ import Security
             try CloudCredentials.clear()
             pending?.cancel(); pending = nil; resyncRequested = false
             session = nil; service = nil; signedIn = false; usingLocal = false; conflict = nil; codeSent = false
+            needsSignInAgain = false
             message = tr("已退出登录。云端和本机账本均保留，请用原账号重新登录。", "Signed out. Cloud and local ledgers are retained; sign in to the original account.", "Log keluar. Lejar awan dan setempat dikekalkan; log masuk ke akaun asal.")
         } catch { report(error) }
     }
@@ -315,15 +319,18 @@ struct CloudEntryView: View {
     @ObservedObject private var cloud = CloudAccount.shared
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.scenePhase) private var phase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var playful = true
     var body: some View {
         Group {
             if !cloud.loaded { ProgressView() }
-            else if cloud.canEnter { MainView() }
+            else if cloud.canEnter { MainView().transition(.opacity) }
             else { NavigationStack {
                 if cloud.signedIn { CloudAccountView(isEntry: true) }
                 else { CloudWelcomeView() }
             } }
         }
+        .animation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.25), value: cloud.canEnter)
         .task { await cloud.initialize() }
         .onChange(of: cloud.cloudRestored) { _, _ in Task { await model.refresh(postRecurring: false) } }
         .onChange(of: phase) { _, value in
@@ -348,6 +355,7 @@ private struct CloudWelcomeView: View {
     private var motion: Bool { !reduceMotion && playful && phase == .active }
     private var creating: Bool { mode == true }
     private var title: String {
+        if cloud.needsSignInAgain { return tr("欢迎回来，\n请重新登录。", "Welcome back.\nSign in again.", "Selamat kembali.\nLog masuk semula.") }
         if cloud.codeSent { return tr("一封信，\n开启你的月记。", "A little code.\nA new chapter.", "Satu kod.\nBab baharu.") }
         if mode == nil { return tr("把日子，\n记成自己的光。", "Little moments.\nYour own light.", "Detik kecil.\nCahaya milikmu.") }
         return creating ? tr("你好，\n新的开始。", "Hello,\nnew beginnings.", "Helo,\npermulaan baharu.") : tr("欢迎回来，\n继续你的故事。", "Welcome back.\nYour story continues.", "Selamat kembali.\nKisahmu diteruskan.")
@@ -410,11 +418,12 @@ private struct CloudWelcomeView: View {
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
             address = cloud.email
-            if cloud.link != nil || cloud.codeSent { mode = false }
+            if cloud.link != nil || cloud.codeSent || cloud.needsSignInAgain { mode = false }
         }
         .onChange(of: cloud.codeSent) { _, sent in if sent { field = .code } }
     }
     private var subtitle: String {
+        if cloud.needsSignInAgain { return tr("登录已过期。本机账本和未同步的更改仍保留，请使用原账号登录后继续同步。", "Your session expired. Your local ledger and pending changes are safe. Sign in to the same account to resume syncing.", "Sesi tamat. Lejar setempat dan perubahan belum disegerakkan dikekalkan. Log masuk ke akaun asal untuk meneruskan.") }
         if cloud.codeSent { return tr("验证码已发送至", "We sent a code to", "Kod dihantar ke") + " " + cloud.email }
         if mode == nil { return tr("收好每一笔生活。登录并同步，让账本随你去下一站。", "Keep a little of every day. Sign in and sync to take your ledger with you.", "Simpan setiap detik harian. Log masuk dan segerakkan untuk membawa lejar bersama.") }
         return creating ? tr("使用邮箱和密码创建账号，验证邮箱后开始同步。", "Create an account with email and password, then verify your email to start syncing.", "Cipta akaun dengan e-mel dan kata laluan, kemudian sahkan e-mel untuk menyegerakkan.") : tr("使用原来的邮箱和密码，找回已同步的账本。", "Use your original email and password to recover your synced ledger.", "Gunakan e-mel asal dan kata laluan untuk memulihkan lejar.")
@@ -644,6 +653,49 @@ private struct YueJiCharacter: View {
                     .offset(y: animated ? sin(time * 0.8) * 2 : 0)
             }
         }.accessibilityHidden(true)
+    }
+}
+
+/// Shared profile keys keep the Settings summary and profile editor in sync.
+struct AccountSettingsCard: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    var body: some View {
+        NavigationLink { CloudAccountView() } label: {
+            AccountSettingsSummary(accountID: cloud.link?.userID.uuidString ?? cloud.email,
+                                   email: cloud.email, signedIn: cloud.signedIn,
+                                   status: cloud.status, attention: cloud.lastSyncFailed || cloud.conflict != nil)
+                .id(cloud.link?.userID.uuidString ?? cloud.email)
+        }.accessibilityIdentifier("settings.account")
+    }
+}
+
+private struct AccountSettingsSummary: View {
+    let email: String
+    let signedIn: Bool
+    let status: String
+    let attention: Bool
+    @AppStorage private var nickname: String
+    @AppStorage private var avatarStyle: Int
+    init(accountID: String, email: String, signedIn: Bool, status: String, attention: Bool) {
+        self.email = email; self.signedIn = signedIn; self.status = status; self.attention = attention
+        _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
+        _avatarStyle = AppStorage(wrappedValue: 0, "accountProfile.avatar." + accountID)
+    }
+    var body: some View {
+        HStack(spacing: 16) {
+            YueJiCharacter(style: signedIn ? avatarStyle : 0)
+                .frame(width: 64, height: 64)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(signedIn ? (nickname.isEmpty ? tr("月记用户", "YueJi member", "Pengguna YueJi") : nickname)
+                     : tr("登录月记", "Sign in to YueJi", "Log masuk ke YueJi"))
+                    .font(.title3.weight(.semibold)).foregroundStyle(.primary)
+                Text(signedIn ? email : tr("登录并同步，让账本随你同行", "Sign in and take your ledger with you", "Log masuk dan bawa lejar bersama"))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                    .lineLimit(2)
+                Label(status, systemImage: attention ? "exclamationmark.icloud" : signedIn ? "icloud" : "person.crop.circle")
+                    .font(.caption).foregroundStyle(attention ? Color.orange : Color.secondary)
+            }.frame(maxWidth: .infinity, alignment: .leading)
+        }.padding(.vertical, 10)
     }
 }
 
