@@ -274,11 +274,13 @@ actor SupabaseCloudService: CloudRemote {
 }
 
 actor CloudSynchronizer {
-    private let store: LocalStore
+    private let overrideStore: LocalStore?
+    private var store: LocalStore { overrideStore ?? .shared }
     private var running = false
-    init(store: LocalStore = .shared) { self.store = store }
+    init(store: LocalStore? = nil) { self.overrideStore = store }
     func localLink() throws -> CloudLink? { try store.cloudLink() }
     func sync(userID: UUID, server: String, remote: any CloudRemote, resolution: CloudResolution? = nil) async throws -> CloudSyncResult {
+        let store = self.store // Pin the account for the entire network operation.
         guard !running else { return .busy }
         running = true; defer { running = false }
         let previousLink = try store.cloudLink()

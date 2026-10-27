@@ -51,6 +51,55 @@ final class CloudSyncTests: XCTestCase {
         XCTAssertEqual(CloudSyncDecision.decide(local: "guest", hasLocalFile: true, remote: "old-account", revision: 2, link: nil), .conflict)
         XCTAssertEqual(CloudSyncDecision.decide(local: "empty", hasLocalFile: false, remote: "old-account", revision: 2, link: nil), .download)
     }
+    func testAccountDirectoriesKeepUnsyncedLedgerAndBackupsSeparate() throws {
+        let original = temporaryStore()
+        try original.change { $0 = ledger("Account A pending") }
+        let a = try LocalStore.accountStore(userID: user, server: server, root: original.folder)
+        XCTAssertEqual(a.folder, original.folder)
+        try LocalStore.exportData(a.read()).write(to: a.recoveryFile)
+        let inboxFolder = a.folder.appendingPathComponent("AutomationInbox", isDirectory: true)
+        try FileManager.default.createDirectory(at: inboxFolder, withIntermediateDirectories: true)
+        try Data("pending A".utf8).write(to: inboxFolder.appendingPathComponent("pending-marker"))
+        let other = UUID()
+        let b = try LocalStore.accountStore(userID: other, server: server, root: original.folder)
+        XCTAssertNotEqual(a.folder, b.folder)
+        XCTAssertTrue(try b.readSnapshot().signature.isEmpty)
+        XCTAssertTrue(try b.read().expenses.isEmpty)
+        XCTAssertTrue(try b.backups().isEmpty)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: b.recoveryFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: b.folder.appendingPathComponent("AutomationInbox").path))
+        try b.change { $0 = ledger("Account B pending") }
+        let returned = try LocalStore.accountStore(userID: user, server: server, root: original.folder)
+        XCTAssertEqual(try returned.read().expenses.first?.merchant, "Account A pending")
+        XCTAssertEqual(try b.read().expenses.first?.merchant, "Account B pending")
+        XCTAssertEqual(try returned.cloudLink()?.revision, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: returned.recoveryFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: inboxFolder.appendingPathComponent("pending-marker").path))
+    }
+    func testSwitchToNewAccountDownloadsOnlyItsCloudLedger() async throws {
+        let original = temporaryStore()
+        try original.change { $0 = ledger("Private A") }
+        _ = try LocalStore.accountStore(userID: user, server: server, root: original.folder)
+        let other = UUID()
+        let b = try LocalStore.accountStore(userID: other, server: server, root: original.folder)
+        let remote = MemoryCloud(ledger("Private B"), revision: 3)
+        let sync = CloudSynchronizer(store: b)
+        let result = try await sync.sync(userID: other, server: server, remote: remote)
+        guard case .synced(_, let downloaded) = result else { return XCTFail("Expected restoration") }
+        XCTAssertTrue(downloaded)
+        XCTAssertEqual(try b.read().expenses.first?.merchant, "Private B")
+        XCTAssertEqual(try original.read().expenses.first?.merchant, "Private A")
+        let writes = await remote.writes
+        XCTAssertEqual(writes, 0)
+    }
+    func testAccountDirectoryIsAlsoIsolatedByServerAndRejectsCorruption() throws {
+        let original = temporaryStore()
+        _ = try LocalStore.accountStore(userID: user, server: server, root: original.folder)
+        let otherServer = try LocalStore.accountStore(userID: user, server: "https://other.supabase.co", root: original.folder)
+        XCTAssertNotEqual(original.folder, otherServer.folder)
+        try Data("invalid".utf8).write(to: otherServer.folder.appendingPathComponent("ledger.json"))
+        XCTAssertThrowsError(try LocalStore.accountStore(userID: user, server: "https://other.supabase.co", root: original.folder))
+    }
     func testReinstallAutomaticallyDownloadsWithoutUploadingAnEmptyLedger() async throws {
         let original = ledger("Before uninstall")
         let cloud = MemoryCloud(original, revision: 7)

@@ -111,7 +111,7 @@ struct AutoBackupResult {
 
 /// Reads the ledger and writes the copy away from the main actor.
 actor AutoBackupWriter {
-    static let shared = AutoBackupWriter()
+    static var shared: AutoBackupWriter { AutoBackupWriter() }
     private let store: LocalStore
     init(store: LocalStore = .shared) { self.store = store }
 

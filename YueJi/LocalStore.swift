@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 /// Persist the input before attempting the ledger write. This cannot capture an automation that never ran.
 struct AutomationDelivery: Codable, Identifiable {
@@ -121,7 +122,7 @@ extension Ledger {
 }
 
 final class AutomationInbox {
-    static let shared = AutomationInbox(folder: LocalStore.shared.folder.appendingPathComponent("AutomationInbox", isDirectory: true))
+    static var shared: AutomationInbox { AutomationInbox(folder: LocalStore.shared.folder.appendingPathComponent("AutomationInbox", isDirectory: true)) }
     let folder: URL
     init(folder: URL) { self.folder = folder }
     func save(_ delivery: AutomationDelivery) throws {
@@ -157,13 +158,24 @@ final class AutomationInbox {
 }
 
 actor AutomationRecovery {
-    static let shared = AutomationRecovery()
+    private static let cacheLock = NSLock()
+    private static var accounts: [String: AutomationRecovery] = [:]
+    static var shared: AutomationRecovery {
+        let store = LocalStore.shared
+        cacheLock.lock(); defer { cacheLock.unlock() }
+        if let existing = accounts[store.folder.path] { return existing }
+        let worker = AutomationRecovery(store: store)
+        accounts[store.folder.path] = worker
+        return worker
+    }
     private let store: LocalStore
     private let inbox: AutomationInbox
     private let sendsNotifications: Bool
     private var recovering = false
-    init(store: LocalStore = .shared, inbox: AutomationInbox = .shared, sendsNotifications: Bool = true) {
-        self.store = store; self.inbox = inbox; self.sendsNotifications = sendsNotifications
+    init(store: LocalStore = .shared, inbox: AutomationInbox? = nil, sendsNotifications: Bool = true) {
+        self.store = store
+        self.inbox = inbox ?? AutomationInbox(folder: store.folder.appendingPathComponent("AutomationInbox", isDirectory: true))
+        self.sendsNotifications = sendsNotifications
     }
     func submit(_ delivery: AutomationDelivery) async throws -> AutomationResult {
         // Failure here is reported as not retained; it must not pretend a recovery copy exists.
@@ -186,12 +198,12 @@ actor AutomationRecovery {
         }
         // A cleanup failure never changes a successful commit; its marker makes recovery safe.
         try? inbox.remove(delivery)
-        if result.shouldNotify && sendsNotifications {
+        if result.shouldNotify && sendsNotifications && store.isActive {
             await LedgerNotifications.result(title: result.title, body: result.message,
                                              expenseID: result.expenseID, noticeID: result.noticeID, deliveryID: delivery.id, sound: result.sound)
         }
         // A matched renewal moves its schedule on, and its reminders with it.
-        if sendsNotifications, let ledger = try? store.read() { await RenewalReminders.sync(ledger) }
+        if sendsNotifications && store.isActive, let ledger = try? store.read() { await RenewalReminders.sync(ledger) }
         return result
     }
     func retryPending(manual: Bool = false) async -> String? {
@@ -216,7 +228,7 @@ actor AutomationRecovery {
 
 /// Keep coordinated reads and entry/settlement writes off the UI actor.
 actor LedgerRefreshWorker {
-    static let shared = LedgerRefreshWorker()
+    static var shared: LedgerRefreshWorker { LedgerRefreshWorker() }
     private let store: LocalStore
     init(store: LocalStore = .shared) { self.store = store }
     func backups() throws -> [URL] { try Task.checkCancellation(); return try store.backups() }
@@ -285,10 +297,45 @@ actor LedgerRefreshWorker {
 /// App UI and App Intent use the same sandbox file. File coordination serializes read-modify-write.
 /// No App Group or paid iCloud entitlement is required. Explicit exports use the Files document picker.
 final class LocalStore {
-    static let shared = LocalStore()
+    static var shared: LocalStore {
+        let root = defaultFolder
+        let selected = UserDefaults.standard.string(forKey: "activeLedgerFolder.v1")
+        let folder = selected.map { root.appendingPathComponent("Accounts", isDirectory: true).appendingPathComponent($0, isDirectory: true) } ?? root
+        return LocalStore(folder: folder, managed: true)
+    }
+    private static var defaultFolder: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YueJi", isDirectory: true)
+    }
+    private let managed: Bool
     let folder: URL
-    init(folder: URL? = nil) {
-        self.folder = folder ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("YueJi", isDirectory: true)
+    var isActive: Bool { !managed || folder == Self.shared.folder }
+    init(folder: URL? = nil, managed: Bool = false) {
+        self.folder = folder ?? Self.defaultFolder
+        self.managed = managed
+    }
+    /// Existing installations keep their original folder. Other accounts get a
+    /// separate directory containing ledger, backups, recovery file and inbox.
+    static func accountStore(userID: UUID, server: String, root: URL? = nil) throws -> LocalStore {
+        let root = root ?? defaultFolder
+        let legacy = LocalStore(folder: root)
+        if let link = try legacy.cloudLink() {
+            if link.accepts(userID: userID, server: server) { _ = try legacy.read(); return legacy }
+        } else {
+            // Claim the guest ledger once, before any network upload can occur.
+            _ = try legacy.read()
+            try legacy.writeCloudLink(CloudLink(userID: userID, server: server))
+            return legacy
+        }
+        let key = SHA256.hash(data: Data((server + "|" + userID.uuidString).utf8)).map { String(format: "%02x", $0) }.joined()
+        let target = LocalStore(folder: root.appendingPathComponent("Accounts", isDirectory: true).appendingPathComponent(key, isDirectory: true))
+        try target.writeCloudLink(try target.cloudLink() ?? CloudLink(userID: userID, server: server))
+        guard try target.cloudLink()?.accepts(userID: userID, server: server) == true else { throw CloudFailure.accountMismatch }
+        _ = try target.read() // Corrupt account data must not become an empty ledger.
+        return target
+    }
+    static func activate(_ store: LocalStore) {
+        if store.folder == defaultFolder { UserDefaults.standard.removeObject(forKey: "activeLedgerFolder.v1") }
+        else { UserDefaults.standard.set(store.folder.lastPathComponent, forKey: "activeLedgerFolder.v1") }
     }
     private var file: URL { folder.appendingPathComponent("ledger.json") }
     private var backupFolder: URL { folder.appendingPathComponent("Backups", isDirectory: true) }
@@ -323,7 +370,7 @@ final class LocalStore {
     }
     @discardableResult func change<T>(_ action: (inout Ledger) throws -> T) throws -> T {
         try prepare()
-        if self === LocalStore.shared, let link = try cloudLink() {
+        if managed, let link = try cloudLink() {
             guard let credential = try CloudCredentials.read(), link.accepts(userID: credential.session.user.id, server: credential.server) else {
                 throw CloudFailure.session
             }
@@ -332,7 +379,7 @@ final class LocalStore {
         defer {
             // After file coordination releases its lock; isolated test/preview stores do
             // not trigger external writes. A cloud failure never rolls back local money.
-            if committed, self === LocalStore.shared {
+            if committed, managed {
                 Task { @MainActor in
                     AutoBackup.ledgerDidChange()
                     CloudAccount.shared.ledgerDidChange()

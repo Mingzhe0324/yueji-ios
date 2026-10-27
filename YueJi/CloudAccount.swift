@@ -3,12 +3,14 @@ import UIKit
 import AuthenticationServices
 import CryptoKit
 import Security
+import UserNotifications
 
 @MainActor final class CloudAccount: ObservableObject {
     static let shared = CloudAccount()
     @Published private(set) var loaded = false
     @Published private(set) var signedIn = false
     @Published private(set) var needsSignInAgain = false
+    @Published private(set) var changingAccount = false
     @Published private(set) var email = ""
     @Published private(set) var busy = false
     @Published private(set) var message = ""
@@ -32,7 +34,7 @@ import Security
     private let googleBrowser = GoogleAccountBrowser()
     var configured: Bool { CloudConfiguration.bundled != nil }
     var canEnter: Bool {
-        guard loaded, !initializationFailed else { return false }
+        guard loaded, !initializationFailed, !changingAccount else { return false }
         if signedIn, link != nil { return true }
         if signedIn, usingLocal { return true }
         return link == nil && (!configured || usingLocal)
@@ -87,18 +89,25 @@ import Security
             let api = try connectedService()
             let value = try await api.verify(email: email, code: code.trimmingCharacters(in: .whitespacesAndNewlines), type: verificationType)
             if verificationType == "recovery" {
-                let config = await api.configuration
-                let existing = try await synchronizer.localLink()
-                if let existing, !existing.accepts(userID: value.user.id, server: config.server) { throw CloudFailure.accountMismatch }
                 recoverySession = value; resettingPassword = true; codeSent = false; message = ""
             } else { try await accept(value, api: api) }
         } catch { await reloadLink(); report(error) }
     }
     private func accept(_ value: CloudSession, api: SupabaseCloudService) async throws {
         let config = await api.configuration
-        let existing = try await synchronizer.localLink()
-        if let existing, !existing.accepts(userID: value.user.id, server: config.server) { throw CloudFailure.accountMismatch }
+        changingAccount = true
+        defer { changingAccount = false }
+        let target = try LocalStore.accountStore(userID: value.user.id, server: config.server)
+        let switched = target.folder != LocalStore.shared.folder
         try CloudCredentials.save(CloudCredential(server: config.server, session: value))
+        if switched {
+            AutoBackup.turnOff()
+            UNUserNotificationCenter.current().removeAllPendingNotificationRequests()
+            UNUserNotificationCenter.current().removeAllDeliveredNotifications()
+        }
+        LocalStore.activate(target)
+        link = try target.cloudLink()
+        conflict = nil; dirty = false; lastSyncFailed = false
         await api.use(value)
         session = value; signedIn = true; codeSent = false; email = value.user.email ?? email
         needsSignInAgain = false
@@ -258,7 +267,7 @@ import Security
             pending?.cancel(); pending = nil; resyncRequested = false
             session = nil; service = nil; signedIn = false; usingLocal = false; conflict = nil; codeSent = false
             needsSignInAgain = false
-            message = tr("已退出登录。云端和本机账本均保留，请用原账号重新登录。", "Signed out. Cloud and local ledgers are retained; sign in to the original account.", "Log keluar. Lejar awan dan setempat dikekalkan; log masuk ke akaun asal.")
+            message = tr("已退出登录。账本已单独保留，可登录其他账号；切回原账号即可继续。", "Signed out. Your ledger is kept separately. Sign in to another account, or return to this one later.", "Log keluar. Lejar disimpan berasingan. Log masuk ke akaun lain atau kembali kemudian.")
         } catch { report(error) }
     }
     func syncInBackground() {
@@ -323,8 +332,10 @@ struct CloudEntryView: View {
     @AppStorage("playfulAnimations") private var playful = true
     var body: some View {
         Group {
-            if !cloud.loaded { ProgressView() }
-            else if cloud.canEnter { MainView().transition(.opacity) }
+            if !cloud.loaded || cloud.changingAccount { ProgressView() }
+            else if cloud.canEnter {
+                AccountLedgerContent().id(cloud.link?.userID.uuidString ?? "guest").transition(.opacity)
+            }
             else { NavigationStack {
                 if cloud.signedIn { CloudAccountView(isEntry: true) }
                 else { CloudWelcomeView() }
@@ -337,6 +348,16 @@ struct CloudEntryView: View {
             if value == .active { Task { await cloud.sync() } }
             if value == .background { cloud.syncInBackground() }
         }
+    }
+}
+
+/// Recreate UI state and pending editor tasks when the authenticated owner changes.
+private struct AccountLedgerContent: View {
+    @StateObject private var model = LedgerModel()
+    @ObservedObject private var cloud = CloudAccount.shared
+    var body: some View {
+        MainView().environmentObject(model)
+            .onChange(of: cloud.cloudRestored) { _, _ in Task { await model.refresh(postRecurring: false) } }
     }
 }
 
@@ -433,7 +454,7 @@ private struct CloudWelcomeView: View {
             Button { Task { await cloud.signInWithGoogle() } } label: {
                 actionLabel(tr("通过 Google 继续", "Continue with Google", "Teruskan dengan Google"), symbol: "person.crop.circle")
             }.buttonStyle(MoonWelcomeButton(primary: false)).disabled(!cloud.configured || cloud.busy)
-            if cloud.link == nil {
+            Group {
                 Button { selectMode(true) } label: {
                     actionLabel(tr("创建账户", "Create account", "Cipta akaun"), symbol: "sparkles")
                 }.buttonStyle(MoonWelcomeButton(primary: true)).disabled(!cloud.configured || cloud.busy)
@@ -782,7 +803,7 @@ struct CloudAccountView: View {
                     CloudPasswordForm(creating: false)
                     NavigationLink { CloudRegistrationView() } label: {
                         Label(tr("创建账户", "Create account", "Cipta akaun"), systemImage: "person.badge.plus")
-                    }.disabled(cloud.busy || cloud.codeSent || cloud.resettingPassword || cloud.link != nil)
+                    }.disabled(cloud.busy || cloud.codeSent || cloud.resettingPassword)
                 }
             } else {
                 Section(tr("账号", "Account", "Akaun")) {
@@ -833,7 +854,7 @@ struct CloudAccountView: View {
         .confirmationDialog(tr("退出登录？", "Sign out?", "Log keluar?"), isPresented: $signingOut, titleVisibility: .visible) {
             Button(tr("退出登录", "Sign out", "Log keluar"), role: .destructive) { cloud.signOut() }
         } message: {
-            Text(tr("未同步的记录只保留在本机。退出后需要用同一账号重新登录。", "Unsynced records remain only on this device. You will need to sign in to the same account again.", "Rekod belum disegerakkan hanya kekal pada peranti. Anda perlu log masuk semula ke akaun sama."))
+            Text(tr("此账号的账本和未同步记录会单独保留在本机。可以登录其他账号，切回此账号后继续同步。切换账号后请重新选择外部自动备份文件夹。", "This account's ledger and unsynced entries stay separately on this device. You can sign in to another account and return later. Choose an external auto-backup folder again after switching accounts.", "Lejar dan rekod belum disegerakkan disimpan berasingan. Anda boleh bertukar akaun dan kembali kemudian. Pilih semula folder sandaran luaran selepas bertukar akaun."))
         }
     }
     private func choose(_ choice: CloudChoice, _ conflict: CloudConflict) {
