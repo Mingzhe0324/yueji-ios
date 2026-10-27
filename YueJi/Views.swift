@@ -40,31 +40,82 @@ struct IslandBackdrop: View {
     }
 }
 
-/// The tabs' root pages sit on the page of the kit's Mobile Banking app: the system grouped
-/// background lit by three soft glows, rose at the top trailing corner, green on the leading
-/// side and amber lower down, brighter on black than on light grey. Static and decorative;
-/// Reduce Transparency and Increase Contrast keep the plain background.
+private struct AmbientTabKey: EnvironmentKey { static let defaultValue = 0 }
+private struct AmbientActiveKey: EnvironmentKey { static let defaultValue = true }
+extension EnvironmentValues {
+    fileprivate var ambientTab: Int {
+        get { self[AmbientTabKey.self] }
+        set { self[AmbientTabKey.self] = newValue }
+    }
+    fileprivate var ambientActive: Bool {
+        get { self[AmbientActiveKey.self] }
+        set { self[AmbientActiveKey.self] = newValue }
+    }
+}
+
+/// Local wall-clock colours, smoothly interpolated across midnight as well.
+enum DaylightPalette {
+    static func rgb(hour: Double, tab: Int, layer: Int) -> (Double, Double, Double) {
+        let anchors: [(Double, Double, Double)] = [
+            (0.34, 0.30, 0.72), (0.96, 0.59, 0.43),
+            (0.36, 0.72, 0.88), (0.84, 0.42, 0.60), (0.34, 0.30, 0.72)
+        ]
+        let wrapped = (hour.truncatingRemainder(dividingBy: 24) + 24).truncatingRemainder(dividingBy: 24)
+        let segment = Int(wrapped / 6)
+        let progress = wrapped / 6 - Double(segment)
+        let blend = progress * progress * (3 - 2 * progress)
+        let a = anchors[segment], b = anchors[segment + 1]
+        let red = a.0 + (b.0 - a.0) * blend
+        let green = a.1 + (b.1 - a.1) * blend
+        let blue = a.2 + (b.2 - a.2) * blend
+        // A restrained signature for each tab; financial semantic colours stay intact.
+        let shift = Double(min(max(tab, 0), 4)) * 0.025
+        return (min(1, red + shift), min(1, green + Double(layer) * 0.05), max(0, blue - shift))
+    }
+}
+
+/// Only the visible foreground tab ticks, once per minute. Text/cards retain system colours.
 struct AmbientGlowBackdrop: View {
     @Environment(\.colorScheme) private var scheme
     @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var phase
+    @Environment(\.ambientTab) private var tab
+    @Environment(\.ambientActive) private var active
+    @AppStorage("daylightBackgrounds") private var daylight = true
+    @AppStorage("playfulAnimations") private var animateChanges = true
     var body: some View {
+        Group {
+            if daylight && active && phase == .active && !reduceTransparency && contrast != .increased {
+                TimelineView(.periodic(from: .now, by: 60)) { context in surface(date: context.date) }
+            } else { surface(date: Date()) }
+        }
+    }
+    private func tone(_ date: Date, layer: Int) -> Color {
+        let parts = Calendar.autoupdatingCurrent.dateComponents([.hour, .minute], from: date)
+        let hour = Double(parts.hour ?? 0) + Double(parts.minute ?? 0) / 60
+        let rgb = DaylightPalette.rgb(hour: hour, tab: tab, layer: layer)
+        return Color(red: rgb.0, green: rgb.1, blue: rgb.2)
+    }
+    private func surface(date: Date) -> some View {
         IslandTheme.paper
             .overlay {
                 if !reduceTransparency && contrast != .increased {
                     GeometryReader { proxy in
                         let width = proxy.size.width, height = proxy.size.height
                         let dark = scheme == .dark
-                        glow(Color(uiColor: .systemRed), strength: dark ? 0.42 : 0.16, diameter: width)
+                        glow(daylight ? tone(date, layer: 0) : Color(uiColor: .systemRed), strength: dark ? 0.42 : 0.16, diameter: width)
                             .position(x: width * 0.92, y: height * 0.06)
-                        glow(Color(uiColor: .systemGreen), strength: dark ? 0.26 : 0.12, diameter: width * 0.9)
+                        glow(daylight ? tone(date, layer: 1) : Color(uiColor: .systemGreen), strength: dark ? 0.26 : 0.12, diameter: width * 0.9)
                             .position(x: width * 0.02, y: height * 0.34)
-                        glow(Color(uiColor: .systemYellow), strength: dark ? 0.24 : 0.14, diameter: width * 0.9)
+                        glow(daylight ? tone(date, layer: 2) : Color(uiColor: .systemYellow), strength: dark ? 0.24 : 0.14, diameter: width * 0.9)
                             .position(x: width, y: height * 0.7)
                     }
                 }
             }
             .ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
+            .animation(reduceMotion || !animateChanges || !active || phase != .active ? nil : .easeInOut(duration: 3), value: Calendar.autoupdatingCurrent.component(.minute, from: date))
     }
     private func glow(_ color: Color, strength: Double, diameter: CGFloat) -> some View {
         Circle()
@@ -379,11 +430,11 @@ struct MainView: View {
             DashboardView(openLedger: { month in
                 ledgerMonthRequest = LedgerMonthRequest(month: month)
                 selectedTab = 1
-            }).ledgerFeedback().modifier(YueJiBarAppearance()).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView(isActive: selectedTab == 1, monthRequest: $ledgerMonthRequest).ledgerFeedback().modifier(YueJiBarAppearance()).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle.fill") }
-            RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "arrow.triangle.2.circlepath") }
-            FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
-            SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
+            }).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 0).environment(\.ambientActive, selectedTab == 0).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
+            ExpensesView(isActive: selectedTab == 1, monthRequest: $ledgerMonthRequest).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 1).environment(\.ambientActive, selectedTab == 1).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle.fill") }
+            RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 2).environment(\.ambientActive, selectedTab == 2).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "arrow.triangle.2.circlepath") }
+            FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 3).environment(\.ambientActive, selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
+            SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 4).environment(\.ambientActive, selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
         }.tint(ink).modifier(YueJiTabBarMotion())
     }
     var body: some View {
@@ -3383,6 +3434,7 @@ struct SettingsView: View {
     @AppStorage("appLanguage") private var language = "system"
     @AppStorage("appAppearance") private var appearance = "system"
     @AppStorage("playfulAnimations") private var playful = true
+    @AppStorage("daylightBackgrounds") private var daylight = true
     @AppStorage("animationSounds") private var sounds = true
     @AppStorage("feedbackHaptics") private var haptics = true
     @AppStorage(AutoBackupKeys.folderName) private var autoBackupFolder = ""
@@ -3471,6 +3523,7 @@ struct SettingsView: View {
             }
             Section {
                 Toggle(tr("动画", "Animations", "Animasi"), isOn: $playful)
+                Toggle(tr("背景随时间变化", "Time-of-day backgrounds", "Latar mengikut waktu"), isOn: $daylight)
                 Toggle(tr("音效", "Sound effects", "Kesan bunyi"), isOn: $sounds)
                 Toggle(tr("触感反馈", "Haptics", "Haptik"), isOn: $haptics)
             } header: {
