@@ -4,6 +4,7 @@ import AuthenticationServices
 import CryptoKit
 import Security
 import UserNotifications
+import SceneKit
 
 @MainActor final class CloudAccount: ObservableObject {
     static let shared = CloudAccount()
@@ -708,10 +709,10 @@ private struct MoonWelcomeArtwork: View {
     }
 }
 
-/// Original vector character; no access to the user's Apple ID or personal Memoji.
+/// Packed avatar choices retain compatibility with earlier profile values.
 private struct AvatarLook {
     let rawValue: Int
-    private var safe: Int { min(max(rawValue, 0), 2879) }
+    private var safe: Int { min(max(rawValue, 0), 11519) }
     var shirt: Int { safe % 3 }
     var skin: Int { (safe / 3) % 5 }
     var hair: Int { (safe / 15) % 4 }
@@ -719,6 +720,7 @@ private struct AvatarLook {
     var glasses: Int { (safe / 240) % 3 }
     var face: Int { (safe / 720) % 2 }
     var beard: Int { (safe / 1440) % 2 }
+    var expression: Int { (safe / 2880) % 4 }
     func replacing(divisor: Int, count: Int, with value: Int) -> Int {
         safe + (min(max(value, 0), count - 1) - (safe / divisor) % count) * divisor
     }
@@ -727,92 +729,171 @@ private struct AvatarLook {
 private struct YueJiCharacter: View {
     var animated = false
     var style = 0
-    @State private var animationStart = Date()
-    private var look: AvatarLook { AvatarLook(rawValue: style) }
-    private var shirt: Color { [Color.indigo, .teal, .orange][look.shirt] }
-    private var skin: Color { [Color(red: 1, green: 0.84, blue: 0.71), Color(red: 0.94, green: 0.70, blue: 0.50), Color(red: 0.77, green: 0.51, blue: 0.34), Color(red: 0.58, green: 0.35, blue: 0.23), Color(red: 0.36, green: 0.21, blue: 0.15)][look.skin] }
-    private var hair: Color { [Color(red: 0.12, green: 0.09, blue: 0.10), Color(red: 0.34, green: 0.18, blue: 0.10), Color(red: 0.79, green: 0.57, blue: 0.25), Color(red: 0.62, green: 0.64, blue: 0.70)][look.hairColor] }
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.scenePhase) private var phase
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !animated)) { context in
-            let time = animated ? max(0, context.date.timeIntervalSince(animationStart)) : 0
-            let blink = animated && time > 1 && time.truncatingRemainder(dividingBy: 4.8) < 0.16
-            GeometryReader { geometry in
-                let size = min(geometry.size.width, geometry.size.height)
-                ZStack {
-                    Circle().fill(LinearGradient(colors: [shirt.opacity(0.18), shirt.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    Ellipse().fill(shirt.gradient).frame(width: size * 0.76, height: size * 0.52).offset(y: size * 0.40)
-                    RoundedRectangle(cornerRadius: size * 0.08).fill(skin.gradient)
-                        .frame(width: size * 0.19, height: size * 0.22).offset(y: size * 0.21)
-                    if look.hair != 3 {
-                        RoundedRectangle(cornerRadius: size * 0.29).fill(hair.gradient)
-                            .frame(width: size * 0.60, height: size * (look.hair == 1 ? 0.82 : 0.65)).offset(y: -size * 0.05)
-                    }
-                    HStack(spacing: size * 0.41) {
-                        ForEach(0..<2) { _ in Ellipse().fill(skin.gradient).frame(width: size * 0.10, height: size * 0.15) }
-                    }
-                    Ellipse().fill(skin.gradient)
-                        .overlay {
-                            Ellipse().fill(LinearGradient(colors: [.white.opacity(0.20), .clear, .black.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        }
-                        .frame(width: size * (look.face == 0 ? 0.53 : 0.49), height: size * 0.58).offset(y: -size * 0.015)
-                        .shadow(color: .black.opacity(0.12), radius: size * 0.025, y: size * 0.02)
-                    if look.hair != 3 {
-                        Ellipse().fill(hair.gradient)
-                            .overlay {
-                                Ellipse().strokeBorder(.white.opacity(0.12), lineWidth: size * 0.025)
-                            }
-                            .frame(width: size * 0.51, height: size * (look.hair == 2 ? 0.26 : 0.18))
-                            .rotationEffect(.degrees(look.hair == 1 ? 16 : -14)).offset(x: -size * 0.025, y: -size * 0.24)
-                        if look.hair == 2 {
-                            HStack(spacing: -size * 0.025) {
-                                ForEach(0..<5) { _ in Circle().fill(hair.gradient).frame(width: size * 0.12) }
-                            }.offset(y: -size * 0.29)
-                        }
-                    }
-                    HStack(spacing: size * 0.13) {
-                        ForEach(0..<2) { _ in Capsule().fill(hair).frame(width: size * 0.09, height: size * 0.018) }
-                    }.offset(y: -size * 0.09)
-                    HStack(spacing: size * 0.15) {
-                        ForEach(0..<2) { _ in
-                            ZStack {
-                                Ellipse().fill(.white).frame(width: size * 0.085, height: size * (blink ? 0.012 : 0.075))
-                                Capsule().fill(Color(red: 0.16, green: 0.10, blue: 0.10))
-                                    .frame(width: size * 0.042, height: size * (blink ? 0.012 : 0.060))
-                                if !blink { Circle().fill(.white).frame(width: size * 0.013).offset(x: -size * 0.007, y: -size * 0.013) }
-                            }
-                        }
-                    }.offset(y: -size * 0.015)
-                    HStack(spacing: size * 0.28) {
-                        ForEach(0..<2) { _ in Ellipse().fill(Color.pink.opacity(0.15)).frame(width: size * 0.09, height: size * 0.045).blur(radius: size * 0.012) }
-                    }.offset(y: size * 0.06)
-                    if look.glasses != 0 {
-                        HStack(spacing: size * 0.025) {
-                            ForEach(0..<2) { _ in
-                                RoundedRectangle(cornerRadius: size * (look.glasses == 1 ? 0.08 : 0.025))
-                                    .stroke(Color.primary.opacity(0.85), lineWidth: size * 0.014)
-                                    .background(.white.opacity(0.10))
-                                    .frame(width: size * 0.19, height: size * 0.14)
-                            }
-                        }.overlay { Capsule().fill(.primary).frame(width: size * 0.04, height: size * 0.012) }
-                        .offset(y: -size * 0.012)
-                    }
-                    Capsule().fill(Color(red: 0.69, green: 0.36, blue: 0.24).opacity(0.5))
-                        .frame(width: size * 0.045, height: size * 0.065).offset(y: size * 0.055)
-                    Ellipse().trim(from: 0, to: 0.5).stroke(Color(red: 0.42, green: 0.19, blue: 0.15), style: StrokeStyle(lineWidth: size * 0.018, lineCap: .round))
-                        .frame(width: size * 0.16, height: size * 0.09).offset(y: size * 0.10)
-                    if look.beard == 1 {
-                        Ellipse().trim(from: 0, to: 0.5).stroke(hair, style: StrokeStyle(lineWidth: size * 0.045, lineCap: .round))
-                            .frame(width: size * 0.28, height: size * 0.16).offset(y: size * 0.13)
-                    }
-                    Image(systemName: "moon.fill").font(.system(size: size * 0.11)).foregroundStyle(.yellow).offset(y: size * 0.36)
-                    Image(systemName: "hand.wave.fill").font(.system(size: size * 0.27)).foregroundStyle(skin.gradient)
-                        .rotationEffect(.degrees(animated && time < 2.4 ? -8 + sin(time * 8) * 13 * (1 - time / 2.4) : -8), anchor: .bottom)
-                        .offset(x: size * 0.33, y: size * 0.18)
-                }.frame(width: size, height: size).clipShape(Circle())
-            }
-        }.accessibilityHidden(true)
+        AvatarSceneView(style: style, animated: animated && !reduceMotion && phase == .active)
+            .background(Color.indigo.opacity(0.12), in: Circle())
+            .clipShape(Circle()).allowsHitTesting(false).accessibilityHidden(true)
     }
 }
+
+/// Original, locally generated geometry. No camera, downloaded models or private avatar APIs.
+private struct AvatarSceneView: UIViewRepresentable {
+    let style: Int
+    let animated: Bool
+    final class Coordinator {
+        var style = -1
+        var moving = false
+    }
+    func makeCoordinator() -> Coordinator { Coordinator() }
+    func makeUIView(context: Context) -> SCNView {
+        let view = SCNView(frame: .zero)
+        view.backgroundColor = .clear
+        view.isOpaque = false
+        view.antialiasingMode = .multisampling2X
+        view.preferredFramesPerSecond = 24
+        view.rendersContinuously = false
+        view.isUserInteractionEnabled = false
+        view.isAccessibilityElement = false
+        return view
+    }
+    func updateUIView(_ view: SCNView, context: Context) {
+        if context.coordinator.style != style {
+            view.scene = Self.makeScene(AvatarLook(rawValue: style))
+            context.coordinator.style = style
+            context.coordinator.moving = false
+        }
+        if context.coordinator.moving != animated {
+            let head = view.scene?.rootNode.childNode(withName: "head", recursively: true)
+            head?.removeAllActions()
+            head?.eulerAngles = SCNVector3(0, -0.10, 0)
+            if animated {
+                let turn = SCNAction.sequence([
+                    .rotateTo(x: 0.03, y: 0.12, z: 0.025, duration: 2.5),
+                    .rotateTo(x: 0, y: -0.10, z: 0, duration: 2.5)
+                ])
+                head?.runAction(.sequence([turn, .wait(duration: 3)]))
+            }
+            for name in ["leftEye", "rightEye"] {
+                guard let eye = head?.childNode(withName: name, recursively: true) else { continue }
+                eye.removeAllActions(); eye.scale = SCNVector3(1, 1, 1)
+                if animated {
+                    let close = SCNAction.customAction(duration: 0.10) { node, elapsed in
+                        node.scale.y = 1 - Float(elapsed / 0.10) * 0.9
+                    }
+                    let open = SCNAction.customAction(duration: 0.12) { node, elapsed in
+                        node.scale.y = 0.1 + Float(elapsed / 0.12) * 0.9
+                    }
+                    eye.runAction(.repeatForever(.sequence([.wait(duration: 4.5), close, open])))
+                }
+            }
+            context.coordinator.moving = animated
+        }
+        view.isPlaying = animated
+        view.setNeedsDisplay()
+    }
+    static func dismantleUIView(_ view: SCNView, coordinator: Coordinator) {
+        view.isPlaying = false
+        view.scene = nil
+    }
+    private static func material(_ color: UIColor, roughness: CGFloat = 0.55) -> SCNMaterial {
+        let m = SCNMaterial()
+        m.diffuse.contents = color
+        m.lightingModel = .physicallyBased
+        m.roughness.contents = roughness
+        m.metalness.contents = 0.0
+        return m
+    }
+    private static func makeScene(_ look: AvatarLook) -> SCNScene {
+        let scene = SCNScene()
+        let camera = SCNNode(); camera.camera = SCNCamera()
+        camera.camera?.usesOrthographicProjection = true
+        camera.camera?.orthographicScale = 1.30
+        camera.position = SCNVector3(0, 0.05, 5)
+        scene.rootNode.addChildNode(camera)
+        for (position, intensity) in [(SCNVector3(-3, 4, 5), CGFloat(950)), (SCNVector3(3, 1, 3), CGFloat(450))] {
+            let light = SCNNode(); light.light = SCNLight()
+            light.light?.type = .omni; light.light?.intensity = intensity
+            light.position = position; scene.rootNode.addChildNode(light)
+        }
+        let fill = SCNNode(); fill.light = SCNLight()
+        fill.light?.type = .ambient; fill.light?.intensity = 250
+        scene.rootNode.addChildNode(fill)
+        let skinColors: [UIColor] = [UIColor(red: 1, green: 0.81, blue: 0.66, alpha: 1), UIColor(red: 0.91, green: 0.65, blue: 0.44, alpha: 1), UIColor(red: 0.74, green: 0.48, blue: 0.31, alpha: 1), UIColor(red: 0.55, green: 0.32, blue: 0.20, alpha: 1), UIColor(red: 0.34, green: 0.19, blue: 0.12, alpha: 1)]
+        let skin = material(skinColors[look.skin], roughness: 0.65)
+        let hair = material([UIColor(white: 0.045, alpha: 1), UIColor.brown, UIColor(red: 0.68, green: 0.43, blue: 0.16, alpha: 1), UIColor.lightGray][look.hairColor], roughness: 0.38)
+        let shirt = material([UIColor.systemIndigo, .systemTeal, .systemOrange][look.shirt])
+        let head = SCNNode(); head.name = "head"
+        head.eulerAngles.y = -0.10
+        scene.rootNode.addChildNode(head)
+        @discardableResult func ball(_ parent: SCNNode, _ position: SCNVector3, _ scale: SCNVector3, _ m: SCNMaterial) -> SCNNode {
+            let geometry = SCNSphere(radius: 1); geometry.segmentCount = 32
+            geometry.materials = [m]
+            let n = SCNNode(geometry: geometry); n.position = position; n.scale = scale
+            parent.addChildNode(n); return n
+        }
+        ball(scene.rootNode, SCNVector3(0, -1.03, -0.12), SCNVector3(0.82, 0.48, 0.40), shirt)
+        ball(head, SCNVector3(0, -0.72, 0), SCNVector3(0.21, 0.35, 0.23), skin)
+        ball(head, SCNVector3(0, 0, 0), SCNVector3(look.face == 0 ? 0.64 : 0.59, 0.83, 0.55), skin)
+        for x in [Float(-0.64), Float(0.64)] {
+            ball(head, SCNVector3(x, -0.02, 0), SCNVector3(0.12, 0.21, 0.12), skin)
+        }
+        if look.hair != 3 {
+            ball(head, SCNVector3(0, 0.48, -0.12), SCNVector3(0.67, 0.48, 0.54), hair)
+            for i in 0..<7 {
+                let x = Float(i - 3) * 0.17
+                ball(head, SCNVector3(x, 0.57 - abs(x) * 0.12, 0.35), SCNVector3(0.14, look.hair == 2 ? 0.17 : 0.28, 0.19), hair)
+            }
+            if look.hair == 1 {
+                for x in [Float(-0.56), Float(0.56)] { ball(head, SCNVector3(x, -0.10, -0.16), SCNVector3(0.19, 0.75, 0.35), hair) }
+            }
+        }
+        for (i, x) in [Float(-0.27), Float(0.27)].enumerated() {
+            let eye = SCNNode(); eye.position = SCNVector3(x, 0.12, 0.48)
+            eye.name = i == 0 ? "leftEye" : "rightEye"
+            head.addChildNode(eye)
+            let wink = look.expression == 2 && i == 1
+            ball(eye, SCNVector3Zero, SCNVector3(0.18, wink ? 0.025 : 0.14, 0.085), material(wink ? .brown : .white))
+            if !wink {
+                ball(eye, SCNVector3(0, 0, 0.078), SCNVector3(0.078, 0.095, 0.025), material(.brown))
+                ball(eye, SCNVector3(0, 0, 0.10), SCNVector3(0.043, 0.065, 0.014), material(.black))
+                ball(eye, SCNVector3(-0.025, 0.035, 0.115), SCNVector3(0.019, 0.024, 0.01), material(.white))
+            }
+            let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.18, 0.035, 0.04), hair)
+            brow.eulerAngles.z = i == 0 ? 0.08 : -0.08
+            if look.glasses != 0 {
+                let path = UIBezierPath(roundedRect: CGRect(x: -0.22, y: -0.18, width: 0.44, height: 0.36), cornerRadius: look.glasses == 1 ? 0.17 : 0.07)
+                let inner = UIBezierPath(roundedRect: CGRect(x: -0.18, y: -0.14, width: 0.36, height: 0.28), cornerRadius: look.glasses == 1 ? 0.13 : 0.045)
+                path.append(inner.reversing())
+                let frame = SCNShape(path: path, extrusionDepth: 0.045)
+                frame.firstMaterial = material(.darkGray, roughness: 0.3)
+                let n = SCNNode(geometry: frame); n.position = SCNVector3(x, 0.12, 0.64); head.addChildNode(n)
+            }
+        }
+        if look.glasses != 0 { ball(head, SCNVector3(0, 0.16, 0.66), SCNVector3(0.09, 0.025, 0.025), material(.darkGray)) }
+        ball(head, SCNVector3(0, -0.12, 0.55), SCNVector3(0.105, 0.13, 0.14), skin)
+        let open = look.expression == 1 || look.expression == 3
+        let lips = material(UIColor(red: 0.40, green: 0.10, blue: 0.12, alpha: 1))
+        if open {
+            ball(head, SCNVector3(0, -0.38, 0.48), SCNVector3(look.expression == 3 ? 0.09 : 0.22, 0.12, 0.045), lips)
+        } else {
+            let smile = UIBezierPath()
+            smile.move(to: CGPoint(x: -0.21, y: 0.025))
+            smile.addQuadCurve(to: CGPoint(x: 0.21, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.08))
+            smile.addQuadCurve(to: CGPoint(x: -0.21, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.17))
+            smile.close()
+            let geometry = SCNShape(path: smile, extrusionDepth: 0.025)
+            geometry.firstMaterial = lips
+            let mouth = SCNNode(geometry: geometry); mouth.position = SCNVector3(0, -0.34, 0.53)
+            head.addChildNode(mouth)
+        }
+        if look.expression == 1 { ball(head, SCNVector3(0, -0.34, 0.52), SCNVector3(0.18, 0.045, 0.02), material(.white)) }
+        if look.beard == 1 { ball(head, SCNVector3(0, -0.62, 0.31), SCNVector3(0.28, 0.10, 0.12), hair) }
+        return scene
+    }
+}
+
 
 /// Shared profile keys keep the Settings summary and profile editor in sync.
 struct AccountSettingsCard: View {
@@ -888,7 +969,7 @@ private struct AccountProfileHeader: View {
             NavigationStack {
                 VStack(spacing: 0) {
                     YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: draftStyle)
-                        .frame(width: 128, height: 128).padding(12)
+                        .frame(width: 180, height: 180).padding(12)
                         .accessibilityHidden(true)
                     ScrollView {
                         VStack(alignment: .leading, spacing: 24) {
@@ -901,11 +982,11 @@ private struct AccountProfileHeader: View {
                                 .font(.caption).foregroundStyle(.secondary)
                             ScrollView(.horizontal, showsIndicators: false) {
                                 HStack(spacing: 10) {
-                                    ForEach(0..<4) { index in
+                                    ForEach(0..<5) { index in
                                         Button {
                                             withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) { avatarTab = index }
                                         } label: {
-                                            Text([tr("脸部", "Face", "Muka"), tr("头发", "Hair", "Rambut"), tr("配饰", "Accessories", "Aksesori"), tr("服装", "Clothing", "Pakaian")][index])
+                                            Text([tr("脸部", "Face", "Muka"), tr("头发", "Hair", "Rambut"), tr("配饰", "Accessories", "Aksesori"), tr("服装", "Clothing", "Pakaian"), tr("表情", "Expression", "Ekspresi")][index])
                                                 .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).frame(minHeight: 44)
                                                 .background(avatarTab == index ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
                                         }.buttonStyle(.plain).accessibilityAddTraits(avatarTab == index ? .isSelected : [])
@@ -922,8 +1003,10 @@ private struct AccountProfileHeader: View {
                                     avatarPicker(tr("胡须", "Facial hair", "Janggut"), options: [tr("无", "None", "Tiada"), tr("短胡须", "Short beard", "Janggut pendek")], divisor: 1440)
                                 } else if avatarTab == 2 {
                                     avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
-                                } else {
+                                } else if avatarTab == 3 {
                                     avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("靛蓝", "Indigo", "Indigo"), tr("青绿", "Teal", "Biru kehijauan"), tr("暖橙", "Orange", "Jingga")], divisor: 1)
+                                } else {
+                                    avatarPicker(tr("表情", "Expression", "Ekspresi"), options: [tr("微笑", "Smile", "Senyum"), tr("大笑", "Laugh", "Ketawa"), tr("眨眼", "Wink", "Kenyit"), tr("惊讶", "Surprised", "Terkejut")], divisor: 2880)
                                 }
                             }
                             Divider()
