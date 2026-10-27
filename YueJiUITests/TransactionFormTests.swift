@@ -144,8 +144,20 @@ final class TransactionFormTests: XCTestCase {
                 XCTAssertEqual(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "transaction.item.open.")).count, 0)
             }
         }
-        app.navigationBars["Entry details"].buttons.element(boundBy: 0).tap()
-        XCTAssertTrue(addEntry.waitForExistence(timeout: 5))
+        // The editor's navigation bar can disappear before the sheet's onDismiss.
+        // The detail Edit action stays disabled until that callback releases
+        // editorPresented. Wait for that real lifecycle signal before Back.
+        let detailEdit = app.buttons["transaction.edit"]
+        let back = app.navigationBars["Entry details"].buttons["BackButton"]
+        let detailReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            detailEdit.exists && detailEdit.isEnabled && detailEdit.isHittable &&
+                back.exists && back.isEnabled && back.isHittable
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [detailReady], timeout: 10), .completed,
+                       "Detail did not become interactive after closing the item editor; \(app.debugDescription)")
+        back.tap()
+        waitUntilGone(app.navigationBars["Entry details"])
+        XCTAssertTrue(addEntry.waitForExistence(timeout: 5), "One Back tap must return to Overview")
         let ledger = app.tabBars.buttons["Ledger"]
         ledger.tap()
         reveal(purchase, in: app); purchase.tap()
