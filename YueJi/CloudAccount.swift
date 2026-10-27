@@ -9,6 +9,7 @@ import UserNotifications
     static let shared = CloudAccount()
     @Published private(set) var loaded = false
     @Published private(set) var signedIn = false
+    @Published private(set) var signInPresentationID = UUID()
     @Published private(set) var needsSignInAgain = false
     @Published private(set) var changingAccount = false
     @Published private(set) var email = ""
@@ -114,6 +115,7 @@ import UserNotifications
         recoverySession = nil; resettingPassword = false
         initializationFailed = false; usingLocal = false
         try await synchronize(api, refresh: false)
+        signInPresentationID = UUID()
     }
     func signInWithGoogle() async {
         guard !busy else { return }
@@ -325,6 +327,7 @@ import UserNotifications
 }
 
 struct CloudEntryView: View {
+    @State private var showSignInSuccess = false
     @ObservedObject private var cloud = CloudAccount.shared
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.scenePhase) private var phase
@@ -342,6 +345,22 @@ struct CloudEntryView: View {
             } }
         }
         .animation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.25), value: cloud.canEnter)
+        .overlay(alignment: .top) {
+            if showSignInSuccess && cloud.canEnter && cloud.signedIn {
+                Label(tr("登录成功", "Signed in", "Berjaya log masuk"), systemImage: "checkmark.circle.fill")
+                    .font(.headline).padding(16)
+                    .background(.regularMaterial, in: Capsule()).padding(.top, 12)
+                    .transition(.opacity).allowsHitTesting(false)
+            }
+        }
+        .onChange(of: cloud.signInPresentationID) { _, _ in
+            showSignInSuccess = true
+        }
+        .task(id: showSignInSuccess) {
+            guard showSignInSuccess else { return }
+            do { try await Task.sleep(for: .seconds(1.2)) } catch { return }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.2)) { showSignInSuccess = false }
+        }
         .task { await cloud.initialize() }
         .onChange(of: cloud.cloudRestored) { _, _ in Task { await model.refresh(postRecurring: false) } }
         .onChange(of: phase) { _, value in
@@ -368,6 +387,7 @@ private struct CloudWelcomeView: View {
     @Environment(\.scenePhase) private var phase
     @AppStorage("playfulAnimations") private var playful = true
     @State private var appeared = false
+    @State private var enteringText = false
     @State private var mode: Bool? // true: create account; false: returning account
     @State private var address = ""
     @State private var code = ""
@@ -409,8 +429,8 @@ private struct CloudWelcomeView: View {
                         }
                     }
                     ZStack {
-                        MoonWelcomeArtwork(animated: motion).opacity(0.45)
-                        YueJiCharacter(animated: motion, style: 0)
+                        MoonWelcomeArtwork(animated: motion && !enteringText && !cloud.busy).opacity(0.45)
+                        YueJiCharacter(animated: motion && !enteringText && !cloud.busy, style: 0)
                             .frame(width: mode == nil ? 180 : 130, height: mode == nil ? 180 : 130)
                     }.frame(height: mode == nil ? 240 : 150)
                         .accessibilityHidden(true)
@@ -430,7 +450,7 @@ private struct CloudWelcomeView: View {
                     if cloud.busy {
                         ProgressView(tr("正在连接…", "Connecting…", "Menyambung…")).tint(gold)
                     }
-                    if !cloud.message.isEmpty {
+                    if !cloud.message.isEmpty && mode == nil {
                         VStack(alignment: .leading, spacing: 12) {
                             Text(cloud.message).font(.footnote).textSelection(.enabled)
                             Button(tr("检查云端连接", "Check cloud connection", "Semak sambungan awan")) {
@@ -483,7 +503,7 @@ private struct CloudWelcomeView: View {
         }
     }
     private var emailForm: some View {
-        CloudPasswordForm(creating: creating)
+        CloudPasswordForm(creating: creating, focusChanged: { enteringText = $0 })
     }
     private func selectMode(_ create: Bool) {
         cloud.changeEmail(); code = ""
@@ -511,6 +531,7 @@ private struct CloudRegistrationView: View {
 private struct CloudPasswordForm: View {
     let creating: Bool
     var changingPassword = false
+    var focusChanged: (Bool) -> Void = { _ in }
     @ObservedObject private var cloud = CloudAccount.shared
     @State private var address = ""
     @State private var password = ""
@@ -527,9 +548,20 @@ private struct CloudPasswordForm: View {
                 TextField(tr("邮件验证码", "Email code", "Kod e-mel"), text: $code)
                     .textContentType(.oneTimeCode).keyboardType(.numberPad).focused($focused, equals: .code)
                     .padding(14).background(.primary.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
-                Button(tr("验证邮箱", "Verify email", "Sahkan e-mel")) {
-                    focused = nil; Task { await cloud.verify(code: code); code = "" }
+                Button {
+                    focused = nil
+                    Task {
+                        await cloud.verify(code: code)
+                        if cloud.signedIn || cloud.resettingPassword { code = "" }
+                    }
+                } label: {
+                    HStack {
+                        Text(tr("验证邮箱", "Verify email", "Sahkan e-mel"))
+                        Spacer()
+                        if cloud.busy { ProgressView() } else { Image(systemName: "checkmark.shield") }
+                    }.padding(.vertical, 12).frame(minHeight: 44)
                 }.buttonStyle(.borderedProminent).disabled(code.isEmpty)
+                if !cloud.message.isEmpty { Text(cloud.message).font(.footnote) }
                 Button(tr("返回 / 重新发送", "Back / resend", "Kembali / hantar semula")) { cloud.changeEmail(); code = "" }
             } else {
                 if !cloud.resettingPassword && !changingPassword {
@@ -555,11 +587,15 @@ private struct CloudPasswordForm: View {
                 }
                 Button(action: submit) {
                     HStack {
-                        Text(buttonTitle).fontWeight(.semibold)
+                        Text(cloud.busy ? tr("正在处理…", "Please wait…", "Sila tunggu…") : buttonTitle).fontWeight(.semibold)
                         Spacer()
                         if cloud.busy { ProgressView() } else { Image(systemName: "arrow.right") }
-                    }.padding(.vertical, 8)
+                    }.padding(.vertical, 12).frame(minHeight: 44)
                 }.buttonStyle(.borderedProminent).disabled(!valid)
+                if !cloud.message.isEmpty {
+                    Text(cloud.message).font(.footnote).fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("account.form.feedback")
+                }
                 if !creating && !changingPassword && !cloud.resettingPassword {
                     Button(recovering ? tr("返回密码登录", "Back to password sign-in", "Kembali ke log masuk") : tr("忘记密码 / 首次设置密码", "Forgot password / Set first password", "Lupa kata laluan / Tetapkan kali pertama")) {
                         password = ""; confirmation = ""; recovering.toggle(); focused = .email
@@ -580,7 +616,8 @@ private struct CloudPasswordForm: View {
         .onChange(of: creating) { _, _ in clearSecrets(); recovering = false; cloud.changeEmail() }
         .onChange(of: cloud.codeSent) { _, value in if value { clearSecrets(); focused = .code } }
         .onChange(of: cloud.resettingPassword) { _, value in if value { clearSecrets(); focused = .password } }
-        .onDisappear { clearSecrets() }
+        .onChange(of: focused) { _, value in focusChanged(value != nil) }
+        .onDisappear { clearSecrets(); focusChanged(false) }
     }
     private var valid: Bool {
         if changingPassword || cloud.resettingPassword { return password.count >= 8 && password == confirmation }
@@ -600,7 +637,7 @@ private struct CloudPasswordForm: View {
             if changingPassword || cloud.resettingPassword { await cloud.savePassword(password, confirmation: confirmation) }
             else if recovering { await cloud.requestPasswordReset(address: address) }
             else { await cloud.authenticate(address: address, password: password, confirmation: confirmation, creating: creating) }
-            clearSecrets()
+            if cloud.signedIn || cloud.codeSent { clearSecrets() }
         }
     }
     private func clearSecrets() { password = ""; confirmation = ""; code = "" }
@@ -690,14 +727,15 @@ private struct AvatarLook {
 private struct YueJiCharacter: View {
     var animated = false
     var style = 0
+    @State private var animationStart = Date()
     private var look: AvatarLook { AvatarLook(rawValue: style) }
     private var shirt: Color { [Color.indigo, .teal, .orange][look.shirt] }
     private var skin: Color { [Color(red: 1, green: 0.84, blue: 0.71), Color(red: 0.94, green: 0.70, blue: 0.50), Color(red: 0.77, green: 0.51, blue: 0.34), Color(red: 0.58, green: 0.35, blue: 0.23), Color(red: 0.36, green: 0.21, blue: 0.15)][look.skin] }
     private var hair: Color { [Color(red: 0.12, green: 0.09, blue: 0.10), Color(red: 0.34, green: 0.18, blue: 0.10), Color(red: 0.79, green: 0.57, blue: 0.25), Color(red: 0.62, green: 0.64, blue: 0.70)][look.hairColor] }
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !animated)) { context in
-            let time = animated ? context.date.timeIntervalSinceReferenceDate : 0
-            let blink = animated && time.truncatingRemainder(dividingBy: 4.8) < 0.16
+            let time = animated ? max(0, context.date.timeIntervalSince(animationStart)) : 0
+            let blink = animated && time > 1 && time.truncatingRemainder(dividingBy: 4.8) < 0.16
             GeometryReader { geometry in
                 let size = min(geometry.size.width, geometry.size.height)
                 ZStack {
@@ -712,11 +750,17 @@ private struct YueJiCharacter: View {
                     HStack(spacing: size * 0.41) {
                         ForEach(0..<2) { _ in Ellipse().fill(skin.gradient).frame(width: size * 0.10, height: size * 0.15) }
                     }
-                    Ellipse().fill(RadialGradient(colors: [skin, skin.opacity(0.82), skin], center: .init(x: 0.35, y: 0.25), startRadius: 0, endRadius: size * 0.48))
+                    Ellipse().fill(skin.gradient)
+                        .overlay {
+                            Ellipse().fill(LinearGradient(colors: [.white.opacity(0.20), .clear, .black.opacity(0.16)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                        }
                         .frame(width: size * (look.face == 0 ? 0.53 : 0.49), height: size * 0.58).offset(y: -size * 0.015)
                         .shadow(color: .black.opacity(0.12), radius: size * 0.025, y: size * 0.02)
                     if look.hair != 3 {
                         Ellipse().fill(hair.gradient)
+                            .overlay {
+                                Ellipse().strokeBorder(.white.opacity(0.12), lineWidth: size * 0.025)
+                            }
                             .frame(width: size * 0.51, height: size * (look.hair == 2 ? 0.26 : 0.18))
                             .rotationEffect(.degrees(look.hair == 1 ? 16 : -14)).offset(x: -size * 0.025, y: -size * 0.24)
                         if look.hair == 2 {
@@ -762,10 +806,9 @@ private struct YueJiCharacter: View {
                     }
                     Image(systemName: "moon.fill").font(.system(size: size * 0.11)).foregroundStyle(.yellow).offset(y: size * 0.36)
                     Image(systemName: "hand.wave.fill").font(.system(size: size * 0.27)).foregroundStyle(skin.gradient)
-                        .rotationEffect(.degrees(animated ? sin(time * 3) * 13 : -8), anchor: .bottom)
+                        .rotationEffect(.degrees(animated && time < 2.4 ? -8 + sin(time * 8) * 13 * (1 - time / 2.4) : -8), anchor: .bottom)
                         .offset(x: size * 0.33, y: size * 0.18)
                 }.frame(width: size, height: size).clipShape(Circle())
-                    .offset(y: animated ? sin(time * 0.8) * 2 : 0)
             }
         }.accessibilityHidden(true)
     }
@@ -824,6 +867,7 @@ private struct AccountProfileHeader: View {
     @State private var editing = false
     @State private var draft = ""
     @State private var draftStyle = 0
+    @State private var avatarTab = 0
     init(accountID: String, email: String) {
         self.email = email
         _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
@@ -842,35 +886,54 @@ private struct AccountProfileHeader: View {
         }.frame(maxWidth: .infinity).padding(.vertical, 12)
         .sheet(isPresented: $editing) {
             NavigationStack {
-                Form {
-                    Section {
-                        HStack { Spacer(); YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: draftStyle).frame(width: 180, height: 180); Spacer() }
-                            .padding(.vertical, 16)
-                            .animation(reduceMotion || !playful ? nil : .spring(response: 0.4, dampingFraction: 0.8), value: draftStyle)
-                        HStack {
-                            Button(tr("男生预设", "Boy preset", "Pratetap lelaki")) { draftStyle = 0 }
-                            Spacer()
-                            Button(tr("女生预设", "Girl preset", "Pratetap perempuan")) { draftStyle = 735 }
-                        }.buttonStyle(.bordered).frame(minHeight: 44)
-                        Text(tr("预设只是起点，每一项都可以自由搭配。", "Start with a preset, then make every detail yours.", "Mulakan dengan pratetap dan sesuaikan setiap ciri."))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Section(tr("外观细节", "Your look", "Penampilan anda")) {
-                        avatarPicker(tr("肤色", "Skin tone", "Tona kulit"), options: [tr("浅色", "Light", "Cerah"), tr("暖浅色", "Warm light", "Cerah hangat"), tr("中等", "Medium", "Sederhana"), tr("棕色", "Brown", "Coklat"), tr("深色", "Deep", "Gelap")], divisor: 3)
-                        avatarPicker(tr("发型", "Hairstyle", "Gaya rambut"), options: [tr("短发", "Short", "Pendek"), tr("长发", "Long", "Panjang"), tr("卷发", "Curly", "Keriting"), tr("光头", "Shaved", "Botak")], divisor: 15)
-                        avatarPicker(tr("发色", "Hair colour", "Warna rambut"), options: [tr("黑色", "Black", "Hitam"), tr("棕色", "Brown", "Coklat"), tr("金色", "Blond", "Perang"), tr("银色", "Silver", "Perak")], divisor: 60)
-                        avatarPicker(tr("脸型", "Face shape", "Bentuk muka"), options: [tr("圆润", "Round", "Bulat"), tr("椭圆", "Oval", "Bujur")], divisor: 720)
-                        avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
-                        avatarPicker(tr("胡须", "Facial hair", "Janggut"), options: [tr("无", "None", "Tiada"), tr("短胡须", "Short beard", "Janggut pendek")], divisor: 1440)
-                        avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("靛蓝", "Indigo", "Indigo"), tr("青绿", "Teal", "Biru kehijauan"), tr("暖橙", "Orange", "Jingga")], divisor: 1)
-                    }
-                    Section {
-                        TextField(tr("昵称", "Display name", "Nama paparan"), text: $draft)
-                            .textContentType(.nickname)
-                            .onChange(of: draft) { _, value in if value.count > 40 { draft = String(value.prefix(40)) } }
-                    } footer: {
-                        Text(tr("头像和昵称保存在这台设备，不会更改登录邮箱。", "Your avatar and name are saved on this device. Your sign-in email stays the same.", "Avatar dan nama disimpan pada peranti ini. E-mel log masuk tidak berubah."))
-                    }
+                VStack(spacing: 0) {
+                    YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: draftStyle)
+                        .frame(width: 128, height: 128).padding(12)
+                        .accessibilityHidden(true)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 24) {
+                            HStack {
+                                Button(tr("男生预设", "Boy preset", "Pratetap lelaki")) { draftStyle = 0 }
+                                Spacer()
+                                Button(tr("女生预设", "Girl preset", "Pratetap perempuan")) { draftStyle = 735 }
+                            }.buttonStyle(.bordered).frame(minHeight: 44)
+                            Text(tr("预设只是起点，每一项都可以自由搭配。", "Start with a preset, then make every detail yours.", "Mulakan dengan pratetap dan sesuaikan setiap ciri."))
+                                .font(.caption).foregroundStyle(.secondary)
+                            ScrollView(.horizontal, showsIndicators: false) {
+                                HStack(spacing: 10) {
+                                    ForEach(0..<4) { index in
+                                        Button {
+                                            withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) { avatarTab = index }
+                                        } label: {
+                                            Text([tr("脸部", "Face", "Muka"), tr("头发", "Hair", "Rambut"), tr("配饰", "Accessories", "Aksesori"), tr("服装", "Clothing", "Pakaian")][index])
+                                                .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).frame(minHeight: 44)
+                                                .background(avatarTab == index ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
+                                        }.buttonStyle(.plain).accessibilityAddTraits(avatarTab == index ? .isSelected : [])
+                                    }
+                                }
+                            }
+                            Group {
+                                if avatarTab == 0 {
+                                    avatarPicker(tr("肤色", "Skin tone", "Tona kulit"), options: [tr("浅色", "Light", "Cerah"), tr("暖浅色", "Warm light", "Cerah hangat"), tr("中等", "Medium", "Sederhana"), tr("棕色", "Brown", "Coklat"), tr("深色", "Deep", "Gelap")], divisor: 3)
+                                    avatarPicker(tr("脸型", "Face shape", "Bentuk muka"), options: [tr("圆润", "Round", "Bulat"), tr("椭圆", "Oval", "Bujur")], divisor: 720)
+                                } else if avatarTab == 1 {
+                                    avatarPicker(tr("发型", "Hairstyle", "Gaya rambut"), options: [tr("短发", "Short", "Pendek"), tr("长发", "Long", "Panjang"), tr("卷发", "Curly", "Keriting"), tr("光头", "Shaved", "Botak")], divisor: 15)
+                                    avatarPicker(tr("发色", "Hair colour", "Warna rambut"), options: [tr("黑色", "Black", "Hitam"), tr("棕色", "Brown", "Coklat"), tr("金色", "Blond", "Perang"), tr("银色", "Silver", "Perak")], divisor: 60)
+                                    avatarPicker(tr("胡须", "Facial hair", "Janggut"), options: [tr("无", "None", "Tiada"), tr("短胡须", "Short beard", "Janggut pendek")], divisor: 1440)
+                                } else if avatarTab == 2 {
+                                    avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
+                                } else {
+                                    avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("靛蓝", "Indigo", "Indigo"), tr("青绿", "Teal", "Biru kehijauan"), tr("暖橙", "Orange", "Jingga")], divisor: 1)
+                                }
+                            }
+                            Divider()
+                            TextField(tr("昵称", "Display name", "Nama paparan"), text: $draft)
+                                .textContentType(.nickname).textFieldStyle(.roundedBorder)
+                                .onChange(of: draft) { _, value in if value.count > 40 { draft = String(value.prefix(40)) } }
+                            Text(tr("头像和昵称保存在这台设备，不会更改登录邮箱。", "Your avatar and name are saved on this device. Your sign-in email stays the same.", "Avatar dan nama disimpan pada peranti ini. E-mel log masuk tidak berubah."))
+                                .font(.footnote).foregroundStyle(.secondary)
+                        }.padding(20).frame(maxWidth: 560).frame(maxWidth: .infinity)
+                    }.scrollDismissesKeyboard(.interactively)
                 }
                 .navigationTitle(tr("个人资料", "Profile", "Profil"))
                 .toolbar {
@@ -886,14 +949,28 @@ private struct AccountProfileHeader: View {
         }
     }
     private func avatarPicker(_ title: String, options: [String], divisor: Int) -> some View {
-        Picker(title, selection: Binding(get: {
-            (max(0, draftStyle) / divisor) % options.count
-        }, set: { value in
-            draftStyle = AvatarLook(rawValue: draftStyle).replacing(divisor: divisor, count: options.count, with: value)
-        })) {
-            ForEach(options.indices, id: \.self) { index in Text(options[index]).tag(index) }
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title).font(.headline)
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 12)], spacing: 12) {
+                ForEach(options.indices, id: \.self) { index in
+                    let selected = (max(0, draftStyle) / divisor) % options.count == index
+                    let candidate = AvatarLook(rawValue: draftStyle).replacing(divisor: divisor, count: options.count, with: index)
+                    Button { draftStyle = candidate } label: {
+                        VStack(spacing: 8) {
+                            YueJiCharacter(style: candidate).frame(width: 58, height: 58)
+                            Text(options[index]).font(.caption.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+                            Image(systemName: selected ? "checkmark.circle.fill" : "circle").foregroundStyle(selected ? Color.accentColor : Color.secondary)
+                        }.frame(maxWidth: .infinity).padding(10)
+                            .background(selected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
+                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2))
+                    }.buttonStyle(.plain)
+                        .accessibilityLabel(title + ": " + options[index])
+                        .accessibilityAddTraits(selected ? .isSelected : [])
+                }
+            }
         }
     }
+
 }
 
 struct CloudAccountView: View {
