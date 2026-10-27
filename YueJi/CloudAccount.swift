@@ -809,6 +809,36 @@ private struct AvatarSceneView: UIViewRepresentable {
         m.metalness.contents = 0.0
         return m
     }
+    /// One continuous head surface: broader cheeks, a softer jaw and a narrower chin.
+    private static func headGeometry(oval: Bool, skin: SCNMaterial) -> SCNGeometry {
+        let rings = 40, slices = 56
+        var vertices: [SCNVector3] = []
+        var normals: [SCNVector3] = []
+        var indices: [Int32] = []
+        for row in 0...rings {
+            let theta = Float(row) / Float(rings) * .pi
+            let y = cos(theta)
+            let jaw = 1 - 0.20 * max(0, -y)
+            let width: Float = oval ? 0.60 : 0.65
+            for col in 0...slices {
+                let phi = Float(col) / Float(slices) * 2 * .pi
+                let x = sin(theta) * cos(phi)
+                let z = sin(theta) * sin(phi)
+                vertices.append(SCNVector3(x * width * jaw, y * 0.83, z * 0.55))
+                let nx = x / (width * jaw), ny = y / 0.83, nz = z / 0.55
+                let length = sqrt(nx * nx + ny * ny + nz * nz)
+                normals.append(SCNVector3(nx / length, ny / length, nz / length))
+                if row < rings && col < slices {
+                    let a = Int32(row * (slices + 1) + col), b = a + Int32(slices + 1)
+                    indices += [a, a + 1, b, a + 1, b + 1, b]
+                }
+            }
+        }
+        let geometry = SCNGeometry(sources: [.init(vertices: vertices), .init(normals: normals)],
+                                   elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
+        geometry.materials = [skin]
+        return geometry
+    }
     private static func makeScene(_ look: AvatarLook) -> SCNScene {
         let scene = SCNScene()
         let camera = SCNNode(); camera.camera = SCNCamera()
@@ -825,8 +855,8 @@ private struct AvatarSceneView: UIViewRepresentable {
         fill.light?.type = .ambient; fill.light?.intensity = 250
         scene.rootNode.addChildNode(fill)
         let skinColors: [UIColor] = [UIColor(red: 1, green: 0.81, blue: 0.66, alpha: 1), UIColor(red: 0.91, green: 0.65, blue: 0.44, alpha: 1), UIColor(red: 0.74, green: 0.48, blue: 0.31, alpha: 1), UIColor(red: 0.55, green: 0.32, blue: 0.20, alpha: 1), UIColor(red: 0.34, green: 0.19, blue: 0.12, alpha: 1)]
-        let skin = material(skinColors[look.skin], roughness: 0.65)
-        let hair = material([UIColor(white: 0.045, alpha: 1), UIColor.brown, UIColor(red: 0.68, green: 0.43, blue: 0.16, alpha: 1), UIColor.lightGray][look.hairColor], roughness: 0.38)
+        let skin = material(skinColors[look.skin], roughness: 0.80)
+        let hair = material([UIColor(white: 0.045, alpha: 1), UIColor.brown, UIColor(red: 0.68, green: 0.43, blue: 0.16, alpha: 1), UIColor.lightGray][look.hairColor], roughness: 0.55)
         let shirt = material([UIColor.systemIndigo, .systemTeal, .systemOrange][look.shirt])
         let head = SCNNode(); head.name = "head"
         head.eulerAngles.y = -0.10
@@ -838,8 +868,14 @@ private struct AvatarSceneView: UIViewRepresentable {
             parent.addChildNode(n); return n
         }
         ball(scene.rootNode, SCNVector3(0, -1.03, -0.12), SCNVector3(0.82, 0.48, 0.40), shirt)
+        let collar = SCNTorus(ringRadius: 0.27, pipeRadius: 0.065)
+        collar.firstMaterial = shirt
+        let collarNode = SCNNode(geometry: collar)
+        collarNode.position = SCNVector3(0, -0.82, 0.05)
+        collarNode.scale = SCNVector3(1, 0.6, 0.85)
+        scene.rootNode.addChildNode(collarNode)
         ball(head, SCNVector3(0, -0.72, 0), SCNVector3(0.21, 0.35, 0.23), skin)
-        ball(head, SCNVector3(0, 0, 0), SCNVector3(look.face == 0 ? 0.64 : 0.59, 0.83, 0.55), skin)
+        head.addChildNode(SCNNode(geometry: headGeometry(oval: look.face == 1, skin: skin)))
         for x in [Float(-0.64), Float(0.64)] {
             ball(head, SCNVector3(x, -0.02, 0), SCNVector3(0.12, 0.21, 0.12), skin)
             if look.earrings == 1 {
@@ -857,9 +893,25 @@ private struct AvatarSceneView: UIViewRepresentable {
         }
         if look.hair != 3 {
             ball(head, SCNVector3(0, 0.48, -0.12), SCNVector3(0.67, 0.48, 0.54), hair)
-            for i in 0..<7 {
+            for i in 0..<7 where look.hair == 2 {
                 let x = Float(i - 3) * 0.17
                 ball(head, SCNVector3(x, 0.57 - abs(x) * 0.12, 0.35), SCNVector3(0.14, look.hair == 2 ? 0.17 : 0.28, 0.19), hair)
+            }
+            if look.hair != 2 {
+                let fringe = UIBezierPath()
+                fringe.move(to: CGPoint(x: -0.60, y: 0.04))
+                fringe.addCurve(to: CGPoint(x: 0.58, y: 0.12), controlPoint1: CGPoint(x: -0.62, y: 0.66), controlPoint2: CGPoint(x: 0.42, y: 0.65))
+                fringe.addCurve(to: CGPoint(x: 0.05, y: -0.01), controlPoint1: CGPoint(x: 0.55, y: -0.04), controlPoint2: CGPoint(x: 0.27, y: -0.09))
+                fringe.addLine(to: CGPoint(x: -0.04, y: 0.26))
+                fringe.addCurve(to: CGPoint(x: -0.60, y: 0.04), controlPoint1: CGPoint(x: -0.10, y: 0.02), controlPoint2: CGPoint(x: -0.32, y: -0.06))
+                fringe.close()
+                let geometry = SCNShape(path: fringe, extrusionDepth: 0.18)
+                geometry.chamferRadius = 0.045
+                geometry.firstMaterial = hair
+                let node = SCNNode(geometry: geometry)
+                node.position = SCNVector3(0, 0.38, 0.34)
+                node.eulerAngles.z = look.hair == 1 ? 0.10 : -0.06
+                head.addChildNode(node)
             }
             if look.hair == 1 {
                 for x in [Float(-0.56), Float(0.56)] { ball(head, SCNVector3(x, -0.10, -0.16), SCNVector3(0.19, 0.75, 0.35), hair) }
@@ -870,11 +922,11 @@ private struct AvatarSceneView: UIViewRepresentable {
             eye.name = i == 0 ? "leftEye" : "rightEye"
             head.addChildNode(eye)
             let wink = look.expression == 2 && i == 1
-            ball(eye, SCNVector3Zero, SCNVector3(0.18, wink ? 0.025 : 0.14, 0.085), material(wink ? .brown : .white))
+            ball(eye, SCNVector3Zero, SCNVector3(0.175, wink ? 0.022 : 0.115, 0.055), material(wink ? .brown : UIColor(white: 0.94, alpha: 1)))
             if !wink {
-                ball(eye, SCNVector3(0, 0, 0.078), SCNVector3(0.078, 0.095, 0.025), material([UIColor.brown, .systemBlue, .systemGreen][look.eyeColor]))
-                ball(eye, SCNVector3(0, 0, 0.10), SCNVector3(0.043, 0.065, 0.014), material(.black))
-                ball(eye, SCNVector3(-0.025, 0.035, 0.115), SCNVector3(0.019, 0.024, 0.01), material(.white))
+                ball(eye, SCNVector3(0, 0, 0.05), SCNVector3(0.080, 0.095, 0.018), material([UIColor.brown, .systemBlue, .systemGreen][look.eyeColor]))
+                ball(eye, SCNVector3(0, 0, 0.066), SCNVector3(0.047, 0.065, 0.010), material(.black))
+                ball(eye, SCNVector3(-0.025, 0.035, 0.077), SCNVector3(0.019, 0.024, 0.006), material(.white))
             }
             let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.18, look.brows == 1 ? 0.055 : 0.035, 0.04), hair)
             let angle: Float = look.brows == 2 ? 0.26 : 0.08
