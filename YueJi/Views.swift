@@ -2522,8 +2522,8 @@ enum ExpenseDraftStorage {
 extension View {
     func editorDismissal(hasChanges: Bool, saving: Bool, confirming: Binding<Bool>, discard: @escaping () -> Void) -> some View {
         self.background {
-                EditorDismissObserver(blocked: hasChanges || saving) {
-                    if hasChanges && !saving { confirming.wrappedValue = true }
+                EditorDismissObserver(blocked: hasChanges || saving, allowsConfirmation: hasChanges && !saving, confirming: confirming.wrappedValue) {
+                    if hasChanges && !saving && !confirming.wrappedValue { confirming.wrappedValue = true }
                 }.frame(width: 0, height: 0)
             }
             // A confirmationDialog can become a popover that omits its cancel
@@ -2542,10 +2542,14 @@ extension View {
 /// of presentation bindings, and restore its delegate when the observer leaves.
 private struct EditorDismissObserver: UIViewControllerRepresentable {
     var blocked: Bool
+    var allowsConfirmation: Bool
+    var confirming: Bool
     var attempted: () -> Void
     func makeUIViewController(context: Context) -> Controller { Controller() }
     func updateUIViewController(_ controller: Controller, context: Context) {
         controller.blocked = blocked
+        controller.allowsConfirmation = allowsConfirmation
+        controller.updateConfirmation(confirming)
         controller.attempted = attempted
         controller.install()
         DispatchQueue.main.async { [weak controller] in controller?.install() }
@@ -2559,11 +2563,20 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
         private static let owners = NSMapTable<UIPresentationController, Controller>(
             keyOptions: .weakMemory, valueOptions: .weakMemory)
         var blocked = false
+        var allowsConfirmation = false
         var attempted: (() -> Void)?
         private weak var observed: UIPresentationController?
         private weak var previous: (any UIAdaptivePresentationControllerDelegate)?
         private var previousModalInPresentation = false
         private var removed = false
+        private var attemptPending = false
+        private var confirmationVisible = false
+        func updateConfirmation(_ visible: Bool) {
+            // Keep one rejected drag latched until its confirmation is closed.
+            // UIKit can report multiple attempts during the same long gesture.
+            if confirmationVisible && !visible { attemptPending = false }
+            confirmationVisible = visible
+        }
         override func loadView() { view = UIView(); view.isUserInteractionEnabled = false }
         override func viewDidAppear(_ animated: Bool) { super.viewDidAppear(animated); install() }
         override func didMove(toParent parent: UIViewController?) { super.didMove(toParent: parent); if parent != nil { install() } }
@@ -2621,10 +2634,23 @@ private struct EditorDismissObserver: UIViewControllerRepresentable {
         }
         func presentationControllerShouldDismiss(_ presentationController: UIPresentationController) -> Bool { !blocked }
         func presentationControllerDidAttemptToDismiss(_ presentationController: UIPresentationController) {
+            guard !removed, allowsConfirmation, !attemptPending, !confirmationVisible else { return }
+            attemptPending = true
             #if DEBUG
             print("Editor dismissal observer received attempted dismissal")
             #endif
-            DispatchQueue.main.async { [weak self] in self?.attempted?() }
+            let show: () -> Void = { [weak self] in
+                guard let self, !self.removed, self.attemptPending, !self.confirmationVisible else { return }
+                guard self.allowsConfirmation else { self.attemptPending = false; return }
+                self.attempted?()
+            }
+            // Present after the cancelled sheet transition settles, so the
+            // alert's cancel action is not competing with the sheet rollback.
+            if let transition = presentationController.presentedViewController.transitionCoordinator,
+               transition.animate(alongsideTransition: nil, completion: { _ in
+                   DispatchQueue.main.async(execute: show)
+               }) { return }
+            DispatchQueue.main.async(execute: show)
         }
         func presentationControllerWillDismiss(_ presentationController: UIPresentationController) {
             previous?.presentationControllerWillDismiss?(presentationController)

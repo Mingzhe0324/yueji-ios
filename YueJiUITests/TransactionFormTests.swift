@@ -338,6 +338,7 @@ final class TransactionFormTests: XCTestCase {
         let keepDraft = discardAlert.buttons["Keep editing"]
         XCTAssertTrue(keepDraft.waitForExistence(timeout: 5))
         keepDraft.tap()
+        waitUntilGone(discardAlert)
         XCTAssertEqual(names.firstMatch.value as? String, "Lunch")
         XCTAssertEqual(itemAmount.value as? String, "35.00")
         reveal(add, in: app); add.tap()
@@ -405,8 +406,13 @@ final class TransactionFormTests: XCTestCase {
         discard.tap()
     }
 
-    private func reveal(_ element: XCUIElement, in app: XCUIApplication, above: Bool = false) {
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication, above: Bool = false,
+                        file: StaticString = #filePath, line: UInt = #line) {
         for _ in 0..<8 {
+            guard !app.alerts.firstMatch.exists else {
+                XCTFail("Cannot scroll while an alert covers the form: \(app.alerts.firstMatch.label)", file: file, line: line)
+                return
+            }
             // Large navigation titles collapse while scrolling. Measure again
             // rather than retaining the initial, taller navigation-bar bounds.
             let viewport = unobscuredContent(in: app)
@@ -437,7 +443,7 @@ final class TransactionFormTests: XCTestCase {
         }
         let viewport = unobscuredContent(in: app)
         XCTAssertTrue(element.exists && element.isHittable && viewport.contains(element.frame),
-                      "Could not fully reveal \(element) above the screen controls; viewport=\(viewport), target=\(element.exists ? element.frame : .zero)")
+                      "Could not fully reveal \(element) above the screen controls; viewport=\(viewport), target=\(element.exists ? element.frame : .zero)", file: file, line: line)
     }
 
     private func unobscuredContent(in app: XCUIApplication) -> CGRect {
