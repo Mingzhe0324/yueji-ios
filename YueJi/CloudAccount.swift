@@ -367,6 +367,7 @@ private struct CloudWelcomeView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.scenePhase) private var phase
     @AppStorage("playfulAnimations") private var playful = true
+    @State private var appeared = false
     @State private var mode: Bool? // true: create account; false: returning account
     @State private var address = ""
     @State private var code = ""
@@ -384,6 +385,14 @@ private struct CloudWelcomeView: View {
     var body: some View {
         ZStack {
             LinearGradient(colors: [Color(red: 0.06, green: 0.10, blue: 0.20), Color(red: 0.13, green: 0.20, blue: 0.32)], startPoint: .topLeading, endPoint: .bottomTrailing).ignoresSafeArea()
+            GeometryReader { proxy in
+                ZStack {
+                    Circle().fill(Color.indigo.opacity(0.40)).frame(width: 280, height: 280)
+                        .position(x: proxy.size.width * 0.1, y: proxy.size.height * 0.2)
+                    Circle().fill(gold.opacity(0.16)).frame(width: 240, height: 240)
+                        .position(x: proxy.size.width * 0.95, y: proxy.size.height * 0.55)
+                }.blur(radius: 70)
+            }.ignoresSafeArea().allowsHitTesting(false).accessibilityHidden(true)
             ScrollView {
                 VStack(alignment: .leading, spacing: 26) {
                     HStack {
@@ -406,12 +415,18 @@ private struct CloudWelcomeView: View {
                     }.frame(height: mode == nil ? 240 : 150)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 14) {
-                        Text(title).font(.system(.largeTitle, design: .serif, weight: .medium)).fixedSize(horizontal: false, vertical: true)
+                        Text(title).font(.system(.largeTitle, design: .rounded, weight: .bold)).fixedSize(horizontal: false, vertical: true)
                         Text(subtitle).font(.subheadline).foregroundStyle(.white.opacity(0.78))
                             .fixedSize(horizontal: false, vertical: true).lineSpacing(4)
                     }
-                    if mode == nil { welcomeActions }
-                    else { emailForm.transition(.opacity) }
+                    VStack(alignment: .leading, spacing: 18) {
+                        if mode == nil { welcomeActions }
+                        else {
+                            Label(creating ? tr("创建你的账号", "Create your account", "Cipta akaun anda") : tr("登录月记", "Sign in to YueJi", "Log masuk ke YueJi"), systemImage: creating ? "person.crop.circle.badge.plus" : "lock.shield")
+                                .font(.headline)
+                            emailForm.transition(.opacity.combined(with: .offset(y: motion ? 10 : 0)))
+                        }
+                    }.padding(22).modifier(AccountGlassSurface())
                     if cloud.busy {
                         ProgressView(tr("正在连接…", "Connecting…", "Menyambung…")).tint(gold)
                     }
@@ -432,12 +447,15 @@ private struct CloudWelcomeView: View {
                         Text(tr("本机模式不会上传账本；登录并同步后才能跨设备恢复。", "Local mode stays on this device. Sign in and sync to restore on another device.", "Mod setempat kekal pada peranti ini. Log masuk dan segerakkan untuk pulih pada peranti lain."))
                             .font(.caption).foregroundStyle(.white.opacity(0.65)).multilineTextAlignment(.center)
                     }
-                }.padding(28).frame(maxWidth: 520).frame(maxWidth: .infinity)
+                }.padding(24).frame(maxWidth: 520).frame(maxWidth: .infinity)
+                    .opacity(appeared || !motion ? 1 : 0)
+                    .offset(y: appeared || !motion ? 0 : 16)
             }.scrollDismissesKeyboard(.interactively)
         }
         .foregroundStyle(.white).tint(gold).preferredColorScheme(.dark)
         .toolbar(.hidden, for: .navigationBar)
         .onAppear {
+            withAnimation(motion ? .spring(response: 0.65, dampingFraction: 0.86) : nil) { appeared = true }
             address = cloud.email
             if cloud.link != nil || cloud.codeSent || cloud.needsSignInAgain { mode = false }
         }
@@ -469,7 +487,7 @@ private struct CloudWelcomeView: View {
     }
     private func selectMode(_ create: Bool) {
         cloud.changeEmail(); code = ""
-        withAnimation(motion ? .easeInOut(duration: 0.3) : nil) { mode = create }
+        withAnimation(motion ? .spring(response: 0.48, dampingFraction: 0.86) : nil) { mode = create }
     }
     private func actionLabel(_ text: String, symbol: String) -> some View {
         HStack { Text(text).multilineTextAlignment(.leading); Spacer(minLength: 12); Image(systemName: symbol) }
@@ -588,6 +606,24 @@ private struct CloudPasswordForm: View {
     private func clearSecrets() { password = ""; confirmation = ""; code = "" }
 }
 
+private struct AccountGlassSurface: ViewModifier {
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    func body(content: Content) -> some View {
+        content
+            .background {
+                let shape = RoundedRectangle(cornerRadius: 30, style: .continuous)
+                if reduceTransparency { shape.fill(Color(red: 0.16, green: 0.21, blue: 0.31)) }
+                else { shape.fill(.ultraThinMaterial) }
+            }
+            .overlay {
+                RoundedRectangle(cornerRadius: 30, style: .continuous)
+                    .strokeBorder(LinearGradient(colors: [.white.opacity(0.38), .white.opacity(0.06), .white.opacity(0.15)], startPoint: .topLeading, endPoint: .bottomTrailing), lineWidth: 1)
+                    .allowsHitTesting(false)
+            }
+            .shadow(color: .black.opacity(0.18), radius: 24, y: 12)
+    }
+}
+
 private struct MoonWelcomeButton: ButtonStyle {
     let primary: Bool
     @Environment(\.isEnabled) private var enabled
@@ -599,6 +635,7 @@ private struct MoonWelcomeButton: ButtonStyle {
             .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(primary ? 0 : 0.22)))
             .opacity(enabled ? (configuration.isPressed ? 0.8 : 1) : 0.45)
             .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.98 : 1)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .spring(response: 0.3, dampingFraction: 0.7), value: configuration.isPressed)
     }
 }
 
@@ -635,10 +672,28 @@ private struct MoonWelcomeArtwork: View {
 }
 
 /// Original vector character; no access to the user's Apple ID or personal Memoji.
+private struct AvatarLook {
+    let rawValue: Int
+    private var safe: Int { min(max(rawValue, 0), 2879) }
+    var shirt: Int { safe % 3 }
+    var skin: Int { (safe / 3) % 5 }
+    var hair: Int { (safe / 15) % 4 }
+    var hairColor: Int { (safe / 60) % 4 }
+    var glasses: Int { (safe / 240) % 3 }
+    var face: Int { (safe / 720) % 2 }
+    var beard: Int { (safe / 1440) % 2 }
+    func replacing(divisor: Int, count: Int, with value: Int) -> Int {
+        safe + (min(max(value, 0), count - 1) - (safe / divisor) % count) * divisor
+    }
+}
+
 private struct YueJiCharacter: View {
     var animated = false
     var style = 0
-    private var shirt: Color { [Color.indigo, .teal, .orange][min(max(style, 0), 2)] }
+    private var look: AvatarLook { AvatarLook(rawValue: style) }
+    private var shirt: Color { [Color.indigo, .teal, .orange][look.shirt] }
+    private var skin: Color { [Color(red: 1, green: 0.84, blue: 0.71), Color(red: 0.94, green: 0.70, blue: 0.50), Color(red: 0.77, green: 0.51, blue: 0.34), Color(red: 0.58, green: 0.35, blue: 0.23), Color(red: 0.36, green: 0.21, blue: 0.15)][look.skin] }
+    private var hair: Color { [Color(red: 0.12, green: 0.09, blue: 0.10), Color(red: 0.34, green: 0.18, blue: 0.10), Color(red: 0.79, green: 0.57, blue: 0.25), Color(red: 0.62, green: 0.64, blue: 0.70)][look.hairColor] }
     var body: some View {
         TimelineView(.animation(minimumInterval: 1.0 / 24, paused: !animated)) { context in
             let time = animated ? context.date.timeIntervalSinceReferenceDate : 0
@@ -648,26 +703,65 @@ private struct YueJiCharacter: View {
                 ZStack {
                     Circle().fill(LinearGradient(colors: [shirt.opacity(0.18), shirt.opacity(0.55)], startPoint: .topLeading, endPoint: .bottomTrailing))
                     Ellipse().fill(shirt.gradient).frame(width: size * 0.76, height: size * 0.52).offset(y: size * 0.40)
-                    RoundedRectangle(cornerRadius: size * 0.08).fill(Color(red: 0.78, green: 0.49, blue: 0.32))
+                    RoundedRectangle(cornerRadius: size * 0.08).fill(skin.gradient)
                         .frame(width: size * 0.19, height: size * 0.22).offset(y: size * 0.21)
-                    Ellipse().fill(Color(red: 0.17, green: 0.11, blue: 0.10).gradient)
-                        .frame(width: size * 0.59, height: size * 0.65).offset(y: -size * 0.09)
-                    Ellipse().fill(LinearGradient(colors: [Color(red: 1, green: 0.79, blue: 0.59), Color(red: 0.84, green: 0.55, blue: 0.37)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .frame(width: size * 0.51, height: size * 0.56).offset(y: -size * 0.015)
-                    Ellipse().fill(Color(red: 0.22, green: 0.14, blue: 0.11).gradient)
-                        .frame(width: size * 0.49, height: size * 0.20).rotationEffect(.degrees(-14)).offset(x: -size * 0.035, y: -size * 0.24)
+                    if look.hair != 3 {
+                        RoundedRectangle(cornerRadius: size * 0.29).fill(hair.gradient)
+                            .frame(width: size * 0.60, height: size * (look.hair == 1 ? 0.82 : 0.65)).offset(y: -size * 0.05)
+                    }
+                    HStack(spacing: size * 0.41) {
+                        ForEach(0..<2) { _ in Ellipse().fill(skin.gradient).frame(width: size * 0.10, height: size * 0.15) }
+                    }
+                    Ellipse().fill(RadialGradient(colors: [skin, skin.opacity(0.82), skin], center: .init(x: 0.35, y: 0.25), startRadius: 0, endRadius: size * 0.48))
+                        .frame(width: size * (look.face == 0 ? 0.53 : 0.49), height: size * 0.58).offset(y: -size * 0.015)
+                        .shadow(color: .black.opacity(0.12), radius: size * 0.025, y: size * 0.02)
+                    if look.hair != 3 {
+                        Ellipse().fill(hair.gradient)
+                            .frame(width: size * 0.51, height: size * (look.hair == 2 ? 0.26 : 0.18))
+                            .rotationEffect(.degrees(look.hair == 1 ? 16 : -14)).offset(x: -size * 0.025, y: -size * 0.24)
+                        if look.hair == 2 {
+                            HStack(spacing: -size * 0.025) {
+                                ForEach(0..<5) { _ in Circle().fill(hair.gradient).frame(width: size * 0.12) }
+                            }.offset(y: -size * 0.29)
+                        }
+                    }
+                    HStack(spacing: size * 0.13) {
+                        ForEach(0..<2) { _ in Capsule().fill(hair).frame(width: size * 0.09, height: size * 0.018) }
+                    }.offset(y: -size * 0.09)
                     HStack(spacing: size * 0.15) {
                         ForEach(0..<2) { _ in
-                            Capsule().fill(Color(red: 0.16, green: 0.10, blue: 0.10))
-                                .frame(width: size * 0.04, height: size * (blink ? 0.012 : 0.065))
+                            ZStack {
+                                Ellipse().fill(.white).frame(width: size * 0.085, height: size * (blink ? 0.012 : 0.075))
+                                Capsule().fill(Color(red: 0.16, green: 0.10, blue: 0.10))
+                                    .frame(width: size * 0.042, height: size * (blink ? 0.012 : 0.060))
+                                if !blink { Circle().fill(.white).frame(width: size * 0.013).offset(x: -size * 0.007, y: -size * 0.013) }
+                            }
                         }
                     }.offset(y: -size * 0.015)
+                    HStack(spacing: size * 0.28) {
+                        ForEach(0..<2) { _ in Ellipse().fill(Color.pink.opacity(0.15)).frame(width: size * 0.09, height: size * 0.045).blur(radius: size * 0.012) }
+                    }.offset(y: size * 0.06)
+                    if look.glasses != 0 {
+                        HStack(spacing: size * 0.025) {
+                            ForEach(0..<2) { _ in
+                                RoundedRectangle(cornerRadius: size * (look.glasses == 1 ? 0.08 : 0.025))
+                                    .stroke(Color.primary.opacity(0.85), lineWidth: size * 0.014)
+                                    .background(.white.opacity(0.10))
+                                    .frame(width: size * 0.19, height: size * 0.14)
+                            }
+                        }.overlay { Capsule().fill(.primary).frame(width: size * 0.04, height: size * 0.012) }
+                        .offset(y: -size * 0.012)
+                    }
                     Capsule().fill(Color(red: 0.69, green: 0.36, blue: 0.24).opacity(0.5))
                         .frame(width: size * 0.045, height: size * 0.065).offset(y: size * 0.055)
                     Ellipse().trim(from: 0, to: 0.5).stroke(Color(red: 0.42, green: 0.19, blue: 0.15), style: StrokeStyle(lineWidth: size * 0.018, lineCap: .round))
                         .frame(width: size * 0.16, height: size * 0.09).offset(y: size * 0.10)
+                    if look.beard == 1 {
+                        Ellipse().trim(from: 0, to: 0.5).stroke(hair, style: StrokeStyle(lineWidth: size * 0.045, lineCap: .round))
+                            .frame(width: size * 0.28, height: size * 0.16).offset(y: size * 0.13)
+                    }
                     Image(systemName: "moon.fill").font(.system(size: size * 0.11)).foregroundStyle(.yellow).offset(y: size * 0.36)
-                    Image(systemName: "hand.wave.fill").font(.system(size: size * 0.27)).foregroundStyle(Color(red: 1, green: 0.76, blue: 0.53))
+                    Image(systemName: "hand.wave.fill").font(.system(size: size * 0.27)).foregroundStyle(skin.gradient)
                         .rotationEffect(.degrees(animated ? sin(time * 3) * 13 : -8), anchor: .bottom)
                         .offset(x: size * 0.33, y: size * 0.18)
                 }.frame(width: size, height: size).clipShape(Circle())
@@ -750,12 +844,27 @@ private struct AccountProfileHeader: View {
             NavigationStack {
                 Form {
                     Section {
-                        HStack { Spacer(); YueJiCharacter(style: draftStyle).frame(width: 120, height: 120); Spacer() }
-                        Picker(tr("头像配色", "Avatar colour", "Warna avatar"), selection: $draftStyle) {
-                            Text(tr("靛蓝", "Indigo", "Indigo")).tag(0)
-                            Text(tr("青绿", "Teal", "Biru kehijauan")).tag(1)
-                            Text(tr("暖橙", "Orange", "Jingga")).tag(2)
-                        }
+                        HStack { Spacer(); YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: draftStyle).frame(width: 180, height: 180); Spacer() }
+                            .padding(.vertical, 16)
+                            .animation(reduceMotion || !playful ? nil : .spring(response: 0.4, dampingFraction: 0.8), value: draftStyle)
+                        HStack {
+                            Button(tr("男生预设", "Boy preset", "Pratetap lelaki")) { draftStyle = 0 }
+                            Spacer()
+                            Button(tr("女生预设", "Girl preset", "Pratetap perempuan")) { draftStyle = 735 }
+                        }.buttonStyle(.bordered).frame(minHeight: 44)
+                        Text(tr("预设只是起点，每一项都可以自由搭配。", "Start with a preset, then make every detail yours.", "Mulakan dengan pratetap dan sesuaikan setiap ciri."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Section(tr("外观细节", "Your look", "Penampilan anda")) {
+                        avatarPicker(tr("肤色", "Skin tone", "Tona kulit"), options: [tr("浅色", "Light", "Cerah"), tr("暖浅色", "Warm light", "Cerah hangat"), tr("中等", "Medium", "Sederhana"), tr("棕色", "Brown", "Coklat"), tr("深色", "Deep", "Gelap")], divisor: 3)
+                        avatarPicker(tr("发型", "Hairstyle", "Gaya rambut"), options: [tr("短发", "Short", "Pendek"), tr("长发", "Long", "Panjang"), tr("卷发", "Curly", "Keriting"), tr("光头", "Shaved", "Botak")], divisor: 15)
+                        avatarPicker(tr("发色", "Hair colour", "Warna rambut"), options: [tr("黑色", "Black", "Hitam"), tr("棕色", "Brown", "Coklat"), tr("金色", "Blond", "Perang"), tr("银色", "Silver", "Perak")], divisor: 60)
+                        avatarPicker(tr("脸型", "Face shape", "Bentuk muka"), options: [tr("圆润", "Round", "Bulat"), tr("椭圆", "Oval", "Bujur")], divisor: 720)
+                        avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
+                        avatarPicker(tr("胡须", "Facial hair", "Janggut"), options: [tr("无", "None", "Tiada"), tr("短胡须", "Short beard", "Janggut pendek")], divisor: 1440)
+                        avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("靛蓝", "Indigo", "Indigo"), tr("青绿", "Teal", "Biru kehijauan"), tr("暖橙", "Orange", "Jingga")], divisor: 1)
+                    }
+                    Section {
                         TextField(tr("昵称", "Display name", "Nama paparan"), text: $draft)
                             .textContentType(.nickname)
                             .onChange(of: draft) { _, value in if value.count > 40 { draft = String(value.prefix(40)) } }
@@ -774,6 +883,15 @@ private struct AccountProfileHeader: View {
                     }
                 }
             }
+        }
+    }
+    private func avatarPicker(_ title: String, options: [String], divisor: Int) -> some View {
+        Picker(title, selection: Binding(get: {
+            (max(0, draftStyle) / divisor) % options.count
+        }, set: { value in
+            draftStyle = AvatarLook(rawValue: draftStyle).replacing(divisor: divisor, count: options.count, with: value)
+        })) {
+            ForEach(options.indices, id: \.self) { index in Text(options[index]).tag(index) }
         }
     }
 }
