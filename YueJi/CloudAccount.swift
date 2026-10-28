@@ -737,9 +737,35 @@ private struct YueJiCharacter: View {
     @Environment(\.scenePhase) private var phase
     var body: some View {
         AvatarSceneView(style: style, animated: animated && !reduceMotion && phase == .active)
-            .background(Color.indigo.opacity(0.12), in: Circle())
+            .background {
+                let tint = Color(uiColor: AvatarPortraitPalette.clothing[AvatarLook(rawValue: style).shirt])
+                Circle().fill(LinearGradient(colors: [tint.opacity(0.12), tint.opacity(0.38)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
+            }
             .clipShape(Circle()).allowsHitTesting(false).accessibilityHidden(true)
     }
+}
+
+/// Fixed portrait colours keep skin and clothing consistent in both appearance modes.
+private enum AvatarPortraitPalette {
+    static let skin: [UIColor] = [
+        UIColor(red: 0.98, green: 0.82, blue: 0.73, alpha: 1),
+        UIColor(red: 0.88, green: 0.68, blue: 0.53, alpha: 1),
+        UIColor(red: 0.72, green: 0.50, blue: 0.36, alpha: 1),
+        UIColor(red: 0.53, green: 0.34, blue: 0.25, alpha: 1),
+        UIColor(red: 0.34, green: 0.22, blue: 0.18, alpha: 1)
+    ]
+    static let clothing: [UIColor] = [
+        UIColor(red: 0.43, green: 0.46, blue: 0.80, alpha: 1),
+        UIColor(red: 0.26, green: 0.63, blue: 0.57, alpha: 1),
+        UIColor(red: 0.88, green: 0.49, blue: 0.38, alpha: 1)
+    ]
+    static let hair: [UIColor] = [
+        UIColor(red: 0.10, green: 0.085, blue: 0.09, alpha: 1),
+        UIColor(red: 0.25, green: 0.15, blue: 0.11, alpha: 1),
+        UIColor(red: 0.65, green: 0.47, blue: 0.27, alpha: 1),
+        UIColor(red: 0.64, green: 0.66, blue: 0.70, alpha: 1)
+    ]
 }
 
 /// Original, locally generated geometry. No camera, downloaded models or private avatar APIs.
@@ -755,7 +781,7 @@ private struct AvatarSceneView: UIViewRepresentable {
         let view = SCNView(frame: .zero)
         view.backgroundColor = .clear
         view.isOpaque = false
-        view.antialiasingMode = .multisampling2X
+        view.antialiasingMode = .multisampling4X
         view.preferredFramesPerSecond = 24
         view.rendersContinuously = false
         view.isUserInteractionEnabled = false
@@ -843,21 +869,22 @@ private struct AvatarSceneView: UIViewRepresentable {
         let scene = SCNScene()
         let camera = SCNNode(); camera.camera = SCNCamera()
         camera.camera?.usesOrthographicProjection = true
-        camera.camera?.orthographicScale = 1.30
+        camera.camera?.orthographicScale = 1.20
+        camera.camera?.wantsHDR = true
+        camera.camera?.wantsExposureAdaptation = false
         camera.position = SCNVector3(0, 0.05, 5)
         scene.rootNode.addChildNode(camera)
-        for (position, intensity) in [(SCNVector3(-3, 4, 5), CGFloat(950)), (SCNVector3(3, 1, 3), CGFloat(450))] {
+        for (position, intensity) in [(SCNVector3(-3, 4, 5), CGFloat(750)), (SCNVector3(3, 1, 3), CGFloat(500)), (SCNVector3(1, 3, -3), CGFloat(650))] {
             let light = SCNNode(); light.light = SCNLight()
             light.light?.type = .omni; light.light?.intensity = intensity
             light.position = position; scene.rootNode.addChildNode(light)
         }
         let fill = SCNNode(); fill.light = SCNLight()
-        fill.light?.type = .ambient; fill.light?.intensity = 250
+        fill.light?.type = .ambient; fill.light?.intensity = 350
         scene.rootNode.addChildNode(fill)
-        let skinColors: [UIColor] = [UIColor(red: 1, green: 0.81, blue: 0.66, alpha: 1), UIColor(red: 0.91, green: 0.65, blue: 0.44, alpha: 1), UIColor(red: 0.74, green: 0.48, blue: 0.31, alpha: 1), UIColor(red: 0.55, green: 0.32, blue: 0.20, alpha: 1), UIColor(red: 0.34, green: 0.19, blue: 0.12, alpha: 1)]
-        let skin = material(skinColors[look.skin], roughness: 0.80)
-        let hair = material([UIColor(white: 0.045, alpha: 1), UIColor.brown, UIColor(red: 0.68, green: 0.43, blue: 0.16, alpha: 1), UIColor.lightGray][look.hairColor], roughness: 0.55)
-        let shirt = material([UIColor.systemIndigo, .systemTeal, .systemOrange][look.shirt])
+        let skin = material(AvatarPortraitPalette.skin[look.skin], roughness: 0.65)
+        let hair = material(AvatarPortraitPalette.hair[look.hairColor], roughness: 0.42)
+        let shirt = material(AvatarPortraitPalette.clothing[look.shirt], roughness: 0.90)
         let head = SCNNode(); head.name = "head"
         head.eulerAngles.y = -0.10
         scene.rootNode.addChildNode(head)
@@ -928,7 +955,7 @@ private struct AvatarSceneView: UIViewRepresentable {
                 ball(eye, SCNVector3(0, 0, 0.066), SCNVector3(0.047, 0.065, 0.010), material(.black))
                 ball(eye, SCNVector3(-0.025, 0.035, 0.077), SCNVector3(0.019, 0.024, 0.006), material(.white))
             }
-            let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.18, look.brows == 1 ? 0.055 : 0.035, 0.04), hair)
+            let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.15, look.brows == 1 ? 0.042 : 0.025, 0.025), hair)
             let angle: Float = look.brows == 2 ? 0.26 : 0.08
             brow.eulerAngles.z = i == 0 ? angle : -angle
             if look.glasses != 0 {
@@ -941,17 +968,17 @@ private struct AvatarSceneView: UIViewRepresentable {
             }
         }
         if look.glasses != 0 { ball(head, SCNVector3(0, 0.16, 0.66), SCNVector3(0.09, 0.025, 0.025), material(.darkGray)) }
-        let noseScale = [SCNVector3(0.105, 0.13, 0.14), SCNVector3(0.08, 0.16, 0.17), SCNVector3(0.14, 0.105, 0.12)][look.nose]
-        ball(head, SCNVector3(0, -0.12, 0.55), noseScale, skin)
+        let noseScale = [SCNVector3(0.085, 0.11, 0.10), SCNVector3(0.07, 0.14, 0.13), SCNVector3(0.11, 0.09, 0.09)][look.nose]
+        ball(head, SCNVector3(0, -0.10, 0.53), noseScale, skin)
         let open = look.expression == 1 || look.expression == 3
-        let lips = material(UIColor(red: 0.40, green: 0.10, blue: 0.12, alpha: 1))
+        let lips = material(UIColor(red: 0.53, green: 0.25, blue: 0.25, alpha: 1), roughness: 0.7)
         if open {
             ball(head, SCNVector3(0, -0.38, 0.48), SCNVector3(look.expression == 3 ? 0.09 : 0.22, 0.12, 0.045), lips)
         } else {
             let smile = UIBezierPath()
-            smile.move(to: CGPoint(x: -0.21, y: 0.025))
-            smile.addQuadCurve(to: CGPoint(x: 0.21, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.08))
-            smile.addQuadCurve(to: CGPoint(x: -0.21, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.17))
+            smile.move(to: CGPoint(x: -0.18, y: 0.025))
+            smile.addQuadCurve(to: CGPoint(x: 0.18, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.07))
+            smile.addQuadCurve(to: CGPoint(x: -0.18, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.12))
             smile.close()
             let geometry = SCNShape(path: smile, extrusionDepth: 0.025)
             geometry.firstMaterial = lips
@@ -1149,7 +1176,7 @@ private struct AccountProfileHeader: View {
                                     avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
                                     avatarPicker(tr("耳饰", "Earrings", "Anting-anting"), options: [tr("无", "None", "Tiada"), tr("金色耳钉", "Gold studs", "Subang emas"), tr("银色耳环", "Silver hoops", "Gelung perak")], divisor: 311040)
                                 } else if avatarTab == 3 {
-                                    avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("靛蓝", "Indigo", "Indigo"), tr("青绿", "Teal", "Biru kehijauan"), tr("暖橙", "Orange", "Jingga")], divisor: 1)
+                                    avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("鸢尾紫", "Iris", "Iris"), tr("薄荷绿", "Mint", "Pudina"), tr("珊瑚橘", "Coral", "Karang")], divisor: 1)
                                 } else {
                                     avatarPicker(tr("表情", "Expression", "Ekspresi"), options: [tr("微笑", "Smile", "Senyum"), tr("大笑", "Laugh", "Ketawa"), tr("眨眼", "Wink", "Kenyit"), tr("惊讶", "Surprised", "Terkejut")], divisor: 2880)
                                 }
