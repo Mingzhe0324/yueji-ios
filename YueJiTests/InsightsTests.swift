@@ -34,11 +34,17 @@ final class BankAccountTests: XCTestCase {
     }
 
     func testAccountsRoundTripAndLegacyBackupDefaults() throws {
-        let account = BankAccount(name: "Wallet", openingCents: 0, openingDate: opening)
+        let account = BankAccount(name: "Savings", openingCents: 0, openingDate: opening, institution: "CIMB Bank")
         var ledger = Ledger(); ledger.bankAccounts = [account]
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
         XCTAssertEqual(restored.bankAccounts, [account])
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        var accounts = try XCTUnwrap(object["bankAccounts"] as? [[String: Any]])
+        accounts[0].removeValue(forKey: "institution")
+        object["bankAccounts"] = accounts
+        let legacyAccount = try LocalStore.decode(JSONSerialization.data(withJSONObject: object)).bankAccounts.first
+        XCTAssertEqual(legacyAccount?.name, account.name)
+        XCTAssertNil(legacyAccount?.institution)
         object.removeValue(forKey: "bankAccounts")
         XCTAssertTrue(try LocalStore.decode(JSONSerialization.data(withJSONObject: object)).bankAccounts.isEmpty)
     }

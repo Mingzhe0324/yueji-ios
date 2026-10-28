@@ -1,5 +1,12 @@
 import Foundation
 
+enum MalaysianBanks {
+    // Display names checked against PIDM's member-bank directory, October 2026.
+    static let conventional = ["Maybank", "CIMB Bank", "Public Bank", "RHB Bank", "Hong Leong Bank", "AmBank", "Affin Bank", "Alliance Bank", "HSBC Malaysia", "OCBC Malaysia", "UOB Malaysia", "Standard Chartered Malaysia", "Bank of China Malaysia", "ICBC Malaysia"]
+    static let islamic = ["Maybank Islamic", "CIMB Islamic", "Bank Islam", "Bank Muamalat", "MBSB Bank", "Affin Islamic", "Alliance Islamic", "AmBank Islamic", "Hong Leong Islamic", "HSBC Amanah", "OCBC Al-Amin", "Public Islamic", "RHB Islamic", "Standard Chartered Saadiq", "Al Rajhi Malaysia"]
+    static let digital = ["GXBank", "Boost Bank", "AEON Bank", "Ryt Bank", "KAF Digital Bank"]
+}
+
 /// A manually maintained MYR account. No bank credentials or bank connection.
 struct BankAccount: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
@@ -7,6 +14,7 @@ struct BankAccount: Codable, Identifiable, Equatable {
     var openingCents: Int
     /// Opening balance is measured immediately before this time.
     var openingDate: Date
+    var institution: String? = nil
 }
 
 extension Ledger {
@@ -33,7 +41,7 @@ extension Ledger {
         for account in bankAccounts {
             guard !account.id.isEmpty, account.id.count <= 200,
                   !account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-                  account.name.count <= 80, (-10_000_000_000...10_000_000_000).contains(account.openingCents),
+                  account.name.count <= 80, (account.institution?.count ?? 0) <= 80, (-10_000_000_000...10_000_000_000).contains(account.openingCents),
                   account.openingDate.timeIntervalSince1970 >= 0,
                   account.openingDate.timeIntervalSince1970 < 4_102_444_800 else {
                 throw LedgerError.invalid("Invalid bank account")

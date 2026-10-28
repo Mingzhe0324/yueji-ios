@@ -1,5 +1,73 @@
 import SwiftUI
 
+private struct BankWalletCard: View {
+    let account: BankAccount
+    let balance: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private var bank: String { account.institution ?? account.name }
+    private var colors: [Color] {
+        if bank.hasPrefix("Maybank") { return [Color(red: 0.32, green: 0.23, blue: 0.04), .black] }
+        if bank.hasPrefix("CIMB") || bank.hasPrefix("Public") { return [Color(red: 0.65, green: 0.03, blue: 0.13), Color(red: 0.24, green: 0.02, blue: 0.08)] }
+        if bank == "GXBank" || bank == "AEON Bank" { return [.purple, Color(red: 0.16, green: 0.07, blue: 0.31)] }
+        return [Color(red: 0.10, green: 0.28, blue: 0.45), Color(red: 0.04, green: 0.09, blue: 0.17)]
+    }
+    private var logo: String? {
+        switch account.institution {
+        case "CIMB Bank": return "BankCIMB"
+        case "Hong Leong Bank": return "BankHongLeong"
+        case "GXBank": return "BankGX"
+        case "RHB Bank": return "BankRHB"
+        default: return nil
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            HStack(alignment: .top) {
+                if let logo {
+                    Image(logo).resizable().scaledToFit().frame(width: 116, height: 42)
+                        .padding(8).background(.white, in: RoundedRectangle(cornerRadius: 10))
+                        .accessibilityHidden(true)
+                } else {
+                    Label(bank, systemImage: "building.columns.fill").font(.headline)
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right").font(.caption.weight(.bold)).padding(10)
+                    .background(.white.opacity(0.12), in: Circle()).accessibilityHidden(true)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text(account.name).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+                Text(money(balance)).font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                    .monospacedDigit().contentTransition(.numericText())
+                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: balance)
+                    .minimumScaleFactor(0.65).lineLimit(1)
+            }
+            HStack {
+                Text(tr("账面余额 · MYR", "Recorded balance · MYR", "Baki direkod · MYR"))
+                Spacer()
+                if logo != nil { Text(bank) }
+            }.font(.caption).foregroundStyle(.white.opacity(0.85))
+        }
+        .foregroundStyle(.white).padding(22).frame(maxWidth: .infinity, alignment: .leading)
+        .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+        .overlay(alignment: .topTrailing) {
+            Circle().fill(.white.opacity(0.04)).frame(width: 200, height: 200).offset(x: 70, y: -90).allowsHitTesting(false)
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.16), lineWidth: 1))
+        .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BankCardPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label.scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
+            .opacity(configuration.isPressed ? 0.9 : 1)
+            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: configuration.isPressed)
+    }
+}
+
 struct BankAccountPicker: View {
     @EnvironmentObject var model: LedgerModel
     @Binding var selection: String?
@@ -15,7 +83,10 @@ struct BankAccountPicker: View {
 
 struct BankAccountsView: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var walletTransition
     @State private var adding = false
+    @State private var recurring = false
     var body: some View {
         NavigationStack {
             List {
@@ -29,15 +100,22 @@ struct BankAccountsView: View {
                 Section(tr("我的账户", "My accounts", "Akaun saya")) {
                     ForEach(model.ledger.bankAccounts) { account in
                         NavigationLink {
-                            BankAccountDetail(accountID: account.id)
-                        } label: {
-                            HStack {
-                                Image(systemName: "building.columns.fill").foregroundStyle(.tint)
-                                Text(account.name)
-                                Spacer()
-                                Text(money(model.ledger.bankBalance(account))).monospacedDigit()
+                            if #available(iOS 18.0, *), !reduceMotion {
+                                BankAccountDetail(accountID: account.id)
+                                    .navigationTransition(.zoom(sourceID: account.id, in: walletTransition))
+                            } else {
+                                BankAccountDetail(accountID: account.id)
                             }
-                        }
+                        } label: {
+                            if #available(iOS 18.0, *), !reduceMotion {
+                                BankWalletCard(account: account, balance: model.ledger.bankBalance(account))
+                                    .matchedTransitionSource(id: account.id, in: walletTransition)
+                            } else {
+                                BankWalletCard(account: account, balance: model.ledger.bankBalance(account))
+                            }
+                        }.buttonStyle(BankCardPressStyle())
+                            .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                            .listRowBackground(Color.clear).listRowSeparator(.hidden)
                     }
                     Button { adding = true } label: {
                         Label(tr("添加银行／钱包账户", "Add bank / wallet account", "Tambah akaun bank / dompet"), systemImage: "plus.circle.fill")
@@ -50,7 +128,13 @@ struct BankAccountsView: View {
             }
             .yuejiListSurface()
             .navigationTitle(tr("账户", "Accounts", "Akaun"))
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(tr("固定收支", "Recurring", "Berulang"), systemImage: "arrow.triangle.2.circlepath") { recurring = true }
+                }
+            }
             .sheet(isPresented: $adding) { BankAccountEditor() }
+            .sheet(isPresented: $recurring) { RecurringView().ledgerFeedback(modal: true).presentationDragIndicator(.visible) }
         }
     }
 }
@@ -62,6 +146,9 @@ private struct BankAccountDetail: View {
     var body: some View {
         List {
             if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
+                BankWalletCard(account: account, balance: model.ledger.bankBalance(account))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
+                    .listRowBackground(Color.clear).listRowSeparator(.hidden)
                 Section {
                     LabeledContent(tr("账面余额", "Recorded balance", "Baki direkod"), value: money(model.ledger.bankBalance(account)))
                         .font(.title3).monospacedDigit()
@@ -92,6 +179,7 @@ private struct BankAccountEditor: View {
     @Environment(\.dismiss) private var dismiss
     var original: BankAccount? = nil
     @State private var name = ""
+    @State private var institution = ""
     @State private var amount = ""
     @State private var openingDate = Date()
     @State private var initialized = false
@@ -102,6 +190,24 @@ private struct BankAccountEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                Picker(tr("选择银行", "Choose bank", "Pilih bank"), selection: $institution) {
+                    Text(tr("其他银行／钱包（自定义）", "Other bank / wallet (custom)", "Bank / dompet lain (tersuai)")).tag("")
+                    Section(tr("商业银行", "Conventional banks", "Bank konvensional")) {
+                        ForEach(MalaysianBanks.conventional, id: \.self) { Text($0).tag($0) }
+                    }
+                    Section(tr("伊斯兰银行", "Islamic banks", "Bank Islam")) {
+                        ForEach(MalaysianBanks.islamic, id: \.self) { Text($0).tag($0) }
+                    }
+                    Section(tr("数字银行", "Digital banks", "Bank digital")) {
+                        ForEach(MalaysianBanks.digital, id: \.self) { Text($0).tag($0) }
+                    }
+                    if !institution.isEmpty && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital).contains(institution) {
+                        Text(institution).tag(institution)
+                    }
+                }.pickerStyle(.navigationLink)
+                    .onChange(of: institution) { old, new in
+                        if name.isEmpty || name == old { name = new }
+                    }
                 TextField(tr("例如 Maybank 储蓄账户", "e.g. Maybank savings", "cth. Simpanan Maybank"), text: $name)
                 TextField(tr("期初余额 MYR", "Opening balance MYR", "Baki awal MYR"), text: $amount).keyboardType(.numbersAndPunctuation)
                 DatePicker(tr("期初时间", "Opening date", "Tarikh awal"), selection: $openingDate, in: ...Date())
@@ -119,6 +225,7 @@ private struct BankAccountEditor: View {
             .onAppear {
                 guard !initialized else { return }; initialized = true
                 if let original {
+                    institution = original.institution ?? ""
                     name = original.name; amount = Currency.input(original.openingCents, "MYR"); openingDate = original.openingDate
                 }
             }
@@ -134,7 +241,8 @@ private struct BankAccountEditor: View {
             let magnitude = negative ? String(raw.dropFirst()) : raw
             let cents = ["0", "0.0", "0.00"].contains(magnitude) ? 0 : try Currency.parse(magnitude, code: "MYR")
             let account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
-                                      openingCents: negative ? -cents : cents, openingDate: openingDate)
+                                      openingCents: negative ? -cents : cents, openingDate: openingDate,
+                                      institution: institution.isEmpty ? nil : institution)
             let before = original
             model.perform(key: operationKey, action: { ledger in
                 if let before {
