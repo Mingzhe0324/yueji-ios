@@ -6,7 +6,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
-    timeout-minutes: 35
+    # Simulator tests can take 32 minutes on the hosted runner; reserve time for
+    # the device build, packaging and artifact uploads after tests succeed.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - name: Verify source version and required features
@@ -44,6 +46,7 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('Test simulator: '+phone['name']+' ('+runtime+')\n')
           PY
       - name: Build and test
+        timeout-minutes: 45
         run: |
           set -o pipefail
           xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
