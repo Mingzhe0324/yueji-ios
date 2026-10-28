@@ -817,12 +817,6 @@ struct DashboardView: View {
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
                 budgetSection
-                Section {
-                    NavigationLink { SpendingCalendarView() } label: {
-                        DashboardLinkLabel(title: tr("消费日历", "Spending calendar", "Kalendar belanja"), symbol: "calendar")
-                    }
-
-                }
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
                 recentCard
@@ -1545,7 +1539,6 @@ struct OverviewToolsView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
-                NavigationLink { SpendingCalendarView() } label: { Label(tr("消费日历", "Spending calendar", "Kalendar belanja"), systemImage: "calendar") }
                 NavigationLink { ReimbursementsView() } label: { IslandRowLabel(title: tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), symbol: "doc.text.fill", color: IslandPalette.lavender) }
                 NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")

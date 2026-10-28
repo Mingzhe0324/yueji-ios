@@ -3,70 +3,6 @@ import UniformTypeIdentifiers
 import MapKit
 import UserNotifications
 
-struct SpendingCalendarView: View {
-    @EnvironmentObject private var model: LedgerModel
-    @AppStorage("hideOverviewAmounts") private var hidden = false
-    @State private var month = Date()
-    @State private var selected = Calendar.autoupdatingCurrent.startOfDay(for: Date())
-    private var calendar: Calendar { .autoupdatingCurrent }
-    var body: some View {
-        let days = model.ledger.spendingCalendar(month: month)
-        let maximum = max(1, days.map(\.total).max() ?? 0)
-        let chosen = days.first { calendar.isDate($0.date, inSameDayAs: selected) }
-        List {
-            Section {
-                HStack {
-                    Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
-                        .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
-                    Spacer()
-                    Text(month, format: .dateTime.year().month(.wide)).font(.headline)
-                    Spacer()
-                    Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
-                        .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
-                }.buttonStyle(.borderless)
-                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 7), spacing: 8) {
-                    ForEach(0..<7) { i in
-                        Text(calendar.veryShortStandaloneWeekdaySymbols[(calendar.firstWeekday - 1 + i) % 7])
-                            .font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
-                    }
-                    if let first = days.first {
-                        let offset = (calendar.component(.weekday, from: first.date) - calendar.firstWeekday + 7) % 7
-                        ForEach(0..<offset, id: \.self) { _ in Color.clear.frame(height: 44).accessibilityHidden(true) }
-                    }
-                    ForEach(days) { day in
-                        Button { selected = day.date } label: {
-                            Text(String(calendar.component(.day, from: day.date)))
-                                .font(.subheadline.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
-                                .background(Color.accentColor.opacity(hidden || day.entries.isEmpty ? 0.04 : 0.10 + 0.25 * Double(max(0, day.total)) / Double(maximum)), in: RoundedRectangle(cornerRadius: 10))
-                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(calendar.isDate(day.date, inSameDayAs: selected) ? Color.accentColor : .clear, lineWidth: 2))
-                        }.buttonStyle(.plain)
-                            .accessibilityLabel(dateLabel(day.date) + (hidden ? "" : ", " + money(day.total)))
-                            .accessibilityAddTraits(calendar.isDate(day.date, inSameDayAs: selected) ? .isSelected : [])
-                    }
-                }
-                Text(tr("颜色越深，当天个人实际消费越高。退款与报销按原账目的日期归属。", "Darker days mean more personal spending. Refunds and claims are attributed to the original purchase date.", "Warna gelap menunjukkan belanja peribadi lebih tinggi. Pulangan dan tuntutan mengikut tarikh pembelian asal."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section(dateLabel(selected)) {
-                LabeledContent(tr("个人实际消费", "Personal spending", "Belanja peribadi"), value: hidden ? "••••" : money(chosen?.total ?? 0))
-                if let chosen, !chosen.entries.isEmpty {
-                    ForEach(chosen.entries) { entry in
-                        NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
-                            HStack { Text(entry.displayName); Spacer(); Text(hidden ? "••••" : money(entry.personalSpending)).monospacedDigit() }
-                        }
-                    }
-                } else { Text(tr("这一天没有消费记录", "No expenses recorded for this day", "Tiada belanja direkod pada hari ini")).foregroundStyle(.secondary) }
-            }
-        }.yuejiListSurface().navigationTitle(tr("消费日历", "Spending calendar", "Kalendar belanja"))
-            .navigationBarTitleDisplayMode(.inline)
-    }
-    private func move(_ amount: Int) {
-        guard let start = calendar.dateInterval(of: .month, for: month)?.start,
-              let next = calendar.date(byAdding: .month, value: amount, to: start) else { return }
-        month = next; selected = next
-    }
-}
-
 struct TravelBooksView: View {
     @EnvironmentObject private var model: LedgerModel
     @State private var creating = false
@@ -1682,7 +1618,7 @@ struct NotificationSettingsView: View {
     @AppStorage("budgetAlertPercent") private var budgetPercent = 100
     @AppStorage("hideNotificationDetails") private var hideDetails = false
     @AppStorage(UnusualSpendingNotifier.enabledKey) private var unusualAlerts = true
-    @State private var time = Date()
+    @State private var time = Self.savedReminderTime()
     @State private var busy = false
     @State private var message: String?
     @State private var permission = tr("正在读取…", "Loading…", "Memuatkan…")
@@ -1691,24 +1627,14 @@ struct NotificationSettingsView: View {
         let _ = uiLocale.identifier
         Form {
             Section(tr("记账提醒", "Recording reminders", "Peringatan rekod")) {
-                Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: $daily)
-                if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: $time, displayedComponents: .hourAndMinute) }
-                Toggle(tr("自动记账后通知我", "Notify me after automatic recording", "Maklum selepas rekod automatik"), isOn: $results)
+                Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: Binding(get: { daily }, set: { guard !busy else { return }; daily = $0; saveReminders() }))
+                if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: Binding(get: { time }, set: { guard !busy else { return }; time = $0; saveReminders() }), displayedComponents: .hourAndMinute) }
+                Toggle(tr("自动记账后通知我", "Notify me after automatic recording", "Maklum selepas rekod automatik"), isOn: Binding(get: { results }, set: { guard !busy else { return }; results = $0; saveReminders() }))
                 Toggle(tr("通知里隐藏金额和姓名", "Hide amounts and names in notifications", "Sembunyikan amaun dan nama dalam notifikasi"), isOn: $hideDetails)
                 Text(tr("系统通知会用不同声音区分收款与扣款：收款是清亮上扬音，扣款是较低的下落音；待确认或失败使用普通提示音。", "System notifications use a bright rising tone for incoming money and a lower falling tone for outgoing money. Unclear results or failures use the regular tone.", "Notifikasi sistem menggunakan nada menaik untuk wang masuk dan nada menurun untuk wang keluar. Hasil tidak jelas atau kegagalan menggunakan nada biasa.")).font(.footnote)
-                Button(tr("保存记账提醒", "Save recording reminders", "Simpan peringatan rekod")) {
-                    busy = true
-                    Task {
-                        do {
-                            let c = Calendar.current.dateComponents([.hour, .minute], from: time)
-                            try await LedgerNotifications.configure(daily: daily, results: results, hour: c.hour ?? 21, minute: c.minute ?? 0, budgetAlerts: budgetAlerts)
-                            await BudgetAlertService.shared.check()
-                            message = tr("设置已保存", "Settings saved", "Tetapan disimpan")
-                        } catch { message = error.localizedDescription }
-                        await refreshPermission(); busy = false
-                    }
-                }
                 if busy { ProgressView() }
+                Text(tr("提醒开关和时间会自动保存。", "Reminder switches and time save automatically.", "Suis dan masa peringatan disimpan secara automatik."))
+                    .font(.footnote).foregroundStyle(.secondary)
             }.disabled(busy)
             Section(tr("预算提醒", "Budget reminder", "Peringatan bajet")) {
                 Toggle(tr("达到月度预算时提醒", "Alert when monthly budget is reached", "Maklum apabila bajet bulanan dicapai"), isOn: $budgetAlerts)
@@ -1746,9 +1672,6 @@ struct NotificationSettingsView: View {
 
         }.yuejiListSurface().navigationTitle(tr("通知与提醒", "Notifications", "Notifikasi")).navigationBarTitleDisplayMode(.inline)
             .task {
-                let d = UserDefaults.standard
-                let minutes = d.object(forKey: "reminderMinutes") == nil ? 21 * 60 : d.integer(forKey: "reminderMinutes")
-                time = Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date()
                 await refreshPermission()
             }
             .onChange(of: budgetAlerts) { _, enabled in
@@ -1762,6 +1685,33 @@ struct NotificationSettingsView: View {
             }
             .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refreshPermission() } } }
             .alert(tr("通知设置", "Notification settings", "Tetapan notifikasi"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK") {} } message: { Text(message ?? "") }
+    }
+    private static func savedReminderTime() -> Date {
+        let defaults = UserDefaults.standard
+        let minutes = defaults.object(forKey: "reminderMinutes") == nil ? 21 * 60 : defaults.integer(forKey: "reminderMinutes")
+        return Calendar.current.date(bySettingHour: minutes / 60, minute: minutes % 60, second: 0, of: Date()) ?? Date()
+    }
+    private func saveReminders() {
+        guard !busy else { return }
+        busy = true
+        let requestedDaily = daily, requestedResults = results
+        let components = Calendar.current.dateComponents([.hour, .minute], from: time)
+        let requestedBudget = budgetAlerts
+        // An unstructured task finishes saving even if the user leaves this screen.
+        Task { @MainActor in
+            do {
+                try await LedgerNotifications.configure(daily: requestedDaily, results: requestedResults,
+                    hour: components.hour ?? 21, minute: components.minute ?? 0, budgetAlerts: requestedBudget)
+                await BudgetAlertService.shared.check()
+            } catch {
+                daily = UserDefaults.standard.bool(forKey: "dailyReminder")
+                results = UserDefaults.standard.bool(forKey: "automationNotifications")
+                time = Self.savedReminderTime()
+                message = error.localizedDescription
+            }
+            await refreshPermission()
+            busy = false
+        }
     }
     private func enableBudgetAlerts() async {
         do {

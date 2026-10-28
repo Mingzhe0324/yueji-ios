@@ -464,7 +464,8 @@ struct SpendingDonutChart: View {
     var body: some View {
         Chart(slices) { slice in
             SectorMark(angle: .value("Spent", Double(slice.cents) / 100),
-                       innerRadius: .ratio(0.6), angularInset: 1.5)
+                       innerRadius: .ratio(0.6),
+                       outerRadius: .ratio(selection == slice.category ? 1 : 0.92), angularInset: 1.5)
                 .cornerRadius(4)
                 .foregroundStyle(slice.color)
                 .opacity(selection == nil || selection == slice.category ? 1 : 0.3)
@@ -481,7 +482,9 @@ struct SpendingDonutChart: View {
                             let next = picked == selection ? nil : picked
                             guard next != selection else { return }
                             FeedbackHaptics.selection()
-                            onSelect(next)
+                            withAnimation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.76)) {
+                                onSelect(next)
+                            }
                         }
                 }
             }
@@ -502,7 +505,7 @@ struct SpendingDonutChart: View {
         }
         .frame(width: size, height: size)
         .animation(reduceMotion ? nil : YueJiMotion.content, value: slices)
-        .animation(reduceMotion ? nil : YueJiMotion.standard, value: selection)
+        .animation(reduceMotion ? nil : .spring(response: 0.38, dampingFraction: 0.76), value: selection)
         .accessibilityHidden(true)
     }
 }
