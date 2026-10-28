@@ -198,6 +198,7 @@ extension Expense {
     }
 }
 
+// Legacy backup compatibility only; the cooling-off feature has been retired.
 struct CoolingPurchase: Codable, Identifiable, Equatable {
     enum Decision: String, Codable { case waiting, buy, declined }
     var id = UUID().uuidString

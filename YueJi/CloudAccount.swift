@@ -4,7 +4,6 @@ import AuthenticationServices
 import CryptoKit
 import Security
 import UserNotifications
-import SceneKit
 
 @MainActor final class CloudAccount: ObservableObject {
     static let shared = CloudAccount()
@@ -429,11 +428,8 @@ private struct CloudWelcomeView: View {
                                 .disabled(cloud.busy)
                         }
                     }
-                    ZStack {
-                        MoonWelcomeArtwork(animated: motion && !enteringText && !cloud.busy).opacity(0.45)
-                        YueJiCharacter(animated: motion && !enteringText && !cloud.busy, style: 0)
-                            .frame(width: mode == nil ? 180 : 130, height: mode == nil ? 180 : 130)
-                    }.frame(height: mode == nil ? 240 : 150)
+                    MoonWelcomeArtwork(animated: motion && !enteringText && !cloud.busy)
+                        .frame(height: mode == nil ? 240 : 150)
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 14) {
                         Text(title).font(.system(.largeTitle, design: .rounded, weight: .bold)).fixedSize(horizontal: false, vertical: true)
@@ -710,359 +706,6 @@ private struct MoonWelcomeArtwork: View {
 }
 
 /// Packed avatar choices retain compatibility with earlier profile values.
-private struct AvatarLook {
-    let rawValue: Int
-    private var safe: Int { min(max(rawValue, 0), 933119) }
-    var shirt: Int { safe % 3 }
-    var skin: Int { (safe / 3) % 5 }
-    var hair: Int { (safe / 15) % 4 }
-    var hairColor: Int { (safe / 60) % 4 }
-    var glasses: Int { (safe / 240) % 3 }
-    var face: Int { (safe / 720) % 2 }
-    var beard: Int { (safe / 1440) % 2 }
-    var expression: Int { (safe / 2880) % 4 }
-    var eyeColor: Int { (safe / 11520) % 3 }
-    var nose: Int { (safe / 34560) % 3 }
-    var brows: Int { (safe / 103680) % 3 }
-    var earrings: Int { (safe / 311040) % 3 }
-    func replacing(divisor: Int, count: Int, with value: Int) -> Int {
-        safe + (min(max(value, 0), count - 1) - (safe / divisor) % count) * divisor
-    }
-}
-
-private struct YueJiCharacter: View {
-    var animated = false
-    var style = 0
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var phase
-    var body: some View {
-        AvatarSceneView(style: style, animated: animated && !reduceMotion && phase == .active)
-            .background {
-                let tint = Color(uiColor: AvatarPortraitPalette.clothing[AvatarLook(rawValue: style).shirt])
-                Circle().fill(LinearGradient(colors: [tint.opacity(0.12), tint.opacity(0.38)], startPoint: .topLeading, endPoint: .bottomTrailing))
-                    .overlay(Circle().strokeBorder(.white.opacity(0.35), lineWidth: 1))
-            }
-            .clipShape(Circle()).allowsHitTesting(false).accessibilityHidden(true)
-    }
-}
-
-/// Fixed portrait colours keep skin and clothing consistent in both appearance modes.
-private enum AvatarPortraitPalette {
-    static let skin: [UIColor] = [
-        UIColor(red: 0.98, green: 0.82, blue: 0.73, alpha: 1),
-        UIColor(red: 0.88, green: 0.68, blue: 0.53, alpha: 1),
-        UIColor(red: 0.72, green: 0.50, blue: 0.36, alpha: 1),
-        UIColor(red: 0.53, green: 0.34, blue: 0.25, alpha: 1),
-        UIColor(red: 0.34, green: 0.22, blue: 0.18, alpha: 1)
-    ]
-    static let clothing: [UIColor] = [
-        UIColor(red: 0.43, green: 0.46, blue: 0.80, alpha: 1),
-        UIColor(red: 0.26, green: 0.63, blue: 0.57, alpha: 1),
-        UIColor(red: 0.88, green: 0.49, blue: 0.38, alpha: 1)
-    ]
-    static let hair: [UIColor] = [
-        UIColor(red: 0.10, green: 0.085, blue: 0.09, alpha: 1),
-        UIColor(red: 0.25, green: 0.15, blue: 0.11, alpha: 1),
-        UIColor(red: 0.65, green: 0.47, blue: 0.27, alpha: 1),
-        UIColor(red: 0.64, green: 0.66, blue: 0.70, alpha: 1)
-    ]
-}
-
-/// Original, locally generated geometry. No camera, downloaded models or private avatar APIs.
-private struct AvatarSceneView: UIViewRepresentable {
-    let style: Int
-    let animated: Bool
-    final class Coordinator {
-        var style = -1
-        var moving = false
-    }
-    func makeCoordinator() -> Coordinator { Coordinator() }
-    func makeUIView(context: Context) -> SCNView {
-        let view = SCNView(frame: .zero)
-        view.backgroundColor = .clear
-        view.isOpaque = false
-        view.antialiasingMode = .multisampling4X
-        view.preferredFramesPerSecond = 24
-        view.rendersContinuously = false
-        view.isUserInteractionEnabled = false
-        view.isAccessibilityElement = false
-        return view
-    }
-    func updateUIView(_ view: SCNView, context: Context) {
-        if context.coordinator.style != style {
-            view.scene = Self.makeScene(AvatarLook(rawValue: style))
-            context.coordinator.style = style
-            context.coordinator.moving = false
-        }
-        if context.coordinator.moving != animated {
-            let head = view.scene?.rootNode.childNode(withName: "head", recursively: true)
-            head?.removeAllActions()
-            head?.eulerAngles = SCNVector3(0, -0.10, 0)
-            if animated {
-                let turn = SCNAction.sequence([
-                    .rotateTo(x: 0.03, y: 0.12, z: 0.025, duration: 2.5),
-                    .rotateTo(x: 0, y: -0.10, z: 0, duration: 2.5)
-                ])
-                head?.runAction(.sequence([turn, .wait(duration: 3)]))
-            }
-            for name in ["leftEye", "rightEye"] {
-                guard let eye = head?.childNode(withName: name, recursively: true) else { continue }
-                eye.removeAllActions(); eye.scale = SCNVector3(1, 1, 1)
-                if animated {
-                    let close = SCNAction.customAction(duration: 0.10) { node, elapsed in
-                        node.scale.y = 1 - Float(elapsed / 0.10) * 0.9
-                    }
-                    let open = SCNAction.customAction(duration: 0.12) { node, elapsed in
-                        node.scale.y = 0.1 + Float(elapsed / 0.12) * 0.9
-                    }
-                    eye.runAction(.repeatForever(.sequence([.wait(duration: 4.5), close, open])))
-                }
-            }
-            context.coordinator.moving = animated
-        }
-        view.isPlaying = animated
-        view.setNeedsDisplay()
-    }
-    static func dismantleUIView(_ view: SCNView, coordinator: Coordinator) {
-        view.isPlaying = false
-        view.scene = nil
-    }
-    private static func material(_ color: UIColor, roughness: CGFloat = 0.55) -> SCNMaterial {
-        let m = SCNMaterial()
-        m.diffuse.contents = color
-        m.lightingModel = .physicallyBased
-        m.roughness.contents = roughness
-        m.metalness.contents = 0.0
-        return m
-    }
-    /// One continuous head surface: broader cheeks, a softer jaw and a narrower chin.
-    private static func headGeometry(oval: Bool, skin: SCNMaterial) -> SCNGeometry {
-        let rings = 40, slices = 56
-        var vertices: [SCNVector3] = []
-        var normals: [SCNVector3] = []
-        var indices: [Int32] = []
-        for row in 0...rings {
-            let theta = Float(row) / Float(rings) * .pi
-            let y = cos(theta)
-            let jaw = 1 - 0.20 * max(0, -y)
-            let width: Float = oval ? 0.60 : 0.65
-            for col in 0...slices {
-                let phi = Float(col) / Float(slices) * 2 * .pi
-                let x = sin(theta) * cos(phi)
-                let z = sin(theta) * sin(phi)
-                vertices.append(SCNVector3(x * width * jaw, y * 0.83, z * 0.55))
-                let nx = x / (width * jaw), ny = y / 0.83, nz = z / 0.55
-                let length = sqrt(nx * nx + ny * ny + nz * nz)
-                normals.append(SCNVector3(nx / length, ny / length, nz / length))
-                if row < rings && col < slices {
-                    let a = Int32(row * (slices + 1) + col), b = a + Int32(slices + 1)
-                    indices += [a, a + 1, b, a + 1, b + 1, b]
-                }
-            }
-        }
-        let geometry = SCNGeometry(sources: [.init(vertices: vertices), .init(normals: normals)],
-                                   elements: [SCNGeometryElement(indices: indices, primitiveType: .triangles)])
-        geometry.materials = [skin]
-        return geometry
-    }
-    private static func makeScene(_ look: AvatarLook) -> SCNScene {
-        let scene = SCNScene()
-        let camera = SCNNode(); camera.camera = SCNCamera()
-        camera.camera?.usesOrthographicProjection = true
-        camera.camera?.orthographicScale = 1.20
-        camera.camera?.wantsHDR = true
-        camera.camera?.wantsExposureAdaptation = false
-        camera.position = SCNVector3(0, 0.05, 5)
-        scene.rootNode.addChildNode(camera)
-        for (position, intensity) in [(SCNVector3(-3, 4, 5), CGFloat(750)), (SCNVector3(3, 1, 3), CGFloat(500)), (SCNVector3(1, 3, -3), CGFloat(650))] {
-            let light = SCNNode(); light.light = SCNLight()
-            light.light?.type = .omni; light.light?.intensity = intensity
-            light.position = position; scene.rootNode.addChildNode(light)
-        }
-        let fill = SCNNode(); fill.light = SCNLight()
-        fill.light?.type = .ambient; fill.light?.intensity = 350
-        scene.rootNode.addChildNode(fill)
-        let skin = material(AvatarPortraitPalette.skin[look.skin], roughness: 0.65)
-        let hair = material(AvatarPortraitPalette.hair[look.hairColor], roughness: 0.42)
-        let shirt = material(AvatarPortraitPalette.clothing[look.shirt], roughness: 0.90)
-        let head = SCNNode(); head.name = "head"
-        head.eulerAngles.y = -0.10
-        scene.rootNode.addChildNode(head)
-        @discardableResult func ball(_ parent: SCNNode, _ position: SCNVector3, _ scale: SCNVector3, _ m: SCNMaterial) -> SCNNode {
-            let geometry = SCNSphere(radius: 1); geometry.segmentCount = 32
-            geometry.materials = [m]
-            let n = SCNNode(geometry: geometry); n.position = position; n.scale = scale
-            parent.addChildNode(n); return n
-        }
-        ball(scene.rootNode, SCNVector3(0, -1.03, -0.12), SCNVector3(0.82, 0.48, 0.40), shirt)
-        let collar = SCNTorus(ringRadius: 0.27, pipeRadius: 0.065)
-        collar.firstMaterial = shirt
-        let collarNode = SCNNode(geometry: collar)
-        collarNode.position = SCNVector3(0, -0.82, 0.05)
-        collarNode.scale = SCNVector3(1, 0.6, 0.85)
-        scene.rootNode.addChildNode(collarNode)
-        ball(head, SCNVector3(0, -0.72, 0), SCNVector3(0.21, 0.35, 0.23), skin)
-        head.addChildNode(SCNNode(geometry: headGeometry(oval: look.face == 1, skin: skin)))
-        for x in [Float(-0.64), Float(0.64)] {
-            ball(head, SCNVector3(x, -0.02, 0), SCNVector3(0.12, 0.21, 0.12), skin)
-            if look.earrings == 1 {
-                ball(head, SCNVector3(x, -0.17, 0.13), SCNVector3(0.045, 0.045, 0.035), material(.systemYellow, roughness: 0.22))
-            } else if look.earrings == 2 {
-                let hoop = SCNTorus(ringRadius: 0.075, pipeRadius: 0.018)
-                let metal = material(.lightGray, roughness: 0.2)
-                metal.metalness.contents = 0.85
-                hoop.firstMaterial = metal
-                let node = SCNNode(geometry: hoop)
-                node.position = SCNVector3(x, -0.23, 0.10)
-                node.eulerAngles.x = .pi / 2
-                head.addChildNode(node)
-            }
-        }
-        if look.hair != 3 {
-            ball(head, SCNVector3(0, 0.48, -0.12), SCNVector3(0.67, 0.48, 0.54), hair)
-            for i in 0..<7 where look.hair == 2 {
-                let x = Float(i - 3) * 0.17
-                ball(head, SCNVector3(x, 0.57 - abs(x) * 0.12, 0.35), SCNVector3(0.14, look.hair == 2 ? 0.17 : 0.28, 0.19), hair)
-            }
-            if look.hair != 2 {
-                let fringe = UIBezierPath()
-                fringe.move(to: CGPoint(x: -0.60, y: 0.04))
-                fringe.addCurve(to: CGPoint(x: 0.58, y: 0.12), controlPoint1: CGPoint(x: -0.62, y: 0.66), controlPoint2: CGPoint(x: 0.42, y: 0.65))
-                fringe.addCurve(to: CGPoint(x: 0.05, y: -0.01), controlPoint1: CGPoint(x: 0.55, y: -0.04), controlPoint2: CGPoint(x: 0.27, y: -0.09))
-                fringe.addLine(to: CGPoint(x: -0.04, y: 0.26))
-                fringe.addCurve(to: CGPoint(x: -0.60, y: 0.04), controlPoint1: CGPoint(x: -0.10, y: 0.02), controlPoint2: CGPoint(x: -0.32, y: -0.06))
-                fringe.close()
-                let geometry = SCNShape(path: fringe, extrusionDepth: 0.18)
-                geometry.chamferRadius = 0.045
-                geometry.firstMaterial = hair
-                let node = SCNNode(geometry: geometry)
-                node.position = SCNVector3(0, 0.38, 0.34)
-                node.eulerAngles.z = look.hair == 1 ? 0.10 : -0.06
-                head.addChildNode(node)
-            }
-            if look.hair == 1 {
-                for x in [Float(-0.56), Float(0.56)] { ball(head, SCNVector3(x, -0.10, -0.16), SCNVector3(0.19, 0.75, 0.35), hair) }
-            }
-        }
-        for (i, x) in [Float(-0.27), Float(0.27)].enumerated() {
-            let eye = SCNNode(); eye.position = SCNVector3(x, 0.12, 0.48)
-            eye.name = i == 0 ? "leftEye" : "rightEye"
-            head.addChildNode(eye)
-            let wink = look.expression == 2 && i == 1
-            ball(eye, SCNVector3Zero, SCNVector3(0.175, wink ? 0.022 : 0.115, 0.055), material(wink ? .brown : UIColor(white: 0.94, alpha: 1)))
-            if !wink {
-                ball(eye, SCNVector3(0, 0, 0.05), SCNVector3(0.080, 0.095, 0.018), material([UIColor.brown, .systemBlue, .systemGreen][look.eyeColor]))
-                ball(eye, SCNVector3(0, 0, 0.066), SCNVector3(0.047, 0.065, 0.010), material(.black))
-                ball(eye, SCNVector3(-0.025, 0.035, 0.077), SCNVector3(0.019, 0.024, 0.006), material(.white))
-            }
-            let brow = ball(head, SCNVector3(x, look.expression == 3 ? 0.36 : 0.31, 0.48), SCNVector3(0.15, look.brows == 1 ? 0.042 : 0.025, 0.025), hair)
-            let angle: Float = look.brows == 2 ? 0.26 : 0.08
-            brow.eulerAngles.z = i == 0 ? angle : -angle
-            if look.glasses != 0 {
-                let path = UIBezierPath(roundedRect: CGRect(x: -0.22, y: -0.18, width: 0.44, height: 0.36), cornerRadius: look.glasses == 1 ? 0.17 : 0.07)
-                let inner = UIBezierPath(roundedRect: CGRect(x: -0.18, y: -0.14, width: 0.36, height: 0.28), cornerRadius: look.glasses == 1 ? 0.13 : 0.045)
-                path.append(inner.reversing())
-                let frame = SCNShape(path: path, extrusionDepth: 0.045)
-                frame.firstMaterial = material(.darkGray, roughness: 0.3)
-                let n = SCNNode(geometry: frame); n.position = SCNVector3(x, 0.12, 0.64); head.addChildNode(n)
-            }
-        }
-        if look.glasses != 0 { ball(head, SCNVector3(0, 0.16, 0.66), SCNVector3(0.09, 0.025, 0.025), material(.darkGray)) }
-        let noseScale = [SCNVector3(0.085, 0.11, 0.10), SCNVector3(0.07, 0.14, 0.13), SCNVector3(0.11, 0.09, 0.09)][look.nose]
-        ball(head, SCNVector3(0, -0.10, 0.53), noseScale, skin)
-        let open = look.expression == 1 || look.expression == 3
-        let lips = material(UIColor(red: 0.53, green: 0.25, blue: 0.25, alpha: 1), roughness: 0.7)
-        if open {
-            ball(head, SCNVector3(0, -0.38, 0.48), SCNVector3(look.expression == 3 ? 0.09 : 0.22, 0.12, 0.045), lips)
-        } else {
-            let smile = UIBezierPath()
-            smile.move(to: CGPoint(x: -0.18, y: 0.025))
-            smile.addQuadCurve(to: CGPoint(x: 0.18, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.07))
-            smile.addQuadCurve(to: CGPoint(x: -0.18, y: 0.025), controlPoint: CGPoint(x: 0, y: -0.12))
-            smile.close()
-            let geometry = SCNShape(path: smile, extrusionDepth: 0.025)
-            geometry.firstMaterial = lips
-            let mouth = SCNNode(geometry: geometry); mouth.position = SCNVector3(0, -0.34, 0.53)
-            head.addChildNode(mouth)
-        }
-        if look.expression == 1 { ball(head, SCNVector3(0, -0.34, 0.52), SCNVector3(0.18, 0.045, 0.02), material(.white)) }
-        if look.beard == 1 { ball(head, SCNVector3(0, -0.62, 0.31), SCNVector3(0.28, 0.10, 0.12), hair) }
-        return scene
-    }
-}
-
-
-struct LedgerCompanionCard: View {
-    @ObservedObject private var cloud = CloudAccount.shared
-    @AppStorage("ledgerCompanionEnabled") private var enabled = true
-    var body: some View {
-        if enabled {
-            LedgerCompanionContent(accountID: cloud.link?.userID.uuidString ?? "guest")
-                .id(cloud.link?.userID.uuidString ?? "guest")
-        }
-    }
-}
-
-private struct LedgerCompanionContent: View {
-    @EnvironmentObject private var model: LedgerModel
-    @Environment(\.scenePhase) private var phase
-    @AppStorage("playfulAnimations") private var playful = true
-    @AppStorage("hideOverviewAmounts") private var hidden = false
-    @AppStorage private var avatar: Int
-    @State private var celebrating = false
-    @State private var appeared = false
-    init(accountID: String) {
-        _avatar = AppStorage(wrappedValue: 0, "accountProfile.avatar." + accountID)
-    }
-    var body: some View {
-        TimelineView(.periodic(from: .now, by: 60)) { context in
-            let today = model.ledger.expenses.filter { Calendar.autoupdatingCurrent.isDate($0.date, inSameDayAs: context.date) }.count
-            let due = model.ledger.coolingPurchases.filter { $0.decision == .waiting && $0.reviewAt <= context.date }.count
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 14) {
-                    YueJiCharacter(animated: celebrating && playful && phase == .active,
-                                   style: celebrating ? AvatarLook(rawValue: avatar).replacing(divisor: 2880, count: 4, with: 1) : avatar)
-                        .frame(width: 72, height: 72)
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(tr("记账小伙伴", "Your ledger companion", "Teman lejar anda")).font(.headline)
-                        Text(celebrating
-                             ? tr("记录好了，每一笔都让生活更清楚。", "Recorded. Each entry makes things a little clearer.", "Direkod. Setiap catatan menjadikan hidup lebih jelas.")
-                             : today > 0
-                             ? tr("今天已记 \(today) 笔，按自己的节奏就好。", "\(today) entries today. Keep your own pace.", "\(today) catatan hari ini. Ikut rentak sendiri.")
-                             : tr("有需要时，我陪你记下一笔。", "Here whenever you want to record something.", "Saya di sini apabila anda ingin mencatat sesuatu."))
-                            .font(.subheadline).foregroundStyle(.secondary)
-                    }
-                }
-                if !hidden, let goal = model.ledger.savingsGoals.first(where: { $0.progress > 0 && $0.progress < 1 }) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text(goal.name).font(.caption)
-                        ProgressView(value: goal.progress).accessibilityLabel(tr("储蓄目标进度", "Savings goal progress", "Kemajuan matlamat simpanan"))
-                    }
-                }
-                if due > 0 {
-                    NavigationLink { CoolingListView() } label: {
-                        Label(tr("\(due) 个购买想法可以重新考虑了", "\(due) purchase ideas are ready to review", "\(due) idea pembelian sedia disemak"), systemImage: "hourglass")
-                            .font(.subheadline)
-                    }
-                }
-            }.padding(.vertical, 6)
-        }
-        .onAppear { appeared = true }
-        .onDisappear { appeared = false; celebrating = false }
-        .onChange(of: model.savedNotice) { _, value in
-            if appeared && value != nil { celebrating = true }
-        }
-        .onChange(of: model.ledger.savingsGoals.map(\.balance)) { old, new in
-            if appeared && old != new { celebrating = true }
-        }
-        .task(id: celebrating) {
-            guard celebrating else { return }
-            do { try await Task.sleep(for: .seconds(2.5)) } catch { return }
-            celebrating = false
-        }
-    }
-}
-
 /// Shared profile keys keep the Settings summary and profile editor in sync.
 struct AccountSettingsCard: View {
     @ObservedObject private var cloud = CloudAccount.shared
@@ -1082,15 +725,13 @@ private struct AccountSettingsSummary: View {
     let status: String
     let attention: Bool
     @AppStorage private var nickname: String
-    @AppStorage private var avatarStyle: Int
     init(accountID: String, email: String, signedIn: Bool, status: String, attention: Bool) {
         self.email = email; self.signedIn = signedIn; self.status = status; self.attention = attention
         _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
-        _avatarStyle = AppStorage(wrappedValue: 0, "accountProfile.avatar." + accountID)
     }
     var body: some View {
         HStack(spacing: 16) {
-            YueJiCharacter(style: signedIn ? avatarStyle : 0)
+            ProfileMonogram(name: signedIn ? nickname : "")
                 .frame(width: 64, height: 64)
             VStack(alignment: .leading, spacing: 6) {
                 Text(signedIn ? (nickname.isEmpty ? tr("月记用户", "YueJi member", "Pengguna YueJi") : nickname)
@@ -1106,126 +747,71 @@ private struct AccountSettingsSummary: View {
     }
 }
 
+private struct ProfileMonogram: View {
+    let name: String
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                Circle().fill(Color.accentColor.opacity(0.10))
+                if let first = name.trimmingCharacters(in: .whitespacesAndNewlines).first {
+                    Text(String(first).uppercased())
+                        .font(.system(size: geometry.size.width * 0.38, weight: .semibold, design: .rounded))
+                } else {
+                    Image(systemName: "person.fill")
+                        .font(.system(size: geometry.size.width * 0.38, weight: .medium))
+                }
+            }.foregroundStyle(Color.accentColor)
+        }.accessibilityHidden(true)
+    }
+}
+
 private struct AccountProfileHeader: View {
     let email: String
     @AppStorage private var nickname: String
-    @AppStorage private var avatarStyle: Int
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @Environment(\.scenePhase) private var phase
-    @AppStorage("playfulAnimations") private var playful = true
     @State private var editing = false
     @State private var draft = ""
-    @State private var draftStyle = 0
-    @State private var avatarTab = 0
     init(accountID: String, email: String) {
         self.email = email
         _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
-        _avatarStyle = AppStorage(wrappedValue: 0, "accountProfile.avatar." + accountID)
     }
     var body: some View {
         VStack(spacing: 10) {
-            YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: avatarStyle)
-                .frame(width: 100, height: 100)
+            ProfileMonogram(name: nickname).frame(width: 80, height: 80)
             Text(nickname.isEmpty ? tr("月记用户", "YueJi member", "Pengguna YueJi") : nickname)
                 .font(.title2.weight(.semibold)).multilineTextAlignment(.center)
             Text(email).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
-            Button(tr("编辑头像与昵称", "Edit avatar and name", "Edit avatar dan nama")) {
-                draft = nickname; draftStyle = avatarStyle; editing = true
+            Button(tr("编辑昵称", "Edit name", "Edit nama")) {
+                draft = nickname; editing = true
             }.font(.subheadline).frame(minHeight: 44)
         }.frame(maxWidth: .infinity).padding(.vertical, 12)
         .sheet(isPresented: $editing) {
             NavigationStack {
-                VStack(spacing: 0) {
-                    YueJiCharacter(animated: playful && !reduceMotion && phase == .active, style: draftStyle)
-                        .frame(width: 180, height: 180).padding(12)
-                        .accessibilityHidden(true)
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 24) {
-                            HStack {
-                                Button(tr("男生预设", "Boy preset", "Pratetap lelaki")) { draftStyle = 0 }
-                                Spacer()
-                                Button(tr("女生预设", "Girl preset", "Pratetap perempuan")) { draftStyle = 735 }
-                            }.buttonStyle(.bordered).frame(minHeight: 44)
-                            Text(tr("预设只是起点，每一项都可以自由搭配。", "Start with a preset, then make every detail yours.", "Mulakan dengan pratetap dan sesuaikan setiap ciri."))
-                                .font(.caption).foregroundStyle(.secondary)
-                            ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(spacing: 10) {
-                                    ForEach(0..<5) { index in
-                                        Button {
-                                            withAnimation(reduceMotion || !playful ? nil : .easeInOut(duration: 0.2)) { avatarTab = index }
-                                        } label: {
-                                            Text([tr("脸部", "Face", "Muka"), tr("头发", "Hair", "Rambut"), tr("配饰", "Accessories", "Aksesori"), tr("服装", "Clothing", "Pakaian"), tr("表情", "Expression", "Ekspresi")][index])
-                                                .font(.subheadline.weight(.semibold)).padding(.horizontal, 16).frame(minHeight: 44)
-                                                .background(avatarTab == index ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: Capsule())
-                                        }.buttonStyle(.plain).accessibilityAddTraits(avatarTab == index ? .isSelected : [])
-                                    }
-                                }
+                Form {
+                    Section {
+                        TextField(tr("昵称", "Display name", "Nama paparan"), text: $draft)
+                            .textContentType(.nickname)
+                            .onChange(of: draft) { _, value in
+                                if value.count > 40 { draft = String(value.prefix(40)) }
                             }
-                            Group {
-                                if avatarTab == 0 {
-                                    avatarPicker(tr("肤色", "Skin tone", "Tona kulit"), options: [tr("浅色", "Light", "Cerah"), tr("暖浅色", "Warm light", "Cerah hangat"), tr("中等", "Medium", "Sederhana"), tr("棕色", "Brown", "Coklat"), tr("深色", "Deep", "Gelap")], divisor: 3)
-                                    avatarPicker(tr("脸型", "Face shape", "Bentuk muka"), options: [tr("圆润", "Round", "Bulat"), tr("椭圆", "Oval", "Bujur")], divisor: 720)
-                                    avatarPicker(tr("眼睛颜色", "Eye colour", "Warna mata"), options: [tr("棕色", "Brown", "Coklat"), tr("蓝色", "Blue", "Biru"), tr("绿色", "Green", "Hijau")], divisor: 11520)
-                                    avatarPicker(tr("鼻型", "Nose shape", "Bentuk hidung"), options: [tr("柔和", "Soft", "Lembut"), tr("挺拔", "Defined", "Tegas"), tr("圆翘", "Rounded", "Bulat")], divisor: 34560)
-                                    avatarPicker(tr("眉型", "Eyebrows", "Kening"), options: [tr("自然", "Natural", "Semula jadi"), tr("浓眉", "Full", "Tebal"), tr("上扬", "Angled", "Bersudut")], divisor: 103680)
-                                } else if avatarTab == 1 {
-                                    avatarPicker(tr("发型", "Hairstyle", "Gaya rambut"), options: [tr("短发", "Short", "Pendek"), tr("长发", "Long", "Panjang"), tr("卷发", "Curly", "Keriting"), tr("光头", "Shaved", "Botak")], divisor: 15)
-                                    avatarPicker(tr("发色", "Hair colour", "Warna rambut"), options: [tr("黑色", "Black", "Hitam"), tr("棕色", "Brown", "Coklat"), tr("金色", "Blond", "Perang"), tr("银色", "Silver", "Perak")], divisor: 60)
-                                    avatarPicker(tr("胡须", "Facial hair", "Janggut"), options: [tr("无", "None", "Tiada"), tr("短胡须", "Short beard", "Janggut pendek")], divisor: 1440)
-                                } else if avatarTab == 2 {
-                                    avatarPicker(tr("眼镜", "Glasses", "Cermin mata"), options: [tr("无", "None", "Tiada"), tr("圆框", "Round", "Bulat"), tr("方框", "Square", "Segi empat")], divisor: 240)
-                                    avatarPicker(tr("耳饰", "Earrings", "Anting-anting"), options: [tr("无", "None", "Tiada"), tr("金色耳钉", "Gold studs", "Subang emas"), tr("银色耳环", "Silver hoops", "Gelung perak")], divisor: 311040)
-                                } else if avatarTab == 3 {
-                                    avatarPicker(tr("服装配色", "Clothing", "Pakaian"), options: [tr("鸢尾紫", "Iris", "Iris"), tr("薄荷绿", "Mint", "Pudina"), tr("珊瑚橘", "Coral", "Karang")], divisor: 1)
-                                } else {
-                                    avatarPicker(tr("表情", "Expression", "Ekspresi"), options: [tr("微笑", "Smile", "Senyum"), tr("大笑", "Laugh", "Ketawa"), tr("眨眼", "Wink", "Kenyit"), tr("惊讶", "Surprised", "Terkejut")], divisor: 2880)
-                                }
-                            }
-                            Divider()
-                            TextField(tr("昵称", "Display name", "Nama paparan"), text: $draft)
-                                .textContentType(.nickname).textFieldStyle(.roundedBorder)
-                                .onChange(of: draft) { _, value in if value.count > 40 { draft = String(value.prefix(40)) } }
-                            Text(tr("头像和昵称保存在这台设备，不会更改登录邮箱。", "Your avatar and name are saved on this device. Your sign-in email stays the same.", "Avatar dan nama disimpan pada peranti ini. E-mel log masuk tidak berubah."))
-                                .font(.footnote).foregroundStyle(.secondary)
-                        }.padding(20).frame(maxWidth: 560).frame(maxWidth: .infinity)
-                    }.scrollDismissesKeyboard(.interactively)
+                    } footer: {
+                        Text(tr("昵称保存在这台设备，不会更改登录邮箱。", "Your name is saved on this device. Your sign-in email stays the same.", "Nama disimpan pada peranti ini. E-mel log masuk tidak berubah."))
+                    }
                 }
                 .navigationTitle(tr("个人资料", "Profile", "Profil"))
                 .toolbar {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { editing = false } }
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button(tr("取消", "Cancel", "Batal")) { editing = false }
+                    }
                     ToolbarItem(placement: .confirmationAction) {
                         Button(tr("保存", "Save", "Simpan")) {
                             nickname = draft.trimmingCharacters(in: .whitespacesAndNewlines)
-                            avatarStyle = draftStyle; editing = false
+                            editing = false
                         }
                     }
                 }
             }
         }
     }
-    private func avatarPicker(_ title: String, options: [String], divisor: Int) -> some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title).font(.headline)
-            LazyVGrid(columns: [GridItem(.adaptive(minimum: 88), spacing: 12)], spacing: 12) {
-                ForEach(options.indices, id: \.self) { index in
-                    let selected = (max(0, draftStyle) / divisor) % options.count == index
-                    let candidate = AvatarLook(rawValue: draftStyle).replacing(divisor: divisor, count: options.count, with: index)
-                    Button { draftStyle = candidate } label: {
-                        VStack(spacing: 8) {
-                            YueJiCharacter(style: candidate).frame(width: 58, height: 58)
-                            Text(options[index]).font(.caption.weight(.medium)).fixedSize(horizontal: false, vertical: true)
-                            Image(systemName: selected ? "checkmark.circle.fill" : "circle").foregroundStyle(selected ? Color.accentColor : Color.secondary)
-                        }.frame(maxWidth: .infinity).padding(10)
-                            .background(selected ? Color.accentColor.opacity(0.12) : Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
-                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(selected ? Color.accentColor : .clear, lineWidth: 2))
-                    }.buttonStyle(.plain)
-                        .accessibilityLabel(title + ": " + options[index])
-                        .accessibilityAddTraits(selected ? .isSelected : [])
-                }
-            }
-        }
-    }
-
 }
 
 struct CloudAccountView: View {
