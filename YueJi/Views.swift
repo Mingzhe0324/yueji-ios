@@ -817,6 +817,15 @@ struct DashboardView: View {
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
                 budgetSection
+                Section {
+                    LedgerCompanionCard()
+                    NavigationLink { SpendingCalendarView() } label: {
+                        DashboardLinkLabel(title: tr("消费日历", "Spending calendar", "Kalendar belanja"), symbol: "calendar")
+                    }
+                    NavigationLink { CoolingListView() } label: {
+                        DashboardLinkLabel(title: tr("购买冷静清单", "Cooling-off list", "Senarai pertimbangan"), symbol: "hourglass")
+                    }
+                }
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
                 recentCard
@@ -1539,6 +1548,8 @@ struct OverviewToolsView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
+                NavigationLink { SpendingCalendarView() } label: { Label(tr("消费日历", "Spending calendar", "Kalendar belanja"), systemImage: "calendar") }
+                NavigationLink { CoolingListView() } label: { Label(tr("购买冷静清单", "Cooling-off list", "Senarai pertimbangan"), systemImage: "hourglass") }
                 NavigationLink { ReimbursementsView() } label: { IslandRowLabel(title: tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), symbol: "doc.text.fill", color: IslandPalette.lavender) }
                 NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")
@@ -3432,6 +3443,7 @@ struct SettingsView: View {
     var guideDestination: String? = nil
     @EnvironmentObject var model: LedgerModel
     @AppStorage("appLanguage") private var language = "system"
+    @AppStorage("ledgerCompanionEnabled") private var companion = true
     @AppStorage("appAppearance") private var appearance = "system"
     @AppStorage("playfulAnimations") private var playful = true
     @AppStorage("daylightBackgrounds") private var daylight = true
@@ -3524,6 +3536,7 @@ struct SettingsView: View {
             Section {
                 Toggle(tr("动画", "Animations", "Animasi"), isOn: $playful)
                 Toggle(tr("背景随时间变化", "Time-of-day backgrounds", "Latar mengikut waktu"), isOn: $daylight)
+                Toggle(tr("记账小伙伴", "Ledger companion", "Teman lejar"), isOn: $companion)
                 Toggle(tr("音效", "Sound effects", "Kesan bunyi"), isOn: $sounds)
                 Toggle(tr("触感反馈", "Haptics", "Haptik"), isOn: $haptics)
             } header: {

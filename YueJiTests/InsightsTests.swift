@@ -1,6 +1,60 @@
 import XCTest
 @testable import YueJi
 
+final class EverydayToolsTests: XCTestCase {
+    private var calendar: Calendar {
+        var value = Calendar(identifier: .gregorian)
+        value.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")!
+        return value
+    }
+    private func day(_ year: Int, _ month: Int, _ day: Int) -> Date {
+        calendar.date(from: DateComponents(year: year, month: month, day: day))!
+    }
+    func testCalendarIncludesLeapDayAndExcludesNextMonthMidnight() {
+        let ledger = Ledger(expenses: [
+            Expense(merchant: "Shared lunch", cents: 3000, date: day(2024, 2, 29), shares: [Share(name: "Alex", cents: 1000)]),
+            Expense(merchant: "Next month", cents: 5000, date: day(2024, 3, 1))
+        ])
+        let days = ledger.spendingCalendar(month: day(2024, 2, 15), calendar: calendar)
+        XCTAssertEqual(days.count, 29)
+        XCTAssertEqual(days.reduce(0) { $0 + $1.total }, 2000)
+        XCTAssertEqual(days.last?.entries.count, 1)
+        XCTAssertEqual(days.first?.total, 0)
+    }
+    func testCalendarHandlesDaylightSavingWithoutDroppingDays() {
+        var local = Calendar(identifier: .gregorian)
+        local.timeZone = TimeZone(identifier: "America/New_York")!
+        let month = local.date(from: DateComponents(year: 2026, month: 3, day: 1))!
+        let days = Ledger().spendingCalendar(month: month, calendar: local)
+        XCTAssertEqual(days.count, 31)
+        XCTAssertEqual(Set(days.map(\.date)).count, 31)
+        XCTAssertTrue(days.allSatisfy { local.component(.hour, from: $0.date) == 0 })
+    }
+    func testCoolingListRoundTripsAndOldBackupsDefaultToEmpty() throws {
+        let item = CoolingPurchase(name: "Headphones", cents: 25000, createdAt: day(2026, 10, 1), reviewAt: day(2026, 10, 4))
+        var ledger = Ledger(); ledger.coolingPurchases = [item]
+        let encoded = try LocalStore.encode(ledger)
+        XCTAssertEqual(try LocalStore.decode(encoded).coolingPurchases, [item])
+        var old = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        old.removeValue(forKey: "coolingPurchases")
+        XCTAssertTrue(try LocalStore.decode(JSONSerialization.data(withJSONObject: old)).coolingPurchases.isEmpty)
+    }
+    func testCoolingDecisionDoesNotCreateExpenseAndRejectsStaleUpdates() throws {
+        let item = CoolingPurchase(name: "Headphones", cents: 25000, createdAt: day(2026, 10, 1), reviewAt: day(2026, 10, 4))
+        var ledger = Ledger(); ledger.coolingPurchases = [item]
+        try ledger.updateCoolingPurchase(item, decision: .buy)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertEqual(ledger.coolingPurchases.first?.decision, .buy)
+        XCTAssertThrowsError(try ledger.updateCoolingPurchase(item, decision: .declined))
+        var invalid = item; invalid.cents = 0
+        XCTAssertThrowsError(try invalid.validate())
+        invalid = item; invalid.reviewAt = day(2026, 9, 30)
+        XCTAssertThrowsError(try invalid.validate())
+        ledger.coolingPurchases = [item, item]
+        XCTAssertThrowsError(try ledger.validated())
+    }
+}
+
 final class YearReviewTests: XCTestCase {
     private let calendar = InsightCalendar.make()
     private func day(_ year: Int, _ month: Int, _ day: Int, hour: Int = 12) -> Date {

@@ -198,7 +198,57 @@ extension Expense {
     }
 }
 
+struct CoolingPurchase: Codable, Identifiable, Equatable {
+    enum Decision: String, Codable { case waiting, buy, declined }
+    var id = UUID().uuidString
+    var name: String
+    var cents: Int
+    var note = ""
+    var createdAt = Date()
+    var reviewAt: Date
+    var decision: Decision = .waiting
+    func validate() throws {
+        guard !id.isEmpty, id.count <= 100, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              name.count <= 100, note.count <= 1000, cents > 0, cents <= 10_000_000_000,
+              createdAt.timeIntervalSince1970.isFinite, reviewAt.timeIntervalSince1970.isFinite,
+              createdAt.timeIntervalSince1970 >= 0, reviewAt >= createdAt,
+              reviewAt.timeIntervalSince1970 < 4_102_444_800 else {
+            throw LedgerError.invalid(tr("请检查清单名称、金额和日期。", "Check the item name, amount and dates.", "Semak nama, amaun dan tarikh."))
+        }
+    }
+}
+
+struct SpendingCalendarDay: Identifiable {
+    let date: Date
+    let entries: [Expense]
+    var id: Date { date }
+    var total: Int { entries.reduce(0) { $0 + $1.personalSpending } }
+}
+
+extension Ledger {
+    func spendingCalendar(month: Date, calendar: Calendar = .autoupdatingCurrent) -> [SpendingCalendarDay] {
+        guard let interval = calendar.dateInterval(of: .month, for: month),
+              let days = calendar.range(of: .day, in: .month, for: month) else { return [] }
+        let grouped = Dictionary(grouping: expenses.filter { $0.date >= interval.start && $0.date < interval.end }, by: { calendar.startOfDay(for: $0.date) })
+        return days.compactMap { day in
+            guard let date = calendar.date(byAdding: .day, value: day - 1, to: interval.start) else { return nil }
+            return SpendingCalendarDay(date: date, entries: (grouped[date] ?? []).sorted { $0.date > $1.date })
+        }
+    }
+    mutating func updateCoolingPurchase(_ expected: CoolingPurchase, decision: CoolingPurchase.Decision, reviewAt: Date? = nil) throws {
+        guard let index = coolingPurchases.firstIndex(where: { $0.id == expected.id }), coolingPurchases[index] == expected else {
+            throw LedgerError.invalid(tr("清单已改变，请重新打开。", "The list changed. Reopen the item.", "Senarai berubah. Buka semula item."))
+        }
+        var updated = expected
+        updated.decision = decision
+        if let reviewAt { updated.reviewAt = reviewAt }
+        try updated.validate()
+        coolingPurchases[index] = updated
+    }
+}
+
 struct Ledger: Codable {
+    var coolingPurchases: [CoolingPurchase] = []
     var trips: [TravelBook] = []
     var version = 6
     var expenses: [Expense] = []
@@ -226,9 +276,10 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
+        coolingPurchases = try c.decodeIfPresent([CoolingPurchase].self, forKey: .coolingPurchases) ?? []
         let v = try c.decode(Int.self, forKey: .version)
         guard (1...6).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }
         version = 6
@@ -255,6 +306,8 @@ struct Ledger: Codable {
         self = reconcilingBudgetAllocations()
     }
     func validated() throws -> Ledger {
+        guard coolingPurchases.count <= 500, Set(coolingPurchases.map(\.id)).count == coolingPurchases.count else { throw LedgerError.invalid("Invalid cooling list") }
+        for purchase in coolingPurchases { try purchase.validate() }
         try validateTrips()
         try validateBookkeeping()
         guard savingsGoals.count <= 100, Set(savingsGoals.map(\.id)).count == savingsGoals.count else { throw LedgerError.invalid("储蓄目标无效 / Invalid savings goals") }

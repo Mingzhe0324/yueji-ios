@@ -965,6 +965,77 @@ private struct AvatarSceneView: UIViewRepresentable {
 }
 
 
+struct LedgerCompanionCard: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    @AppStorage("ledgerCompanionEnabled") private var enabled = true
+    var body: some View {
+        if enabled {
+            LedgerCompanionContent(accountID: cloud.link?.userID.uuidString ?? "guest")
+                .id(cloud.link?.userID.uuidString ?? "guest")
+        }
+    }
+}
+
+private struct LedgerCompanionContent: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.scenePhase) private var phase
+    @AppStorage("playfulAnimations") private var playful = true
+    @AppStorage("hideOverviewAmounts") private var hidden = false
+    @AppStorage private var avatar: Int
+    @State private var celebrating = false
+    @State private var appeared = false
+    init(accountID: String) {
+        _avatar = AppStorage(wrappedValue: 0, "accountProfile.avatar." + accountID)
+    }
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let today = model.ledger.expenses.filter { Calendar.autoupdatingCurrent.isDate($0.date, inSameDayAs: context.date) }.count
+            let due = model.ledger.coolingPurchases.filter { $0.decision == .waiting && $0.reviewAt <= context.date }.count
+            VStack(alignment: .leading, spacing: 12) {
+                HStack(spacing: 14) {
+                    YueJiCharacter(animated: celebrating && playful && phase == .active,
+                                   style: celebrating ? AvatarLook(rawValue: avatar).replacing(divisor: 2880, count: 4, with: 1) : avatar)
+                        .frame(width: 72, height: 72)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(tr("记账小伙伴", "Your ledger companion", "Teman lejar anda")).font(.headline)
+                        Text(celebrating
+                             ? tr("记录好了，每一笔都让生活更清楚。", "Recorded. Each entry makes things a little clearer.", "Direkod. Setiap catatan menjadikan hidup lebih jelas.")
+                             : today > 0
+                             ? tr("今天已记 \(today) 笔，按自己的节奏就好。", "\(today) entries today. Keep your own pace.", "\(today) catatan hari ini. Ikut rentak sendiri.")
+                             : tr("有需要时，我陪你记下一笔。", "Here whenever you want to record something.", "Saya di sini apabila anda ingin mencatat sesuatu."))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                }
+                if !hidden, let goal = model.ledger.savingsGoals.first(where: { $0.progress > 0 && $0.progress < 1 }) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(goal.name).font(.caption)
+                        ProgressView(value: goal.progress).accessibilityLabel(tr("储蓄目标进度", "Savings goal progress", "Kemajuan matlamat simpanan"))
+                    }
+                }
+                if due > 0 {
+                    NavigationLink { CoolingListView() } label: {
+                        Label(tr("\(due) 个购买想法可以重新考虑了", "\(due) purchase ideas are ready to review", "\(due) idea pembelian sedia disemak"), systemImage: "hourglass")
+                            .font(.subheadline)
+                    }
+                }
+            }.padding(.vertical, 6)
+        }
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false; celebrating = false }
+        .onChange(of: model.savedNotice) { _, value in
+            if appeared && value != nil { celebrating = true }
+        }
+        .onChange(of: model.ledger.savingsGoals.map(\.balance)) { old, new in
+            if appeared && old != new { celebrating = true }
+        }
+        .task(id: celebrating) {
+            guard celebrating else { return }
+            do { try await Task.sleep(for: .seconds(2.5)) } catch { return }
+            celebrating = false
+        }
+    }
+}
+
 /// Shared profile keys keep the Settings summary and profile editor in sync.
 struct AccountSettingsCard: View {
     @ObservedObject private var cloud = CloudAccount.shared

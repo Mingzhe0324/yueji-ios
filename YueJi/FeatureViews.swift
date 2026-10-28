@@ -3,6 +3,171 @@ import UniformTypeIdentifiers
 import MapKit
 import UserNotifications
 
+struct SpendingCalendarView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @AppStorage("hideOverviewAmounts") private var hidden = false
+    @State private var month = Date()
+    @State private var selected = Calendar.autoupdatingCurrent.startOfDay(for: Date())
+    private var calendar: Calendar { .autoupdatingCurrent }
+    var body: some View {
+        let days = model.ledger.spendingCalendar(month: month)
+        let maximum = max(1, days.map(\.total).max() ?? 0)
+        let chosen = days.first { calendar.isDate($0.date, inSameDayAs: selected) }
+        List {
+            Section {
+                HStack {
+                    Button { move(-1) } label: { Image(systemName: "chevron.left").frame(width: 44, height: 44) }
+                        .accessibilityLabel(tr("上个月", "Previous month", "Bulan sebelumnya"))
+                    Spacer()
+                    Text(month, format: .dateTime.year().month(.wide)).font(.headline)
+                    Spacer()
+                    Button { move(1) } label: { Image(systemName: "chevron.right").frame(width: 44, height: 44) }
+                        .accessibilityLabel(tr("下个月", "Next month", "Bulan seterusnya"))
+                }.buttonStyle(.borderless)
+                LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 3), count: 7), spacing: 8) {
+                    ForEach(0..<7) { i in
+                        Text(calendar.veryShortStandaloneWeekdaySymbols[(calendar.firstWeekday - 1 + i) % 7])
+                            .font(.caption).foregroundStyle(.secondary).accessibilityHidden(true)
+                    }
+                    if let first = days.first {
+                        let offset = (calendar.component(.weekday, from: first.date) - calendar.firstWeekday + 7) % 7
+                        ForEach(0..<offset, id: \.self) { _ in Color.clear.frame(height: 44).accessibilityHidden(true) }
+                    }
+                    ForEach(days) { day in
+                        Button { selected = day.date } label: {
+                            Text(String(calendar.component(.day, from: day.date)))
+                                .font(.subheadline.weight(.medium)).frame(maxWidth: .infinity, minHeight: 44)
+                                .background(Color.accentColor.opacity(hidden || day.entries.isEmpty ? 0.04 : 0.10 + 0.25 * Double(max(0, day.total)) / Double(maximum)), in: RoundedRectangle(cornerRadius: 10))
+                                .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(calendar.isDate(day.date, inSameDayAs: selected) ? Color.accentColor : .clear, lineWidth: 2))
+                        }.buttonStyle(.plain)
+                            .accessibilityLabel(dateLabel(day.date) + (hidden ? "" : ", " + money(day.total)))
+                            .accessibilityAddTraits(calendar.isDate(day.date, inSameDayAs: selected) ? .isSelected : [])
+                    }
+                }
+                Text(tr("颜色越深，当天个人实际消费越高。退款与报销按原账目的日期归属。", "Darker days mean more personal spending. Refunds and claims are attributed to the original purchase date.", "Warna gelap menunjukkan belanja peribadi lebih tinggi. Pulangan dan tuntutan mengikut tarikh pembelian asal."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section(dateLabel(selected)) {
+                LabeledContent(tr("个人实际消费", "Personal spending", "Belanja peribadi"), value: hidden ? "••••" : money(chosen?.total ?? 0))
+                if let chosen, !chosen.entries.isEmpty {
+                    ForEach(chosen.entries) { entry in
+                        NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                            HStack { Text(entry.displayName); Spacer(); Text(hidden ? "••••" : money(entry.personalSpending)).monospacedDigit() }
+                        }
+                    }
+                } else { Text(tr("这一天没有消费记录", "No expenses recorded for this day", "Tiada belanja direkod pada hari ini")).foregroundStyle(.secondary) }
+            }
+        }.yuejiListSurface().navigationTitle(tr("消费日历", "Spending calendar", "Kalendar belanja"))
+            .navigationBarTitleDisplayMode(.inline)
+    }
+    private func move(_ amount: Int) {
+        guard let start = calendar.dateInterval(of: .month, for: month)?.start,
+              let next = calendar.date(byAdding: .month, value: amount, to: start) else { return }
+        month = next; selected = next
+    }
+}
+
+struct CoolingListView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @AppStorage("hideOverviewAmounts") private var hidden = false
+    @State private var creating = false
+    @State private var history = false
+    @State private var deleting: CoolingPurchase?
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            List {
+                Section {
+                    Text(tr("先收藏，过几天再决定。清单不会计入消费，也不会自动扣款或记账。", "Save the idea and decide later. This list never spends money or creates expenses automatically.", "Simpan idea dan putuskan kemudian. Senarai ini tidak membuat bayaran atau merekod belanja secara automatik."))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                    Picker(tr("显示", "Show", "Papar"), selection: $history) {
+                        Text(tr("考虑中", "Considering", "Dipertimbangkan")).tag(false)
+                        Text(tr("已决定", "Decided", "Diputuskan")).tag(true)
+                    }.pickerStyle(.segmented)
+                }
+                let items = model.ledger.coolingPurchases.filter { ($0.decision != .waiting) == history }.sorted { $0.reviewAt < $1.reviewAt }
+                if items.isEmpty {
+                    Text(tr("清单还是空的，点右上角添加想买的东西。", "Your list is empty. Tap + to save a purchase idea.", "Senarai kosong. Ketik + untuk simpan idea pembelian."))
+                }
+                ForEach(items) { item in
+                    Section {
+                        HStack { Text(item.name).font(.headline); Spacer(); Text(hidden ? "••••" : money(item.cents)) }
+                        if !item.note.isEmpty { Text(item.note).font(.subheadline).foregroundStyle(.secondary) }
+                        if item.decision == .waiting {
+                            Text(item.reviewAt <= context.date ? tr("可以重新考虑了", "Ready to reconsider", "Sedia dipertimbangkan semula") : tr("考虑到：", "Review on: ", "Semak pada: ") + dateLabel(item.reviewAt, time: true))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                            Button(tr("决定购买（不自动记账）", "Decide to buy (no expense created)", "Putuskan membeli (tiada rekod belanja)")) { update(item, .buy) }
+                            Button(tr("再考虑 3 天", "Think for 3 more days", "Fikir 3 hari lagi")) { update(item, .waiting, later: true) }
+                            Button(tr("暂时不买", "Let it go", "Tidak membeli")) { update(item, .declined) }
+                        } else {
+                            Text(item.decision == .buy ? tr("已决定购买，实际付款后请另行记账。", "Decided to buy. Record the expense after payment.", "Diputuskan membeli. Rekod belanja selepas bayaran.") : tr("已放下这次购买想法。", "This purchase idea was let go.", "Idea pembelian ini dilepaskan."))
+                            Button(tr("重新考虑", "Reconsider", "Pertimbang semula")) { update(item, .waiting, later: true) }
+                        }
+                    }.swipeActions { Button(role: .destructive) { deleting = item } label: { Label(tr("删除", "Delete", "Padam"), systemImage: "trash") } }
+                }
+            }.yuejiListSurface()
+        }
+        .navigationTitle(tr("购买冷静清单", "Cooling-off list", "Senarai pertimbangan"))
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar { Button { creating = true } label: { Image(systemName: "plus") }.accessibilityLabel(tr("添加想买的东西", "Add purchase idea", "Tambah idea pembelian")) }
+        .sheet(isPresented: $creating) { CoolingPurchaseEditor().environmentObject(model) }
+        .confirmationDialog(tr("删除这项购买想法？", "Delete this purchase idea?", "Padam idea pembelian ini?"), isPresented: Binding(get: { deleting != nil }, set: { if !$0 { deleting = nil } }), titleVisibility: .visible) {
+            if let item = deleting {
+                Button(tr("删除", "Delete", "Padam"), role: .destructive) {
+                    model.change { ledger in ledger.coolingPurchases.removeAll { $0.id == item.id } }
+                    deleting = nil
+                }
+            }
+        }
+        .ledgerFeedback()
+    }
+    private func update(_ item: CoolingPurchase, _ decision: CoolingPurchase.Decision, later: Bool = false) {
+        let next = later ? Calendar.autoupdatingCurrent.date(byAdding: .day, value: 3, to: max(Date(), item.reviewAt)) : nil
+        model.change { try $0.updateCoolingPurchase(item, decision: decision, reviewAt: next) }
+    }
+}
+
+private struct CoolingPurchaseEditor: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @State private var name = ""
+    @State private var amount = ""
+    @State private var note = ""
+    @State private var days = 3
+    @State private var saving = false
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField(tr("想买什么？", "What would you like to buy?", "Apa yang ingin dibeli?"), text: $name)
+                    TextField(tr("预计金额（MYR）", "Estimated amount (MYR)", "Anggaran amaun (MYR)"), text: $amount).keyboardType(.decimalPad)
+                    TextField(tr("为什么想买？", "Why do you want it?", "Mengapa anda mahukannya?"), text: $note, axis: .vertical).lineLimit(2...4)
+                    Picker(tr("考虑时间", "Cooling-off period", "Tempoh pertimbangan"), selection: $days) {
+                        ForEach([1, 3, 7, 14, 30], id: \.self) { n in Text(tr("\(n) 天", "\(n) days", "\(n) hari")).tag(n) }
+                    }
+                } footer: { Text(tr("到期项目会在首页小伙伴和清单中提示。", "Due items appear in your home companion and this list.", "Item yang tiba masanya muncul pada teman halaman utama dan senarai ini.")) }
+                if let error { Text(error).foregroundStyle(.red) }
+            }.navigationTitle(tr("新的购买想法", "New purchase idea", "Idea pembelian baharu"))
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
+                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() }.disabled(saving || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount.isEmpty) }
+                }.disabled(saving).interactiveDismissDisabled(saving)
+        }
+    }
+    private func save() {
+        do {
+            let now = Date()
+            let item = CoolingPurchase(name: name.trimmingCharacters(in: .whitespacesAndNewlines), cents: try Currency.parse(amount, code: "MYR"), note: note, createdAt: now, reviewAt: Calendar.autoupdatingCurrent.date(byAdding: .day, value: days, to: now) ?? now)
+            try item.validate(); saving = true; error = nil
+            Task {
+                do { try await model.mutate { $0.coolingPurchases.append(item) }; dismiss() }
+                catch { self.error = error.localizedDescription }
+                saving = false
+            }
+        } catch { self.error = error.localizedDescription }
+    }
+}
+
 struct TravelBooksView: View {
     @EnvironmentObject private var model: LedgerModel
     @State private var creating = false
