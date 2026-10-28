@@ -68,6 +68,34 @@ private struct BankCardPressStyle: ButtonStyle {
     }
 }
 
+private struct AutomaticAccountLinksView: View {
+    @EnvironmentObject var model: LedgerModel
+    var body: some View {
+        List {
+            Section {
+                Text(tr("这里可以为旧通知或无法自动匹配的通知选择账户。待确认、疑似重复及已忽略的记录不会仅因选择账户而入账。", "Assign accounts to older or unmatched notices here. Selecting an account alone does not post pending, duplicate or ignored records.", "Tetapkan akaun untuk notifikasi lama atau tidak sepadan. Memilih akaun tidak merekod notifikasi tertunda, pendua atau diabaikan."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            ForEach(model.ledger.tngNotices.sorted { $0.date > $1.date }) { notice in
+                Section {
+                    LabeledContent(notice.party ?? notice.provider, value: notice.cents.map { money($0) } ?? "—")
+                    Text(notice.provider + " · " + dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                    if let suffix = notice.accountSuffix { Text("•••• " + suffix).font(.caption).monospacedDigit() }
+                    BankAccountPicker(selection: Binding(get: {
+                        if let id = notice.expenseID, let entry = model.ledger.expenses.first(where: { $0.id == id }) { return entry.bankAccountID }
+                        return notice.bankAccountID
+                    }, set: { accountID in
+                        let id = notice.id
+                        model.perform(key: "notice-account-" + id, action: { ledger in
+                            try ledger.assignNoticeAccount(id: id, accountID: accountID)
+                        })
+                    })).disabled(model.isWorking("notice-account-" + notice.id))
+                }
+            }
+        }.yuejiListSurface().navigationTitle(tr("自动记录的账户", "Automatic entry accounts", "Akaun rekod automatik"))
+    }
+}
+
 struct BankAccountPicker: View {
     @EnvironmentObject var model: LedgerModel
     @Binding var selection: String?
@@ -122,8 +150,11 @@ struct BankAccountsView: View {
                     }.accessibilityIdentifier("bankAccount.add")
                 }
                 Section {
-                    Text(tr("添加账户后，在收入或支出编辑页选择资金账户。旧记录和自动导入的记录默认未分配，可在账本中编辑。", "Choose a money account when editing income or spending. Existing and imported entries stay unassigned until you edit them in the ledger.", "Pilih akaun semasa mengedit pendapatan atau belanja. Rekod lama dan diimport belum ditetapkan sehingga diedit dalam lejar."))
-                    Text(tr("余额计入已分配的收入、自己实际支付的全额支出及退回原账户的退款。朋友还款、报销收款、转账和通知收入暂不自动计入；请定期与银行核对。", "Balances include assigned income, your full payments and refunds to the original account. Friend repayments, reimbursements, transfers and notification income are not included automatically; reconcile with your bank regularly.", "Baki merangkumi pendapatan ditetapkan, bayaran penuh anda dan pulangan ke akaun asal. Bayaran rakan, tuntutan, pindahan dan pendapatan notifikasi tidak dikira automatik; semak dengan bank secara berkala."))
+                    NavigationLink { AutomaticAccountLinksView() } label: {
+                        Label(tr("核对自动记录的账户", "Review automatic entry accounts", "Semak akaun rekod automatik"), systemImage: "arrow.triangle.branch")
+                    }
+                    Text(tr("在编辑账户中设置自动记账来源。新导入的付款按来源及尾号匹配账户；收入通知确认后才加余额。旧记录可在此补选账户。", "Set the automatic source in Edit account. New payments match by source and suffix; income notices add to the balance after confirmation. Assign older records here.", "Tetapkan sumber automatik dalam Edit akaun. Bayaran baharu dipadankan mengikut sumber dan digit; pendapatan ditambah selepas pengesahan. Tetapkan rekod lama di sini."))
+                    Text(tr("余额包含已分配的收入、全额付款及原账户退款。朋友还款、报销和账户间转账暂不自动计入，请与银行核对。", "Balances include assigned income, full payments and refunds to the original account. Friend repayments, reimbursements and transfers are not included automatically; reconcile with your bank.", "Baki termasuk pendapatan ditetapkan, bayaran penuh dan pulangan ke akaun asal. Bayaran rakan, tuntutan dan pindahan tidak dikira automatik; semak dengan bank."))
                 }.font(.footnote).foregroundStyle(.secondary)
             }
             .yuejiListSurface()
@@ -180,6 +211,8 @@ private struct BankAccountEditor: View {
     var original: BankAccount? = nil
     @State private var name = ""
     @State private var institution = ""
+    @State private var automaticSource = ""
+    @State private var automaticSuffix = ""
     @State private var amount = ""
     @State private var openingDate = Date()
     @State private var initialized = false
@@ -201,7 +234,8 @@ private struct BankAccountEditor: View {
                     Section(tr("数字银行", "Digital banks", "Bank digital")) {
                         ForEach(MalaysianBanks.digital, id: \.self) { Text($0).tag($0) }
                     }
-                    if !institution.isEmpty && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital).contains(institution) {
+                    Section(tr("电子钱包", "eWallet", "eDompet")) { Text("TNG eWallet").tag("TNG eWallet") }
+                    if !institution.isEmpty && institution != "TNG eWallet" && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital).contains(institution) {
                         Text(institution).tag(institution)
                     }
                 }.pickerStyle(.navigationLink)
@@ -211,6 +245,21 @@ private struct BankAccountEditor: View {
                 TextField(tr("例如 Maybank 储蓄账户", "e.g. Maybank savings", "cth. Simpanan Maybank"), text: $name)
                 TextField(tr("期初余额 MYR", "Opening balance MYR", "Baki awal MYR"), text: $amount).keyboardType(.numbersAndPunctuation)
                 DatePicker(tr("期初时间", "Opening date", "Tarikh awal"), selection: $openingDate, in: ...Date())
+                Section {
+                    Picker(tr("自动记账来源", "Automatic entry source", "Sumber rekod automatik"), selection: $automaticSource) {
+                        Text(tr("关闭", "Off", "Tutup")).tag("")
+                        ForEach(financialProviderAliases.map { $0.0 }, id: \.self) { Text($0).tag($0) }
+                        if !automaticSource.isEmpty && !financialProviderAliases.contains(where: { $0.0 == automaticSource }) {
+                            Text(automaticSource).tag(automaticSource)
+                        }
+                    }.pickerStyle(.navigationLink)
+                    if !automaticSource.isEmpty {
+                        TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
+                            .keyboardType(.numberPad)
+                    }
+                } footer: {
+                    Text(tr("仅影响保存后新导入的通知。来源和尾号匹配时自动关联；同一来源有多个账户而通知无法区分时，留待手动选择。付款扣余额，通知收入确认后加余额。", "Applies to newly imported notices only. Matching source and suffix link automatically; ambiguous accounts require selection. Payments reduce the balance; notification income increases it after confirmation.", "Untuk notifikasi baharu sahaja. Sumber dan digit sepadan dipaut automatik; akaun tidak jelas perlu dipilih. Bayaran mengurangkan baki; pendapatan menambahnya selepas pengesahan."))
+                }
                 Text(tr("填写这个时间点之前的余额，可填 0 或负数。修改期初余额或时间会重新计算账面余额。无需银行卡号或银行密码。", "Enter the balance just before this time, including zero or a negative amount. Changing the opening balance or date recalculates your recorded balance. No bank number or password needed.", "Masukkan baki sebelum masa ini, termasuk sifar atau negatif. Perubahan baki atau tarikh awal mengira semula baki. Tidak perlu nombor atau kata laluan bank."))
                     .font(.footnote).foregroundStyle(.secondary)
             }.yuejiListSurface()
@@ -226,6 +275,8 @@ private struct BankAccountEditor: View {
                 guard !initialized else { return }; initialized = true
                 if let original {
                     institution = original.institution ?? ""
+                    automaticSource = original.automaticSource ?? ""
+                    automaticSuffix = original.automaticSuffix ?? ""
                     name = original.name; amount = Currency.input(original.openingCents, "MYR"); openingDate = original.openingDate
                 }
             }
@@ -242,7 +293,9 @@ private struct BankAccountEditor: View {
             let cents = ["0", "0.0", "0.00"].contains(magnitude) ? 0 : try Currency.parse(magnitude, code: "MYR")
             let account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                       openingCents: negative ? -cents : cents, openingDate: openingDate,
-                                      institution: institution.isEmpty ? nil : institution)
+                                      institution: institution.isEmpty ? nil : institution,
+                                      automaticSource: automaticSource.isEmpty ? nil : automaticSource,
+                                      automaticSuffix: automaticSource.isEmpty || automaticSuffix.isEmpty ? nil : automaticSuffix)
             let before = original
             model.perform(key: operationKey, action: { ledger in
                 if let before {

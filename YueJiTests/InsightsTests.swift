@@ -4,6 +4,57 @@ import XCTest
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testAutomaticPaymentRoutesOnceAndRuleChangesDoNotMoveHistory() throws {
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening, automaticSource: "TNG")
+        var ledger = Ledger(); ledger.bankAccounts = [wallet]
+        let body = "You have paid RM35.00 for Shop."
+        _ = try ledger.receiveTNG(body: body, date: opening, eventID: "route-once")
+        XCTAssertEqual(ledger.expenses.first?.bankAccountID, wallet.id)
+        XCTAssertEqual(ledger.bankBalance(wallet), 6500)
+        _ = try ledger.receiveTNG(body: body, date: opening, eventID: "route-once")
+        XCTAssertEqual(ledger.bankBalance(wallet), 6500)
+        ledger.bankAccounts[0].automaticSource = nil
+        XCTAssertEqual(ledger.bankBalance(wallet), 6500)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.bankBalance(wallet), 6500)
+    }
+
+    func testBankSuffixMatchingDoesNotGuessBetweenAccounts() {
+        let first = BankAccount(name: "CIMB savings", openingCents: 0, openingDate: opening, automaticSource: "CIMB", automaticSuffix: "1234")
+        let second = BankAccount(name: "CIMB current", openingCents: 0, openingDate: opening, automaticSource: "CIMB", automaticSuffix: "5678")
+        var ledger = Ledger(); ledger.bankAccounts = [first, second]
+        XCTAssertEqual(ledger.automaticBankAccount(source: "CIMB OCTO", suffix: "1234"), first.id)
+        XCTAssertNil(ledger.automaticBankAccount(source: "CIMB", suffix: nil))
+        XCTAssertNil(ledger.automaticBankAccount(source: "CIMB", suffix: "9999"))
+        XCTAssertNil(ledger.automaticBankAccount(source: "Apple Pay", suffix: "1234"))
+        ledger.bankAccounts[1].automaticSuffix = "1234"
+        XCTAssertNil(ledger.automaticBankAccount(source: "CIMB", suffix: "1234"))
+    }
+
+    func testNotificationIncomeRequiresConfirmationAndReopeningReversesBalance() throws {
+        let account = BankAccount(name: "Maybank", openingCents: 10000, openingDate: opening)
+        var notice = TNGNotice(body: "Income", title: "", date: opening, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 2500, party: "Salary")
+        notice.bankAccountID = account.id
+        var ledger = Ledger(); ledger.bankAccounts = [account]; ledger.tngNotices = [notice]
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+        try ledger.resolveTNGIncoming(id: notice.id, purpose: "income", date: opening)
+        XCTAssertEqual(ledger.bankBalance(account), 12500)
+        try ledger.reopenTNGIncoming(id: notice.id)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+    }
+
+    func testManualNoticeAssignmentUpdatesLinkedExpenseWithoutDoubleCounting() throws {
+        let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        _ = try ledger.receiveTNG(body: "You have paid RM35.00 for Shop.", date: opening, eventID: "manual-route")
+        let notice = try XCTUnwrap(ledger.tngNotices.first)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+        try ledger.assignNoticeAccount(id: notice.id, accountID: account.id)
+        XCTAssertEqual(ledger.bankBalance(account), 6500)
+        try ledger.assignNoticeAccount(id: notice.id, accountID: nil)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+    }
+
     func testBalanceUsesFullPaymentNotPersonalShareAndIgnoresOtherAccounts() {
         let account = BankAccount(name: "Maybank", openingCents: 100_000, openingDate: opening)
         var expense = Expense(merchant: "Dinner", cents: 6000, date: opening, shares: [Share(name: "Alex", cents: 3000)])

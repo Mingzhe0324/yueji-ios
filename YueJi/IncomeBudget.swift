@@ -15,9 +15,41 @@ struct BankAccount: Codable, Identifiable, Equatable {
     /// Opening balance is measured immediately before this time.
     var openingDate: Date
     var institution: String? = nil
+    /// Explicit opt-in. Stored with the ledger, so mappings stay account-isolated.
+    var automaticSource: String? = nil
+    var automaticSuffix: String? = nil
 }
 
 extension Ledger {
+    func automaticBankAccount(source: String, suffix: String?) -> String? {
+        guard validFinancialSource(source), source != "银行 / TNG", source != "Apple Pay" else { return nil }
+        let key = (financialProvider(source) ?? source).lowercased()
+        let candidates = bankAccounts.filter {
+            guard let configured = $0.automaticSource else { return false }
+            return (financialProvider(configured) ?? configured).lowercased() == key
+        }
+        if let suffix, !suffix.isEmpty {
+            let exact = candidates.filter { $0.automaticSuffix == suffix }
+            if exact.count == 1 { return exact[0].id }
+            if !exact.isEmpty { return nil }
+        }
+        // A source-only rule is safe only when it is the sole configured account.
+        guard candidates.count == 1, candidates[0].automaticSuffix == nil else { return nil }
+        return candidates[0].id
+    }
+
+    mutating func assignNoticeAccount(id: String, accountID: String?) throws {
+        guard let index = tngNotices.firstIndex(where: { $0.id == id }),
+              accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {
+            throw LedgerError.invalid("Account or notification no longer exists")
+        }
+        tngNotices[index].bankAccountID = accountID
+        if let expenseID = tngNotices[index].expenseID,
+           let expenseIndex = expenses.firstIndex(where: { $0.id == expenseID }) {
+            expenses[expenseIndex].bankAccountID = expenses[expenseIndex].paidByFriend == nil ? accountID : nil
+        }
+    }
+
     func bankBalance(_ account: BankAccount) -> Int {
         var total = account.openingCents
         for entry in expenses where entry.bankAccountID == account.id && entry.paidByFriend == nil {
@@ -30,6 +62,9 @@ extension Ledger {
         for entry in incomes where entry.bankAccountID == account.id && entry.date >= account.openingDate {
             total += entry.cents
         }
+        for notice in tngNotices where notice.bankAccountID == account.id && notice.date >= account.openingDate && notice.isConfirmedIncome && notice.expenseID == nil {
+            total += notice.cents ?? 0
+        }
         return total
     }
 
@@ -39,6 +74,14 @@ extension Ledger {
             throw LedgerError.invalid("Invalid bank accounts")
         }
         for account in bankAccounts {
+            if let source = account.automaticSource {
+                guard validFinancialSource(source), source != "银行 / TNG", source != "Apple Pay" else { throw LedgerError.invalid("Invalid automatic source") }
+            }
+            if let suffix = account.automaticSuffix {
+                guard account.automaticSource != nil, suffix.range(of: #"^[0-9]{4}$"#, options: .regularExpression) != nil else {
+                    throw LedgerError.invalid(tr("账号尾号请输入 4 位数字。", "Enter the last four account digits.", "Masukkan empat digit akhir akaun."))
+                }
+            }
             guard !account.id.isEmpty, account.id.count <= 200,
                   !account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   account.name.count <= 80, (account.institution?.count ?? 0) <= 80, (-10_000_000_000...10_000_000_000).contains(account.openingCents),
@@ -47,7 +90,7 @@ extension Ledger {
                 throw LedgerError.invalid("Invalid bank account")
             }
         }
-        for id in expenses.compactMap(\.bankAccountID) + incomes.compactMap(\.bankAccountID) {
+        for id in expenses.compactMap(\.bankAccountID) + incomes.compactMap(\.bankAccountID) + tngNotices.compactMap(\.bankAccountID) {
             guard ids.contains(id) else { throw LedgerError.invalid("Payment account no longer exists") }
         }
     }

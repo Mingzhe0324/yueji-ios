@@ -446,6 +446,7 @@ func equalShares(total: Int, count: Int, includeMe: Bool) -> [Int] {
 }
 
 struct TNGNotice: Codable, Identifiable, Equatable {
+    var bankAccountID: String? = nil
     var place: ExpensePlace? = nil
     var id = UUID().uuidString
     var body: String
@@ -632,6 +633,7 @@ extension Ledger {
             var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: true, kind: "unknown", status: "pending", cents: nil, party: nil)
             notice.reviewReason = financialReviewReason(text)
             notice.sourceBank = provider
+            notice.bankAccountID = automaticBankAccount(source: provider, suffix: nil)
             notice.cents = singleNotificationAmount(text)
             notice.bankReference = reference
             tngNotices.append(notice)
@@ -672,9 +674,10 @@ extension Ledger {
             return old.kind == verified.kind && old.cents == verified.cents && merchantIdentity(old.party ?? "") == partyKey
         }
         var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: verified.transactionDate == nil && (verified.sourceBank != "TNG" || date == nil), kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate || crossSourceDuplicate, recipient: parsed?.recipient, sourceBank: verified.sourceBank == "TNG" ? nil : verified.sourceBank, accountSuffix: verified.accountSuffix, bankReference: suppliedReference)
+        notice.bankAccountID = automaticBankAccount(source: verified.sourceBank, suffix: verified.accountSuffix)
         if let parsed, !duplicate, !crossSourceDuplicate {
             if parsed.kind == "payment" {
-                let entry = Expense(merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party, description: title + " " + text), source: parsed.sourceBank, transactionReference: suppliedReference, timeSource: verified.transactionDate == nil ? "notification" : "supplied")
+                let entry = Expense(bankAccountID: notice.bankAccountID, merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party, description: title + " " + text), source: parsed.sourceBank, transactionReference: suppliedReference, timeSource: verified.transactionDate == nil ? "notification" : "supplied")
                 expenses.append(entry); notice.expenseID = entry.id; notice.status = "recorded"
             } else if parsed.kind == "transfer" { notice.status = "transfer" }
         }
@@ -696,6 +699,7 @@ extension Ledger {
               cents > 0, cents <= 10_000_000_000, !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               merchant.count <= 200, categoryNames.contains(category), date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("付款或分账数据无效。") }
         var expense = Expense(merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date, category: category, source: tngNotices[i].provider, transactionReference: tngNotices[i].bankReference)
+        expense.bankAccountID = tngNotices[i].bankAccountID
         expense.timeSource = date == tngNotices[i].date ? (tngNotices[i].usesReceivedDate ? (tngNotices[i].provider == "Apple Pay" ? "received" : "notification") : "supplied") : "edited"
         expense.note = tngNotices[i].note
         expense.entryDescription = description.isEmpty ? nil : description
