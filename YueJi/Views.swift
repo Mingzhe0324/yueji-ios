@@ -432,6 +432,7 @@ struct MainView: View {
                 selectedTab = 1
             }).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 0).environment(\.ambientActive, selectedTab == 0).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
             ExpensesView(isActive: selectedTab == 1, monthRequest: $ledgerMonthRequest).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 1).environment(\.ambientActive, selectedTab == 1).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle.fill") }
+            BankAccountsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 2).environment(\.ambientActive, selectedTab == 5).tag(5).tabItem { Label(tr("账户", "Accounts", "Akaun"), systemImage: "building.columns.fill") }
             RecurringView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 2).environment(\.ambientActive, selectedTab == 2).tag(2).tabItem { Label(tr("固定", "Recurring", "Berulang"), systemImage: "arrow.triangle.2.circlepath") }
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 3).environment(\.ambientActive, selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 4).environment(\.ambientActive, selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
@@ -2544,6 +2545,7 @@ struct ExpenseEditorSnapshot: Codable, Equatable {
     var people: [FriendDraft]
     var place: ExpensePlace? = nil
     var tripID: String? = nil
+    var bankAccountID: String? = nil
 }
 
 struct SavedExpenseDraft: Codable {
@@ -2732,6 +2734,7 @@ struct ExpenseEditor: View {
     @State private var name = ""
     @State private var entryDescription = ""
     @State private var place: ExpensePlace?
+    @State private var bankAccountID: String?
     @State private var tripID: String?
     @StateObject private var placeLocator = ExpensePlaceLocator()
     @State private var editingPlace = false
@@ -2780,7 +2783,7 @@ struct ExpenseEditor: View {
     private var snapshot: ExpenseEditorSnapshot {
         ExpenseEditorSnapshot(text: [name, entryDescription, amount, currency, rate, category, entryType, payerName, friendPaidMode, friendShareText, reimbursementRecipient, reimbursementAmount, chargeSubtotal, sstPercent, servicePercent, chargeRounding],
                               flags: [rememberCategory, splitting, friendPays, fuel, equal, includeMe, reimbursementEnabled, chargesEnabled],
-                              date: date, items: itemDrafts, people: people, place: place, tripID: tripID)
+                              date: date, items: itemDrafts, people: people, place: place, tripID: tripID, bankAccountID: bankAccountID)
     }
     private var hasChanges: Bool { initialSnapshot.map { $0 != snapshot } ?? false }
     private func requestClose() {
@@ -2959,6 +2962,7 @@ struct ExpenseEditor: View {
     private func restoreDraft(_ draft: SavedExpenseDraft) {
         place = draft.fields.place
         tripID = draft.fields.tripID
+        bankAccountID = draft.fields.bankAccountID
         guard draft.supported, draft.base == original else { return }
         let t = draft.fields.text, f = draft.fields.flags
         name = t[0]; entryDescription = t[1]; amount = t[2]; currency = t[3]; rate = t[4]
@@ -2982,6 +2986,7 @@ struct ExpenseEditor: View {
                     .monospacedDigit().padding(.vertical, 12)
                     .accessibilityLabel(tr("付款金额", "Payment amount", "Amaun bayaran"))
             }
+            if !friendPays { BankAccountPicker(selection: $bankAccountID) }
             if currency != "MYR", let converted = try? total() {
                 LabeledContent(tr("折合 MYR", "Equivalent in MYR", "Nilai dalam MYR"), value: money(converted))
                     .font(.subheadline)
@@ -3131,6 +3136,7 @@ struct ExpenseEditor: View {
             entryDescription = e.entryDescription ?? ""
             place = e.place
             tripID = e.tripID
+            bankAccountID = e.bankAccountID
             if let claim = e.reimbursement {
                 reimbursementEnabled = true
                 reimbursementRecipient = claim.recipient
@@ -3194,6 +3200,7 @@ struct ExpenseEditor: View {
             entry.entryDescription = description.isEmpty ? nil : description
             entry.place = place
             entry.tripID = tripID
+            entry.bankAccountID = friendPays ? nil : bankAccountID
             var fx = try foreign()
             if let old = original?.foreign, old.currency == currency, old.quote.text == rate { fx?.quote = old.quote }
             else if let saved = model.ledger.rates[currency], saved.text == rate { fx?.quote = saved }

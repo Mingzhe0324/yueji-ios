@@ -1,5 +1,50 @@
 import Foundation
 
+/// A manually maintained MYR account. No bank credentials or bank connection.
+struct BankAccount: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var name: String
+    var openingCents: Int
+    /// Opening balance is measured immediately before this time.
+    var openingDate: Date
+}
+
+extension Ledger {
+    func bankBalance(_ account: BankAccount) -> Int {
+        var total = account.openingCents
+        for entry in expenses where entry.bankAccountID == account.id && entry.paidByFriend == nil {
+            if entry.date >= account.openingDate { total -= entry.cents }
+            // A refund follows its original payment account, unless a friend received it.
+            for refund in entry.refunds ?? [] where refund.date >= account.openingDate && refund.receivedByMe != false {
+                total += refund.cents
+            }
+        }
+        for entry in incomes where entry.bankAccountID == account.id && entry.date >= account.openingDate {
+            total += entry.cents
+        }
+        return total
+    }
+
+    func validateBankAccounts() throws {
+        let ids = Set(bankAccounts.map(\.id))
+        guard bankAccounts.count <= 100, ids.count == bankAccounts.count else {
+            throw LedgerError.invalid("Invalid bank accounts")
+        }
+        for account in bankAccounts {
+            guard !account.id.isEmpty, account.id.count <= 200,
+                  !account.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  account.name.count <= 80, (-10_000_000_000...10_000_000_000).contains(account.openingCents),
+                  account.openingDate.timeIntervalSince1970 >= 0,
+                  account.openingDate.timeIntervalSince1970 < 4_102_444_800 else {
+                throw LedgerError.invalid("Invalid bank account")
+            }
+        }
+        for id in expenses.compactMap(\.bankAccountID) + incomes.compactMap(\.bankAccountID) {
+            guard ids.contains(id) else { throw LedgerError.invalid("Payment account no longer exists") }
+        }
+    }
+}
+
 /// Genuine income: what a person records by hand or confirms from a bank/TNG notice. Transfers
 /// between their own accounts, top-ups, refunds and friend repayments are never income here, so
 /// they can never reach a budget.
@@ -28,6 +73,7 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable {
 
 /// Income recorded by hand. Bank/TNG income stays an incoming notice confirmed as income.
 struct IncomeEntry: Codable, Identifiable, Equatable {
+    var bankAccountID: String? = nil
     var id = UUID().uuidString
     /// Employer, client or a short description.
     var source: String

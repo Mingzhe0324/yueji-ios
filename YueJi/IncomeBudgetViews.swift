@@ -1,4 +1,153 @@
 import SwiftUI
+
+struct BankAccountPicker: View {
+    @EnvironmentObject var model: LedgerModel
+    @Binding var selection: String?
+    var body: some View {
+        Picker(tr("资金账户", "Money account", "Akaun wang"), selection: $selection) {
+            Text(tr("未分配账户", "Unassigned", "Belum ditetapkan")).tag(String?.none)
+            ForEach(model.ledger.bankAccounts) { account in
+                Text(account.name).tag(Optional(account.id))
+            }
+        }.accessibilityIdentifier("transaction.bankAccount")
+    }
+}
+
+struct BankAccountsView: View {
+    @EnvironmentObject var model: LedgerModel
+    @State private var adding = false
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    LabeledContent(tr("账面总余额", "Recorded balance", "Baki direkod"),
+                                   value: money(model.ledger.bankAccounts.reduce(0) { $0 + model.ledger.bankBalance($1) }))
+                        .font(.headline).monospacedDigit()
+                } footer: {
+                    Text(tr("手动管理的 MYR 账户，不连接银行，也不是银行实时余额。", "Manually managed MYR accounts. Not connected to banks or live bank balances.", "Akaun MYR diurus manual. Tidak disambung ke bank atau baki langsung."))
+                }
+                Section(tr("我的账户", "My accounts", "Akaun saya")) {
+                    ForEach(model.ledger.bankAccounts) { account in
+                        NavigationLink {
+                            BankAccountDetail(accountID: account.id)
+                        } label: {
+                            HStack {
+                                Image(systemName: "building.columns.fill").foregroundStyle(.tint)
+                                Text(account.name)
+                                Spacer()
+                                Text(money(model.ledger.bankBalance(account))).monospacedDigit()
+                            }
+                        }
+                    }
+                    Button { adding = true } label: {
+                        Label(tr("添加银行／钱包账户", "Add bank / wallet account", "Tambah akaun bank / dompet"), systemImage: "plus.circle.fill")
+                    }.accessibilityIdentifier("bankAccount.add")
+                }
+                Section {
+                    Text(tr("添加账户后，在收入或支出编辑页选择资金账户。旧记录和自动导入的记录默认未分配，可在账本中编辑。", "Choose a money account when editing income or spending. Existing and imported entries stay unassigned until you edit them in the ledger.", "Pilih akaun semasa mengedit pendapatan atau belanja. Rekod lama dan diimport belum ditetapkan sehingga diedit dalam lejar."))
+                    Text(tr("余额计入已分配的收入、自己实际支付的全额支出及退回原账户的退款。朋友还款、报销收款、转账和通知收入暂不自动计入；请定期与银行核对。", "Balances include assigned income, your full payments and refunds to the original account. Friend repayments, reimbursements, transfers and notification income are not included automatically; reconcile with your bank regularly.", "Baki merangkumi pendapatan ditetapkan, bayaran penuh anda dan pulangan ke akaun asal. Bayaran rakan, tuntutan, pindahan dan pendapatan notifikasi tidak dikira automatik; semak dengan bank secara berkala."))
+                }.font(.footnote).foregroundStyle(.secondary)
+            }
+            .yuejiListSurface()
+            .navigationTitle(tr("账户", "Accounts", "Akaun"))
+            .sheet(isPresented: $adding) { BankAccountEditor() }
+        }
+    }
+}
+
+private struct BankAccountDetail: View {
+    @EnvironmentObject var model: LedgerModel
+    let accountID: String
+    @State private var editing = false
+    var body: some View {
+        List {
+            if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
+                Section {
+                    LabeledContent(tr("账面余额", "Recorded balance", "Baki direkod"), value: money(model.ledger.bankBalance(account)))
+                        .font(.title3).monospacedDigit()
+                    LabeledContent(tr("期初余额", "Opening balance", "Baki awal"), value: money(account.openingCents))
+                    LabeledContent(tr("期初时间", "Opening date", "Tarikh awal")) { Text(account.openingDate, format: .dateTime.year().month().day().hour().minute()) }
+                    Button(tr("编辑账户", "Edit account", "Edit akaun")) { editing = true }
+                } footer: {
+                    Text(tr("期初余额指此时间之前的余额；更早的收支不会重复计入。", "Opening balance is the balance just before this time; earlier entries are not counted again.", "Baki awal ialah baki sebelum masa ini; rekod lebih awal tidak dikira semula."))
+                }
+                Section(tr("已分配的支出", "Assigned spending", "Belanja ditetapkan")) {
+                    ForEach(model.ledger.expenses.filter { $0.bankAccountID == accountID }.sorted { $0.date > $1.date }) { entry in
+                        LabeledContent(entry.merchant, value: money(entry.cents))
+                    }
+                }
+                Section(tr("已分配的收入", "Assigned income", "Pendapatan ditetapkan")) {
+                    ForEach(model.ledger.incomes.filter { $0.bankAccountID == accountID }.sorted { $0.date > $1.date }) { entry in
+                        LabeledContent(entry.source, value: money(entry.cents))
+                    }
+                }
+                .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
+            }
+        }.yuejiListSurface().navigationTitle(tr("账户详情", "Account details", "Butiran akaun"))
+    }
+}
+
+private struct BankAccountEditor: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    var original: BankAccount? = nil
+    @State private var name = ""
+    @State private var amount = ""
+    @State private var openingDate = Date()
+    @State private var initialized = false
+    @State private var error: String?
+    @State private var draftID = UUID().uuidString
+    private var operationKey: String { "bank-account-" + (original?.id ?? draftID) }
+    private var saving: Bool { model.isWorking(operationKey) }
+    var body: some View {
+        NavigationStack {
+            Form {
+                TextField(tr("例如 Maybank 储蓄账户", "e.g. Maybank savings", "cth. Simpanan Maybank"), text: $name)
+                TextField(tr("期初余额 MYR", "Opening balance MYR", "Baki awal MYR"), text: $amount).keyboardType(.numbersAndPunctuation)
+                DatePicker(tr("期初时间", "Opening date", "Tarikh awal"), selection: $openingDate, in: ...Date())
+                Text(tr("填写这个时间点之前的余额，可填 0 或负数。修改期初余额或时间会重新计算账面余额。无需银行卡号或银行密码。", "Enter the balance just before this time, including zero or a negative amount. Changing the opening balance or date recalculates your recorded balance. No bank number or password needed.", "Masukkan baki sebelum masa ini, termasuk sifar atau negatif. Perubahan baki atau tarikh awal mengira semula baki. Tidak perlu nombor atau kata laluan bank."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }.yuejiListSurface()
+            .navigationTitle(tr("银行／钱包账户", "Bank / wallet account", "Akaun bank / dompet"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { save() } label: { EditorSaveLabel(saving: saving) }
+                        .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount.isEmpty)
+                }
+            }.disabled(saving).interactiveDismissDisabled(saving)
+            .onAppear {
+                guard !initialized else { return }; initialized = true
+                if let original {
+                    name = original.name; amount = Currency.input(original.openingCents, "MYR"); openingDate = original.openingDate
+                }
+            }
+            .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") {}
+            } message: { Text(error ?? "") }
+        }.ledgerFeedback(modal: true)
+    }
+    private func save() {
+        do {
+            let raw = amount.trimmingCharacters(in: .whitespacesAndNewlines)
+            let negative = raw.hasPrefix("-")
+            let magnitude = negative ? String(raw.dropFirst()) : raw
+            let cents = ["0", "0.0", "0.00"].contains(magnitude) ? 0 : try Currency.parse(magnitude, code: "MYR")
+            let account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+                                      openingCents: negative ? -cents : cents, openingDate: openingDate)
+            let before = original
+            model.perform(key: operationKey, action: { ledger in
+                if let before {
+                    guard let index = ledger.bankAccounts.firstIndex(where: { $0.id == before.id }), ledger.bankAccounts[index] == before else {
+                        throw LedgerError.invalid("Account changed; reopen and try again")
+                    }
+                    ledger.bankAccounts[index] = account
+                } else { ledger.bankAccounts.append(account) }
+                try ledger.validateBankAccounts()
+            }, completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
+        } catch { self.error = error.localizedDescription }
+    }
+}
 import UIKit
 
 /// Income keeps a green/teal look, apart from spending red and the app's blue. The light
@@ -416,6 +565,7 @@ struct IncomeEditor: View {
     @EnvironmentObject var model: LedgerModel
     var original: IncomeEntry? = nil
     @State private var draftID = UUID().uuidString
+    @State private var bankAccountID: String?
     @State private var source = ""
     @State private var amount = ""
     @State private var currency = "MYR"
@@ -433,6 +583,7 @@ struct IncomeEditor: View {
         guard !name.isEmpty else { throw reviewError("请填写收入来源。", "Enter where the income came from.", "Masukkan sumber pendapatan.") }
         var entry = original ?? IncomeEntry(id: draftID, source: name, cents: 1)
         entry.source = name
+        entry.bankAccountID = bankAccountID
         entry.kind = kind
         entry.date = date
         let trimmed = note.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -493,6 +644,7 @@ struct IncomeEditor: View {
                     Picker(tr("类型", "Type", "Jenis"), selection: $kind) {
                         ForEach(IncomeKind.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
                     }
+                    BankAccountPicker(selection: $bankAccountID)
                     DatePicker(tr("收到日期", "Date received", "Tarikh diterima"), selection: $date, in: ...Date())
                     TextField(tr("备注（可选）", "Note (optional)", "Nota (pilihan)"), text: $note, axis: .vertical).lineLimit(1...4)
                 } footer: {
@@ -527,6 +679,7 @@ struct IncomeEditor: View {
                 guard !initialized else { return }
                 initialized = true
                 guard let original else { return }
+                bankAccountID = original.bankAccountID
                 source = original.source; kind = original.kind; date = original.date; note = original.note ?? ""
                 currency = original.foreign?.currency ?? "MYR"
                 amount = Currency.input(original.foreign?.minor ?? original.cents, currency)

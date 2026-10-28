@@ -1,6 +1,60 @@
 import XCTest
 @testable import YueJi
 
+final class BankAccountTests: XCTestCase {
+    let opening = Date(timeIntervalSince1970: 1_700_000_000)
+
+    func testBalanceUsesFullPaymentNotPersonalShareAndIgnoresOtherAccounts() {
+        let account = BankAccount(name: "Maybank", openingCents: 100_000, openingDate: opening)
+        var expense = Expense(merchant: "Dinner", cents: 6000, date: opening, shares: [Share(name: "Alex", cents: 3000)])
+        expense.bankAccountID = account.id
+        var income = IncomeEntry(source: "Salary", cents: 20_000, date: opening)
+        income.bankAccountID = account.id
+        var ledger = Ledger(expenses: [expense, Expense(merchant: "Unassigned", cents: 5000, date: opening)])
+        ledger.bankAccounts = [account]; ledger.incomes = [income]
+        XCTAssertEqual(ledger.bankBalance(account), 114_000)
+        ledger.expenses[0].cents = 7000
+        XCTAssertEqual(ledger.bankBalance(account), 113_000)
+        ledger.expenses.removeFirst()
+        XCTAssertEqual(ledger.bankBalance(account), 120_000)
+    }
+
+    func testOpeningCutoffAndRefundToOriginalAccount() {
+        let account = BankAccount(name: "CIMB", openingCents: 5000, openingDate: opening)
+        var expense = Expense(merchant: "Before opening", cents: 2000, date: opening.addingTimeInterval(-60))
+        expense.bankAccountID = account.id
+        expense.refunds = [RefundRecord(cents: 500, date: opening, personalCents: 500, shares: [:])]
+        var ledger = Ledger(expenses: [expense]); ledger.bankAccounts = [account]
+        XCTAssertEqual(ledger.bankBalance(account), 5500)
+        ledger.expenses[0].refunds?[0].receivedByMe = false
+        XCTAssertEqual(ledger.bankBalance(account), 5000)
+        ledger.expenses[0].date = opening
+        ledger.expenses[0].paidByFriend = "Alex"
+        XCTAssertEqual(ledger.bankBalance(account), 5000)
+    }
+
+    func testAccountsRoundTripAndLegacyBackupDefaults() throws {
+        let account = BankAccount(name: "Wallet", openingCents: 0, openingDate: opening)
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.bankAccounts, [account])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        object.removeValue(forKey: "bankAccounts")
+        XCTAssertTrue(try LocalStore.decode(JSONSerialization.data(withJSONObject: object)).bankAccounts.isEmpty)
+    }
+
+    func testInvalidOrMissingAccountRejected() throws {
+        var ledger = Ledger()
+        ledger.bankAccounts = [BankAccount(name: " ", openingCents: 0, openingDate: opening)]
+        XCTAssertThrowsError(try ledger.validated())
+        ledger.bankAccounts = []
+        var expense = Expense(merchant: "Missing account", cents: 100)
+        expense.bankAccountID = "missing"
+        ledger.expenses = [expense]
+        XCTAssertThrowsError(try ledger.validated())
+    }
+}
+
 final class EverydayToolsTests: XCTestCase {
     private var calendar: Calendar {
         var value = Calendar(identifier: .gregorian)
