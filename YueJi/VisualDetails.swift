@@ -281,6 +281,48 @@ extension Ledger {
 
 // MARK: - Today's spending in the overview header
 
+private struct TimeOfDaySpendingIcon: View {
+    @Environment(\.scenePhase) private var scenePhase
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var playful = true
+    @State private var visible = false
+    private var animate: Bool { visible && scenePhase == .active && playful && !reduceMotion }
+
+    var body: some View {
+        Group {
+            if visible && scenePhase == .active {
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    icon(at: context.date)
+                }
+            } else {
+                icon(at: Date())
+            }
+        }
+        .frame(width: 24, height: 24)
+        .accessibilityHidden(true)
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
+    }
+
+    private func icon(at date: Date) -> some View {
+        let hour = Calendar.autoupdatingCurrent.component(.hour, from: date)
+        let symbol: String
+        let color: Color
+        switch hour {
+        case 5..<8: symbol = "sunrise.fill"; color = .orange
+        case 8..<17: symbol = "sun.max.fill"; color = .orange
+        case 17..<20: symbol = "sunset.fill"; color = .pink
+        default: symbol = "moon.stars.fill"; color = .indigo
+        }
+        return Image(systemName: symbol)
+            .symbolRenderingMode(.hierarchical)
+            .foregroundStyle(color)
+            .symbolEffect(.pulse, options: .repeating, isActive: animate)
+            .contentTransition(animate ? .symbolEffect(.replace) : .identity)
+            .animation(animate ? .easeInOut(duration: 0.45) : nil, value: symbol)
+    }
+}
+
 struct TodaySpendingRow: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
@@ -297,7 +339,7 @@ struct TodaySpendingRow: View {
         let _ = uiLocale.identifier
         let spent = today
             HStack(spacing: 8) {
-                Image(systemName: "sun.horizon").foregroundStyle(IslandTheme.accent)
+                TimeOfDaySpendingIcon()
                 Text(tr("今日消费", "Spent today", "Belanja hari ini")).foregroundStyle(.secondary)
                 Spacer(minLength: 8)
                 Group {
