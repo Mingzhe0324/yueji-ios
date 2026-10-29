@@ -251,6 +251,7 @@ extension Ledger {
 
 struct Ledger: Codable {
     var bankAccounts: [BankAccount] = []
+    var bankTransfers: [BankTransfer] = []
     var coolingPurchases: [CoolingPurchase] = []
     var trips: [TravelBook] = []
     var version = 6
@@ -279,10 +280,11 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bankAccounts = try c.decodeIfPresent([BankAccount].self, forKey: .bankAccounts) ?? []
+        bankTransfers = try c.decodeIfPresent([BankTransfer].self, forKey: .bankTransfers) ?? []
         coolingPurchases = try c.decodeIfPresent([CoolingPurchase].self, forKey: .coolingPurchases) ?? []
         let v = try c.decode(Int.self, forKey: .version)
         guard (1...6).contains(v) else { throw LedgerError.invalid("账本格式或版本无效。") }

@@ -4,6 +4,53 @@ import XCTest
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testTransferConservesMoneyAndEditDeleteRecalculateBothAccounts() throws {
+        let bank = BankAccount(name: "Maybank", openingCents: 50000, openingDate: opening)
+        let wallet = BankAccount(name: "TNG", openingCents: 2000, openingDate: opening)
+        var ledger = Ledger(); ledger.bankAccounts = [bank, wallet]
+        let transfer = BankTransfer(fromAccountID: bank.id, toAccountID: wallet.id, cents: 10000, date: opening)
+        try ledger.saveBankTransfer(transfer, replacing: nil)
+        XCTAssertEqual(ledger.bankBalance(bank), 40000)
+        XCTAssertEqual(ledger.bankBalance(wallet), 12000)
+        XCTAssertEqual(ledger.bankBalance(bank) + ledger.bankBalance(wallet), 52000)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.incomes.isEmpty)
+        var edited = transfer; edited.cents = 5000
+        try ledger.saveBankTransfer(edited, replacing: transfer)
+        XCTAssertEqual(ledger.bankBalance(bank), 45000)
+        XCTAssertEqual(ledger.bankBalance(wallet), 7000)
+        XCTAssertThrowsError(try ledger.deleteBankTransfer(transfer))
+        try ledger.deleteBankTransfer(edited)
+        XCTAssertEqual(ledger.bankBalance(bank), 50000)
+        XCTAssertEqual(ledger.bankBalance(wallet), 2000)
+    }
+
+    func testTransferValidationIsAtomicAndOpeningCutoffIsPerAccount() throws {
+        let bank = BankAccount(name: "Bank", openingCents: 50000, openingDate: opening)
+        let wallet = BankAccount(name: "TNG", openingCents: 12000, openingDate: opening.addingTimeInterval(60))
+        var ledger = Ledger(); ledger.bankAccounts = [bank, wallet]
+        let transfer = BankTransfer(fromAccountID: bank.id, toAccountID: wallet.id, cents: 10000, date: opening)
+        var invalid = transfer; invalid.toAccountID = bank.id
+        XCTAssertThrowsError(try ledger.saveBankTransfer(invalid, replacing: nil))
+        invalid = transfer; invalid.toAccountID = "missing"
+        XCTAssertThrowsError(try ledger.saveBankTransfer(invalid, replacing: nil))
+        invalid = transfer; invalid.cents = -1
+        XCTAssertThrowsError(try ledger.saveBankTransfer(invalid, replacing: nil))
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        try ledger.saveBankTransfer(transfer, replacing: nil)
+        XCTAssertThrowsError(try ledger.saveBankTransfer(transfer, replacing: nil))
+        XCTAssertEqual(ledger.bankBalance(bank), 40000)
+        XCTAssertEqual(ledger.bankBalance(wallet), 12000)
+        let data = try JSONEncoder().encode(ledger)
+        let restored = try JSONDecoder().decode(Ledger.self, from: data)
+        XCTAssertEqual(restored.bankTransfers, [transfer])
+        XCTAssertEqual(restored.bankBalance(bank), 40000)
+        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        legacy.removeValue(forKey: "bankTransfers")
+        let old = try JSONDecoder().decode(Ledger.self, from: JSONSerialization.data(withJSONObject: legacy))
+        XCTAssertTrue(old.bankTransfers.isEmpty)
+    }
+
     func testTNGWithoutSuffixMatchesOnlyAfterSuffixRuleIsCleared() throws {
         var account = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
         account.automaticSource = "TNG"

@@ -20,7 +20,41 @@ struct BankAccount: Codable, Identifiable, Equatable {
     var automaticSuffix: String? = nil
 }
 
+struct BankTransfer: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var fromAccountID: String
+    var toAccountID: String
+    var cents: Int
+    var date: Date
+    var note: String = ""
+}
+
 extension Ledger {
+    mutating func saveBankTransfer(_ transfer: BankTransfer, replacing original: BankTransfer?) throws {
+        var copy = self
+        if let original {
+            guard transfer.id == original.id,
+                  let index = copy.bankTransfers.firstIndex(where: { $0.id == original.id }),
+                  copy.bankTransfers[index] == original else {
+                throw LedgerError.invalid(tr("转账已变化，请重新打开。", "Transfer changed; reopen it.", "Pindahan berubah; buka semula."))
+            }
+            copy.bankTransfers[index] = transfer
+        } else {
+            guard !copy.bankTransfers.contains(where: { $0.id == transfer.id }) else {
+                throw LedgerError.invalid("Transfer already exists")
+            }
+            copy.bankTransfers.append(transfer)
+        }
+        try copy.validateBankAccounts()
+        self = copy
+    }
+
+    mutating func deleteBankTransfer(_ original: BankTransfer) throws {
+        guard let index = bankTransfers.firstIndex(where: { $0.id == original.id }), bankTransfers[index] == original else {
+            throw LedgerError.invalid(tr("转账已变化，请重新打开。", "Transfer changed; reopen it.", "Pindahan berubah; buka semula."))
+        }
+        bankTransfers.remove(at: index)
+    }
     mutating func assignApplePayAccount(id: String, accountID: String?) throws {
         guard let index = expenses.firstIndex(where: { $0.id == id && $0.source == "Apple Pay" }),
               expenses[index].paidByFriend == nil,
@@ -64,6 +98,10 @@ extension Ledger {
 
     func bankBalance(_ account: BankAccount) -> Int {
         var total = account.openingCents
+        for transfer in bankTransfers where transfer.date >= account.openingDate {
+            if transfer.fromAccountID == account.id { total -= transfer.cents }
+            if transfer.toAccountID == account.id { total += transfer.cents }
+        }
         for entry in expenses where entry.bankAccountID == account.id && entry.paidByFriend == nil {
             if entry.date >= account.openingDate { total -= entry.cents }
             // A refund follows its original payment account, unless a friend received it.
@@ -82,6 +120,18 @@ extension Ledger {
 
     func validateBankAccounts() throws {
         let ids = Set(bankAccounts.map(\.id))
+        guard bankTransfers.count <= 10000, Set(bankTransfers.map(\.id)).count == bankTransfers.count else {
+            throw LedgerError.invalid("Invalid bank transfers")
+        }
+        for transfer in bankTransfers {
+            guard !transfer.id.isEmpty, transfer.id.count <= 200,
+                  transfer.fromAccountID != transfer.toAccountID,
+                  ids.contains(transfer.fromAccountID), ids.contains(transfer.toAccountID),
+                  (1...10_000_000_000).contains(transfer.cents), transfer.note.count <= 500,
+                  transfer.date.timeIntervalSince1970 >= 0, transfer.date.timeIntervalSince1970 < 4_102_444_800 else {
+                throw LedgerError.invalid(tr("请选择不同的转出、转入账户并填写有效金额。", "Choose different accounts and a valid amount.", "Pilih akaun berbeza dan amaun yang sah."))
+            }
+        }
         guard bankAccounts.count <= 100, ids.count == bankAccounts.count else {
             throw LedgerError.invalid("Invalid bank accounts")
         }

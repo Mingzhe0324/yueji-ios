@@ -289,6 +289,9 @@ struct BankAccountsView: View {
                     }.moveDisabled(model.isWorking("account-order"))
                 }
                 Section {
+                    NavigationLink { BankTransfersView() } label: {
+                        Label(tr("转账／TNG 充值", "Transfers / TNG top-ups", "Pindahan / tambah nilai TNG"), systemImage: "arrow.left.arrow.right")
+                    }.accessibilityIdentifier("bankAccount.transfers")
                     NavigationLink { AutomaticAccountLinksView() } label: {
                         Label(tr("核对自动记录的账户", "Review automatic entry accounts", "Semak akaun rekod automatik"), systemImage: "arrow.triangle.branch")
                     }
@@ -341,8 +344,144 @@ private struct BankAccountDetail: View {
                     }
                 }
                 .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
+                Section {
+                    NavigationLink { BankTransfersView(accountID: accountID) } label: {
+                        Label(tr("转账／充值记录", "Transfer history", "Sejarah pindahan"), systemImage: "arrow.left.arrow.right")
+                    }
+                }
             }
         }.yuejiListSurface().navigationTitle(tr("账户详情", "Account details", "Butiran akaun"))
+    }
+}
+
+private struct BankTransfersView: View {
+    @EnvironmentObject var model: LedgerModel
+    var accountID: String? = nil
+    @State private var adding = false
+    @State private var editing: BankTransfer?
+    private var transfers: [BankTransfer] {
+        model.ledger.bankTransfers.filter { accountID == nil || $0.fromAccountID == accountID || $0.toAccountID == accountID }
+            .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+    }
+    private func name(_ id: String) -> String {
+        model.ledger.bankAccounts.first(where: { $0.id == id })?.name ?? "—"
+    }
+    var body: some View {
+        List {
+            if transfers.isEmpty {
+                Text(tr("还没有转账记录", "No transfers yet", "Belum ada pindahan")).foregroundStyle(.secondary)
+            }
+            ForEach(transfers) { transfer in
+                Button { editing = transfer } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(name(transfer.fromAccountID) + " → " + name(transfer.toAccountID)).font(.headline)
+                        HStack {
+                            Text(dateLabel(transfer.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                            Spacer()
+                            Text(money(transfer.cents)).monospacedDigit()
+                        }
+                        if !transfer.note.isEmpty { Text(transfer.note).font(.caption).foregroundStyle(.secondary) }
+                    }.foregroundStyle(.primary)
+                }
+            }
+        }.yuejiListSurface()
+        .navigationTitle(tr("转账／充值", "Transfers / top-ups", "Pindahan / tambah nilai"))
+        .toolbar {
+            Button { adding = true } label: { Image(systemName: "plus") }
+                .accessibilityLabel(tr("记录转账", "Record transfer", "Rekod pindahan"))
+                .disabled(model.ledger.bankAccounts.count < 2)
+        }
+        .safeAreaInset(edge: .bottom) {
+            if model.ledger.bankAccounts.count < 2 {
+                Text(tr("请先添加至少两个资金账户。", "Add at least two accounts first.", "Tambah sekurang-kurangnya dua akaun dahulu."))
+                    .font(.footnote).padding().frame(maxWidth: .infinity).background(.regularMaterial)
+            }
+        }
+        .sheet(isPresented: $adding) { BankTransferEditor(initialAccountID: accountID) }
+        .sheet(item: $editing) { BankTransferEditor(original: $0) }
+    }
+}
+
+private struct BankTransferEditor: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    var original: BankTransfer? = nil
+    var initialAccountID: String? = nil
+    @State private var fromID = ""
+    @State private var toID = ""
+    @State private var amount = ""
+    @State private var date = Date()
+    @State private var note = ""
+    @State private var draftID = UUID().uuidString
+    @State private var initialized = false
+    @State private var deleting = false
+    @State private var error: String?
+    private var key: String { "bank-transfer-" + (original?.id ?? draftID) }
+    private var saving: Bool { model.isWorking(key) }
+    private var beforeOpening: Bool {
+        model.ledger.bankAccounts.contains { ($0.id == fromID || $0.id == toID) && date < $0.openingDate }
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Picker(tr("转出账户", "From account", "Akaun asal"), selection: $fromID) {
+                        Text(tr("请选择", "Choose", "Pilih")).tag("")
+                        ForEach(model.ledger.bankAccounts) { Text($0.name).tag($0.id) }
+                    }
+                    Picker(tr("转入账户", "To account", "Akaun penerima"), selection: $toID) {
+                        Text(tr("请选择", "Choose", "Pilih")).tag("")
+                        ForEach(model.ledger.bankAccounts) { Text($0.name).tag($0.id) }
+                    }
+                    TextField(tr("转账金额 MYR", "Transfer amount MYR", "Amaun pindahan MYR"), text: $amount).keyboardType(.decimalPad)
+                    DatePicker(tr("转账时间", "Transfer date", "Tarikh pindahan"), selection: $date, in: ...Date())
+                    TextField(tr("备注（可选）", "Note (optional)", "Nota (pilihan)"), text: $note)
+                } footer: {
+                    Text(tr("仅记录已完成的转账，不会实际转钱。TNG 充值请选择银行转出、TNG 转入。本金不计收入或消费；如有手续费，请另外记一笔支出并选择转出账户。", "Records completed transfers; does not move real money. For TNG top-ups, select the bank as source and TNG as destination. Principal is neither income nor spending. Record any fee separately as an expense on the source account.", "Merekod pindahan selesai, bukan memindahkan wang sebenar. Untuk tambah nilai TNG, pilih bank sebagai asal dan TNG sebagai penerima. Prinsipal bukan pendapatan atau belanja. Rekod fi secara berasingan sebagai belanja akaun asal."))
+                }
+                if beforeOpening {
+                    Text(tr("转账早于部分账户的期初时间：该账户已包含这笔资金，不会再次增减。请核对时间和期初余额。", "This transfer predates an account's opening balance and will not change that account again. Check the date and opening balances.", "Pindahan mendahului baki awal sesetengah akaun dan tidak mengubahnya lagi. Semak tarikh dan baki awal."))
+                        .font(.footnote).foregroundStyle(.orange)
+                }
+                if original != nil {
+                    Button(tr("删除转账", "Delete transfer", "Padam pindahan"), role: .destructive) { deleting = true }
+                }
+            }.yuejiListSurface().disabled(saving)
+            .navigationTitle(tr("记录转账", "Record transfer", "Rekod pindahan"))
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button { save() } label: { EditorSaveLabel(saving: saving) }
+                        .disabled(saving || fromID.isEmpty || toID.isEmpty || fromID == toID || amount.isEmpty)
+                }
+            }
+            .interactiveDismissDisabled(saving)
+            .onAppear {
+                guard !initialized else { return }; initialized = true
+                fromID = original?.fromAccountID ?? initialAccountID ?? model.ledger.bankAccounts.first?.id ?? ""
+                toID = original?.toAccountID ?? model.ledger.bankAccounts.first(where: { $0.id != fromID })?.id ?? ""
+                if let original { amount = Currency.input(original.cents, "MYR"); date = original.date; note = original.note }
+            }
+            .confirmationDialog(tr("删除后将重新计算两边余额。", "Deleting recalculates both balances.", "Memadam mengira semula kedua-dua baki."), isPresented: $deleting) {
+                Button(tr("删除转账", "Delete transfer", "Padam pindahan"), role: .destructive) {
+                    guard let original else { return }
+                    model.perform(key: key, action: { try $0.deleteBankTransfer(original) }, completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
+                }
+            }
+            .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") {}
+            } message: { Text(error ?? "") }
+        }.ledgerFeedback(modal: true)
+    }
+    private func save() {
+        do {
+            let transfer = BankTransfer(id: original?.id ?? draftID, fromAccountID: fromID, toAccountID: toID,
+                                        cents: try Currency.parse(amount, code: "MYR"), date: date,
+                                        note: note.trimmingCharacters(in: .whitespacesAndNewlines))
+            let before = original
+            model.perform(key: key, action: { try $0.saveBankTransfer(transfer, replacing: before) },
+                          completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
+        } catch { self.error = error.localizedDescription }
     }
 }
 
