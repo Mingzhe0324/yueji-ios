@@ -12,11 +12,27 @@ private struct BankWalletCard: View {
         return [Color(red: 0.10, green: 0.28, blue: 0.45), Color(red: 0.04, green: 0.09, blue: 0.17)]
     }
     private var logo: String? {
-        switch account.institution {
-        case "CIMB Bank": return "BankCIMB"
-        case "Hong Leong Bank": return "BankHongLeong"
+        if account.institution?.hasPrefix("Alliance") == true { return "BankAlliance" }
+        switch financialProvider(account.institution ?? "") {
+        case "Maybank": return "BankMaybank"
+        case "CIMB": return "BankCIMB"
+        case "Hong Leong": return "BankHongLeong"
         case "GXBank": return "BankGX"
-        case "RHB Bank": return "BankRHB"
+        case "RHB": return "BankRHB"
+        case "AmBank": return "BankAmBank"
+        case "Affin Bank": return "BankAffin"
+        case "Alliance Bank": return "BankAlliance"
+        case "HSBC": return "BankHSBC"
+        case "OCBC": return "BankOCBC"
+        case "UOB": return "BankUOB"
+        case "Standard Chartered": return "BankStandardChartered"
+        case "Bank Islam": return "BankBankIslam"
+        case "Al Rajhi": return "BankAlRajhi"
+        case "Boost Bank": return "BankBoost"
+        case "AEON Bank": return "BankAEON"
+        case "Ryt Bank": return "BankRyt"
+        case "KAF Digital Bank": return "BankKAF"
+        case "TNG": return "BankTNG"
         default: return nil
         }
     }
@@ -24,9 +40,10 @@ private struct BankWalletCard: View {
         VStack(alignment: .leading, spacing: 24) {
             HStack(alignment: .top) {
                 if let logo {
-                    Image(logo).resizable().scaledToFit().frame(width: 116, height: 42)
+                    Image(logo).resizable().scaledToFit().frame(width: 56, height: 36)
                         .padding(8).background(.white, in: RoundedRectangle(cornerRadius: 10))
                         .accessibilityHidden(true)
+                    Text(bank).font(.headline)
                 } else {
                     Label(bank, systemImage: "building.columns.fill").font(.headline)
                 }
@@ -114,7 +131,6 @@ struct BankAccountsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var walletTransition
     @State private var adding = false
-    @State private var recurring = false
     var body: some View {
         NavigationStack {
             List {
@@ -144,7 +160,19 @@ struct BankAccountsView: View {
                         }.buttonStyle(BankCardPressStyle())
                             .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                             .listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    }
+                    }.onMove { offsets, destination in
+                        let originalIDs = model.ledger.bankAccounts.map(\.id)
+                        var orderedIDs = originalIDs
+                        orderedIDs.move(fromOffsets: offsets, toOffset: destination)
+                        let savedIDs = orderedIDs
+                        model.perform(key: "account-order", action: { ledger in
+                            guard ledger.bankAccounts.map(\.id) == originalIDs else {
+                                throw LedgerError.invalid(tr("账户已变化，请重试排序。", "Accounts changed; reorder again.", "Akaun berubah; susun semula."))
+                            }
+                            let byID = Dictionary(uniqueKeysWithValues: ledger.bankAccounts.map { ($0.id, $0) })
+                            ledger.bankAccounts = savedIDs.compactMap { byID[$0] }
+                        })
+                    }.moveDisabled(model.isWorking("account-order"))
                     Button { adding = true } label: {
                         Label(tr("添加银行／钱包账户", "Add bank / wallet account", "Tambah akaun bank / dompet"), systemImage: "plus.circle.fill")
                     }.accessibilityIdentifier("bankAccount.add")
@@ -153,19 +181,22 @@ struct BankAccountsView: View {
                     NavigationLink { AutomaticAccountLinksView() } label: {
                         Label(tr("核对自动记录的账户", "Review automatic entry accounts", "Semak akaun rekod automatik"), systemImage: "arrow.triangle.branch")
                     }
+                    DisclosureGroup(tr("Apple Pay 自动扣账面余额", "Apple Pay account setup", "Tetapan akaun Apple Pay")) {
+                        Text(tr("1. 在快捷指令创建交易自动化，每个自动化只选择一张付款卡。\n2. 添加「记录 Apple Pay 支出」，传入金额和商户。\n3. 在该动作的「扣款账户」选择这张卡对应的月记账户，并设置立即运行。\n4. 其他卡分别配置。未选扣款账户的旧自动化仍会记账，但不会猜测银行账户。", "1. Create a transaction automation in Shortcuts and select just one payment card.\n2. Add Record Apple Pay expense and pass the amount and merchant.\n3. Choose that card's YueJi payment account in the action and set the automation to run immediately.\n4. Configure other cards separately. Older actions without an account still record expenses without guessing the bank.", "1. Cipta automasi transaksi dalam Pintasan dan pilih satu kad sahaja.\n2. Tambah tindakan rekod Apple Pay serta amaun dan peniaga.\n3. Pilih akaun YueJi bagi kad itu dan tetapkan jalan serta-merta.\n4. Tetapkan kad lain secara berasingan. Tindakan lama tanpa akaun masih merekod tanpa meneka bank."))
+                    }
                     Text(tr("在编辑账户中设置自动记账来源。新导入的付款按来源及尾号匹配账户；收入通知确认后才加余额。旧记录可在此补选账户。", "Set the automatic source in Edit account. New payments match by source and suffix; income notices add to the balance after confirmation. Assign older records here.", "Tetapkan sumber automatik dalam Edit akaun. Bayaran baharu dipadankan mengikut sumber dan digit; pendapatan ditambah selepas pengesahan. Tetapkan rekod lama di sini."))
                     Text(tr("余额包含已分配的收入、全额付款及原账户退款。朋友还款、报销和账户间转账暂不自动计入，请与银行核对。", "Balances include assigned income, full payments and refunds to the original account. Friend repayments, reimbursements and transfers are not included automatically; reconcile with your bank.", "Baki termasuk pendapatan ditetapkan, bayaran penuh dan pulangan ke akaun asal. Bayaran rakan, tuntutan dan pindahan tidak dikira automatik; semak dengan bank."))
                 }.font(.footnote).foregroundStyle(.secondary)
             }
-            .yuejiListSurface()
+            .yuejiDashboardSurface()
+            .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85), value: model.ledger.bankAccounts.map(\.id))
             .navigationTitle(tr("账户", "Accounts", "Akaun"))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
-                    Button(tr("固定收支", "Recurring", "Berulang"), systemImage: "arrow.triangle.2.circlepath") { recurring = true }
+                    EditButton().disabled(model.ledger.bankAccounts.count < 2)
                 }
             }
             .sheet(isPresented: $adding) { BankAccountEditor() }
-            .sheet(isPresented: $recurring) { RecurringView().ledgerFeedback(modal: true).presentationDragIndicator(.visible) }
         }
     }
 }

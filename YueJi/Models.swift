@@ -394,7 +394,10 @@ struct Ledger: Codable {
         expenses.remove(at: index)
     }
 
-    mutating func addPayment(amount: Double, merchant: String, currency: String, date: Date, eventID: String?, description: String = "") throws -> Bool {
+    mutating func addPayment(amount: Double, merchant: String, currency: String, date: Date, eventID: String?, description: String = "", bankAccountID: String? = nil) throws -> Bool {
+        if let bankAccountID, !bankAccounts.contains(where: { $0.id == bankAccountID }) {
+            throw LedgerError.invalid(tr("快捷指令的扣款账户不存在，请重新选择。", "Select the payment account again in Shortcuts.", "Pilih semula akaun bayaran dalam Pintasan."))
+        }
         guard description.count <= 2000 else { throw LedgerError.invalid("交易描述过长。") }
         let code = currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
         guard Currency.codes.contains(code), amount.isFinite, amount > 0, amount <= 100_000_000,
@@ -421,13 +424,14 @@ struct Ledger: Codable {
             var notice = TNGNotice(body: "Apple Pay: " + name + " " + money(value) + " " + description,
                                    title: "Apple Pay", date: date, usesReceivedDate: false, kind: "payment", status: "pending", cents: value, party: name, possibleDuplicate: true)
             notice.sourceBank = "Apple Pay"
+            notice.bankAccountID = bankAccountID
             notice.bankReference = explicit.isEmpty ? nil : explicit
             notice.reviewReason = "与已有账目的金额、商户和时间相近，请核对是否同一笔。"
             tngNotices.append(notice)
             seenEvents.insert(key)
             return false
         }
-        expenses.append(Expense(merchant: name, entryDescription: description.isEmpty ? nil : description, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
+        expenses.append(Expense(bankAccountID: bankAccountID, merchant: name, entryDescription: description.isEmpty ? nil : description, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
         seenEvents.insert(key)
         return true
     }

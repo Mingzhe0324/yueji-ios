@@ -3,6 +3,7 @@ import CryptoKit
 
 /// Persist the input before attempting the ledger write. This cannot capture an automation that never ran.
 struct AutomationDelivery: Codable, Identifiable {
+    var bankAccountID: String? = nil
     var id = UUID().uuidString
     var receivedAt = Date()
     var kind: String // notification / applePay
@@ -27,7 +28,7 @@ struct AutomationDelivery: Codable, Identifiable {
     func validate() throws {
         guard UUID(uuidString: id) != nil, ["notification", "applePay"].contains(kind),
               body.count <= 8000, title.count <= 500, merchant.count <= 200, (place?.valid ?? true),
-              description.count <= 2000, currency.count <= 10, (eventID?.count ?? 0) <= 500,
+              description.count <= 2000, currency.count <= 10, (eventID?.count ?? 0) <= 500, (bankAccountID?.count ?? 0) <= 200,
               (sourceApp == nil || sourceApp!.isEmpty || validFinancialSource(sourceApp!)),
               !(kind == "applePay" && useTransactionDate == true && date == nil),
               receivedAt.timeIntervalSince1970 >= 0, receivedAt.timeIntervalSince1970 < 4_102_444_800, amount?.isFinite ?? true,
@@ -87,7 +88,7 @@ extension Ledger {
             let date = delivery.applePayDate
             let before = copy.tngNotices.count
             let saved = try copy.addPayment(amount: amount, merchant: delivery.merchant, currency: delivery.currency,
-                                            date: date, eventID: delivery.eventID, description: delivery.description)
+                                            date: date, eventID: delivery.eventID, description: delivery.description, bankAccountID: delivery.bankAccountID)
             if saved, let index = copy.expenses.indices.last { copy.expenses[index].timeSource = delivery.applePayTimeSource }
             if copy.tngNotices.count > before, let index = copy.tngNotices.indices.last {
                 copy.tngNotices[index].usesReceivedDate = delivery.applePayTimeSource == "received"

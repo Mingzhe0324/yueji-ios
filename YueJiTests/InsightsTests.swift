@@ -4,6 +4,27 @@ import XCTest
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testApplePayAccountSurvivesQueuedDeliveryAndDoesNotDoubleDebit() throws {
+        let account = BankAccount(name: "Card account", openingCents: 10000, openingDate: opening)
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        var delivery = AutomationDelivery(kind: "applePay", date: opening, eventID: "wallet-route", amount: 20, merchant: "Shop")
+        delivery.bankAccountID = account.id
+        let decoded = try JSONDecoder().decode(AutomationDelivery.self, from: JSONEncoder().encode(delivery))
+        _ = try ledger.applyDelivery(decoded)
+        XCTAssertEqual(ledger.expenses.first?.bankAccountID, account.id)
+        XCTAssertEqual(ledger.bankBalance(account), 8000)
+        _ = try ledger.applyDelivery(decoded)
+        XCTAssertEqual(ledger.bankBalance(account), 8000)
+    }
+
+    func testApplePayMissingAccountCannotChargeAnotherAccount() throws {
+        var ledger = Ledger()
+        XCTAssertThrowsError(try ledger.addPayment(amount: 20, merchant: "Shop", currency: "MYR", date: opening, eventID: "missing-card", bankAccountID: "old-account"))
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(try ledger.addPayment(amount: 20, merchant: "Shop", currency: "MYR", date: opening, eventID: "legacy-shortcut"))
+        XCTAssertNil(ledger.expenses.first?.bankAccountID)
+    }
+
     func testAutomaticPaymentRoutesOnceAndRuleChangesDoNotMoveHistory() throws {
         let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening, automaticSource: "TNG")
         var ledger = Ledger(); ledger.bankAccounts = [wallet]

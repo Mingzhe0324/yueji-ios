@@ -4,6 +4,24 @@ import Foundation
 import FoundationModels
 #endif
 
+struct PaymentAccountEntity: AppEntity {
+    static var typeDisplayRepresentation: TypeDisplayRepresentation = "月记资金账户"
+    static var defaultQuery = PaymentAccountQuery()
+    var id: String
+    var name: String
+    var displayRepresentation: DisplayRepresentation { DisplayRepresentation(title: "\(name)") }
+}
+
+struct PaymentAccountQuery: EntityQuery {
+    func entities(for identifiers: [String]) async throws -> [PaymentAccountEntity] {
+        try LocalStore.shared.read().bankAccounts.filter { identifiers.contains($0.id) }
+            .map { PaymentAccountEntity(id: $0.id, name: $0.name) }
+    }
+    func suggestedEntities() async throws -> [PaymentAccountEntity] {
+        try LocalStore.shared.read().bankAccounts.map { PaymentAccountEntity(id: $0.id, name: $0.name) }
+    }
+}
+
 struct RecordApplePayIntent: AppIntent {
     static var title: LocalizedStringResource = "记录 Apple Pay 支出"
     static var description = IntentDescription("记录成功付款，默认使用本次自动化运行的时刻。补录旧交易才开启使用指定交易时间；不会读取钱包历史。")
@@ -15,10 +33,12 @@ struct RecordApplePayIntent: AppIntent {
     @Parameter(title: "指定交易时间（补录时使用）", kind: .dateTime) var transactionDate: Date?
     @Parameter(title: "使用指定交易时间（补录旧交易）", default: false) var useTransactionDate: Bool
     @Parameter(title: "交易标识（可选）") var transactionID: String?
+    @Parameter(title: "扣款账户（对应本自动化所选的卡）") var paymentAccount: PaymentAccountEntity?
     func perform() async throws -> some IntentResult & ProvidesDialog {
         var delivery = AutomationDelivery(kind: "applePay", date: transactionDate, eventID: transactionID,
                                           amount: amount, merchant: merchant, currency: currency, description: transactionDescription ?? "")
         delivery.useTransactionDate = useTransactionDate
+        delivery.bankAccountID = paymentAccount?.id
         if !useTransactionDate { delivery.place = await ExpensePlaceLocator.recentPlace() }
         do {
             let result = try await AutomationRecovery.shared.submit(delivery)

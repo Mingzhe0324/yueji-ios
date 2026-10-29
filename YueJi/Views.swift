@@ -3433,6 +3433,7 @@ struct LedgerDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 struct SettingsView: View {
+    @State private var showingRecurring = false
     @Environment(\.locale) private var uiLocale
     @State private var showingUsageGuide = false
     var guideDestination: String? = nil
@@ -3477,6 +3478,9 @@ struct SettingsView: View {
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: IslandPalette.lagoon)
                     }
+                    Button { showingRecurring = true } label: {
+                        SimpleSettingsRow(title: tr("固定收支", "Recurring", "Berulang"), subtitle: tr("管理周期账单", "Manage recurring bills", "Urus bil berulang"), symbol: "arrow.triangle.2.circlepath", color: IslandPalette.sky)
+                    }.sheet(isPresented: $showingRecurring) { RecurringView().ledgerFeedback(modal: true).presentationDragIndicator(.visible) }
                     NavigationLink { categoriesPage } label: {
                         SimpleSettingsRow(title: tr("消费分类", "Spending categories", "Kategori belanja"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
                     }
