@@ -28,3 +28,5 @@ Small official site icons are used as badges, not enlarged wordmarks. Islamic su
 - BankTNG: https://www.touchngo.com.my/images/favicon.gif; original (32, 32)
 - BankOCBC: https://www.ocbc.com.my/iwov-resources/sg/ocbc/personal/img/logo_ocbc.png
 - BankUOB: https://www.uob.com.my/assets/web-resources/business/images/BrandAssets/UOB_Logo.svg
+
+- BankPublic: https://www.publicbankgroup.com/media/3zknkoz4/web-logo.svg (official Public Bank group wordmark; added 2026-10-29)

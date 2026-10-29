@@ -679,6 +679,7 @@ struct DashboardView: View {
     /// The header amount, larger than a title like a banking app's balance; scales with Dynamic Type.
     @ScaledMetric(relativeTo: .largeTitle) private var heroSize: CGFloat = 44
     @State private var path = NavigationPath()
+    @State private var showingRecurring = false
     @State private var adding = false
     @State private var editingExpense: Expense?
     @State private var deletingExpense: Expense?
@@ -816,6 +817,15 @@ struct DashboardView: View {
                 // follow, each card under a bold heading with "View all" where there is
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
+                Section {
+                    Button { showingRecurring = true } label: {
+                        SimpleSettingsRow(title: tr("固定消费", "Recurring bills", "Bil berulang"), subtitle: tr("管理周期账单", "Manage recurring bills", "Urus bil berulang"), symbol: "arrow.triangle.2.circlepath", color: IslandPalette.sky)
+                    }
+                    .accessibilityIdentifier("overview.recurring")
+                    .sheet(isPresented: $showingRecurring) {
+                        RecurringView().ledgerFeedback(modal: true).presentationDragIndicator(.visible)
+                    }
+                }
                 budgetSection
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
@@ -3433,7 +3443,6 @@ struct LedgerDocument: FileDocument {
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper { FileWrapper(regularFileWithContents: data) }
 }
 struct SettingsView: View {
-    @State private var showingRecurring = false
     @Environment(\.locale) private var uiLocale
     @State private var showingUsageGuide = false
     var guideDestination: String? = nil
@@ -3478,9 +3487,7 @@ struct SettingsView: View {
                     NavigationLink { AutomationSetupView() } label: {
                         SimpleSettingsRow(title: tr("自动记账", "Automatic recording", "Rekod automatik"), subtitle: "Apple Pay · TNG · Bank", symbol: "bolt.fill", color: IslandPalette.lagoon)
                     }
-                    Button { showingRecurring = true } label: {
-                        SimpleSettingsRow(title: tr("固定收支", "Recurring", "Berulang"), subtitle: tr("管理周期账单", "Manage recurring bills", "Urus bil berulang"), symbol: "arrow.triangle.2.circlepath", color: IslandPalette.sky)
-                    }.sheet(isPresented: $showingRecurring) { RecurringView().ledgerFeedback(modal: true).presentationDragIndicator(.visible) }
+
                     NavigationLink { categoriesPage } label: {
                         SimpleSettingsRow(title: tr("消费分类", "Spending categories", "Kategori belanja"), subtitle: tr("整理每一笔消费", "Keep spending organized", "Susun setiap belanja"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
                     }
