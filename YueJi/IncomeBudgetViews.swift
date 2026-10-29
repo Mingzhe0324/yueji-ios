@@ -397,6 +397,8 @@ private struct BankAccountEditor: View {
                     if !automaticSource.isEmpty {
                         TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
                             .keyboardType(.numberPad)
+                        Text(tr("填写尾号后，通知必须包含相同尾号才能自动匹配。如果同一来源只有一个账户，而通知没有尾号，请留空。", "If entered, notices must contain the same last four digits to match. Leave blank when this source has only one account and its notices contain no suffix.", "Jika diisi, notifikasi mesti mengandungi empat digit yang sama. Biarkan kosong jika sumber ini hanya mempunyai satu akaun dan notifikasi tiada digit akhir."))
+                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 } footer: {
                     Text(tr("仅影响保存后新导入的通知。来源和尾号匹配时自动关联；同一来源有多个账户而通知无法区分时，留待手动选择。付款扣余额，通知收入确认后加余额。", "Applies to newly imported notices only. Matching source and suffix link automatically; ambiguous accounts require selection. Payments reduce the balance; notification income increases it after confirmation.", "Untuk notifikasi baharu sahaja. Sumber dan digit sepadan dipaut automatik; akaun tidak jelas perlu dipilih. Bayaran mengurangkan baki; pendapatan menambahnya selepas pengesahan."))

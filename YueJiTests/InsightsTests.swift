@@ -4,6 +4,21 @@ import XCTest
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testTNGWithoutSuffixMatchesOnlyAfterSuffixRuleIsCleared() throws {
+        var account = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
+        account.automaticSource = "TNG"
+        account.automaticSuffix = "1234"
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        _ = try ledger.receiveTNG(body: "You have paid RM6.00 for Shop.", date: opening, eventID: "suffix-missing")
+        XCTAssertNil(ledger.expenses.first?.bankAccountID)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+        ledger.bankAccounts[0].automaticSuffix = nil
+        _ = try ledger.receiveTNG(body: "You have paid RM8.00 for Cafe.", date: opening.addingTimeInterval(300), eventID: "suffix-cleared")
+        XCTAssertEqual(ledger.expenses.last?.bankAccountID, account.id)
+        XCTAssertEqual(ledger.bankBalance(account), 9200)
+        XCTAssertNil(ledger.expenses.first?.bankAccountID)
+    }
+
     func testAssignExistingApplePayMovesBalanceWithoutDuplicatingPayment() throws {
         let first = BankAccount(name: "First", openingCents: 10000, openingDate: opening)
         let second = BankAccount(name: "Second", openingCents: 5000, openingDate: opening)
