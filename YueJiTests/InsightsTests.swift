@@ -4,6 +4,24 @@ import XCTest
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testAssignExistingApplePayMovesBalanceWithoutDuplicatingPayment() throws {
+        let first = BankAccount(name: "First", openingCents: 10000, openingDate: opening)
+        let second = BankAccount(name: "Second", openingCents: 5000, openingDate: opening)
+        var ledger = Ledger(); ledger.bankAccounts = [first, second]
+        _ = try ledger.addPayment(amount: 20, merchant: "Shop", currency: "MYR", date: opening, eventID: "assign-existing")
+        let id = try XCTUnwrap(ledger.expenses.first?.id)
+        try ledger.assignApplePayAccount(id: id, accountID: first.id)
+        XCTAssertEqual(ledger.bankBalance(first), 8000)
+        try ledger.assignApplePayAccount(id: id, accountID: second.id)
+        XCTAssertEqual(ledger.bankBalance(first), 10000)
+        XCTAssertEqual(ledger.bankBalance(second), 3000)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertThrowsError(try ledger.assignApplePayAccount(id: id, accountID: "missing"))
+        XCTAssertEqual(ledger.expenses.first?.bankAccountID, second.id)
+        try ledger.assignApplePayAccount(id: id, accountID: nil)
+        XCTAssertEqual(ledger.bankBalance(second), 5000)
+    }
+
     func testApplePayAccountSurvivesQueuedDeliveryAndDoesNotDoubleDebit() throws {
         let account = BankAccount(name: "Card account", openingCents: 10000, openingDate: opening)
         var ledger = Ledger(); ledger.bankAccounts = [account]

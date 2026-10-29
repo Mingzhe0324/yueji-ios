@@ -143,13 +143,50 @@ private struct BankCardPressStyle: ButtonStyle {
 
 private struct AutomaticAccountLinksView: View {
     @EnvironmentObject var model: LedgerModel
+    private enum Record: Identifiable {
+        case notice(TNGNotice)
+        case payment(Expense)
+        var id: String {
+            switch self {
+            case .notice(let entry): return "notice-" + entry.id
+            case .payment(let entry): return "payment-" + entry.id
+            }
+        }
+        var date: Date {
+            switch self {
+            case .notice(let entry): return entry.date
+            case .payment(let entry): return entry.date
+            }
+        }
+    }
+    private var records: [Record] {
+        let linked = Set(model.ledger.tngNotices.compactMap(\.expenseID))
+        let payments = model.ledger.expenses.filter { $0.source == "Apple Pay" && !linked.contains($0.id) }
+        return (model.ledger.tngNotices.map(Record.notice) + payments.map(Record.payment))
+            .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+    }
     var body: some View {
         List {
             Section {
-                Text(tr("这里可以为旧通知或无法自动匹配的通知选择账户。待确认、疑似重复及已忽略的记录不会仅因选择账户而入账。", "Assign accounts to older or unmatched notices here. Selecting an account alone does not post pending, duplicate or ignored records.", "Tetapkan akaun untuk notifikasi lama atau tidak sepadan. Memilih akaun tidak merekod notifikasi tertunda, pendua atau diabaikan."))
+                Text(tr("在这里统一选择 Apple Pay、银行和 TNG 记录的资金账户。待确认、疑似重复及已忽略的通知不会仅因选择账户而入账。", "Assign accounts to Apple Pay, bank and TNG records here. Selecting an account alone does not post pending, duplicate or ignored notices.", "Tetapkan akaun rekod Apple Pay, bank dan TNG di sini. Memilih akaun tidak merekod notifikasi tertunda, pendua atau diabaikan."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
-            ForEach(model.ledger.tngNotices.sorted { $0.date > $1.date }) { notice in
+            ForEach(records) { record in
+                switch record {
+                case .payment(let entry):
+                    Section {
+                        LabeledContent(entry.merchant, value: money(entry.cents))
+                        Text("Apple Pay · " + dateLabel(entry.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                        BankAccountPicker(selection: Binding(get: {
+                            model.ledger.expenses.first(where: { $0.id == entry.id })?.bankAccountID
+                        }, set: { accountID in
+                            model.perform(key: "payment-account-" + entry.id, action: { ledger in
+                                try ledger.assignApplePayAccount(id: entry.id, accountID: accountID)
+                            })
+                        }))
+                        .disabled(entry.paidByFriend != nil || model.isWorking("payment-account-" + entry.id))
+                    }
+                case .notice(let notice):
                 Section {
                     LabeledContent(notice.party ?? notice.provider, value: notice.cents.map { money($0) } ?? "—")
                     Text(notice.provider + " · " + dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
@@ -163,6 +200,7 @@ private struct AutomaticAccountLinksView: View {
                             try ledger.assignNoticeAccount(id: id, accountID: accountID)
                         })
                     })).disabled(model.isWorking("notice-account-" + notice.id))
+                }
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("自动记录的账户", "Automatic entry accounts", "Akaun rekod automatik"))

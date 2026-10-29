@@ -21,6 +21,18 @@ struct BankAccount: Codable, Identifiable, Equatable {
 }
 
 extension Ledger {
+    mutating func assignApplePayAccount(id: String, accountID: String?) throws {
+        guard let index = expenses.firstIndex(where: { $0.id == id && $0.source == "Apple Pay" }),
+              expenses[index].paidByFriend == nil,
+              accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {
+            throw LedgerError.invalid("Payment or account no longer available")
+        }
+        expenses[index].bankAccountID = accountID
+        for noticeIndex in tngNotices.indices where tngNotices[noticeIndex].expenseID == id {
+            tngNotices[noticeIndex].bankAccountID = accountID
+        }
+    }
+
     func automaticBankAccount(source: String, suffix: String?) -> String? {
         guard validFinancialSource(source), source != "银行 / TNG", source != "Apple Pay" else { return nil }
         let key = (financialProvider(source) ?? source).lowercased()
