@@ -3,10 +3,12 @@ import SwiftUI
 private struct BankWalletCard: View {
     let account: BankAccount
     let balance: Int
+    var collapsed = false
+    @ScaledMetric(relativeTo: .body) private var cardHeight = 220
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private var bank: String { account.institution ?? account.name }
     private var colors: [Color] {
-        if bank.hasPrefix("Maybank") { return [Color(red: 0.32, green: 0.23, blue: 0.04), .black] }
+        if bank.hasPrefix("Maybank") { return [Color(red: 0.82, green: 0.64, blue: 0.28), Color(red: 0.54, green: 0.35, blue: 0.10)] }
         if bank.hasPrefix("CIMB") || bank.hasPrefix("Public") { return [Color(red: 0.65, green: 0.03, blue: 0.13), Color(red: 0.24, green: 0.02, blue: 0.08)] }
         if bank == "GXBank" || bank == "AEON Bank" { return [.purple, Color(red: 0.16, green: 0.07, blue: 0.31)] }
         return [Color(red: 0.10, green: 0.28, blue: 0.45), Color(red: 0.04, green: 0.09, blue: 0.17)]
@@ -37,41 +39,46 @@ private struct BankWalletCard: View {
         }
     }
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
-            HStack(alignment: .top) {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 12) {
+                Text(account.name).font(.headline).lineLimit(1).minimumScaleFactor(0.75)
+                Spacer(minLength: 0)
                 if let logo {
-                    Image(logo).resizable().scaledToFit().frame(width: 56, height: 36)
-                        .padding(8).background(.white, in: RoundedRectangle(cornerRadius: 10))
+                    Image(logo).resizable().scaledToFit().frame(width: 44, height: 26)
+                        .padding(4).background(.white, in: RoundedRectangle(cornerRadius: 6))
                         .accessibilityHidden(true)
-                    Text(bank).font(.headline)
                 } else {
-                    Label(bank, systemImage: "building.columns.fill").font(.headline)
+                    Image(systemName: "building.columns.fill").font(.title3).accessibilityHidden(true)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "chevron.right").font(.caption.weight(.bold)).padding(10)
-                    .background(.white.opacity(0.12), in: Circle()).accessibilityHidden(true)
-            }
-            VStack(alignment: .leading, spacing: 6) {
-                Text(account.name).font(.subheadline).foregroundStyle(.white.opacity(0.85))
+            }.frame(minHeight: 34)
+            if !collapsed {
+                Spacer(minLength: 20)
+                Text(bank).font(.caption).foregroundStyle(.white.opacity(0.85))
                 Text(money(balance)).font(.system(.largeTitle, design: .rounded, weight: .semibold))
                     .monospacedDigit().contentTransition(.numericText())
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: balance)
                     .minimumScaleFactor(0.65).lineLimit(1)
+                Spacer(minLength: 20)
+                HStack {
+                    Text(tr("账面余额 · MYR", "Recorded balance · MYR", "Baki direkod · MYR"))
+                    Spacer()
+                    if let suffix = account.automaticSuffix, !suffix.isEmpty {
+                        Text("•••• " + suffix).monospacedDigit()
+                    }
+                }.font(.caption).foregroundStyle(.white.opacity(0.85))
             }
-            HStack {
-                Text(tr("账面余额 · MYR", "Recorded balance · MYR", "Baki direkod · MYR"))
-                Spacer()
-                if logo != nil { Text(bank) }
-            }.font(.caption).foregroundStyle(.white.opacity(0.85))
         }
-        .foregroundStyle(.white).padding(22).frame(maxWidth: .infinity, alignment: .leading)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, collapsed ? 26 : 20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(height: collapsed ? nil : cardHeight)
         .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
         .overlay(alignment: .topTrailing) {
             Circle().fill(.white.opacity(0.04)).frame(width: 200, height: 200).offset(x: 70, y: -90).allowsHitTesting(false)
         }
-        .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(.white.opacity(0.16), lineWidth: 1))
-        .shadow(color: .black.opacity(0.12), radius: 8, y: 5)
+        .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.25), lineWidth: 0.75))
+        .shadow(color: .black.opacity(0.16), radius: 5, y: -2)
         .accessibilityElement(children: .combine)
     }
 }
@@ -131,6 +138,29 @@ struct BankAccountsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var walletTransition
     @State private var adding = false
+    @State private var editMode: EditMode = .inactive
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private func cardLink(_ account: BankAccount, collapsed: Bool = false) -> some View {
+        NavigationLink {
+            if #available(iOS 18.0, *), !reduceMotion {
+                BankAccountDetail(accountID: account.id)
+                    .navigationTransition(.zoom(sourceID: account.id, in: walletTransition))
+            } else {
+                BankAccountDetail(accountID: account.id)
+            }
+        } label: {
+            if #available(iOS 18.0, *), !reduceMotion {
+                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed)
+                    .matchedTransitionSource(id: account.id, in: walletTransition)
+            } else {
+                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed)
+            }
+        }
+        .buttonStyle(BankCardPressStyle())
+        .accessibilityLabel(account.name + ", " + money(model.ledger.bankBalance(account)))
+        .accessibilityHint(tr("查看账户详情", "View account details", "Lihat butiran akaun"))
+    }
     var body: some View {
         NavigationStack {
             List {
@@ -142,22 +172,19 @@ struct BankAccountsView: View {
                     Text(tr("手动管理的 MYR 账户，不连接银行，也不是银行实时余额。", "Manually managed MYR accounts. Not connected to banks or live bank balances.", "Akaun MYR diurus manual. Tidak disambung ke bank atau baki langsung."))
                 }
                 Section(tr("我的账户", "My accounts", "Akaun saya")) {
+                    if !editMode.isEditing && !model.ledger.bankAccounts.isEmpty {
+                        VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 12 : -16) {
+                            ForEach(model.ledger.bankAccounts) { account in
+                                cardLink(account, collapsed: !dynamicTypeSize.isAccessibilitySize && account.id != model.ledger.bankAccounts.last?.id)
+                            }
+                        }
+                        .padding(.vertical, 8)
+                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                        .listRowBackground(Color.clear).listRowSeparator(.hidden)
+                    }
+                    if editMode.isEditing {
                     ForEach(model.ledger.bankAccounts) { account in
-                        NavigationLink {
-                            if #available(iOS 18.0, *), !reduceMotion {
-                                BankAccountDetail(accountID: account.id)
-                                    .navigationTransition(.zoom(sourceID: account.id, in: walletTransition))
-                            } else {
-                                BankAccountDetail(accountID: account.id)
-                            }
-                        } label: {
-                            if #available(iOS 18.0, *), !reduceMotion {
-                                BankWalletCard(account: account, balance: model.ledger.bankBalance(account))
-                                    .matchedTransitionSource(id: account.id, in: walletTransition)
-                            } else {
-                                BankWalletCard(account: account, balance: model.ledger.bankBalance(account))
-                            }
-                        }.buttonStyle(BankCardPressStyle())
+                        cardLink(account)
                             .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                             .listRowBackground(Color.clear).listRowSeparator(.hidden)
                     }.onMove { offsets, destination in
@@ -173,6 +200,7 @@ struct BankAccountsView: View {
                             ledger.bankAccounts = savedIDs.compactMap { byID[$0] }
                         })
                     }.moveDisabled(model.isWorking("account-order"))
+                    }
                     Button { adding = true } label: {
                         Label(tr("添加银行／钱包账户", "Add bank / wallet account", "Tambah akaun bank / dompet"), systemImage: "plus.circle.fill")
                     }.accessibilityIdentifier("bankAccount.add")
@@ -190,12 +218,18 @@ struct BankAccountsView: View {
             }
             .yuejiDashboardSurface()
             .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85), value: model.ledger.bankAccounts.map(\.id))
+            .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85), value: editMode.isEditing)
             .navigationTitle(tr("账户", "Accounts", "Akaun"))
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
                     EditButton().disabled(model.ledger.bankAccounts.count < 2)
                 }
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button { adding = true } label: { Image(systemName: "plus.circle.fill") }
+                        .accessibilityLabel(tr("添加账户", "Add account", "Tambah akaun"))
+                }
             }
+            .environment(\.editMode, $editMode)
             .sheet(isPresented: $adding) { BankAccountEditor() }
         }
     }
