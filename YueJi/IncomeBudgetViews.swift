@@ -6,12 +6,22 @@ private struct BankWalletCard: View {
     var collapsed = false
     @ScaledMetric(relativeTo: .body) private var cardHeight = 220
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var appeared = false
     private var bank: String { account.institution ?? account.name }
-    private var colors: [Color] {
-        if bank.hasPrefix("Maybank") { return [Color(red: 0.82, green: 0.64, blue: 0.28), Color(red: 0.54, green: 0.35, blue: 0.10)] }
-        if bank.hasPrefix("CIMB") || bank.hasPrefix("Public") { return [Color(red: 0.65, green: 0.03, blue: 0.13), Color(red: 0.24, green: 0.02, blue: 0.08)] }
-        if bank == "GXBank" || bank == "AEON Bank" { return [.purple, Color(red: 0.16, green: 0.07, blue: 0.31)] }
-        return [Color(red: 0.10, green: 0.28, blue: 0.45), Color(red: 0.04, green: 0.09, blue: 0.17)]
+    private var brandColor: Color {
+        switch logo {
+        case "BankMaybank": return Color(red: 1, green: 0.76, blue: 0.08)
+        case "BankPublic", "BankCIMB", "BankHSBC", "BankOCBC", "BankBoost", "BankBankIslam":
+            return Color(red: 0.94, green: 0.10, blue: 0.20)
+        case "BankAmBank": return Color(red: 0.98, green: 0.39, blue: 0.09)
+        case "BankAEON", "BankGX": return Color(red: 0.68, green: 0.30, blue: 0.95)
+        case "BankStandardChartered", "BankKAF": return Color(red: 0.10, green: 0.76, blue: 0.47)
+        case "BankRyt": return Color(red: 0.68, green: 0.84, blue: 0.16)
+        case "BankTNG": return Color(red: 0.06, green: 0.57, blue: 1)
+        case "BankRHB", "BankHongLeong", "BankUOB", "BankAffin", "BankAlliance", "BankAlRajhi":
+            return Color(red: 0.12, green: 0.43, blue: 0.90)
+        default: return Color(red: 0.27, green: 0.49, blue: 0.65)
+        }
     }
     private var logo: String? {
         if bank.hasPrefix("Public") { return "BankPublic" }
@@ -55,9 +65,11 @@ private struct BankWalletCard: View {
             if !collapsed {
                 Spacer(minLength: 20)
                 Text(bank).font(.caption).foregroundStyle(.white.opacity(0.85))
-                Text(money(balance)).font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                Text(money(appeared || reduceMotion ? balance : 0)).font(.system(.largeTitle, design: .rounded, weight: .semibold))
                     .monospacedDigit().contentTransition(.numericText())
                     .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: balance)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.7), value: appeared)
+                    .accessibilityLabel(money(balance))
                     .minimumScaleFactor(0.65).lineLimit(1)
                 Spacer(minLength: 20)
                 HStack {
@@ -73,14 +85,52 @@ private struct BankWalletCard: View {
         .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, collapsed ? 26 : 20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .frame(height: collapsed ? nil : cardHeight)
-        .background(LinearGradient(colors: colors, startPoint: .topLeading, endPoint: .bottomTrailing))
-        .overlay(alignment: .topTrailing) {
-            Circle().fill(.white.opacity(0.04)).frame(width: 200, height: 200).offset(x: 70, y: -90).allowsHitTesting(false)
-        }
+        .background(BankBreathingBackground(brand: brandColor))
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.25), lineWidth: 0.75))
         .shadow(color: .black.opacity(0.16), radius: 5, y: -2)
+        .opacity(appeared || reduceMotion ? 1 : 0)
+        .offset(y: appeared || reduceMotion ? 0 : 14)
+        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.88), value: appeared)
+        .onAppear { appeared = true }
+        .onDisappear { appeared = false }
         .accessibilityElement(children: .combine)
+    }
+}
+
+private struct BankBreathingBackground: View {
+    let brand: Color
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
+    @Environment(\.colorSchemeContrast) private var contrast
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var visible = false
+    private var animates: Bool {
+        visible && scenePhase == .active && !reduceMotion && !reduceTransparency && contrast != .increased
+    }
+
+    var body: some View {
+        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: !animates)) { context in
+            let breath = animates ? (sin(context.date.timeIntervalSinceReferenceDate * .pi / 4) + 1) / 2 : 0.5
+            GeometryReader { geometry in
+                ZStack {
+                    Color(red: 0.025, green: 0.035, blue: 0.055)
+                    LinearGradient(colors: [brand.opacity(0.48), brand.opacity(0.10)],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                    if !reduceTransparency && contrast != .increased {
+                        RadialGradient(colors: [brand.opacity(0.25 + breath * 0.14), .clear],
+                                       center: UnitPoint(x: 0.88, y: 0.12), startRadius: 0,
+                                       endRadius: geometry.size.width * (0.65 + breath * 0.20))
+                        RadialGradient(colors: [brand.opacity(0.12 + breath * 0.08), .clear],
+                                       center: .bottomLeading, startRadius: 0,
+                                       endRadius: geometry.size.width * 0.65)
+                    }
+                }
+            }
+        }
+        .allowsHitTesting(false).accessibilityHidden(true)
+        .onAppear { visible = true }
+        .onDisappear { visible = false }
     }
 }
 
