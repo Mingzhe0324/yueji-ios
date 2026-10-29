@@ -44,7 +44,12 @@ struct RecordApplePayIntent: AppIntent {
             let result = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
             await UnusualSpendingNotifier.shared.check()
-            if result.expenseID != nil { return .result(dialog: "已保存到月记。") }
+            if result.expenseID != nil {
+                if paymentAccount == nil {
+                    return .result(dialog: "支出已保存，但未分配资金账户。请在本自动化的「扣款账户」选择对应账户，之后的付款才会更新该账户的账面余额。")
+                }
+                return .result(dialog: "已保存到月记。")
+            }
             if result.noticeID != nil { return .result(dialog: "疑似重复，已保留待确认。") }
             return .result(dialog: "这笔付款已处理，没有重复入账。")
         } catch {

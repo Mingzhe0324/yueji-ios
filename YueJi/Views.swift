@@ -817,6 +817,10 @@ struct DashboardView: View {
                 // follow, each card under a bold heading with "View all" where there is
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
+                budgetSection
+                // Only when something stands out; otherwise the card is absent.
+                UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
+                recentCard
                 Section {
                     Button { showingRecurring = true } label: {
                         SimpleSettingsRow(title: tr("固定消费", "Recurring bills", "Bil berulang"), subtitle: tr("管理周期账单", "Manage recurring bills", "Urus bil berulang"), symbol: "arrow.triangle.2.circlepath", color: IslandPalette.sky)
@@ -826,10 +830,6 @@ struct DashboardView: View {
                         RecurringView().ledgerFeedback(modal: true).presentationDragIndicator(.visible)
                     }
                 }
-                budgetSection
-                // Only when something stands out; otherwise the card is absent.
-                UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
-                recentCard
                 travelSection
                 categoriesCard
                 trendSection

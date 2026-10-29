@@ -6,7 +6,7 @@ private struct BankWalletCard: View {
     var collapsed = false
     @ScaledMetric(relativeTo: .body) private var cardHeight = 220
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var appeared = false
+    var appeared = true
     private var bank: String { account.institution ?? account.name }
     private var brandColor: Color {
         switch logo {
@@ -92,8 +92,6 @@ private struct BankWalletCard: View {
         .opacity(appeared || reduceMotion ? 1 : 0)
         .offset(y: appeared || reduceMotion ? 0 : 14)
         .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.88), value: appeared)
-        .onAppear { appeared = true }
-        .onDisappear { appeared = false }
         .accessibilityElement(children: .combine)
     }
 }
@@ -189,6 +187,7 @@ struct BankAccountsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var walletTransition
     @State private var adding = false
+    @State private var entered = false
 
     private func moveAccount(_ id: String, by offset: Int) {
         model.perform(key: "account-order", action: { ledger in
@@ -208,22 +207,20 @@ struct BankAccountsView: View {
             }
         } label: {
             if #available(iOS 18.0, *), !reduceMotion {
-                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed)
+                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed, appeared: entered)
                     .matchedTransitionSource(id: account.id, in: walletTransition)
             } else {
-                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed)
+                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed, appeared: entered)
             }
         }
         .buttonStyle(BankCardPressStyle())
         .accessibilityLabel(account.name + ", " + money(model.ledger.bankBalance(account)))
         .accessibilityHint(tr("查看账户详情", "View account details", "Lihat butiran akaun"))
-        .contextMenu {
-            Button { moveAccount(account.id, by: -1) } label: {
-                Label(tr("上移", "Move up", "Alih ke atas"), systemImage: "arrow.up")
-            }.disabled(model.ledger.bankAccounts.first?.id == account.id || model.isWorking("account-order"))
-            Button { moveAccount(account.id, by: 1) } label: {
-                Label(tr("下移", "Move down", "Alih ke bawah"), systemImage: "arrow.down")
-            }.disabled(model.ledger.bankAccounts.last?.id == account.id || model.isWorking("account-order"))
+        .accessibilityAction(named: Text(tr("上移", "Move up", "Alih ke atas"))) {
+            moveAccount(account.id, by: -1)
+        }
+        .accessibilityAction(named: Text(tr("下移", "Move down", "Alih ke bawah"))) {
+            moveAccount(account.id, by: 1)
         }
     }
     var body: some View {
@@ -239,7 +236,19 @@ struct BankAccountsView: View {
                         cardLink(account)
                         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                         .listRowBackground(Color.clear).listRowSeparator(.hidden)
-                    }
+                    }.onMove { offsets, destination in
+                        let originalIDs = model.ledger.bankAccounts.map(\.id)
+                        var orderedIDs = originalIDs
+                        orderedIDs.move(fromOffsets: offsets, toOffset: destination)
+                        let savedIDs = orderedIDs
+                        model.perform(key: "account-order", action: { ledger in
+                            guard ledger.bankAccounts.map(\.id) == originalIDs else {
+                                throw LedgerError.invalid(tr("账户已变化，请重试排序。", "Accounts changed; reorder again.", "Akaun berubah; susun semula."))
+                            }
+                            let byID = Dictionary(uniqueKeysWithValues: ledger.bankAccounts.map { ($0.id, $0) })
+                            ledger.bankAccounts = savedIDs.compactMap { byID[$0] }
+                        })
+                    }.moveDisabled(model.isWorking("account-order"))
                 }
                 Section {
                     NavigationLink { AutomaticAccountLinksView() } label: {
@@ -258,6 +267,8 @@ struct BankAccountsView: View {
                 }
             }
             .sheet(isPresented: $adding) { BankAccountEditor() }
+            .onAppear { entered = true }
+            .onDisappear { entered = false }
         }
     }
 }
