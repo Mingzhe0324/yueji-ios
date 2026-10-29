@@ -139,7 +139,6 @@ struct BankAccountsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var walletTransition
     @State private var adding = false
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     private func moveAccount(_ id: String, by offset: Int) {
         model.perform(key: "account-order", action: { ledger in
@@ -186,19 +185,11 @@ struct BankAccountsView: View {
                         .font(.headline).monospacedDigit()
                 }
                 Section(tr("我的账户", "My accounts", "Akaun saya")) {
-                    if !model.ledger.bankAccounts.isEmpty {
-                        VStack(spacing: dynamicTypeSize.isAccessibilitySize ? 12 : -16) {
-                            ForEach(model.ledger.bankAccounts) { account in
-                                cardLink(account, collapsed: !dynamicTypeSize.isAccessibilitySize && account.id != model.ledger.bankAccounts.last?.id)
-                            }
-                        }
-                        .padding(.vertical, 8)
-                        .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
+                    ForEach(model.ledger.bankAccounts) { account in
+                        cardLink(account)
+                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                         .listRowBackground(Color.clear).listRowSeparator(.hidden)
                     }
-                    Button { adding = true } label: {
-                        Label(tr("添加银行／钱包账户", "Add bank / wallet account", "Tambah akaun bank / dompet"), systemImage: "plus.circle.fill")
-                    }.accessibilityIdentifier("bankAccount.add")
                 }
                 Section {
                     NavigationLink { AutomaticAccountLinksView() } label: {
@@ -213,6 +204,7 @@ struct BankAccountsView: View {
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus.circle.fill") }
                         .accessibilityLabel(tr("添加账户", "Add account", "Tambah akaun"))
+                        .accessibilityIdentifier("bankAccount.add")
                 }
             }
             .sheet(isPresented: $adding) { BankAccountEditor() }
