@@ -1658,7 +1658,7 @@ struct SpendingMeter: View {
     }
 }
 extension AccountDirection {
-    var amountColor: Color { self == .incoming ? .green : (self == .outgoing ? .red : .primary) }
+    var amountColor: Color { self == .incoming ? IncomeStyle.tint : (self == .outgoing ? .red : .primary) }
 }
 /// Use the same signs and colors for manual entries, bank notices and settlements.
 struct TransactionAmount: View {

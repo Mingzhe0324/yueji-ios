@@ -1,5 +1,13 @@
 import Foundation
 
+/// Match a complete name phrase, never a substring inside another word.
+func transferNameMatches(_ noticeName: String, owner: String) -> Bool {
+    let phrase = friendKey(owner)
+    guard !phrase.isEmpty else { return false }
+    let pattern = "(?<![\\p{L}\\p{N}])" + NSRegularExpression.escapedPattern(for: phrase) + "(?![\\p{L}\\p{N}])"
+    return friendKey(noticeName).range(of: pattern, options: .regularExpression) != nil
+}
+
 enum MalaysianBanks {
     // Display names checked against PIDM's member-bank directory, October 2026.
     static let conventional = ["Maybank", "CIMB Bank", "Public Bank", "RHB Bank", "Hong Leong Bank", "AmBank", "Affin Bank", "Alliance Bank", "HSBC Malaysia", "OCBC Malaysia", "UOB Malaysia", "Standard Chartered Malaysia", "Bank of China Malaysia", "ICBC Malaysia"]
@@ -18,6 +26,9 @@ struct BankAccount: Codable, Identifiable, Equatable {
     /// Explicit opt-in. Stored with the ledger, so mappings stay account-isolated.
     var automaticSource: String? = nil
     var automaticSuffix: String? = nil
+    var transferDestinationID: String? = nil
+    var transferOwnerName: String? = nil
+    var transferRuleSince: Date? = nil
 }
 
 struct BankTransfer: Codable, Identifiable, Equatable {
@@ -27,9 +38,43 @@ struct BankTransfer: Codable, Identifiable, Equatable {
     var cents: Int
     var date: Date
     var note: String = ""
+    var noticeIDs: [String]? = nil
 }
 
 extension Ledger {
+    /// Opted-in directional route; only new, unique two-sided notifications qualify.
+    mutating func matchAutomaticTransfer(newNoticeID: String) throws -> Bool {
+        func eligible(_ n: TNGNotice) -> Bool {
+            ["pending", "transfer"].contains(n.status) && !n.possibleDuplicate && n.expenseID == nil && n.resolution == nil
+        }
+        var pairs: [(TNGNotice, TNGNotice, BankAccount, String)] = []
+        for source in bankAccounts {
+            guard let destination = source.transferDestinationID, let owner = source.transferOwnerName,
+                  let since = source.transferRuleSince, !friendKey(owner).isEmpty else { continue }
+            let outgoing = tngNotices.filter { eligible($0) && $0.kind == "transfer" && $0.bankAccountID == source.id && $0.date >= since && transferNameMatches($0.party ?? "", owner: owner) }
+            let incoming = tngNotices.filter { eligible($0) && $0.kind == "incoming" && $0.bankAccountID == destination && $0.date >= since && transferNameMatches($0.party ?? "", owner: owner) }
+            for out in outgoing {
+                let matches = incoming.filter { $0.cents == out.cents && abs($0.date.timeIntervalSince(out.date)) <= 120 }
+                guard matches.count == 1, let received = matches.first,
+                      outgoing.filter({ $0.cents == received.cents && abs($0.date.timeIntervalSince(received.date)) <= 120 }).count == 1,
+                      out.id == newNoticeID || received.id == newNoticeID else { continue }
+                pairs.append((out, received, source, destination))
+            }
+        }
+        guard pairs.count == 1, let (out, incoming, source, destination) = pairs.first,
+              let cents = out.cents, cents > 0 else { return false }
+        // A nearby existing transfer may have been entered manually already.
+        guard !bankTransfers.contains(where: { $0.fromAccountID == source.id && $0.toAccountID == destination && $0.cents == cents && abs($0.date.timeIntervalSince(out.date)) <= 300 }) else { return false }
+        let transfer = BankTransfer(fromAccountID: source.id, toAccountID: destination, cents: cents,
+                                    date: out.date, note: tr("通知自动配对", "Matched notifications", "Notifikasi dipadankan"), noticeIDs: [out.id, incoming.id])
+        try saveBankTransfer(transfer, replacing: nil)
+        for index in tngNotices.indices where tngNotices[index].id == out.id || tngNotices[index].id == incoming.id {
+            tngNotices[index].status = "ignored"
+            tngNotices[index].resolution = "ownTransfer"
+            tngNotices[index].relatedRecordID = tngNotices[index].id == out.id ? incoming.id : out.id
+        }
+        return true
+    }
     mutating func saveBankTransfer(_ transfer: BankTransfer, replacing original: BankTransfer?) throws {
         var copy = self
         if let original {
@@ -112,8 +157,10 @@ extension Ledger {
         for entry in incomes where entry.bankAccountID == account.id && entry.date >= account.openingDate {
             total += entry.cents
         }
-        for notice in tngNotices where notice.bankAccountID == account.id && notice.date >= account.openingDate && notice.isConfirmedIncome && notice.expenseID == nil {
-            total += notice.cents ?? 0
+        for notice in tngNotices where notice.bankAccountID == account.id && notice.date >= account.openingDate && notice.expenseID == nil {
+            let tngReceipt = notice.provider == "TNG" && notice.kind == "incoming" &&
+                ((notice.status == "pending" && !notice.possibleDuplicate) || ["income", "repayment", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
+            if notice.isConfirmedIncome || tngReceipt { total += notice.cents ?? 0 }
         }
         return total
     }
@@ -124,6 +171,12 @@ extension Ledger {
             throw LedgerError.invalid("Invalid bank transfers")
         }
         for transfer in bankTransfers {
+            if let noticeIDs = transfer.noticeIDs {
+                guard noticeIDs.count == 2, Set(noticeIDs).count == 2,
+                      noticeIDs.allSatisfy({ id in tngNotices.contains(where: { $0.id == id }) }) else {
+                    throw LedgerError.invalid("Invalid transfer notification links")
+                }
+            }
             guard !transfer.id.isEmpty, transfer.id.count <= 200,
                   transfer.fromAccountID != transfer.toAccountID,
                   ids.contains(transfer.fromAccountID), ids.contains(transfer.toAccountID),
@@ -136,6 +189,13 @@ extension Ledger {
             throw LedgerError.invalid("Invalid bank accounts")
         }
         for account in bankAccounts {
+            if let destination = account.transferDestinationID {
+                guard destination != account.id, ids.contains(destination), account.automaticSource != nil,
+                      let owner = account.transferOwnerName, !friendKey(owner).isEmpty, owner.count <= 200,
+                      let since = account.transferRuleSince, since.timeIntervalSince1970.isFinite else {
+                    throw LedgerError.invalid("Invalid automatic transfer rule")
+                }
+            }
             if let source = account.automaticSource {
                 guard validFinancialSource(source), source != "银行 / TNG", source != "Apple Pay" else { throw LedgerError.invalid("Invalid automatic source") }
             }

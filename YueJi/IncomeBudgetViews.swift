@@ -168,7 +168,7 @@ private struct AutomaticAccountLinksView: View {
     var body: some View {
         List {
             Section {
-                Text(tr("在这里统一选择 Apple Pay、银行和 TNG 记录的资金账户。待确认、疑似重复及已忽略的通知不会仅因选择账户而入账。", "Assign accounts to Apple Pay, bank and TNG records here. Selecting an account alone does not post pending, duplicate or ignored notices.", "Tetapkan akaun rekod Apple Pay, bank dan TNG di sini. Memilih akaun tidak merekod notifikasi tertunda, pendua atau diabaikan."))
+                Text(tr("TNG 收款匹配账户后先加账面余额，用途确认后才计收入或还款。疑似重复和已忽略通知不自动加余额。", "Matched TNG receipts increase the account balance before their purpose is confirmed. Suspected duplicates and ignored notices are excluded.", "Penerimaan TNG dipadankan menambah baki sebelum tujuan disahkan. Notifikasi disyaki pendua dan diabaikan dikecualikan."))
                     .font(.footnote).foregroundStyle(.secondary)
             }
             ForEach(records) { record in
@@ -335,12 +335,28 @@ private struct BankAccountDetail: View {
                 }
                 Section(tr("已分配的支出", "Assigned spending", "Belanja ditetapkan")) {
                     ForEach(model.ledger.expenses.filter { $0.bankAccountID == accountID }.sorted { $0.date > $1.date }) { entry in
-                        LabeledContent(entry.merchant, value: money(entry.cents))
+                        NavigationLink {
+                            ExpenseDetailView(id: entry.id, embeddedInNavigation: true)
+                        } label: {
+                            LabeledContent {
+                                TransactionAmount(cents: entry.cents, direction: .outgoing)
+                            } label: {
+                                Text(entry.merchant).foregroundStyle(.primary)
+                            }
+                        }
                     }
                 }
                 Section(tr("已分配的收入", "Assigned income", "Pendapatan ditetapkan")) {
                     ForEach(model.ledger.incomes.filter { $0.bankAccountID == accountID }.sorted { $0.date > $1.date }) { entry in
-                        LabeledContent(entry.source, value: money(entry.cents))
+                        NavigationLink {
+                            IncomeDetailView(id: entry.id)
+                        } label: {
+                            LabeledContent {
+                                TransactionAmount(cents: entry.cents, direction: .incoming)
+                            } label: {
+                                Text(entry.source).foregroundStyle(.primary)
+                            }
+                        }
                     }
                 }
                 .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
@@ -477,7 +493,7 @@ private struct BankTransferEditor: View {
         do {
             let transfer = BankTransfer(id: original?.id ?? draftID, fromAccountID: fromID, toAccountID: toID,
                                         cents: try Currency.parse(amount, code: "MYR"), date: date,
-                                        note: note.trimmingCharacters(in: .whitespacesAndNewlines))
+                                        note: note.trimmingCharacters(in: .whitespacesAndNewlines), noticeIDs: original?.noticeIDs)
             let before = original
             model.perform(key: key, action: { try $0.saveBankTransfer(transfer, replacing: before) },
                           completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
@@ -493,6 +509,8 @@ private struct BankAccountEditor: View {
     @State private var institution = ""
     @State private var automaticSource = ""
     @State private var automaticSuffix = ""
+    @State private var transferDestination = ""
+    @State private var transferOwner = ""
     @State private var amount = ""
     @State private var openingDate = Date()
     @State private var initialized = false
@@ -542,6 +560,21 @@ private struct BankAccountEditor: View {
                 } footer: {
                     Text(tr("仅影响保存后新导入的通知。来源和尾号匹配时自动关联；同一来源有多个账户而通知无法区分时，留待手动选择。付款扣余额，通知收入确认后加余额。", "Applies to newly imported notices only. Matching source and suffix link automatically; ambiguous accounts require selection. Payments reduce the balance; notification income increases it after confirmation.", "Untuk notifikasi baharu sahaja. Sumber dan digit sepadan dipaut automatik; akaun tidak jelas perlu dipilih. Bayaran mengurangkan baki; pendapatan menambahnya selepas pengesahan."))
                 }
+                if !automaticSource.isEmpty {
+                    Section {
+                        Picker(tr("自动转入我的账户", "Auto-transfer to my account", "Pindahan automatik ke akaun saya"), selection: $transferDestination) {
+                            Text(tr("关闭", "Off", "Tutup")).tag("")
+                            ForEach(model.ledger.bankAccounts.filter { $0.id != original?.id && $0.automaticSource != nil }) {
+                                Text($0.name).tag($0.id)
+                            }
+                        }
+                        if !transferDestination.isEmpty {
+                            TextField(tr("本人完整姓名（通知可包含其他姓名）", "My full name (notices may include other names)", "Nama penuh saya (notifikasi boleh mengandungi nama lain)"), text: $transferOwner)
+                        }
+                    } footer: {
+                        Text(tr("仅对保存后的新通知生效。两边账户均须配置自动记账来源；金额相同、本人姓名一致、相隔不超过 2 分钟且唯一匹配时自动记转账。缺一边或有歧义时待确认。可在转账记录删除，或在通知中撤销关联。", "New notices only. Both accounts need automatic sources. Equal amounts, your full name contained in both notices and a unique pair within 2 minutes record a transfer automatically. Missing or ambiguous notices stay for review. Delete the transfer or reopen the notice to undo.", "Notifikasi baharu sahaja. Kedua-dua akaun perlu sumber automatik. Amaun dan nama sama serta pasangan unik dalam 2 minit direkod automatik. Notifikasi tidak lengkap atau kabur menunggu semakan. Padam pindahan atau buka semula notifikasi untuk batal."))
+                    }
+                }
                 Text(tr("填写这个时间点之前的余额，可填 0 或负数。修改期初余额或时间会重新计算账面余额。无需银行卡号或银行密码。", "Enter the balance just before this time, including zero or a negative amount. Changing the opening balance or date recalculates your recorded balance. No bank number or password needed.", "Masukkan baki sebelum masa ini, termasuk sifar atau negatif. Perubahan baki atau tarikh awal mengira semula baki. Tidak perlu nombor atau kata laluan bank."))
                     .font(.footnote).foregroundStyle(.secondary)
             }.yuejiListSurface()
@@ -559,6 +592,8 @@ private struct BankAccountEditor: View {
                     institution = original.institution ?? ""
                     automaticSource = original.automaticSource ?? ""
                     automaticSuffix = original.automaticSuffix ?? ""
+                    transferDestination = original.transferDestinationID ?? ""
+                    transferOwner = original.transferOwnerName ?? ""
                     name = original.name; amount = Currency.input(original.openingCents, "MYR"); openingDate = original.openingDate
                 }
             }
@@ -573,19 +608,26 @@ private struct BankAccountEditor: View {
             let negative = raw.hasPrefix("-")
             let magnitude = negative ? String(raw.dropFirst()) : raw
             let cents = ["0", "0.0", "0.00"].contains(magnitude) ? 0 : try Currency.parse(magnitude, code: "MYR")
-            let account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            var account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                       openingCents: negative ? -cents : cents, openingDate: openingDate,
                                       institution: institution.isEmpty ? nil : institution,
                                       automaticSource: automaticSource.isEmpty ? nil : automaticSource,
                                       automaticSuffix: automaticSource.isEmpty || automaticSuffix.isEmpty ? nil : automaticSuffix)
+            if !automaticSource.isEmpty && !transferDestination.isEmpty {
+                account.transferDestinationID = transferDestination
+                account.transferOwnerName = transferOwner.trimmingCharacters(in: .whitespacesAndNewlines)
+                account.transferRuleSince = original?.transferDestinationID == transferDestination && original?.transferOwnerName == account.transferOwnerName
+                    ? (original?.transferRuleSince ?? Date()) : Date()
+            }
+            let savedAccount = account
             let before = original
             model.perform(key: operationKey, action: { ledger in
                 if let before {
                     guard let index = ledger.bankAccounts.firstIndex(where: { $0.id == before.id }), ledger.bankAccounts[index] == before else {
                         throw LedgerError.invalid("Account changed; reopen and try again")
                     }
-                    ledger.bankAccounts[index] = account
-                } else { ledger.bankAccounts.append(account) }
+                    ledger.bankAccounts[index] = savedAccount
+                } else { ledger.bankAccounts.append(savedAccount) }
                 try ledger.validateBankAccounts()
             }, completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
         } catch { self.error = error.localizedDescription }

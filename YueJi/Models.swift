@@ -689,6 +689,9 @@ extension Ledger {
         }
         tngNotices.append(notice)
         if let eventKey { seenEvents.insert(eventKey) }
+        if try matchAutomaticTransfer(newNoticeID: notice.id) {
+            return tr("已自动记录账户间转账，两边账面余额已更新。", "Transfer recorded automatically; both account balances updated.", "Pindahan direkod automatik; kedua-dua baki dikemas kini.")
+        }
         if notice.kind == "incoming" { return tr("收款已显示在账本，待确认用途；尚未抵扣欠款或计入收入。若是收入，确认后可加入本月预算。", "Incoming money is in your ledger for review; no debt or income changed. If it's income, confirm it to add it to this month's budget.", "Wang diterima menunggu semakan; hutang dan pendapatan belum berubah. Jika ia pendapatan, sahkan untuk menambahnya ke bajet bulan ini.") }
         if duplicate || crossSourceDuplicate { return tr("疑似重复，已保留待确认，未再次计入消费。", "Possible duplicate retained for review, not added to spending.", "Kemungkinan pendua disimpan untuk semakan, tidak ditambah kepada belanja.") }
         if notice.status == "recorded", let expenseID = notice.expenseID,
@@ -1132,6 +1135,7 @@ extension Ledger {
         if resolution == "refund", let entryID = copy.tngNotices[i].relatedRecordID, let refundID = copy.tngNotices[i].relatedRefundID {
             try copy.removeRefund(expenseID: entryID, refundID: refundID)
         }
+        copy.bankTransfers.removeAll { $0.noticeIDs?.contains(id) == true }
         if resolution == "ownTransfer", let otherID = copy.tngNotices[i].relatedRecordID,
            let j = copy.tngNotices.firstIndex(where: { $0.id == otherID && $0.relatedRecordID == id }) {
             copy.tngNotices[j].status = "pending"; copy.tngNotices[j].resolution = nil; copy.tngNotices[j].relatedRecordID = nil

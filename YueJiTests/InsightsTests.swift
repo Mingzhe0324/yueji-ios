@@ -4,6 +4,102 @@ import XCTest
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 
+    func testObservedPublicBankShopeePaymentUpdatesBalanceAndSpendingOnce() throws {
+        let body = "FPX Payment: You have paid RM57.14 to Shopee MarketPlace via MyPB."
+        for suffix in [nil, "1234"] as [String?] {
+            var account = BankAccount(name: "Public Bank", openingCents: 100000, openingDate: opening)
+            account.automaticSource = "Public Bank"
+            account.automaticSuffix = suffix
+            var ledger = Ledger(); ledger.bankAccounts = [account]
+            _ = try ledger.receiveTNG(body: body, title: "Money Paid", date: opening, eventID: "pb-shopee-5714")
+            let expense = try XCTUnwrap(ledger.expenses.first)
+            XCTAssertEqual(expense.merchant, "Shopee MarketPlace")
+            XCTAssertEqual(expense.cents, 5714)
+            XCTAssertEqual(expense.source, "Public Bank")
+            XCTAssertEqual(expense.personalSpending, 5714)
+            XCTAssertNil(expense.tripID)
+            XCTAssertEqual(monthKey(expense.date), monthKey(opening))
+            XCTAssertEqual(expense.bankAccountID, suffix == nil ? account.id : nil)
+            XCTAssertEqual(ledger.bankBalance(account), suffix == nil ? 94286 : 100000)
+            _ = try ledger.receiveTNG(body: body, title: "Money Paid", date: opening, eventID: "pb-shopee-5714")
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.tngNotices.count, 1)
+        }
+    }
+
+    func testTransferFullNamePhraseMatching() {
+        XCTAssertTrue(transferNameMatches("TAN LAY K/CHONG MING ZHE", owner: "chong  ming zhe"))
+        XCTAssertFalse(transferNameMatches("CHONG MING ZHENG", owner: "CHONG MING ZHE"))
+        XCTAssertFalse(transferNameMatches("CHONG MING", owner: "CHONG MING ZHE"))
+        XCTAssertFalse(transferNameMatches("OTHER PERSON", owner: "CHONG MING ZHE"))
+    }
+
+    func testTNGReceiptCreditsOnceBeforeIncomeConfirmation() throws {
+        var account = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
+        account.automaticSource = "TNG"
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let body = "OTHER PERSON has transferred RM150.00 to you. Tap here to check the transaction details."
+        _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: "receipt")
+        let notice = try XCTUnwrap(ledger.tngNotices.first)
+        XCTAssertEqual(ledger.bankBalance(account), 25000)
+        XCTAssertFalse(notice.isConfirmedIncome)
+        _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: "receipt-copy")
+        XCTAssertEqual(ledger.bankBalance(account), 25000)
+        try ledger.resolveTNGIncoming(id: notice.id, purpose: "income", date: opening)
+        XCTAssertEqual(ledger.bankBalance(account), 25000)
+        try ledger.reopenTNGIncoming(id: notice.id)
+        XCTAssertEqual(ledger.bankBalance(account), 25000)
+        try ledger.resolveTNGIncoming(id: notice.id, purpose: "ignored", date: opening)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+    }
+
+    func testAutomaticTransferRequiresOptInAndBothNoticesThenCanUndo() throws {
+        var source = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
+        var target = BankAccount(name: "Ryt", openingCents: 20000, openingDate: opening)
+        source.automaticSource = "TNG"; target.automaticSource = "Ryt Bank"
+        var ledger = Ledger(); ledger.bankAccounts = [source, target]
+        let outgoing = "You have successfully transferred RM 0.10 to CHONG MING ZHE."
+        let incoming = "You've received RM0.10 from CHONG MING ZHE on 30/10/2026, 6:51 PM (GMT+8)."
+        let stamp = try XCTUnwrap(parseBankNotification(incoming, title: "Your money is in!")?.transactionDate)
+        source.transferDestinationID = target.id; source.transferOwnerName = "CHONG MING ZHE"
+        source.transferRuleSince = stamp.addingTimeInterval(-60)
+        ledger.bankAccounts[0] = source
+        _ = try ledger.receiveTNG(body: outgoing, title: "DuitNow Transfer is successful!", date: stamp, eventID: "out", now: stamp, sourceApp: "TNG")
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        _ = try ledger.receiveTNG(body: incoming, title: "Your money is in!", date: stamp, eventID: "in", now: stamp, sourceApp: "Ryt Bank")
+        XCTAssertEqual(ledger.bankTransfers.count, 1)
+        XCTAssertEqual(ledger.bankBalance(source), 9990)
+        XCTAssertEqual(ledger.bankBalance(target), 20010)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.incomes.isEmpty)
+        _ = try ledger.receiveTNG(body: incoming, title: "Your money is in!", date: stamp, eventID: "in", now: stamp, sourceApp: "Ryt Bank")
+        XCTAssertEqual(ledger.bankTransfers.count, 1)
+        let id = try XCTUnwrap(ledger.bankTransfers.first?.noticeIDs?.first)
+        let restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        XCTAssertEqual(restored.bankTransfers.count, 1)
+        try ledger.reopenResolvedNotice(id: id)
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        XCTAssertEqual(ledger.bankBalance(source), 10000)
+        XCTAssertEqual(ledger.bankBalance(target), 20000)
+        ledger.bankAccounts[0].transferDestinationID = nil
+        XCTAssertFalse(try ledger.matchAutomaticTransfer(newNoticeID: id))
+    }
+
+    func testAutomaticTransferRefusesAmbiguousCandidates() throws {
+        var source = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
+        let target = BankAccount(name: "Ryt", openingCents: 0, openingDate: opening)
+        source.automaticSource = "TNG"; source.transferDestinationID = target.id
+        source.transferOwnerName = "Owner"; source.transferRuleSince = opening
+        var out = TNGNotice(body: "out", title: "", date: opening, usesReceivedDate: false, kind: "transfer", status: "transfer", cents: 10, party: "Owner")
+        out.bankAccountID = source.id
+        var incoming = TNGNotice(body: "in", title: "", date: opening, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 10, party: "Owner")
+        incoming.bankAccountID = target.id
+        var another = incoming; another.id = UUID().uuidString
+        var ledger = Ledger(); ledger.bankAccounts = [source, target]; ledger.tngNotices = [out, incoming, another]
+        XCTAssertFalse(try ledger.matchAutomaticTransfer(newNoticeID: out.id))
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+    }
+
     func testTransferConservesMoneyAndEditDeleteRecalculateBothAccounts() throws {
         let bank = BankAccount(name: "Maybank", openingCents: 50000, openingDate: opening)
         let wallet = BankAccount(name: "TNG", openingCents: 2000, openingDate: opening)
@@ -135,6 +231,7 @@ final class BankAccountTests: XCTestCase {
     func testNotificationIncomeRequiresConfirmationAndReopeningReversesBalance() throws {
         let account = BankAccount(name: "Maybank", openingCents: 10000, openingDate: opening)
         var notice = TNGNotice(body: "Income", title: "", date: opening, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 2500, party: "Salary")
+        notice.sourceBank = "Maybank"
         notice.bankAccountID = account.id
         var ledger = Ledger(); ledger.bankAccounts = [account]; ledger.tngNotices = [notice]
         XCTAssertEqual(ledger.bankBalance(account), 10000)
