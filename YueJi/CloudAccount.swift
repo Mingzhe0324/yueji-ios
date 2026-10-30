@@ -75,6 +75,18 @@ import UserNotifications
         service = value
         return value
     }
+    func recognizeReceipt(image: Data) async throws -> Data {
+        guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
+        let api = try connectedService()
+        do { return try await api.recognizeReceipt(image: image) }
+        catch CloudFailure.session {
+            let refreshed = try await api.refresh()
+            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+            try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+            session = refreshed
+            return try await api.recognizeReceipt(image: image)
+        }
+    }
     func checkConnection() async {
         guard !busy else { return }
         busy = true; defer { finishWork() }

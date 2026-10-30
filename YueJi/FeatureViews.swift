@@ -2989,6 +2989,38 @@ struct ReceiptCamera: UIViewControllerRepresentable {
     }
 }
 
+/// Strictly typed cloud draft. Never saves or posts an expense.
+struct GeminiReceiptDraft: Decodable {
+    struct Line: Decodable { let name: String; let amount: String }
+    let merchant: String
+    let date: String
+    let currency: String
+    let subtotal: String
+    let tax: String
+    let service: String
+    let discount: String
+    let rounding: String
+    let total: String
+    let items: [Line]
+
+    func reviewedDraft() throws -> ScannedReceipt {
+        guard currency == "MYR", merchant.count <= 200, items.count <= 200 else { throw CloudFailure.invalidResponse }
+        for amount in [subtotal, tax, service, discount, total] + items.map(\.amount) {
+            guard amount.isEmpty || (amount.range(of: #"\A[0-9]{1,8}\.[0-9]{2}\z"#, options: .regularExpression) != nil && (try? toCents(amount)) != nil) else { throw CloudFailure.invalidResponse }
+        }
+        guard rounding.isEmpty || rounding.range(of: #"\A-?[0-9]{1,8}\.[0-9]{2}\z"#, options: .regularExpression) != nil,
+              items.allSatisfy({ !$0.name.isEmpty && $0.name.count <= 200 }),
+              date.isEmpty || date.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#, options: .regularExpression) != nil else { throw CloudFailure.invalidResponse }
+        var value = ScannedReceipt()
+        value.merchant = merchant; value.date = date.isEmpty ? nil : ScannedReceipt.receiptDate(date)
+        value.subtotal = subtotal; value.tax = tax; value.service = service
+        value.discount = discount; value.rounding = rounding; value.total = total
+        value.items = items.map { ScannedReceipt.Item(name: $0.name, amount: $0.amount) }
+        value.scanNotice = tr("Gemini 识别结果：请对照原图核对商品、日期与总额，确认后才会保存。", "Gemini draft: check items, date and total against the photo before saving.", "Draf Gemini: semak item, tarikh dan jumlah dengan foto sebelum menyimpan.")
+        return value
+    }
+}
+
 struct ReceiptScanView: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var guideReduceMotion
@@ -3020,6 +3052,7 @@ struct ReceiptScanView: View {
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
     @State private var comparingItem: ScannedReceipt.Item?
+    @State private var useGemini = false
 
     private var people: [ReceiptPerson] {
         (includeMe ? [ReceiptPerson(id: myID, name: tr("我", "Me", "Saya"))] : []) + friends
@@ -3066,6 +3099,10 @@ struct ReceiptScanView: View {
     }
     private var captureSection: some View {
         Section {
+            Toggle(tr("使用 Gemini 识别", "Use Gemini recognition", "Gunakan pengecaman Gemini"), isOn: $useGemini).disabled(busy)
+            if useGemini {
+                Text(tr("扫描时会将收据照片发送至 Google Gemini。需要登录及联网；识别后仍需核对。关闭可使用本机识别。", "Scanning sends the receipt photo to Google Gemini. Sign-in and internet are required; review before saving. Turn off for on-device recognition.", "Imbasan menghantar foto resit ke Google Gemini. Log masuk dan internet diperlukan; semak sebelum menyimpan. Matikan untuk pengecaman setempat.")).font(.caption).foregroundStyle(.secondary)
+            }
             Button { camera = true } label: { Label(tr("扫描收据", "Scan receipt", "Imbas resit"), systemImage: "doc.viewfinder") }
                 .disabled(!VNDocumentCameraViewController.isSupported || busy)
             PhotosPicker(selection: $photo, matching: .images) { Label(tr("选择收据照片", "Choose receipt photo", "Pilih foto resit"), systemImage: "photo") }.disabled(busy).guideTarget("receipt.photo")
@@ -3332,7 +3369,22 @@ struct ReceiptScanView: View {
         defer { if scanRequest == request { busy = false } }
         do {
             guard data.count < 25_000_000 else { throw LedgerError.invalid("Image too large") }
-            let receipt = try await ReceiptOCR.scan(data)
+            let receipt: ScannedReceipt
+            if useGemini {
+                guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { throw CloudFailure.invalidResponse }
+                let scale = min(1, 2000 / max(image.size.width, image.size.height))
+                let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+                let resized = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                    UIColor.white.setFill(); context.fill(CGRect(origin: .zero, size: size))
+                    image.draw(in: CGRect(origin: .zero, size: size))
+                }
+                guard let jpeg = resized.jpegData(compressionQuality: 0.85), jpeg.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
+                let response = try await CloudAccount.shared.recognizeReceipt(image: jpeg)
+                receipt = try JSONDecoder().decode(GeminiReceiptDraft.self, from: response).reviewedDraft()
+            } else {
+                receipt = try await ReceiptOCR.scan(data)
+            }
             guard !Task.isCancelled, scanRequest == request else { return false }
             scanNotice = receipt.scanNotice
             merchant = receipt.merchant; subtotal = receipt.subtotal; tax = receipt.tax

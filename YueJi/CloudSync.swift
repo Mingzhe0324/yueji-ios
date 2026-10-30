@@ -214,6 +214,16 @@ actor SupabaseCloudService: CloudRemote {
         let health = try await request("/rest/v1/rpc/yueji_sync_health", body: [:])
         guard (try? JSONDecoder().decode(Int.self, from: health)) == 1 else { throw CloudFailure.database }
     }
+    func recognizeReceipt(image: Data) async throws -> Data {
+        guard image.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
+        do { return try await request("/functions/v1/receipt-gemini", body: ["image": image.base64EncodedString()], authenticated: true) }
+        catch CloudFailure.server(let status, _) {
+            if status == 404 || status == 503 {
+                throw reviewError("Gemini 识别服务尚未就绪，请先使用本机识别。", "Gemini recognition is not ready. Use on-device recognition for now.", "Pengecaman Gemini belum tersedia. Gunakan pengecaman setempat dahulu.")
+            }
+            throw reviewError("Gemini 未能识别这张收据，请重试或关闭 Gemini 使用本机识别。仅支持马币收据。", "Gemini could not read this receipt. Retry or turn Gemini off for on-device recognition. Only MYR receipts are supported.", "Gemini tidak dapat membaca resit ini. Cuba lagi atau matikan Gemini. Hanya resit MYR disokong.")
+        }
+    }
     func sendCode(email: String, createAccount: Bool = true) async throws {
         _ = try await request("/auth/v1/otp", body: ["email": email, "create_user": createAccount])
     }

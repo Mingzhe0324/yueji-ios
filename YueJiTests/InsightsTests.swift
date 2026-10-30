@@ -1,6 +1,28 @@
 import XCTest
 @testable import YueJi
 
+final class GeminiReceiptDraftTests: XCTestCase {
+    private func draft(currency: String = "MYR", total: String = "10.00") throws -> GeminiReceiptDraft {
+        let object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": currency,
+            "subtotal": "10.00", "tax": "", "service": "", "discount": "", "rounding": "-0.01", "total": total,
+            "items": [["name": "Rice", "amount": "10.00"]]]
+        return try JSONDecoder().decode(GeminiReceiptDraft.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+    func testMissingDateAndAmountsRemainMissingForReview() throws {
+        let receipt = try draft().reviewedDraft()
+        XCTAssertNil(receipt.date)
+        XCTAssertEqual(receipt.tax, "")
+        XCTAssertEqual(receipt.rounding, "-0.01")
+        XCTAssertEqual(receipt.items.first?.amount, "10.00")
+        XCTAssertFalse(receipt.scanNotice.isEmpty)
+    }
+    func testRejectsNonMYRAndMalformedTotals() throws {
+        XCTAssertThrowsError(try draft(currency: "USD").reviewedDraft())
+        XCTAssertThrowsError(try draft(total: "-10.00").reviewedDraft())
+        XCTAssertThrowsError(try draft(total: "10.001").reviewedDraft())
+    }
+}
+
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 

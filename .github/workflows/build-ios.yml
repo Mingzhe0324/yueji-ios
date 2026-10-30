@@ -11,6 +11,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
+      - name: Test Gemini receipt gateway
+        run: node --test backend/tests/receipt-gemini.test.mjs
       - name: Verify source version and required features
         id: release
         run: |
