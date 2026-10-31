@@ -75,6 +75,22 @@ import UserNotifications
         service = value
         return value
     }
+    func assistant(mode: String, text: String, categories: [String]) async throws -> Data {
+        guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
+        let api = try connectedService()
+        let data: Data
+        do { data = try await api.assistant(mode: mode, text: text, categories: categories) }
+        catch CloudFailure.session {
+            let refreshed = try await api.refresh()
+            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+            try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+            session = refreshed
+            data = try await api.assistant(mode: mode, text: text, categories: categories)
+        }
+        try Task.checkCancellation()
+        guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+        return data
+    }
     func recognizeReceipt(image: Data) async throws -> Data {
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()

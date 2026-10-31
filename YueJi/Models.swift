@@ -322,6 +322,8 @@ struct Ledger: Codable {
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for n in tngNotices {
             guard n.place?.valid ?? true else { throw LedgerError.invalid("Invalid notification location") }
+            guard n.verifiedIncomingBalance != true || n.kind == "incoming",
+                  n.transferPeer == nil || exactFinancialProvider(n.transferPeer ?? "") != nil else { throw LedgerError.invalid("Invalid notification analysis") }
             guard (n.resolution == nil || ["ownTransfer", "refund", "duplicate"].contains(n.resolution!)), (n.relatedRecordID?.count ?? 0) <= 200, (n.relatedRefundID?.count ?? 0) <= 200, (n.reviewReason?.count ?? 0) <= 1000, (n.aiSuggestion?.count ?? 0) <= 1000, validFinancialSource(n.provider),
                   (n.accountSuffix?.count ?? 0) <= 4, (n.bankReference?.count ?? 0) <= 500 else { throw LedgerError.invalid("Invalid notification source") }
             guard (n.recipient?.count ?? 0) <= 200, (n.resolvedFriend?.count ?? 0) <= 200,
@@ -473,6 +475,9 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var relatedRefundID: String? = nil
     var reviewReason: String? = nil
     var aiSuggestion: String? = nil
+    var verifiedIncomingBalance: Bool? = nil
+    var balanceHeldForReview: Bool? = nil
+    var transferPeer: String? = nil
     var sourceBank: String? = nil
     var accountSuffix: String? = nil
     var bankReference: String? = nil
@@ -494,6 +499,7 @@ struct TNGParsed {
     var transactionDate: Date? = nil
     var accountSuffix: String? = nil
     var reference: String? = nil
+    var transferPeer: String? = nil
 }
 // A confirmed incoming notification changes the wallet in the positive
 // direction even if its purpose (repayment, income, own transfer) is pending.
@@ -590,9 +596,9 @@ extension Ledger {
     }
     /// Logs delivery independently from whether a supported transaction was recognized.
     /// Unknown transaction-like bodies are retained for review without posting expenses.
-    mutating func processTNGNotification(body: String, title: String = "", date: Date?, eventID: String?, sourceApp: String? = nil) throws -> (accepted: Bool, message: String, expenseID: String?, noticeID: String?) {
+    mutating func processTNGNotification(body: String, title: String = "", date: Date?, eventID: String?, sourceApp: String? = nil, analysis: BankNotificationAnalysis? = nil, automaticBalances: Bool = false) throws -> (accepted: Bool, message: String, expenseID: String?, noticeID: String?) {
         let previousCount = tngNotices.count
-        var message = try receiveTNG(body: body, title: title, date: date, eventID: eventID, sourceApp: sourceApp)
+        var message = try receiveTNG(body: body, title: title, date: date, eventID: eventID, sourceApp: sourceApp, analysis: analysis, automaticBalances: automaticBalances)
         if tngNotices.count > previousCount, let notice = tngNotices.last, notice.status != "recorded" {
             let amount = notice.cents.map(money) ?? tr("金额待确认", "Amount to review", "Amaun untuk semakan")
             let party = notice.party ?? String(notice.body.prefix(100))
@@ -603,7 +609,7 @@ extension Ledger {
             }
         }
         let parsed = parseFinancialNotification(body, title: title, sourceApp: sourceApp)
-        let accepted = parsed != nil
+        let accepted = parsed != nil || (automaticBalances && analysis?.checked(body: body, title: title, source: sourceApp) != nil)
         let savedNotice = tngNotices.count > previousCount ? tngNotices.last : nil
         let outcome: String
         if let notice = savedNotice {
@@ -612,14 +618,23 @@ extension Ledger {
         logAutomation(source: savedNotice?.provider ?? parsed?.sourceBank ?? "银行 / TNG", outcome: outcome, detail: message)
         return (accepted, message, savedNotice?.expenseID, savedNotice?.id)
     }
-    mutating func receiveTNG(body: String, title: String = "", date: Date?, eventID: String?, now: Date = Date(), sourceApp: String? = nil) throws -> String {
+    mutating func receiveTNG(body: String, title: String = "", date: Date?, eventID: String?, now: Date = Date(), sourceApp: String? = nil, analysis: BankNotificationAnalysis? = nil, automaticBalances: Bool = false) throws -> String {
         if let sourceApp, !sourceApp.isEmpty, !validFinancialSource(sourceApp) { throw LedgerError.invalid("通知来源名称无效。") }
         let text = body.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, text.count <= 8000, title.count <= 500 else {
             throw reviewError("通知正文为空或过长，请把 TNG 通知的 Body 传入。", "Notification body is empty or too long. Pass the TNG notification Body.", "Teks notifikasi kosong atau terlalu panjang. Hantar Body notifikasi TNG.")
         }
         // Supported templates can post transactions; unknown financial text stays pending.
-        guard let verified = parseFinancialNotification(text, title: title, sourceApp: sourceApp) else {
+        let local = parseFinancialNotification(text, title: title, sourceApp: sourceApp)
+        let proposed = automaticBalances ? analysis?.checked(body: text, title: title, source: sourceApp) : nil
+        // Known grammars win. AI may add corroborated peer metadata, never reverse
+        // a locally parsed direction, change the amount, or replace its timestamp.
+        var selected = local ?? proposed
+        if let proposed, let local, proposed.kind == local.kind, proposed.cents == local.cents {
+            selected?.transferPeer = proposed.transferPeer
+            if local.accountSuffix == nil { selected?.accountSuffix = proposed.accountSuffix }
+        }
+        guard let verified = selected else {
             guard shouldReviewFinancialNotification(text, title: title) else {
                 return tr("已忽略：推广、验证码、失败或非交易通知。", "Ignored: promotion, OTP, failure or non-transaction notice.", "Diabaikan: promosi, OTP, kegagalan atau bukan transaksi.")
             }
@@ -681,8 +696,16 @@ extension Ledger {
         }
         var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: verified.transactionDate == nil && (verified.sourceBank != "TNG" || date == nil), kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate || crossSourceDuplicate, recipient: parsed?.recipient, sourceBank: verified.sourceBank == "TNG" ? nil : verified.sourceBank, accountSuffix: verified.accountSuffix, bankReference: suppliedReference)
         notice.bankAccountID = automaticBankAccount(source: verified.sourceBank, suffix: verified.accountSuffix)
+        notice.transferPeer = verified.transferPeer
+        if automaticBalances {
+            notice.verifiedIncomingBalance = verified.kind == "incoming" && notice.bankAccountID != nil && !duplicate && !crossSourceDuplicate
+            notice.aiSuggestion = proposed != nil
+                ? tr("Gemini：提取结果已通过原文与金额校验。", "Gemini extraction passed original-text and amount checks.", "Pengekstrakan Gemini lulus semakan teks asal dan amaun.")
+                : tr("本机规则已识别；Gemini 未提供可用结果。", "Recognised by local rules; Gemini did not provide a usable result.", "Dikenal pasti oleh peraturan setempat; Gemini tidak memberikan hasil yang boleh digunakan.")
+            if notice.bankAccountID == nil { notice.reviewReason = tr("未能唯一匹配资金账户，请选择账户后确认；尚未自动入账。", "No unique account match. Select an account and confirm; not automatically posted.", "Tiada padanan akaun unik. Pilih akaun dan sahkan; belum direkod automatik.") }
+        }
         if let parsed, !duplicate, !crossSourceDuplicate {
-            if parsed.kind == "payment" {
+            if parsed.kind == "payment", !automaticBalances || notice.bankAccountID != nil {
                 let entry = Expense(bankAccountID: notice.bankAccountID, merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party, description: title + " " + text), source: parsed.sourceBank, transactionReference: suppliedReference, timeSource: verified.transactionDate == nil ? "notification" : "supplied")
                 expenses.append(entry); notice.expenseID = entry.id; notice.status = "recorded"
             } else if parsed.kind == "transfer" { notice.status = "transfer" }
@@ -691,6 +714,9 @@ extension Ledger {
         if let eventKey { seenEvents.insert(eventKey) }
         if try matchAutomaticTransfer(newNoticeID: notice.id) {
             return tr("已自动记录账户间转账，两边账面余额已更新。", "Transfer recorded automatically; both account balances updated.", "Pindahan direkod automatik; kedua-dua baki dikemas kini.")
+        }
+        if notice.verifiedIncomingBalance == true {
+            return tr("收款已更新匹配账户余额，用途待确认；尚未计入收入。", "Receipt updated the matched account balance. Purpose is awaiting review; not counted as income.", "Penerimaan mengemas kini baki akaun sepadan. Tujuan menunggu semakan; belum dikira sebagai pendapatan.")
         }
         if notice.kind == "incoming" { return tr("收款已显示在账本，待确认用途；尚未抵扣欠款或计入收入。若是收入，确认后可加入本月预算。", "Incoming money is in your ledger for review; no debt or income changed. If it's income, confirm it to add it to this month's budget.", "Wang diterima menunggu semakan; hutang dan pendapatan belum berubah. Jika ia pendapatan, sahkan untuk menambahnya ke bajet bulan ini.") }
         if duplicate || crossSourceDuplicate { return tr("疑似重复，已保留待确认，未再次计入消费。", "Possible duplicate retained for review, not added to spending.", "Kemungkinan pendua disimpan untuk semakan, tidak ditambah kepada belanja.") }
@@ -1139,7 +1165,9 @@ extension Ledger {
         if resolution == "ownTransfer", let otherID = copy.tngNotices[i].relatedRecordID,
            let j = copy.tngNotices.firstIndex(where: { $0.id == otherID && $0.relatedRecordID == id }) {
             copy.tngNotices[j].status = "pending"; copy.tngNotices[j].resolution = nil; copy.tngNotices[j].relatedRecordID = nil
+            copy.tngNotices[j].balanceHeldForReview = true
         }
+        if resolution == "ownTransfer" { copy.tngNotices[i].balanceHeldForReview = true }
         copy.tngNotices[i].status = "pending"; copy.tngNotices[i].resolution = nil
         copy.tngNotices[i].relatedRecordID = nil; copy.tngNotices[i].relatedRefundID = nil
         self = try copy.validated()

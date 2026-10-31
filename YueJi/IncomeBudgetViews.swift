@@ -8,7 +8,9 @@ private struct BankWalletCard: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var appeared = true
     private var bank: String { account.institution ?? account.name }
+    private var isWise: Bool { bank.caseInsensitiveCompare("Wise") == .orderedSame }
     private var brandColor: Color {
+        if isWise { return Color(red: 0.48, green: 0.72, blue: 0.18) }
         switch logo {
         case "BankMaybank": return Color(red: 1, green: 0.76, blue: 0.08)
         case "BankPublic", "BankCIMB", "BankHSBC", "BankOCBC", "BankBoost", "BankBankIslam":
@@ -58,6 +60,8 @@ private struct BankWalletCard: View {
                     Image(logo).resizable().scaledToFit().frame(width: 44, height: 26)
                         .padding(4).background(.white, in: RoundedRectangle(cornerRadius: 6))
                         .accessibilityHidden(true)
+                } else if isWise {
+                    Text("Wise").font(.title3.bold()).accessibilityHidden(true)
                 } else {
                     Image(systemName: "building.columns.fill").font(.title3).accessibilityHidden(true)
                 }
@@ -360,6 +364,26 @@ private struct BankAccountDetail: View {
                     }
                 }
                 .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
+                Section(tr("到账通知", "Received money", "Wang diterima")) {
+                    ForEach(model.ledger.tngNotices.filter {
+                        $0.bankAccountID == accountID && $0.kind == "incoming" && $0.status != "ignored" && $0.resolution == nil
+                    }.sorted { $0.date > $1.date }) { notice in
+                        NavigationLink { TNGIncomingView(id: notice.id) } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                LabeledContent(notice.party ?? notice.provider, value: money(notice.cents ?? 0))
+                                Text(dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                                Text(notice.possibleDuplicate || (notice.status == "pending" && notice.balanceHeldForReview == true)
+                                     ? tr("需复核，未自动加余额", "Review required; not automatically credited", "Perlu semakan; baki belum ditambah automatik")
+                                     : (notice.verifiedIncomingBalance == true || notice.provider == "TNG" || notice.isConfirmedIncome
+                                        ? tr("已计入余额，用途见详情", "Included in balance; see details for purpose", "Termasuk dalam baki; lihat tujuan dalam butiran")
+                                        : tr("待确认，尚未计入余额", "Awaiting review; not included in balance", "Menunggu semakan; belum termasuk dalam baki")))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                } footer: {
+                    Text(tr("到账与收入不同：本人互转不计收入。早于期初时间的款项不重复计入余额。", "Receipts are not necessarily income: own transfers are excluded from income. Amounts before the opening date are not counted again.", "Penerimaan tidak semestinya pendapatan: pindahan sendiri dikecualikan. Amaun sebelum tarikh awal tidak dikira semula.")).font(.caption)
+                }
                 Section {
                     NavigationLink { BankTransfersView(accountID: accountID) } label: {
                         Label(tr("转账／充值记录", "Transfer history", "Sejarah pindahan"), systemImage: "arrow.left.arrow.right")
@@ -521,7 +545,7 @@ private struct BankAccountEditor: View {
     var body: some View {
         NavigationStack {
             Form {
-                Picker(tr("选择银行", "Choose bank", "Pilih bank"), selection: $institution) {
+                Picker(tr("选择银行／钱包", "Choose bank / wallet", "Pilih bank / dompet"), selection: $institution) {
                     Text(tr("其他银行／钱包（自定义）", "Other bank / wallet (custom)", "Bank / dompet lain (tersuai)")).tag("")
                     Section(tr("商业银行", "Conventional banks", "Bank konvensional")) {
                         ForEach(MalaysianBanks.conventional, id: \.self) { Text($0).tag($0) }
@@ -532,8 +556,10 @@ private struct BankAccountEditor: View {
                     Section(tr("数字银行", "Digital banks", "Bank digital")) {
                         ForEach(MalaysianBanks.digital, id: \.self) { Text($0).tag($0) }
                     }
-                    Section(tr("电子钱包", "eWallet", "eDompet")) { Text("TNG eWallet").tag("TNG eWallet") }
-                    if !institution.isEmpty && institution != "TNG eWallet" && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital).contains(institution) {
+                    Section(tr("钱包与支付账户", "Wallets and payment accounts", "Dompet dan akaun pembayaran")) {
+                        ForEach(MalaysianBanks.walletsAndPayments, id: \.self) { Text($0).tag($0) }
+                    }
+                    if !institution.isEmpty && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital + MalaysianBanks.walletsAndPayments).contains(institution) {
                         Text(institution).tag(institution)
                     }
                 }.pickerStyle(.navigationLink)

@@ -13,6 +13,7 @@ enum MalaysianBanks {
     static let conventional = ["Maybank", "CIMB Bank", "Public Bank", "RHB Bank", "Hong Leong Bank", "AmBank", "Affin Bank", "Alliance Bank", "HSBC Malaysia", "OCBC Malaysia", "UOB Malaysia", "Standard Chartered Malaysia", "Bank of China Malaysia", "ICBC Malaysia"]
     static let islamic = ["Maybank Islamic", "CIMB Islamic", "Bank Islam", "Bank Muamalat", "MBSB Bank", "Affin Islamic", "Alliance Islamic", "AmBank Islamic", "Hong Leong Islamic", "HSBC Amanah", "OCBC Al-Amin", "Public Islamic", "RHB Islamic", "Standard Chartered Saadiq", "Al Rajhi Malaysia"]
     static let digital = ["GXBank", "Boost Bank", "AEON Bank", "Ryt Bank", "KAF Digital Bank"]
+    static let walletsAndPayments = ["TNG eWallet", "Wise"]
 }
 
 /// A manually maintained MYR account. No bank credentials or bank connection.
@@ -51,7 +52,12 @@ extension Ledger {
         for source in bankAccounts {
             guard let destination = source.transferDestinationID, let owner = source.transferOwnerName,
                   let since = source.transferRuleSince, !friendKey(owner).isEmpty else { continue }
-            let outgoing = tngNotices.filter { eligible($0) && $0.kind == "transfer" && $0.bankAccountID == source.id && $0.date >= since && transferNameMatches($0.party ?? "", owner: owner) }
+            let destinationProvider = bankAccounts.first(where: { $0.id == destination })?.automaticSource.flatMap { exactFinancialProvider($0) }
+            let outgoing = tngNotices.filter {
+                eligible($0) && $0.kind == "transfer" && $0.bankAccountID == source.id && $0.date >= since &&
+                (transferNameMatches($0.party ?? "", owner: owner) ||
+                 ($0.transferPeer == "TNG" && destinationProvider == "TNG"))
+            }
             let incoming = tngNotices.filter { eligible($0) && $0.kind == "incoming" && $0.bankAccountID == destination && $0.date >= since && transferNameMatches($0.party ?? "", owner: owner) }
             for out in outgoing {
                 let matches = incoming.filter { $0.cents == out.cents && abs($0.date.timeIntervalSince(out.date)) <= 120 }
@@ -139,6 +145,7 @@ extension Ledger {
            let expenseIndex = expenses.firstIndex(where: { $0.id == expenseID }) {
             expenses[expenseIndex].bankAccountID = expenses[expenseIndex].paidByFriend == nil ? accountID : nil
         }
+        _ = try matchAutomaticTransfer(newNoticeID: id)
     }
 
     func bankBalance(_ account: BankAccount) -> Int {
@@ -158,8 +165,8 @@ extension Ledger {
             total += entry.cents
         }
         for notice in tngNotices where notice.bankAccountID == account.id && notice.date >= account.openingDate && notice.expenseID == nil {
-            let tngReceipt = notice.provider == "TNG" && notice.kind == "incoming" &&
-                ((notice.status == "pending" && !notice.possibleDuplicate) || ["income", "repayment", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
+            let tngReceipt = (notice.provider == "TNG" || notice.verifiedIncomingBalance == true) && notice.kind == "incoming" &&
+                ((notice.status == "pending" && !notice.possibleDuplicate && notice.balanceHeldForReview != true) || ["income", "repayment", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
             if notice.isConfirmedIncome || tngReceipt { total += notice.cents ?? 0 }
         }
         return total

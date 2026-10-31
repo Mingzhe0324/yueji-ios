@@ -64,7 +64,7 @@ extension Ledger {
         default: return .neutral
         }
     }
-    mutating func applyDelivery(_ delivery: AutomationDelivery) throws -> AutomationResult {
+    mutating func applyDelivery(_ delivery: AutomationDelivery, analysis: BankNotificationAnalysis? = nil, automaticBalances: Bool = false) throws -> AutomationResult {
         try delivery.validate()
         if seenEvents.contains(delivery.marker) {
             return AutomationResult(title: tr("月记 · 恢复检查完成", "YueJi · Recovery check complete", "YueJi · Semakan pemulihan selesai"), message: tr("此前已处理这次调用，没有重复入账。请查看账本或待确认记录。", "This request was already processed. No duplicate was added. Check the ledger or pending records.", "Permintaan ini telah diproses. Tiada pendua ditambah. Semak lejar atau rekod untuk semakan."),
@@ -74,7 +74,8 @@ extension Ledger {
         var result: AutomationResult
         if delivery.kind == "notification" {
             let processed = try copy.processTNGNotification(body: delivery.body, title: delivery.title,
-                                                          date: delivery.date ?? delivery.receivedAt, eventID: delivery.eventID, sourceApp: delivery.sourceApp)
+                                                          date: delivery.date ?? delivery.receivedAt, eventID: delivery.eventID, sourceApp: delivery.sourceApp,
+                                                          analysis: analysis, automaticBalances: automaticBalances)
             if delivery.date == nil, parseFinancialNotification(delivery.body, title: delivery.title, sourceApp: delivery.sourceApp)?.transactionDate == nil,
                let id = processed.noticeID, let i = copy.tngNotices.firstIndex(where: { $0.id == id }) {
                 copy.tngNotices[i].usesReceivedDate = true
@@ -189,8 +190,13 @@ actor AutomationRecovery {
     }
     private func process(_ original: AutomationDelivery) async throws -> AutomationResult {
         var delivery = original
+        let alreadyProcessed = (try? store.read().seenEvents.contains(delivery.marker)) == true
+        let analysis: BankNotificationAnalysis?
+        if alreadyProcessed { analysis = nil }
+        else { analysis = await BankNotificationAI.analyse(delivery, store: store) }
+        let automaticBalances = store.isActive && BankNotificationAI.enabled(for: store)
         let result: AutomationResult
-        do { result = try store.change { try $0.applyDelivery(delivery) } }
+        do { result = try store.change { try $0.applyDelivery(delivery, analysis: analysis, automaticBalances: automaticBalances) } }
         catch {
             delivery.attempts += 1; delivery.lastAttempt = Date()
             delivery.lastError = String(error.localizedDescription.prefix(1000))

@@ -1,5 +1,91 @@
 import AppIntents
 import Foundation
+
+/// Model output is a proposal. Original-text, amount, direction and account checks
+/// remain local; a model never chooses a ledger account ID or a balance.
+struct BankNotificationAnalysis: Decodable {
+    let kind: String
+    let amount: String
+    let currency: String
+    let party: String
+    let accountSuffix: String
+    let transferPeer: String
+    let evidence: String
+    let completed: Bool
+
+    func checked(body: String, title: String, source: String?) -> TNGParsed? {
+        let provider = notificationProvider(sourceApp: source, title: title, body: body)
+        guard completed, currency == "MYR", provider != "银行 / TNG",
+              ["payment", "incoming", "transfer", "topup"].contains(kind),
+              !isNonTransactionNotification(body, title: title),
+              amount.range(of: #"\A[0-9]{1,8}\.[0-9]{2}\z"#, options: .regularExpression) != nil,
+              let cents = try? toCents(amount), cents > 0,
+              singleNotificationAmount(body) == cents,
+              !party.isEmpty, party.count <= 200, body.contains(party),
+              !evidence.isEmpty, evidence.count <= 1000, body.contains(evidence), singleNotificationAmount(evidence) == cents,
+              !notificationMatches(body, #"\b(?:will|would|could|scheduled|awaiting|request|not|never|unsuccessful|declined|failed|pending)\b|将会|待处理|未成功|未到账"#),
+              !notificationMatches(body, #"\b(?:refund|reversal|reversed|cash\s?back|credit card (?:bill|payment)|loan|repayment|USD|SGD|EUR|GBP|CNY|JPY)\b|退款|返现|信用卡还款"#),
+              !notificationMatches(party, #"[!?\n]|\d{8,}|\b(?:please|ignore|instructions|pending|failed|declined)\b"#) else { return nil }
+        if let heading = financialProvider(title), heading != provider { return nil }
+        if let channel = notificationChannel(notificationText(body)), let channelBank = exactFinancialProvider(channel.name), channelBank != provider { return nil }
+        let incoming = #"\b(?:received|credited|deposited|diterima|dikreditkan)\b|已到账|已入账|已收到"#
+        let outgoing = #"\b(?:paid|made (?:an? )?(?:online )?payment|sent|transferred|debited|charged|spent|membayar|didebitkan)\b|已支付|已付款|已转出|已扣款"#
+        if kind == "incoming" {
+            guard notificationMatches(evidence, incoming), !notificationMatches(evidence, outgoing),
+                  !notificationMatches(title, #"\b(?:outgoing|payment|sent)\b|转出|付款"#) else { return nil }
+        } else {
+            guard notificationMatches(evidence, outgoing), !notificationMatches(evidence, incoming),
+                  !notificationMatches(title, #"\b(?:incoming|received|credited)\b|转入|收款"#) else { return nil }
+        }
+        if kind == "payment", notificationMatches(body, #"\b(?:transfer|transferred|top[- ]?up|reload|sent)\b|转账|充值"#) { return nil }
+        if kind == "payment", !notificationMatches(evidence, #"\b(?:paid|payment|purchase|spent|charged|membayar)\b|已支付|已付款"#) { return nil }
+        var suffix: String?
+        if !accountSuffix.isEmpty {
+            guard accountSuffix.range(of: #"\A[0-9]{4}\z"#, options: .regularExpression) != nil,
+                  notificationMatches(body, #"\byour (?:bank )?(?:account|card) (?:ending (?:in )?|\*+)"# + accountSuffix + #"\b"#) else { return nil }
+            suffix = accountSuffix
+        }
+        var peer: String?
+        if !transferPeer.isEmpty {
+            guard ["transfer", "topup", "incoming"].contains(kind), body.contains(transferPeer),
+                  let other = exactFinancialProvider(transferPeer), other != provider else { return nil }
+            peer = other
+        }
+        if kind == "topup" {
+            guard peer == "TNG", notificationMatches(body, #"\b(?:top[- ]?up|reload)\b|充值"#) else { return nil }
+        }
+        return TNGParsed(kind: kind == "topup" ? "transfer" : kind, cents: cents, party: party,
+                         sourceBank: provider, accountSuffix: suffix, reference: notificationReference(body), transferPeer: peer)
+    }
+}
+
+enum BankNotificationAI {
+    static func key(for store: LocalStore) -> String { "bankNotificationGemini.v1." + store.folder.path }
+    static func enabled(for store: LocalStore) -> Bool { UserDefaults.standard.bool(forKey: key(for: store)) }
+    static func checkConnection(store: LocalStore) async throws {
+        guard let configuration = CloudConfiguration.bundled else { throw CloudFailure.configuration }
+        guard let credential = try CloudCredentials.read(), credential.server == configuration.server,
+              let link = try store.cloudLink(), link.accepts(userID: credential.session.user.id, server: credential.server) else { throw CloudFailure.session }
+        let api = SupabaseCloudService(configuration: configuration, session: credential.session)
+        let data = try await api.analyseBankNotification(body: "You made an online payment of RM1.00 to TEST SHOP.", title: "Money Paid", source: "Public Bank")
+        _ = try JSONDecoder().decode(BankNotificationAnalysis.self, from: data)
+    }
+    static func analyse(_ delivery: AutomationDelivery, store: LocalStore) async -> BankNotificationAnalysis? {
+        guard enabled(for: store), store.isActive, delivery.kind == "notification",
+              shouldReviewFinancialNotification(delivery.body, title: delivery.title),
+              let configuration = CloudConfiguration.bundled,
+              let credential = try? CloudCredentials.read(), credential.server == configuration.server,
+              let link = try? store.cloudLink(), link.accepts(userID: credential.session.user.id, server: credential.server) else { return nil }
+        let api = SupabaseCloudService(configuration: configuration, session: credential.session)
+        // No ledger lock is held while awaiting the network. An expired session
+        // falls back locally; normal account synchronization refreshes credentials.
+        guard let data = try? await api.analyseBankNotification(body: delivery.body, title: delivery.title, source: delivery.source),
+              store.isActive, enabled(for: store),
+              let current = try? CloudCredentials.read(), current.session.user.id == credential.session.user.id,
+              current.server == credential.server else { return nil }
+        return try? JSONDecoder().decode(BankNotificationAnalysis.self, from: data)
+    }
+}
 #if canImport(FoundationModels)
 import FoundationModels
 #endif

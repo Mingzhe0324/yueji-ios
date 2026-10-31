@@ -110,6 +110,18 @@ final class TransactionFormTests: XCTestCase {
         app.terminate(); app.launch()
         XCTAssertTrue(addEntry.waitForExistence(timeout: 20))
         let purchase = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", merchantName)).firstMatch
+        // Long-press creates a separate preview host. It must have the ledger model,
+        // stay alive, and still let the user edit and cancel before opening details.
+        reveal(purchase, in: app); purchase.press(forDuration: 1.2)
+        let contextEdit = app.buttons["Edit"].firstMatch
+        XCTAssertTrue(contextEdit.waitForExistence(timeout: 5), "Recent entry context menu must open without terminating the app")
+        XCTAssertEqual(app.state, .runningForeground)
+        XCTAssertTrue(app.buttons["Delete"].firstMatch.exists)
+        contextEdit.tap()
+        let expenseEditor = app.navigationBars["Edit expense"]
+        XCTAssertTrue(expenseEditor.waitForExistence(timeout: 5))
+        expenseEditor.buttons["Cancel"].tap()
+        waitUntilGone(expenseEditor)
         // Match the recording: Overview -> saved purchase without items -> Add items.
         reveal(purchase, in: app); purchase.tap()
         XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 5))

@@ -1,6 +1,39 @@
 import XCTest
 @testable import YueJi
 
+final class ReceiptCategoryAllocationTests: XCTestCase {
+    func testFinalLineAmountsPreserveOwnershipCategoriesAndEveryCent() throws {
+        let me = UUID(), friend = ReceiptPerson(name: "Alex")
+        let people = [ReceiptPerson(id: me, name: "Me"), friend]
+        let items = [ScannedReceipt.Item(name: "Lunch", amount: "10.00", people: [me], category: "餐饮"),
+                     ScannedReceipt.Item(name: "Soap", amount: "20.00", people: [friend.id], category: "购物")]
+        let saved = try ReceiptSplit.classifiedItems(items, total: 3151, people: people, myID: me, byItem: true)
+        XCTAssertEqual(saved.map(\.cents), [1050, 2101])
+        var entry = Expense(merchant: "Shop", cents: 3151, shares: [Share(name: "Alex", cents: 2101)])
+        entry.items = saved
+        try entry.validateItems(allowedCategories: ["餐饮", "购物"])
+        XCTAssertEqual(entry.personalAmount(category: "餐饮"), 1050)
+        XCTAssertEqual(entry.personalAmount(category: "购物"), 0)
+        XCTAssertEqual(saved.reduce(0) { $0 + $1.cents }, entry.cents)
+    }
+    func testEqualSharingUsesTheSameFinalLineOwnershipForPreviewAndSave() throws {
+        let me = UUID(), friend = ReceiptPerson(name: "Alex")
+        let people = [ReceiptPerson(id: me, name: "Me"), friend]
+        let items = [ScannedReceipt.Item(name: "A", amount: "1.00"), ScannedReceipt.Item(name: "B", amount: "2.00")]
+        let saved = try ReceiptSplit.classifiedItems(items, total: 299, people: people, myID: me, byItem: false)
+        let theirs = saved.reduce(0) { $0 + $1.friendGross("Alex") }
+        var entry = Expense(merchant: "Shop", cents: 299, shares: [Share(name: "Alex", cents: theirs)])
+        entry.items = saved
+        try entry.validateItems()
+        XCTAssertEqual(saved.reduce(0) { $0 + $1.personalGross } + theirs, 299)
+    }
+    func testOversizedAndUnassignedReceiptsAreNotSilentlyTruncated() throws {
+        let item = ScannedReceipt.Item(name: "A", amount: "1.00")
+        XCTAssertThrowsError(try ReceiptSplit.classifiedItems(Array(repeating: item, count: 101), total: 10100, people: [], myID: UUID(), byItem: false))
+        XCTAssertThrowsError(try ReceiptSplit.classifiedItems([item], total: 100, people: [], myID: UUID(), byItem: true))
+    }
+}
+
 final class GeminiReceiptDraftTests: XCTestCase {
     private func draft(currency: String = "MYR", total: String = "10.00") throws -> GeminiReceiptDraft {
         let object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": currency,
@@ -352,6 +385,106 @@ final class BankAccountTests: XCTestCase {
         expense.bankAccountID = "missing"
         ledger.expenses = [expense]
         XCTAssertThrowsError(try ledger.validated())
+    }
+}
+
+final class BankNotificationAITests: XCTestCase {
+    private let stamp = Date(timeIntervalSince1970: 1_790_000_000)
+    private let payment = "You made an online payment of RM12.50 to SHOP."
+    private func proposal(_ body: String, kind: String = "payment", amount: String = "12.50", party: String = "SHOP", peer: String = "", suffix: String = "", completed: Bool = true) -> BankNotificationAnalysis {
+        BankNotificationAnalysis(kind: kind, amount: amount, currency: "MYR", party: party, accountSuffix: suffix, transferPeer: peer, evidence: body, completed: completed)
+    }
+    private func account(_ name: String) -> BankAccount {
+        var value = BankAccount(name: name, openingCents: 10000, openingDate: stamp.addingTimeInterval(-60))
+        value.automaticSource = name
+        return value
+    }
+    func testVerifiedPaymentDebitsMatchedAccountOnceAndKeepsOriginalText() throws {
+        let bank = account("Public Bank")
+        var ledger = Ledger(); ledger.bankAccounts = [bank]
+        var delivery = AutomationDelivery(kind: "notification", body: payment, title: "Money Paid")
+        delivery.sourceApp = "Public Bank"; delivery.receivedAt = stamp
+        let result = try ledger.applyDelivery(delivery, analysis: proposal(payment), automaticBalances: true)
+        XCTAssertNotNil(result.expenseID)
+        XCTAssertEqual(ledger.bankBalance(bank), 8750)
+        XCTAssertEqual(ledger.tngNotices.first?.body, payment)
+        _ = try ledger.applyDelivery(delivery, analysis: proposal(payment), automaticBalances: true)
+        delivery.id = UUID().uuidString
+        _ = try ledger.applyDelivery(delivery, analysis: proposal(payment), automaticBalances: true)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.bankBalance(bank), 8750)
+    }
+    func testUnmatchedAccountAndDisabledAILeaveUnfamiliarPaymentPending() throws {
+        for enabled in [false, true] {
+            var ledger = Ledger()
+            _ = try ledger.receiveTNG(body: payment, date: stamp, eventID: nil, sourceApp: "Public Bank", analysis: proposal(payment), automaticBalances: enabled)
+            XCTAssertTrue(ledger.expenses.isEmpty)
+            XCTAssertEqual(ledger.tngNotices.first?.status, "pending")
+        }
+    }
+    func testRejectsInventedAmountWrongDirectionFailedAndAmbiguousNotifications() {
+        XCTAssertNil(proposal(payment, amount: "99.00").checked(body: payment, title: "", source: "Public Bank"))
+        XCTAssertNil(proposal(payment, kind: "incoming").checked(body: payment, title: "", source: "Public Bank"))
+        XCTAssertNil(proposal(payment, party: "INVENTED").checked(body: payment, title: "", source: "Public Bank"))
+        XCTAssertNil(proposal(payment, suffix: "1234").checked(body: payment, title: "", source: "Public Bank"))
+        XCTAssertNil(proposal(payment, completed: false).checked(body: payment, title: "", source: "Public Bank"))
+        for body in [payment + " Payment failed.", payment + " Available balance RM100.00"] {
+            XCTAssertNil(proposal(body).checked(body: body, title: "", source: "Public Bank"))
+        }
+    }
+    func testConfirmedIncomingCreditsBalanceWithoutInventingIncomeAndNoDoubleCreditAfterConfirmation() throws {
+        let bank = account("Public Bank")
+        var ledger = Ledger(); ledger.bankAccounts = [bank]
+        let body = "You have received RM12.50 from OWNER."
+        _ = try ledger.receiveTNG(body: body, date: stamp, eventID: "credit", sourceApp: "Public Bank", automaticBalances: true)
+        XCTAssertEqual(ledger.bankBalance(bank), 11250)
+        XCTAssertTrue(ledger.incomes.isEmpty)
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+        try ledger.resolveTNGIncoming(id: id, purpose: "income", date: stamp)
+        XCTAssertEqual(ledger.bankBalance(bank), 11250)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.bankBalance(bank), 11250)
+    }
+    func testPBToTNGReloadPairsBothDirectionsWithoutDoubleCreditOrExpense() throws {
+        for reversed in [false, true] {
+            var bank = account("Public Bank"); let wallet = account("TNG")
+            bank.transferDestinationID = wallet.id; bank.transferOwnerName = "OWNER"; bank.transferRuleSince = stamp.addingTimeInterval(-30)
+            var ledger = Ledger(); ledger.bankAccounts = [bank, wallet]
+            let out = "You have paid RM10.00 to TNG for a reload."
+            let incoming = "You have received RM10.00 from OWNER."
+            for isIncoming in (reversed ? [true, false] : [false, true]) {
+                _ = try ledger.receiveTNG(body: isIncoming ? incoming : out, date: stamp, eventID: isIncoming ? "in" : "out",
+                    sourceApp: isIncoming ? "TNG" : "Public Bank",
+                    analysis: isIncoming ? nil : proposal(out, kind: "topup", amount: "10.00", party: "TNG", peer: "TNG"), automaticBalances: true)
+            }
+            XCTAssertEqual(ledger.bankTransfers.count, 1)
+            XCTAssertEqual(ledger.bankBalance(bank), 9000)
+            XCTAssertEqual(ledger.bankBalance(wallet), 11000)
+            XCTAssertTrue(ledger.expenses.isEmpty)
+            XCTAssertTrue(ledger.incomes.isEmpty)
+            XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.resolution == "ownTransfer" })
+            let transferNotice = try XCTUnwrap(ledger.bankTransfers.first?.noticeIDs?.first)
+            try ledger.reopenResolvedNotice(id: transferNotice)
+            XCTAssertTrue(ledger.bankTransfers.isEmpty)
+            XCTAssertEqual(ledger.bankBalance(bank), 10000)
+            XCTAssertEqual(ledger.bankBalance(wallet), 10000)
+        }
+    }
+    func testAITransferCannotGuessMissingSideOrOverrideLocalPayment() throws {
+        let bank = account("Public Bank"); let wallet = account("TNG")
+        var ledger = Ledger(); ledger.bankAccounts = [bank, wallet]
+        let out = "You have paid RM10.00 to TNG for a reload."
+        _ = try ledger.receiveTNG(body: out, date: stamp, eventID: "out", sourceApp: "Public Bank",
+                                 analysis: proposal(out, kind: "topup", amount: "10.00", party: "TNG", peer: "TNG"), automaticBalances: true)
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertEqual(ledger.bankBalance(bank), 10000)
+        let ordinary = "You have paid RM12.50 to SHOP."
+        _ = try ledger.receiveTNG(body: ordinary, date: stamp, eventID: "payment", sourceApp: "Public Bank",
+                                 analysis: proposal(ordinary, kind: "incoming"), automaticBalances: true)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.bankBalance(bank), 8750)
     }
 }
 

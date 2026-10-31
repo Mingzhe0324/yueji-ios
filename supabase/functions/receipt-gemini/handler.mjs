@@ -63,7 +63,12 @@ export async function handleReceipt(request, deps) {
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { inlineData: { mimeType: "image/jpeg", data: image } }] }],
         generationConfig: { temperature: 0, maxOutputTokens: 8192, responseMimeType: "application/json", responseSchema: schema } }),
     });
-    if (!response.ok) return reply(response.status === 429 ? 429 : 502, { error: "recognition_failed" });
+    if (!response.ok) {
+      // Return only stable error codes, never Google's response body or credentials.
+      const error = ({ 400: "model_request_rejected", 401: "model_access_denied", 403: "model_access_denied",
+        404: "model_unavailable", 429: "model_rate_limit" })[response.status] ?? "recognition_failed";
+      return reply(response.status === 429 ? 429 : 502, { error });
+    }
     const result = JSON.parse(await limitedText(response.body, 250_000));
     const candidate = result.candidates?.[0];
     if (candidate?.finishReason !== "STOP") return reply(422, { error: "incomplete_receipt" });

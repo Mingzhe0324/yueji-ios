@@ -662,7 +662,7 @@ struct MonthPicker: View {
     }
 }
 /// Pages the Overview's quick actions and section links open.
-private enum OverviewRoute: Hashable { case receipt, automation, savings, travel, comparison(Date), year(Date) }
+private enum OverviewRoute: Hashable { case receipt, automation, assistant, savings, travel, comparison(Date), year(Date) }
 
 struct DashboardView: View {
     @Environment(\.locale) private var uiLocale
@@ -817,6 +817,11 @@ struct DashboardView: View {
                 // follow, each card under a bold heading with "View all" where there is
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
+                Section {
+                    NavigationLink(value: OverviewRoute.assistant) {
+                        Label(tr("月记 AI · 记账与核对", "YueJi AI · Record and review", "YueJi AI · Rekod dan semak"), systemImage: "sparkles")
+                    }
+                }
                 budgetSection
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
@@ -843,6 +848,7 @@ struct DashboardView: View {
                 switch route {
                 case .receipt: ReceiptScanView()
                 case .automation: AutomationSetupView()
+                case .assistant: AIAssistantView()
                 case .savings: SavingsGoalsView()
                 case .travel: TravelBooksView()
                 case .comparison(let month): SpendingComparisonView(month: month)
@@ -1771,6 +1777,7 @@ private struct RestoredRecordHighlight: ViewModifier {
 }
 private struct ExpenseContextActions: ViewModifier {
     @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
     let entry: Expense
     let edit: () -> Void
     let delete: () -> Void
@@ -1783,6 +1790,9 @@ private struct ExpenseContextActions: ViewModifier {
                 Button(tr("删除", "Delete", "Padam"), systemImage: "trash", role: .destructive, action: delete)
             } preview: {
                 ExpenseRow(entry: entry)
+                    // Context previews are hosted separately from the navigation row.
+                    // Supply the model used by category styling and restore feedback.
+                    .environmentObject(model)
                     .padding(20).frame(idealWidth: 320, maxWidth: 360)
                     .fixedSize(horizontal: false, vertical: true)
                     .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 20))
@@ -2742,6 +2752,7 @@ struct ExpenseEditor: View {
     @State private var deleting: Expense?
     @State private var name = ""
     @State private var entryDescription = ""
+    @State private var manualCategory = false
     @State private var place: ExpensePlace?
     @State private var bankAccountID: String?
     @State private var tripID: String?
@@ -2850,7 +2861,7 @@ struct ExpenseEditor: View {
                 ExpensePlaceField(place: $place, locator: placeLocator, notice: placeNotice) {
                     finishKeyboard(); editingPlace = true
                 }
-                ExpenseItemsFields(items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
+                ExpenseItemsFields(aiDisabled: saving || draftFinished || (original?.refunded ?? 0) > 0 || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false), items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
                 currencySection
                 friendSplitSection
                 reimbursementSection
@@ -3056,7 +3067,10 @@ struct ExpenseEditor: View {
             }.padding(.vertical, 4)
             // Keep this navigation row mounted when the first item is inserted.
             // Removing it in the same Form update can invalidate native navigation.
-            Picker(tr("分类", "Category", "Kategori"), selection: $category) {
+            if itemDrafts.isEmpty {
+                AIClassificationRow(text: entryDescription, categories: model.ledger.categoryNames, category: $category, manuallySelected: manualCategory || fuel || saving || draftFinished || resumedDraft || recoverable != nil || (original != nil && entryDescription == original?.entryDescription) || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
+            }
+            Picker(tr("分类", "Category", "Kategori"), selection: Binding(get: { category }, set: { manualCategory = true; category = $0 })) {
                 ForEach(model.ledger.categoryNames, id: \.self) { item in
                     model.ledger.categoryChoice(item).tag(item)
                 }
@@ -3068,6 +3082,7 @@ struct ExpenseEditor: View {
     }
     private var currencySection: some View {
         Section {
+            AICategorySettings()
             Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
                 .disabled(!itemDrafts.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
@@ -3474,6 +3489,11 @@ struct SettingsView: View {
                 Section {
                     AccountSettingsCard()
                 }
+                Section {
+                    NavigationLink { AIAssistantView() } label: {
+                        Label(tr("月记 AI", "YueJi AI", "YueJi AI"), systemImage: "sparkles")
+                    }
+                }
 
                 Section {
                     NavigationLink { appearancePage } label: {
@@ -3847,7 +3867,7 @@ private struct GuideChapter: Identifiable {
         [
             .init(id: "expense", title: tr("记一笔", "Add an expense", "Tambah belanja"), path: "", detail: tr("点“记一笔”，填写金额、商家和日期。", "Tap Add expense, then enter an amount, merchant and date.", "Ketik Tambah belanja, isi amaun, peniaga dan tarikh."), screens: [.overview, .newExpense, .savedExpense]),
             .init(id: "ledger", title: tr("看账本", "Find an entry", "Cari rekod"), path: "", detail: tr("到账本查找记录，再按需要筛选。", "Find entries in Ledger and narrow them down with filters.", "Cari rekod dalam Lejar dan tapis jika perlu."), screens: [.ledger, .filter, .filteredLedger]),
-            .init(id: "receipt", title: tr("扫描收据", "Scan a receipt", "Imbas resit"), path: "", detail: tr("选照片后核对金额和日期，再按菜品分给每个人。画面使用示例收据数据。", "Choose a photo, check the amounts and date, then assign each item. This demonstration uses sample data.", "Pilih foto, semak amaun dan tarikh, lalu bahagi item. Demonstrasi menggunakan data contoh."), screens: [.receiptEntry, .receipt(0), .receipt(1), .receipt(2), .receipt(3), .receipt(4)]),
+            .init(id: "receipt", title: tr("扫描收据", "Scan a receipt", "Imbas resit"), path: "", detail: tr("选照片后核对金额和日期，再按项目分给每个人。画面使用示例收据数据。", "Choose a photo, check the amounts and date, then assign each item. This demonstration uses sample data.", "Pilih foto, semak amaun dan tarikh, lalu bahagi item. Demonstrasi menggunakan data contoh."), screens: [.receiptEntry, .receipt(0), .receipt(1), .receipt(2), .receipt(3), .receipt(4)]),
             .init(id: "split", title: tr("朋友分账", "Split with friends", "Bahagi bersama rakan"), path: "", detail: tr("从账本打开一笔消费，再按各自份额分账。", "Open an entry in Ledger and assign each friend's share.", "Buka rekod dalam Lejar dan tetapkan bahagian setiap rakan."), screens: [.ledger, .expenseDetail, .editExpense, .splitEditor, .friends]),
             .init(id: "repayment", title: tr("朋友还款", "Record a repayment", "Rekod bayaran rakan"), path: "", detail: tr("打开朋友的欠款，按实际收到的金额记录还款。", "Open a friend's balance and record the amount received.", "Buka baki rakan dan rekod amaun yang diterima."), screens: [.friends, .friendDetail, .repaymentDone]),
             .init(id: "recurring", title: tr("固定消费", "Recurring bills", "Belanja berulang"), path: "", detail: tr("新增计划，设置金额、周期和开始日期。", "Add a schedule with its amount, frequency and start date.", "Tambah jadual bersama amaun, kekerapan dan tarikh mula."), screens: [.recurring, .recurringEditor, .recurring]),
@@ -4016,8 +4036,8 @@ private enum GuideCue {
         case .receiptEntry: return tr("在概览的“更多工具”打开“收据分账”。", "Open Receipt split in Overview’s More tools.", "Buka Bahagi resit dalam Alat lain di Ringkasan.")
         case .receipt(0): return tr("选择一张完整的收据照片。", "Choose a photo of the full receipt.", "Pilih foto resit yang lengkap.")
         case .receipt(1): return tr("先核对日期、税费和实付总额。", "Check the date, charges and paid total first.", "Semak tarikh, caj dan jumlah akhir dahulu.")
-        case .receipt(2): return tr("添加一起吃的朋友，选择按菜品分账。", "Add your friends and choose to split by items.", "Tambah rakan dan pilih bahagi mengikut item.")
-        case .receipt(3): return tr("每道菜分给吃它的人，共享菜可选多人。", "Assign each dish to the people who had it.", "Agihkan setiap hidangan kepada pemakannya.")
+        case .receipt(2): return tr("添加参与分账的人，选择按项目分账。", "Add the people sharing the cost and split by items.", "Tambah peserta dan bahagi kos mengikut item.")
+        case .receipt(3): return tr("为每个项目选择承担费用的人，共享项目可选多人。", "Choose who pays for each item; shared items can have several people.", "Pilih pembayar setiap item; item bersama boleh dikongsi beberapa orang.")
         case .receipt(4): return tr("这里显示每人应付，税费已计入。", "Each person's total includes their share of charges.", "Jumlah setiap orang termasuk bahagian cajnya.")
         case .expenseDetail: return tr("先查看账目详情，再点“编辑”。", "Review the entry, then tap Edit.", "Semak rekod, kemudian ketik Edit.")
         case .editExpense: return tr("开启这笔消费的“朋友分账”。", "Enable splitting for this expense.", "Aktifkan pembahagian untuk belanja ini.")
@@ -4313,7 +4333,7 @@ private struct GuideDemoScene: View {
                 }
             }
         case .friends:
-            heading(tr("一起吃，各自分", "Shared, fairly", "Kongsi dengan adil"))
+            heading(tr("共同消费，清楚分账", "Shared, fairly", "Kongsi dengan adil"))
             section {
                 row(tr("朋友还欠你", "Friends owe you", "Rakan berhutang"), "RM 17.49")
             }
@@ -4423,15 +4443,15 @@ private struct GuideDemoScene: View {
                 divider(); row(tr("实付总额", "Paid total", "Jumlah akhir"), "RM 242.55", target: "receipt.total")
             }
         case 2:
-            heading(tr("谁一起吃？", "Who is sharing?", "Siapa berkongsi?"))
+            heading(tr("谁参与分账？", "Who is sharing?", "Siapa berkongsi?"))
             section {
                 row(tr("包括我", "Include me", "Termasuk saya"), "✓")
                 divider(); row(tr("朋友姓名", "Friend's name", "Nama rakan"), "Amy")
                 divider(); row(tr("添加朋友", "Add friend", "Tambah rakan"), icon: "person.badge.plus", target: "receipt.people")
-                divider(); row(tr("怎样分账", "Split method", "Cara bahagi"), tr("按各自点的菜", "By items", "Ikut item"))
+                divider(); row(tr("怎样分账", "Split method", "Cara bahagi"), tr("按项目分账", "By items", "Ikut item"))
             }
         case 3:
-            heading(tr("菜品明细", "Items", "Butiran item"))
+            heading(tr("项目明细", "Items", "Butiran item"))
             section {
                 row("DAAL CHANA FRY", "RM 25.00", target: "receipt.item0")
                 divider(); row("PLAIN NAAN", "RM 33.00", target: "receipt.item1")
@@ -4441,7 +4461,7 @@ private struct GuideDemoScene: View {
                 divider(); row("CH TANDOORI LEG", "RM 30.00")
                 divider(); row("PLAIN PARATHA", "RM 5.00")
                 divider(); row("FRESH LIME JUICE", "RM 10.00")
-                divider(); row(tr("谁吃这道菜？", "Who had this?", "Siapa makan ini?"), "Amy", icon: "person.2")
+                divider(); row(tr("这项费用由谁承担？", "Who pays for this?", "Siapa membayar item ini?"), "Amy", icon: "person.2")
                 divider(); row(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal"), icon: "plus", target: "receipt.items")
                     .id("demo.items")
             }

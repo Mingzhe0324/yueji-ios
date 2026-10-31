@@ -243,6 +243,50 @@ private final class CloudHTTPStub: URLProtocol {
 }
 
 final class CloudHTTPTests: XCTestCase {
+    func testAssistantUsesAuthenticatedEndpointAndPreservesExpiredSession() async throws {
+        let (api, host) = try service(replies: [(200, #"{"category":"Shopping"}"#)], signedIn: true)
+        _ = try await api.assistant(mode: "classify", text: "Soap", categories: ["Shopping"])
+        let request = try XCTUnwrap(CloudHTTPStub.requests(host: host).first)
+        XCTAssertEqual(request.url?.path, "/functions/v1/assistant-gemini")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-fixture")
+        let (expired, _) = try service(replies: [(401, "{}")], signedIn: true)
+        do { _ = try await expired.assistant(mode: "classify", text: "Soap", categories: ["Shopping"]); XCTFail("Expected session refresh") }
+        catch CloudFailure.session {}
+    }
+    func testBankAnalysisUsesAuthenticatedDedicatedFunctionAndOriginalTextOnly() async throws {
+        let (api, host) = try service(replies: [(200, "{}")], signedIn: true)
+        _ = try await api.analyseBankNotification(body: "Original notification", title: "Money Paid", source: "Public Bank")
+        let request = try XCTUnwrap(CloudHTTPStub.requests(host: host).first)
+        XCTAssertEqual(request.url?.path, "/functions/v1/bank-notification-gemini")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-fixture")
+        // URLSession may stream the request body, so endpoint/header checks are
+        // paired with the backend test asserting the exact forwarded fields.
+    }
+    func testReceiptFailuresPreserveActionableCodes() async throws {
+        for (status, failure) in [(503, ReceiptRecognitionFailure.notConfigured), (503, .quotaUnavailable),
+                                  (429, .dailyLimit), (429, .modelRateLimit), (422, .invalidOrNonMYRReceipt),
+                                  (502, .modelAccessDenied), (502, .modelUnavailable)] {
+            let (api, _) = try service(replies: [(status, "{\"error\":\"\(failure.rawValue)\"}")], signedIn: true)
+            do { _ = try await api.recognizeReceipt(image: Data([0xff, 0xd8, 0xff])); XCTFail("Expected receipt failure") }
+            catch let actual as ReceiptRecognitionFailure {
+                XCTAssertEqual(actual, failure)
+                XCTAssertTrue(actual.localizedDescription.contains(failure.rawValue))
+            }
+        }
+    }
+    func testReceiptExpiredSessionStillAllowsAccountRefresh() async throws {
+        let (api, _) = try service(replies: [(401, #"{"error":"sign_in_required"}"#)], signedIn: true)
+        do { _ = try await api.recognizeReceipt(image: Data([0xff, 0xd8, 0xff])); XCTFail("Expected session failure") }
+        catch CloudFailure.session {}
+    }
+    func testUnknownReceiptServerErrorDoesNotExposeResponseBody() async throws {
+        let (api, _) = try service(replies: [(502, #"{"error":"private upstream content"}"#)], signedIn: true)
+        do { _ = try await api.recognizeReceipt(image: Data([0xff, 0xd8, 0xff])); XCTFail("Expected failure") }
+        catch {
+            XCTAssertTrue(error.localizedDescription.contains("HTTP 502"))
+            XCTAssertFalse(error.localizedDescription.contains("private upstream content"))
+        }
+    }
     private var sessionJSON: String {
         #"{"access_token":"fixture-access","refresh_token":"fixture-refresh","user":{"id":"00000000-0000-0000-0000-000000000001","email":"test@example.invalid"}}"#
     }

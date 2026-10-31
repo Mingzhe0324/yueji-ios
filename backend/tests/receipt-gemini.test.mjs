@@ -7,13 +7,13 @@ const json = (body, status = 200) => new Response(JSON.stringify(body), { status
 function request(body = { image: '/9j/AAAA' }, auth = 'Bearer test-user') {
   return new Request('https://example.test/functions/v1/receipt-gemini', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify(body) });
 }
-function harness({ userStatus = 200, quota = true, result = draft, finish = 'STOP', modelStatus = 200 } = {}) {
+function harness({ userStatus = 200, quota = true, quotaStatus = 200, result = draft, finish = 'STOP', modelStatus = 200, env = {} } = {}) {
   const calls = [];
-  return { calls, env: name => ({ SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'public', GEMINI_API_KEY: 'server-only', GEMINI_RECEIPT_MODEL: 'gemini-test' })[name],
+  return { calls, env: name => ({ SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'public', GEMINI_API_KEY: 'server-only', GEMINI_RECEIPT_MODEL: 'gemini-test', ...env })[name],
     fetch: async (url, options) => {
       calls.push({ url, options });
       if (url.endsWith('/auth/v1/user')) return json({ id: 'user-1' }, userStatus);
-      if (url.endsWith('/claim_receipt_scan')) return json(quota);
+      if (url.endsWith('/claim_receipt_scan')) return json(quota, quotaStatus);
       return json({ candidates: [{ finishReason: finish, content: { parts: [{ text: JSON.stringify(result) }] } }] }, modelStatus);
     } };
 }
@@ -45,4 +45,28 @@ test('rejects non MYR, invalid amounts and oversized item lists', async () => {
 test('does not accept truncated output or leak upstream errors', async () => {
   assert.equal((await handleReceipt(request(), harness({ finish: 'MAX_TOKENS' }))).status, 422);
   assert.equal((await handleReceipt(request(), harness({ modelStatus: 500 }))).status, 502);
+});
+
+test('distinguishes missing configuration from unavailable quota storage without calling Google', async () => {
+  for (const env of [{ GEMINI_API_KEY: '' }, { GEMINI_RECEIPT_MODEL: '' }, { GEMINI_RECEIPT_MODEL: 'models/gemini-test' }]) {
+    const deps = harness({ env });
+    const response = await handleReceipt(request(), deps);
+    assert.equal(response.status, 503);
+    assert.deepEqual(await response.json(), { error: 'not_configured' });
+    assert.equal(deps.calls.length, 0);
+  }
+  const deps = harness({ quotaStatus: 404 });
+  const response = await handleReceipt(request(), deps);
+  assert.equal(response.status, 503);
+  assert.deepEqual(await response.json(), { error: 'quota_unavailable' });
+  assert.equal(deps.calls.length, 2);
+});
+
+test('reports safe actionable upstream errors without exposing response content', async () => {
+  for (const [modelStatus, error] of [[400, 'model_request_rejected'], [401, 'model_access_denied'],
+    [403, 'model_access_denied'], [404, 'model_unavailable'], [429, 'model_rate_limit'], [500, 'recognition_failed']]) {
+    const response = await handleReceipt(request(), harness({ modelStatus, result: { secret: 'must not be returned' } }));
+    assert.equal(response.status, modelStatus === 429 ? 429 : 502);
+    assert.deepEqual(await response.json(), { error });
+  }
 });

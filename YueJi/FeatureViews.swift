@@ -2420,9 +2420,32 @@ struct TNGNoticeView: View {
 }
 struct TNGSetupView: View {
     @Environment(\.locale) private var uiLocale
+    @AppStorage(BankNotificationAI.key(for: LocalStore.shared)) private var bankAI = false
+    @State private var checkingBankAI = false
+    @State private var bankAIMessage: String?
     var body: some View {
         let _ = uiLocale.identifier
         List {
+            Section(tr("Gemini 银行通知助手", "Gemini bank notification assistant", "Pembantu notifikasi bank Gemini")) {
+                Toggle(tr("AI 自动分析与账户记账", "AI analysis and account recording", "Analisis AI dan rekod akaun"), isOn: $bankAI)
+                    .accessibilityIdentifier("bank.gemini.enabled")
+                Text(tr("开启后，新收到的交易通知正文、标题及银行名称会发送给 Google Gemini，需要登录和联网。原文金额、交易状态、账户及重复检查通过后才自动处理；无法确认的留待核对。AI 不会操作银行实际转账。", "When enabled, new transaction notification text, titles and bank names are sent to Google Gemini. Sign-in and internet are required. Automatic processing requires amount, status, account and duplicate checks; uncertain entries need review. AI cannot move money at your bank.", "Apabila diaktifkan, teks, tajuk dan nama bank notifikasi transaksi baharu dihantar ke Google Gemini. Log masuk dan internet diperlukan. Rekod automatik memerlukan semakan amaun, status, akaun dan pendua; yang tidak pasti menunggu semakan. AI tidak memindahkan wang di bank.")).font(.caption).foregroundStyle(.secondary)
+                if bankAI {
+                    Button(tr("检查 AI 连接（使用示例通知）", "Check AI connection (sample notification)", "Semak sambungan AI (notifikasi contoh)")) {
+                        checkingBankAI = true
+                        let store = LocalStore.shared
+                        Task { @MainActor in
+                            defer { checkingBankAI = false }
+                            do {
+                                try await BankNotificationAI.checkConnection(store: store)
+                                bankAIMessage = tr("银行 AI 连接正常，未创建账目。", "Bank AI connection succeeded. No entry was created.", "Sambungan AI bank berjaya. Tiada rekod dicipta.")
+                            } catch { bankAIMessage = error.localizedDescription }
+                        }
+                    }.disabled(checkingBankAI)
+                    if checkingBankAI { ProgressView() }
+                    Text(tr("明确付款扣匹配账户余额；明确收款先加余额，用途另行确认。本人互转仍需设置转出→转入账户及姓名，并收到可唯一配对的两侧通知。服务不可用时使用本机规则，陌生格式保留待确认。仅对新通知生效。", "Clear payments debit the matched account; clear receipts credit its balance before purpose review. Own transfers require a configured route/name and a unique pair of notifications. If the service is unavailable, local rules apply and unfamiliar formats stay for review. New notifications only.", "Bayaran jelas menolak baki akaun sepadan; penerimaan jelas menambah baki sebelum tujuan disemak. Pindahan sendiri memerlukan laluan/nama dan pasangan notifikasi unik. Jika perkhidmatan gagal, peraturan setempat digunakan dan format baharu menunggu semakan. Notifikasi baharu sahaja.")).font(.caption)
+                }
+            }
             Section(tr("接入你的银行", "Connect your bank", "Sambungkan bank anda")) {
                 Text(tr("在快捷指令的通知触发器里点 App 旁的 ＋，加入你使用的银行或 TNG。银行名称不限；能否触发取决于系统是否收到并传入通知。", "In the Shortcuts notification trigger, tap + next to App and add your bank or TNG. Any bank name is accepted; triggering depends on the system receiving and forwarding the notification.", "Dalam pencetus notifikasi Pintasan, tekan + di sebelah App dan tambah bank anda atau TNG. Sebarang nama bank diterima; pencetus bergantung pada sistem menerima dan menghantar notifikasi."))
                 Text(tr("动作选择「记录银行与 TNG 通知」，正文连接 Body，标题连接 Title，时间连接 Date（若有）。不要填写固定交易编号。", "Choose Record bank and TNG notification. Connect the body to Body, title to Title and time to Date if available. Do not use a fixed transaction ID.", "Pilih Rekod notifikasi bank dan TNG. Sambungkan teks kepada Body, tajuk kepada Title dan masa kepada Date jika ada. Jangan gunakan ID transaksi tetap."))
@@ -2438,6 +2461,9 @@ struct TNGSetupView: View {
             }
             NavigationLink(tr("TNG 详细指南", "Detailed TNG guide", "Panduan TNG terperinci")) { ShortcutSetupGuide(provider: .tng) }
         }.yuejiListSurface().navigationTitle(tr("银行通知设置", "Bank notification setup", "Persediaan notifikasi bank"))
+            .alert(tr("银行 AI", "Bank AI", "AI bank"), isPresented: Binding(get: { bankAIMessage != nil }, set: { if !$0 { bankAIMessage = nil } })) {
+                Button("OK") { bankAIMessage = nil }
+            } message: { Text(bankAIMessage ?? "") }
     }
 }
 
@@ -2458,6 +2484,7 @@ struct ScannedReceipt {
         var people: Set<UUID> = []
         var quantity = ""
         var unitPrice = ""
+        var category = "其他"
     }
     var merchant = ""
     var date: Date?
@@ -2578,8 +2605,26 @@ struct ReceiptPerson: Identifiable {
     var name: String
 }
 
-// Largest-remainder allocation conserves every cent, including shared dishes and charges.
+// Largest-remainder allocation conserves every cent, including shared items and charges.
 enum ReceiptSplit {
+    /// Persist final line totals, with charges/discounts allocated once. Printed
+    /// amounts remain in receiptSummary. Preview and saving use the same cents.
+    static func classifiedItems(_ items: [ScannedReceipt.Item], total: Int, people: [ReceiptPerson], myID: UUID, byItem: Bool) throws -> [ExpenseItem] {
+        guard !items.isEmpty, items.count <= 100 else {
+            throw reviewError("分类明细支持 1–100 件物品。", "Categorized receipts support 1–100 items.", "Resit berkategori menyokong 1–100 item.")
+        }
+        let weights = try items.map { try toCents($0.amount) }
+        let amounts = try allocate(total, weights: weights)
+        return try zip(items, amounts).map { item, amount in
+            guard amount > 0, !item.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                throw reviewError("请合并零金额项目，并填写物品名称。", "Merge zero-value lines and enter item names.", "Gabungkan baris bernilai sifar dan isi nama item.")
+            }
+            let owners = byItem ? people.filter { item.people.contains($0.id) } : people
+            let ownership = ItemOwnership(includesMe: owners.contains { $0.id == myID }, friends: owners.filter { $0.id != myID }.map { $0.name.trimmingCharacters(in: .whitespacesAndNewlines) })
+            try ownership.validate()
+            return ExpenseItem(id: item.id.uuidString, name: item.name, cents: amount, category: item.category, ownership: ownership)
+        }
+    }
     static func allocate(_ total: Int, weights: [Int]) throws -> [Int] {
         guard !weights.isEmpty, weights.allSatisfy({ $0 >= 0 && $0 <= 10_000_000_000 }),
               total >= 0, total <= 10_000_000_000, weights.reduce(0, +) > 0 else { throw LedgerError.invalid("Invalid receipt amount") }
@@ -2609,7 +2654,7 @@ enum ReceiptSplit {
             }
             let owners = people.indices.filter { item.people.contains(people[$0]) }
             guard cents == 0 || (!owners.isEmpty && item.people.isSubset(of: Set(people))) else {
-                throw reviewError("请为每道菜选择由谁付款。", "Choose who pays for each item.", "Pilih pembayar setiap item.")
+                throw reviewError("请为每个项目选择由谁付款。", "Choose who pays for each item.", "Pilih pembayar setiap item.")
             }
             sum += cents
             if cents > 0 {
@@ -3052,7 +3097,19 @@ struct ReceiptScanView: View {
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
     @State private var comparingItem: ScannedReceipt.Item?
-    @State private var useGemini = false
+    @AppStorage("receiptUseGemini") private var useGemini = false
+    @State private var category = "其他"
+
+    @State private var itemizeCategories = false
+    @State private var manualItemCategories = Set<UUID>()
+    private var savesCategories: Bool { itemizeCategories && existingID.isEmpty }
+    private func classifiedItems() throws -> [ExpenseItem] {
+        let costs = try costs()
+        guard try items.reduce(0, { try $0 + toCents($1.amount) }) == costs.base else {
+            throw reviewError("商品合计必须等于收据小计。", "Item totals must match the receipt subtotal.", "Jumlah item mesti sama dengan subjumlah resit.")
+        }
+        return try ReceiptSplit.classifiedItems(items, total: costs.total, people: people, myID: myID, byItem: byItem)
+    }
 
     private var people: [ReceiptPerson] {
         (includeMe ? [ReceiptPerson(id: myID, name: tr("我", "Me", "Saya"))] : []) + friends
@@ -3081,6 +3138,11 @@ struct ReceiptScanView: View {
         if byItem { food = try ReceiptSplit.food(items: items, people: people.map(\.id), subtotal: amounts.base) }
         else { food = try ReceiptSplit.allocate(amounts.base, weights: Array(repeating: 1, count: people.count)) }
         let weights = byItem ? food : Array(repeating: 1, count: people.count)
+        if savesCategories {
+            let classified = try classifiedItems()
+            let totals = people.map { person in classified.reduce(0) { $0 + (person.id == myID ? $1.personalGross : $1.friendGross(person.name)) } }
+            return (food, totals)
+        }
         return (food, try ReceiptSplit.allocate(amounts.total, weights: weights))
     }
     private var matching: [Expense] {
@@ -3134,7 +3196,7 @@ struct ReceiptScanView: View {
         }
     }
     private var peopleSection: some View {
-        Section(tr("2. 谁一起吃？", "2. Who is sharing?", "2. Siapa berkongsi?")) {
+        Section(tr("2. 谁参与分账？", "2. Who is sharing?", "2. Siapa berkongsi?")) {
             Toggle(tr("包括我", "Include me", "Termasuk saya"), isOn: $includeMe)
                 .onChange(of: includeMe) { _, value in if !value { for i in items.indices { items[i].people.remove(myID) } } }
             ForEach($friends) { $friend in
@@ -3149,7 +3211,7 @@ struct ReceiptScanView: View {
             }
             Button(tr("添加朋友", "Add friend", "Tambah rakan")) { friends.append(ReceiptPerson(name: "")) }.disabled(friends.count >= 20).guideTarget("receipt.people")
             Picker(tr("怎样分账", "Split method", "Cara bahagi"), selection: $byItem) {
-                Text(tr("按各自点的菜", "By items", "Ikut item")).tag(true)
+                Text(tr("按项目分账", "By items", "Ikut item")).tag(true)
                 Text(tr("全部均分", "Split equally", "Sama rata")).tag(false)
             }.pickerStyle(.segmented)
         }
@@ -3157,7 +3219,7 @@ struct ReceiptScanView: View {
     private func itemRow(_ item: Binding<ScannedReceipt.Item>) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(alignment: .top, spacing: 10) {
-                TextField(tr("菜名 / 商品名", "Item name", "Nama item"), text: item.name, axis: .vertical)
+                TextField(tr("项目名称", "Item name", "Nama item"), text: item.name, axis: .vertical)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .accessibilityLabel(tr("商品名称", "Item name", "Nama item"))
                 Text("RM").foregroundStyle(.secondary)
@@ -3208,13 +3270,21 @@ struct ReceiptScanView: View {
                     Button(tr("大家共享", "Everyone shares", "Semua berkongsi")) { item.wrappedValue.people = Set(people.map(\.id)) }
                 } label: {
                     let selected = people.filter { item.wrappedValue.people.contains($0.id) }.map(\.name).joined(separator: "、")
-                    Label(selected.isEmpty ? tr("谁吃这道菜？", "Who had this?", "Siapa makan ini?") : selected, systemImage: "person.2")
+                    Label(selected.isEmpty ? tr("这项费用由谁承担？", "Who pays for this?", "Siapa membayar item ini?") : selected, systemImage: "person.2")
                 }
             }
         }.padding(.vertical, 4)
     }
     private var itemsSection: some View {
-        Section(tr("3. 菜品明细", "3. Items", "3. Butiran item")) {
+        Section(tr("3. 项目明细", "3. Items", "3. Butiran item")) {
+            if existingID.isEmpty {
+                Toggle(tr("按物品保存分类", "Save categories by item", "Simpan kategori mengikut item"), isOn: $itemizeCategories)
+                if savesCategories {
+                    AICategorySettings()
+                    Text(tr("支持最多 100 项；税费、折扣及舍入分摊到各项，按物品归属统计个人消费。原价保留在收据明细。", "Up to 100 items. Charges, discounts and rounding are allocated to lines; personal spending follows ownership. Printed prices remain in receipt details.", "Sehingga 100 item. Caj, diskaun dan pembundaran diagihkan kepada item; belanja peribadi mengikut pemilikan. Harga asal kekal dalam butiran resit."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             if !scanNotice.isEmpty { Text(scanNotice).font(.caption).foregroundStyle(.orange) }
             if let receiptImage {
                 DisclosureGroup(tr("对照收据照片", "Compare receipt photo", "Banding foto resit")) {
@@ -3223,6 +3293,14 @@ struct ReceiptScanView: View {
             }
             ForEach($items) { item in
                 itemRow(item).guideTarget("receipt.item\(items.firstIndex(where: { $0.id == item.wrappedValue.id }) ?? 0)")
+                if savesCategories {
+                    AIClassificationRow(text: item.wrappedValue.name, categories: model.ledger.categoryNames, category: item.category, manuallySelected: manualItemCategories.contains(item.wrappedValue.id) || busy || model.isWorking("receipt-save"), classifyInitial: true)
+                    Picker(tr("物品分类", "Item category", "Kategori item"), selection: Binding(get: { item.wrappedValue.category }, set: {
+                        manualItemCategories.insert(item.wrappedValue.id); item.wrappedValue.category = $0
+                    })) {
+                        ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) }
+                    }
+                }
             }
             Button(tr("补上漏掉的商品", "Add missing item", "Tambah item tertinggal")) { items.append(ScannedReceipt.Item(name: "", amount: "")) }.guideTarget("receipt.items")
             if !items.isEmpty {
@@ -3232,7 +3310,7 @@ struct ReceiptScanView: View {
                     Text(tr("与小计相差：", "Difference from subtotal: ", "Beza daripada subjumlah: ") + money(base - sum)).foregroundStyle(.orange).font(.caption)
                 }
             }
-            if byItem { Text(tr("共享的菜可选择多人；所选的人均分这道菜。", "Select several people for a shared dish; they split that item equally.", "Pilih beberapa orang untuk berkongsi item sama rata.")).font(.caption).foregroundStyle(.secondary) }
+            if byItem { Text(tr("共享项目可选择多人；所选的人均分这项费用。", "Select several people for a shared item; they split its cost equally.", "Pilih beberapa orang untuk berkongsi kos item sama rata.")).font(.caption).foregroundStyle(.secondary) }
         }
     }
     private var resultSection: some View {
@@ -3251,7 +3329,7 @@ struct ReceiptScanView: View {
                             }
                         } else { Text(tr("全部商品均分", "All items split equally", "Semua item dibahagi sama rata")).font(.subheadline) }
                         Divider()
-                        LabeledContent(tr("餐费", "Food", "Makanan"), value: money(result.food[index]))
+                        LabeledContent(tr("项目金额", "Items amount", "Amaun item"), value: money(result.food[index]))
                         LabeledContent(tr("税费、折扣及舍入", "Charges, discount & rounding", "Caj, diskaun & pembundaran"), value: money(result.totals[index] - result.food[index]))
                             .foregroundStyle(.secondary)
                     }.padding(14).background(IslandTheme.accent.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
@@ -3260,7 +3338,7 @@ struct ReceiptScanView: View {
                     Label(tr("分享分账明细", "Share split details", "Kongsi butiran pembahagian"), systemImage: "square.and.arrow.up")
                 }.disabled(!reviewed)
 
-                Text(tr("税费、服务费、折扣和舍入按餐费比例分摊，尾数自动补齐。", "Charges, discounts and rounding follow each person's food share; cents are balanced automatically.", "Caj, diskaun dan pembundaran mengikut bahagian makanan; baki sen diseimbangkan.")).font(.caption).foregroundStyle(.secondary)
+                Text(tr("税费、服务费、折扣和舍入按各自的项目金额比例分摊；全部均分时平均分摊，尾数自动补齐。", "Charges, discounts and rounding follow each person's item amount, or are shared equally when splitting equally; cents are balanced automatically.", "Caj, diskaun dan pembundaran mengikut amaun item setiap orang, atau dibahagi sama rata jika dipilih; baki sen diseimbangkan.")).font(.caption).foregroundStyle(.secondary)
             } else {
                 Text(validationMessage).font(.caption).foregroundStyle(.orange)
             }
@@ -3271,7 +3349,14 @@ struct ReceiptScanView: View {
                 }
                 Text(tr("这笔付款已入账？选原账目，避免重复。", "Already recorded? Choose the original payment to avoid duplicates.", "Sudah direkod? Pilih bayaran asal supaya tidak berganda.")).font(.caption)
             }
-            Toggle(tr("已核对日期、商品和金额", "Date, items and amounts checked", "Tarikh, item dan amaun disemak"), isOn: $reviewed)
+            if existingID.isEmpty && !savesCategories {
+                Picker(tr("分类", "Category", "Kategori"), selection: $category) {
+                    ForEach(model.ledger.categoryNames, id: \.self) { item in
+                        model.ledger.categoryChoice(item).tag(item)
+                    }
+                }.accessibilityIdentifier("receipt.category")
+            }
+            Toggle(tr("已核对日期、项目和金额", "Date, items and amounts checked", "Tarikh, item dan amaun disemak"), isOn: $reviewed)
             Button(tr("保存分账", "Save split", "Simpan pembahagian")) { save() }.disabled(!reviewed || busy || (try? breakdown()) == nil)
         }
     }
@@ -3291,7 +3376,7 @@ struct ReceiptScanView: View {
                     lines.append(item.name + " · " + money(itemShare(item, person: person.id)))
                 }
             } else { lines.append(tr("全部商品均分", "All items split equally", "Semua item dibahagi sama rata")) }
-            lines.append(tr("餐费：", "Food: ", "Makanan: ") + money(result.food[index]))
+            lines.append(tr("项目金额：", "Items amount: ", "Amaun item: ") + money(result.food[index]))
             lines.append(tr("税费、折扣及舍入：", "Charges, discount & rounding: ", "Caj, diskaun & pembundaran: ") + money(result.totals[index] - result.food[index]))
         }
         return lines.joined(separator: "\n")
@@ -3300,15 +3385,15 @@ struct ReceiptScanView: View {
         do { _ = try breakdown(); return "" } catch { return error.localizedDescription }
     }
     private var reviewKey: String {
-        let fields = [merchant, subtotal, tax, service, discount, rounding, printedTotal, existingID, String(date.timeIntervalSince1970), String(includeMe), String(byItem)]
-        let rows = items.map { $0.id.uuidString + $0.name + $0.amount + $0.quantity + $0.unitPrice + $0.people.map(\.uuidString).sorted().joined(separator: ",") }
+        let fields = [merchant, category, subtotal, tax, service, discount, rounding, printedTotal, existingID, String(date.timeIntervalSince1970), String(includeMe), String(byItem), String(savesCategories)]
+        let rows = items.map { $0.id.uuidString + $0.name + $0.amount + $0.quantity + $0.unitPrice + $0.category + $0.people.map(\.uuidString).sorted().joined(separator: ",") }
         return (fields + rows + friends.map { $0.id.uuidString + $0.name }).joined(separator: "|")
     }
     var body: some View {
         let _ = uiLocale.identifier
         ScrollViewReader { proxy in
         Form {
-            Section { PageIntroduction(title: tr("一张收据，分得清楚", "One receipt. Clear shares.", "Satu resit, bahagian jelas."), subtitle: tr("先核对，再分给一起吃的人。", "Review first, then share with your table.", "Semak dahulu, kemudian bahagi bersama.")) }
+            Section { PageIntroduction(title: tr("一张收据，分得清楚", "One receipt. Clear shares.", "Satu resit, bahagian jelas."), subtitle: tr("聚餐、购物或其他消费，核对后按项目或人数分账。", "Meals, shopping or other expenses: review, then split by items or equally.", "Makanan, beli-belah atau belanja lain: semak, kemudian bahagi mengikut item atau sama rata.")) }
                 .listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             captureSection.id(0)
             if hasReceipt {
@@ -3387,7 +3472,7 @@ struct ReceiptScanView: View {
             }
             guard !Task.isCancelled, scanRequest == request else { return false }
             scanNotice = receipt.scanNotice
-            merchant = receipt.merchant; subtotal = receipt.subtotal; tax = receipt.tax
+            merchant = receipt.merchant; category = "其他"; subtotal = receipt.subtotal; tax = receipt.tax
             service = receipt.service; discount = receipt.discount; rounding = receipt.rounding
             printedTotal = receipt.total; items = receipt.items; date = receipt.date ?? Date()
             dateMissing = receipt.date == nil; existingID = ""; hasReceipt = true; receiptImage = UIImage(data: data)
@@ -3417,12 +3502,18 @@ struct ReceiptScanView: View {
                 previous = original
             } else { previous = nil }
             let recordedDate = date
-            let newExpense = Expense(merchant: merchant, cents: total, date: recordedDate, category: "餐饮", source: "Receipt", shares: shares, receiptSummary: summary)
+            var newExpense = Expense(merchant: merchant, cents: total, date: recordedDate, category: category, source: "Receipt", shares: shares, receiptSummary: summary)
+            if savesCategories {
+                newExpense.items = try classifiedItems()
+                newExpense = try newExpense.applyingItemOwnership()
+                try newExpense.validateItems(allowedCategories: model.ledger.categoryNames)
+            }
+            let savedExpense = newExpense
             model.perform(key: "receipt-save", action: { ledger in
                 if let previous {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == previous.id }), ledger.expenses[i] == previous else { throw LedgerError.invalid("Record changed. Reopen it.") }
                     ledger.expenses[i].shares = shares; ledger.expenses[i].receiptSummary = summary; ledger.expenses[i].date = recordedDate
-                } else { ledger.expenses.append(newExpense) }
+                } else { ledger.expenses.append(savedExpense) }
             }, completion: { _ in
                 model.showSaved(); hasReceipt = false; photo = nil; receiptImage = nil; items = []; existingID = ""; reviewed = false
             }, failure: { self.error = $0.localizedDescription })
@@ -4205,6 +4296,192 @@ struct FinancialNoticeReviewView: View {
     }
 }
 
+struct AIAssistantView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var mode = "entry"
+    @State private var text = ""
+    @State private var working = false
+    @State private var failure: String?
+    @State private var draft: Expense?
+    @State private var answer: AssistantResult?
+    @State private var answerMonth = Date()
+    @State private var requestTask: Task<Void, Never>?
+    private var evidence: [Expense] {
+        model.ledger.expenses.filter { entry in
+            monthKey(entry.date) == monthKey(answerMonth) && entry.personalSpending > 0 &&
+            (answer?.intent != "category" || entry.personalAmount(category: answer?.category ?? "") > 0)
+        }.sorted { $0.personalSpending > $1.personalSpending }
+    }
+    private var answerCents: Int {
+        evidence.reduce(0) { $0 + (answer?.intent == "category" ? $1.personalAmount(category: answer?.category ?? "") : $1.personalSpending) }
+    }
+    var body: some View {
+        List {
+            Section {
+                VStack(alignment: .leading, spacing: 10) {
+                    Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.tint).accessibilityHidden(true)
+                    Text(tr("少填一点，记清每一笔", "Less typing. Clearer records.", "Kurang menaip. Rekod lebih jelas."))
+                        .font(.title2.bold())
+                    Text(tr("AI 整理描述，账本负责计算。保存前由你核对。", "AI interprets descriptions; your ledger calculates. Review before saving.", "AI mentafsir penerangan; lejar mengira. Semak sebelum menyimpan."))
+                        .font(.subheadline).foregroundStyle(.secondary)
+                }.padding(.vertical, 8)
+            }
+            Section {
+                Picker(tr("功能", "Action", "Tindakan"), selection: $mode) {
+                    Text(tr("一句话记账", "Quick entry", "Rekod pantas")).tag("entry")
+                    Text(tr("问账本", "Ask ledger", "Tanya lejar")).tag("query")
+                }.pickerStyle(.segmented)
+                TextField(mode == "entry" ? tr("例如：午餐 RM18.50", "e.g. Lunch RM18.50", "cth. Makan tengah hari RM18.50") : tr("例如：这个月购物花了多少？", "e.g. How much on shopping this month?", "cth. Berapa belanja membeli-belah bulan ini?"), text: $text, axis: .vertical)
+                    .lineLimit(2...5).accessibilityIdentifier("ai.input")
+                Button { submit() } label: {
+                    HStack {
+                        Label(mode == "entry" ? tr("生成待核对草稿", "Create draft", "Cipta draf") : tr("查询本月账目", "Ask about this month", "Tanya bulan ini"), systemImage: "sparkles")
+                        Spacer()
+                        if working { ProgressView() }
+                    }
+                }.disabled(working || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text.count > 1000)
+                    .accessibilityIdentifier("ai.submit")
+                if let failure { Text(failure).font(.footnote).foregroundStyle(.secondary) }
+            } footer: {
+                Text(tr("发送输入文字和分类名称给 Google Gemini。一句话记账目前支持单笔 MYR 支出；问答支持本月总额、分类、大额记录和核对。账目明细留在本机。", "Sends your text and category names to Google Gemini. Quick entry supports one MYR expense. Ask about this month's total, categories, largest expenses or checks. Ledger entries stay on device.", "Menghantar teks dan nama kategori ke Google Gemini. Rekod pantas menyokong satu belanja MYR. Tanya jumlah bulan ini, kategori, belanja terbesar atau semakan. Rekod lejar kekal pada peranti."))
+            }
+            if let answer {
+                if ["summary", "category", "largest"].contains(answer.intent ?? "") {
+                    Section(tr("本地账本计算 · ", "Calculated on device · ", "Dikira pada peranti · ") + monthKey(answerMonth)) {
+                        LabeledContent(answer.intent == "category" ? categoryLabel(answer.category) : tr("个人消费合计", "Personal spending", "Belanja peribadi"), value: money(answerCents))
+                            .font(.headline).monospacedDigit()
+                        Text(tr("按个人份额计算，已扣退款；转账不计入消费。下方最多展示 20 笔依据。", "Uses personal shares after refunds; transfers are excluded. Up to 20 supporting entries appear below.", "Menggunakan bahagian peribadi selepas bayaran balik; pindahan dikecualikan. Sehingga 20 rekod sokongan dipaparkan."))
+                            .font(.caption).foregroundStyle(.secondary)
+                        ForEach(Array(evidence.prefix(20))) { entry in
+                            NavigationLink {
+                                ExpenseDetailView(id: entry.id, embeddedInNavigation: true)
+                            } label: {
+                                LabeledContent(entry.displayName, value: money(answer.intent == "category" ? entry.personalAmount(category: answer.category) : entry.personalSpending))
+                            }
+                        }
+                    }
+                } else if answer.intent == "unknown" {
+                    Section { Text(tr("这个问题暂不支持。可以问本月总额、某个分类或大额支出。", "This question is not supported yet. Ask about this month's total, a category, or largest expenses.", "Soalan ini belum disokong. Tanya jumlah bulan ini, kategori atau belanja terbesar.")) }
+                }
+            }
+            Section(tr("核对与自动记账", "Review and automation", "Semakan dan automasi")) {
+                NavigationLink { DuplicateReviewView() } label: { Label(tr("检查疑似重复", "Review possible duplicates", "Semak kemungkinan pendua"), systemImage: "doc.on.doc") }
+                NavigationLink { AutomationStatusView() } label: { Label(tr("待确认与自动记账状态", "Pending items and automation", "Item tertunda dan automasi"), systemImage: "checklist") }
+                NavigationLink { TNGSetupView() } label: { Label(tr("银行通知 AI", "Bank notification AI", "AI notifikasi bank"), systemImage: "building.columns") }
+                NavigationLink { ReceiptScanView() } label: { Label(tr("收据识别与分账", "Receipts and splitting", "Resit dan pembahagian"), systemImage: "doc.viewfinder") }
+            }
+            UnusualSpendingSection(alerts: SpendingAlerts.make(ledger: model.ledger, month: Date()), month: Date())
+            Section { AICategorySettings() }
+        }.yuejiListSurface()
+            .navigationTitle(tr("月记 AI", "YueJi AI", "YueJi AI"))
+            .navigationBarTitleDisplayMode(.inline)
+            .sheet(item: $draft) { ExpenseEditor(original: nil, initialDraft: $0) }
+            .onChange(of: mode) { _, _ in cancel(); answer = nil; failure = nil }
+            .onChange(of: text) { _, _ in cancel(); answer = nil; failure = nil }
+            .onDisappear { cancel() }
+    }
+    private func cancel() { requestTask?.cancel(); requestTask = nil; working = false }
+    private func submit() {
+        cancel(); working = true; failure = nil; answer = nil
+        let submitted = text, action = mode, categories = model.ledger.categoryNames
+        requestTask = Task { @MainActor in
+            do {
+                let data = try await CloudAccount.shared.assistant(mode: action, text: submitted, categories: categories)
+                let result = try JSONDecoder().decode(AssistantResult.self, from: data)
+                try Task.checkCancellation()
+                if action == "entry" {
+                    guard let amount = result.amount, let cents = try? toCents(amount), cents > 0,
+                          let name = result.name, !name.isEmpty, submitted.contains(name),
+                          result.category.isEmpty || categories.contains(result.category) else {
+                        throw reviewError("请描述一笔支出和明确的 MYR 金额。多笔交易请分别输入。", "Describe one expense with an explicit MYR amount. Enter multiple transactions separately.", "Nyatakan satu belanja dengan amaun MYR yang jelas. Masukkan transaksi berasingan.")
+                    }
+                    var expense = Expense(merchant: name, cents: cents, category: result.category.isEmpty ? "其他" : result.category, source: "AI")
+                    expense.entryDescription = submitted
+                    draft = expense
+                } else {
+                    guard ["summary", "category", "largest", "audit", "unknown"].contains(result.intent ?? ""),
+                          result.category.isEmpty || categories.contains(result.category) else { throw CloudFailure.invalidResponse }
+                    answerMonth = Date(); answer = result
+                }
+                working = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                working = false
+                failure = error.localizedDescription
+            }
+        }
+    }
+}
+
+struct AssistantResult: Decodable {
+    let category: String
+    let name: String?
+    let amount: String?
+    let intent: String?
+}
+
+/// Each mounted field owns its request. SwiftUI cancels obsolete requests when
+/// the text changes or a row disappears; manual selections always take priority.
+struct AIClassificationRow: View {
+    let text: String
+    let categories: [String]
+    @Binding var category: String
+    var manuallySelected: Bool = false
+    var classifyInitial = false
+    @AppStorage("aiAutomaticCategories") private var enabled = false
+    @State private var baseline: String?
+    @State private var status = ""
+    @State private var loading = false
+    private var requestKey: String { String(enabled) + String(manuallySelected) + text + categories.joined(separator: "\u{1F}") }
+    var body: some View {
+        HStack(spacing: 8) {
+            if loading { ProgressView().controlSize(.small) }
+            else { Image(systemName: "sparkles").foregroundStyle(.tint) }
+            Text(manuallySelected ? tr("已保留手动分类", "Keeping your category", "Kategori pilihan dikekalkan") : status)
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .accessibilityElement(children: .combine)
+        .task(id: requestKey) {
+            loading = false; status = ""
+            if baseline == nil { baseline = classifyInitial || !enabled ? "" : text; if !classifyInitial { return } }
+            guard enabled, !manuallySelected, text != baseline,
+                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 1000 else { return }
+            let submitted = text, previous = category
+            do {
+                try await Task.sleep(for: .milliseconds(900))
+                loading = true
+                status = tr("正在识别分类…", "Finding a category…", "Mengenal pasti kategori…")
+                let data = try await CloudAccount.shared.assistant(mode: "classify", text: submitted, categories: categories)
+                let result = try JSONDecoder().decode(AssistantResult.self, from: data)
+                try Task.checkCancellation()
+                guard enabled, !manuallySelected, text == submitted, category == previous else { return }
+                if categories.contains(result.category) {
+                    category = result.category
+                    status = tr("AI 已建议分类，可随时修改", "AI category suggested. You can change it.", "Kategori AI dicadangkan. Anda boleh menukarnya.")
+                } else { status = tr("描述不够明确，请选择分类", "Please choose a category for this description.", "Sila pilih kategori untuk penerangan ini.") }
+                loading = false
+            } catch {
+                guard !Task.isCancelled else { return }
+                loading = false
+                status = tr("AI 暂不可用，仍可手动分类。请检查登录和 AI 服务。", "AI unavailable. Choose a category manually; check sign-in and AI setup.", "AI tidak tersedia. Pilih kategori secara manual; semak log masuk dan persediaan AI.")
+            }
+        }
+        .opacity(enabled && (!status.isEmpty || manuallySelected || loading) ? 1 : 0)
+        .accessibilityHidden(!enabled)
+    }
+}
+
+struct AICategorySettings: View {
+    @AppStorage("aiAutomaticCategories") private var enabled = false
+    var body: some View {
+        Toggle(isOn: $enabled) {
+            Label(tr("AI 自动分类", "AI auto-categorization", "Pengkategorian AI"), systemImage: "sparkles")
+        }
+        Text(tr("开启后，输入停顿时会把描述和分类名称发送给 Google Gemini（包括你写在描述里的内容）。账户余额和完整账本不会发送；手动选择优先。", "When enabled, descriptions and category names are sent to Google Gemini after you pause typing, including anything you write in the description. Account balances and the full ledger are not sent. Manual choices take priority.", "Apabila diaktifkan, penerangan dan nama kategori dihantar ke Google Gemini selepas anda berhenti menaip, termasuk kandungan penerangan anda. Baki akaun dan lejar penuh tidak dihantar. Pilihan manual diutamakan."))
+            .font(.footnote).foregroundStyle(.secondary)
+    }
+}
+
 struct ExpenseItemDraft: Codable, Identifiable, Equatable {
     let id: String
     var name = ""
@@ -4245,6 +4522,8 @@ enum ExpenseInputField: Hashable {
 }
 
 struct ExpenseItemsFields: View {
+    @State private var manualCategories = Set<String>()
+    var aiDisabled = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
@@ -4291,7 +4570,10 @@ struct ExpenseItemsFields: View {
                 }.padding(.vertical, 6).id(draft.id)
                 // Native navigation controls must each own a Form row.
                 // Two links inside one VStack can both activate on one tap.
-                Picker(tr("分类", "Category", "Kategori"), selection: item.category) {
+                AIClassificationRow(text: draft.name, categories: model.ledger.categoryNames, category: item.category, manuallySelected: aiDisabled || manualCategories.contains(draft.id))
+                Picker(tr("分类", "Category", "Kategori"), selection: Binding(get: { item.wrappedValue.category }, set: {
+                    manualCategories.insert(draft.id); item.wrappedValue.category = $0
+                })) {
                     ForEach(model.ledger.categoryNames, id: \.self) { model.ledger.categoryChoice($0).tag($0) }
                 }.pickerStyle(.navigationLink)
                     .accessibilityIdentifier("transaction.item.category")

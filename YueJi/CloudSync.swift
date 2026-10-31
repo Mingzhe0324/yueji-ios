@@ -60,6 +60,49 @@ enum CloudFailure: LocalizedError {
     }
 }
 
+enum ReceiptRecognitionFailure: String, LocalizedError {
+    case notConfigured = "not_configured", quotaUnavailable = "quota_unavailable"
+    case dailyLimit = "daily_limit", invalidImage = "invalid_image"
+    case incompleteReceipt = "incomplete_receipt", invalidReceipt = "invalid_receipt"
+    case invalidOrNonMYRReceipt = "invalid_or_non_myr_receipt"
+    case modelUnavailable = "model_unavailable", modelAccessDenied = "model_access_denied"
+    case modelRequestRejected = "model_request_rejected", modelRateLimit = "model_rate_limit"
+    case recognitionFailed = "recognition_failed", recognitionUnavailable = "recognition_unavailable"
+
+    var errorDescription: String? {
+        let message: String
+        switch self {
+        case .notConfigured:
+            message = tr("Gemini 收据服务尚未配置完成，请检查服务端密钥及收据模型设置。", "Gemini receipts are not configured. Check the server key and receipt model settings.", "Resit Gemini belum dikonfigurasi. Semak kunci pelayan dan tetapan model resit.")
+        case .quotaUnavailable:
+            message = tr("无法检查收据识别额度，请检查服务端收据额度数据库设置。", "Cannot check the scan allowance. Check the receipt quota database setup.", "Tidak dapat menyemak kuota imbasan. Semak tetapan pangkalan data kuota resit.")
+        case .dailyLimit:
+            message = tr("今天的 Gemini 收据识别次数已用完，请稍后再试或使用本机识别。", "Today's Gemini scan allowance is used up. Try later or use on-device recognition.", "Kuota imbasan Gemini hari ini telah habis. Cuba kemudian atau gunakan pengecaman setempat.")
+        case .invalidImage:
+            message = tr("收据图片无效或过大，请重新选择或拍摄。", "The receipt image is invalid or too large. Choose another photo or scan again.", "Imej resit tidak sah atau terlalu besar. Pilih foto lain atau imbas semula.")
+        case .incompleteReceipt:
+            message = tr("Gemini 未返回完整识别结果，请用清晰的单张收据重试。", "Gemini did not return a complete result. Retry with one clear receipt.", "Gemini tidak memulangkan hasil lengkap. Cuba semula dengan satu resit yang jelas.")
+        case .invalidReceipt:
+            message = tr("Gemini 返回的收据格式无效，请重试。", "Gemini returned an invalid receipt format. Please retry.", "Gemini memulangkan format resit tidak sah. Cuba semula.")
+        case .invalidOrNonMYRReceipt:
+            message = tr("识别结果金额格式不正确，或未确认收据币种为 MYR／RM。请确保币种清晰可见后重试。", "The amounts are invalid or MYR/RM could not be confirmed. Ensure the currency is visible and retry.", "Format amaun tidak sah atau MYR/RM tidak dapat disahkan. Pastikan mata wang jelas dan cuba semula.")
+        case .modelUnavailable:
+            message = tr("收据识别模型不可用，请检查服务端 GEMINI_RECEIPT_MODEL 设置。", "The receipt model is unavailable. Check GEMINI_RECEIPT_MODEL on the server.", "Model resit tidak tersedia. Semak GEMINI_RECEIPT_MODEL pada pelayan.")
+        case .modelAccessDenied:
+            message = tr("Gemini 拒绝服务端访问，请检查 API 密钥及模型权限。", "Gemini denied server access. Check the API key and model permissions.", "Gemini menolak akses pelayan. Semak kunci API dan kebenaran model.")
+        case .modelRequestRejected:
+            message = tr("Gemini 拒绝识别请求，请检查服务端模型是否支持图片及结构化输出。", "Gemini rejected the request. Check that the server model supports images and structured output.", "Gemini menolak permintaan. Semak sokongan imej dan output berstruktur model pelayan.")
+        case .modelRateLimit:
+            message = tr("Gemini 服务额度不足或请求过于频繁，请稍后重试。", "Gemini quota is exhausted or requests are too frequent. Try again later.", "Kuota Gemini habis atau permintaan terlalu kerap. Cuba lagi kemudian.")
+        case .recognitionFailed:
+            message = tr("Gemini 服务返回错误，请稍后重试。", "Gemini returned a service error. Try again later.", "Gemini memulangkan ralat perkhidmatan. Cuba lagi kemudian.")
+        case .recognitionUnavailable:
+            message = tr("收据识别连接失败或超时，请稍后重试。", "Receipt recognition could not connect or timed out. Please retry later.", "Sambungan pengecaman resit gagal atau tamat masa. Cuba lagi kemudian.")
+        }
+        return message + " (\(rawValue))"
+    }
+}
+
 struct CloudSession: Codable {
     struct User: Codable { let id: UUID; let email: String? }
     let access_token: String
@@ -193,6 +236,10 @@ actor SupabaseCloudService: CloudRemote {
         guard let response = response as? HTTPURLResponse else { throw CloudFailure.invalidResponse }
         guard (200..<300).contains(response.statusCode) else {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+            // Keep 401 as a session error so CloudAccount can refresh and retry.
+            if path == "/functions/v1/receipt-gemini", response.statusCode != 401,
+               let receiptCode = object?["error"] as? String,
+               let failure = ReceiptRecognitionFailure(rawValue: receiptCode) { throw failure }
             let code = object?["error_code"] as? String ?? object?["code"] as? String ?? ""
             if code == "40001" { throw CloudFailure.changed }
             if ["42P01", "42883", "PGRST202", "PGRST205"].contains(code) { throw CloudFailure.database }
@@ -214,14 +261,33 @@ actor SupabaseCloudService: CloudRemote {
         let health = try await request("/rest/v1/rpc/yueji_sync_health", body: [:])
         guard (try? JSONDecoder().decode(Int.self, from: health)) == 1 else { throw CloudFailure.database }
     }
+    func assistant(mode: String, text: String, categories: [String]) async throws -> Data {
+        guard ["classify", "entry", "query"].contains(mode), text.count <= 1000 else { throw CloudFailure.invalidResponse }
+        do { return try await request("/functions/v1/assistant-gemini", body: ["mode": mode, "text": text, "categories": categories], authenticated: true) }
+        catch CloudFailure.server(let status, _) {
+            if status == 422 {
+                throw reviewError("AI 未能明确理解，请缩短描述并重试。", "AI could not interpret this clearly. Try a shorter description.", "AI tidak dapat mentafsir dengan jelas. Cuba penerangan lebih ringkas.")
+            }
+            throw reviewError("AI 服务尚未就绪，请检查 assistant-gemini、GEMINI_ASSISTANT_MODEL 和额度 SQL。", "AI service is not ready. Check assistant-gemini, GEMINI_ASSISTANT_MODEL and quota SQL.", "Perkhidmatan AI belum tersedia. Semak assistant-gemini, GEMINI_ASSISTANT_MODEL dan SQL kuota.")
+        }
+    }
     func recognizeReceipt(image: Data) async throws -> Data {
         guard image.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
         do { return try await request("/functions/v1/receipt-gemini", body: ["image": image.base64EncodedString()], authenticated: true) }
         catch CloudFailure.server(let status, _) {
-            if status == 404 || status == 503 {
-                throw reviewError("Gemini 识别服务尚未就绪，请先使用本机识别。", "Gemini recognition is not ready. Use on-device recognition for now.", "Pengecaman Gemini belum tersedia. Gunakan pengecaman setempat dahulu.")
+            if status == 404 {
+                throw reviewError("未找到收据识别服务，请检查当前 Supabase 项目是否已部署 receipt-gemini。", "Receipt recognition was not found. Check that receipt-gemini is deployed to the current Supabase project.", "Perkhidmatan resit tidak ditemui. Semak bahawa receipt-gemini telah digunakan pada projek Supabase semasa.")
             }
-            throw reviewError("Gemini 未能识别这张收据，请重试或关闭 Gemini 使用本机识别。仅支持马币收据。", "Gemini could not read this receipt. Retry or turn Gemini off for on-device recognition. Only MYR receipts are supported.", "Gemini tidak dapat membaca resit ini. Cuba lagi atau matikan Gemini. Hanya resit MYR disokong.")
+            throw LedgerError.invalid(tr("Gemini 收据服务暂时不可用，请稍后重试。", "Gemini receipt service is unavailable. Please retry later.", "Perkhidmatan resit Gemini tidak tersedia. Cuba lagi kemudian.") + " (HTTP \(status))")
+        }
+    }
+    func analyseBankNotification(body: String, title: String, source: String) async throws -> Data {
+        guard body.count <= 8000, title.count <= 500, source.count <= 120 else { throw CloudFailure.invalidResponse }
+        do {
+            return try await request("/functions/v1/bank-notification-gemini",
+                                     body: ["body": body, "title": title, "source": source], authenticated: true)
+        } catch CloudFailure.server(let status, _) {
+            throw LedgerError.invalid(tr("银行 AI 服务未就绪，请检查 bank-notification-gemini 部署、GEMINI_BANK_MODEL、密钥及额度 SQL。", "Bank AI service is not ready. Check bank-notification-gemini deployment, GEMINI_BANK_MODEL, the API key and quota SQL.", "AI bank belum tersedia. Semak fungsi bank-notification-gemini, GEMINI_BANK_MODEL, kunci API dan SQL kuota.") + " (HTTP \(status))")
         }
     }
     func sendCode(email: String, createAccount: Bool = true) async throws {
