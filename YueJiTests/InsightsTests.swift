@@ -65,7 +65,14 @@ final class BankAccountTests: XCTestCase {
         let notice = try XCTUnwrap(ledger.tngNotices.first)
         XCTAssertEqual(ledger.bankBalance(account), 25000)
         XCTAssertFalse(notice.isConfirmedIncome)
-        _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: "receipt-copy")
+        // Re-delivery of the same transaction keeps its identifier.
+        _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: "receipt")
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.bankBalance(account), 25000)
+        // Without a transaction identifier, matching content is kept for review.
+        _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: nil)
+        XCTAssertEqual(ledger.tngNotices.count, 2)
+        XCTAssertEqual(ledger.tngNotices.last?.possibleDuplicate, true)
         XCTAssertEqual(ledger.bankBalance(account), 25000)
         try ledger.resolveTNGIncoming(id: notice.id, purpose: "income", date: opening)
         XCTAssertEqual(ledger.bankBalance(account), 25000)
@@ -73,6 +80,22 @@ final class BankAccountTests: XCTestCase {
         XCTAssertEqual(ledger.bankBalance(account), 25000)
         try ledger.resolveTNGIncoming(id: notice.id, purpose: "ignored", date: opening)
         XCTAssertEqual(ledger.bankBalance(account), 10000)
+    }
+
+    func testDistinctTNGReceiptReferencesCreditBothTransactions() throws {
+        var account = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
+        account.automaticSource = "TNG"
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let body = "OTHER PERSON has transferred RM150.00 to you. Tap here to check the transaction details."
+        for reference in ["receipt-one", "receipt-two"] {
+            _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: reference)
+        }
+        XCTAssertEqual(ledger.bankBalance(account), 40000)
+        XCTAssertEqual(ledger.tngNotices.count, 2)
+        XCTAssertTrue(ledger.tngNotices.allSatisfy { !$0.possibleDuplicate && !$0.isConfirmedIncome })
+        _ = try ledger.receiveTNG(body: body, title: "You've received money!", date: opening, eventID: "receipt-two")
+        XCTAssertEqual(ledger.bankBalance(account), 40000)
+        XCTAssertEqual(ledger.tngNotices.count, 2)
     }
 
     func testAutomaticTransferRequiresOptInAndBothNoticesThenCanUndo() throws {
