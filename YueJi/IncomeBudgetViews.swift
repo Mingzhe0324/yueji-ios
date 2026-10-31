@@ -364,7 +364,7 @@ private struct BankAccountDetail: View {
                     }
                 }
                 .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
-                Section(tr("到账通知", "Received money", "Wang diterima")) {
+                Section {
                     ForEach(model.ledger.tngNotices.filter {
                         $0.bankAccountID == accountID && $0.kind == "incoming" && $0.status != "ignored" && $0.resolution == nil
                     }.sorted { $0.date > $1.date }) { notice in
@@ -381,6 +381,8 @@ private struct BankAccountDetail: View {
                             }
                         }
                     }
+                } header: {
+                    Text(tr("到账通知", "Received money", "Wang diterima"))
                 } footer: {
                     Text(tr("到账与收入不同：本人互转不计收入。早于期初时间的款项不重复计入余额。", "Receipts are not necessarily income: own transfers are excluded from income. Amounts before the opening date are not counted again.", "Penerimaan tidak semestinya pendapatan: pindahan sendiri dikecualikan. Amaun sebelum tarikh awal tidak dikira semula.")).font(.caption)
                 }
