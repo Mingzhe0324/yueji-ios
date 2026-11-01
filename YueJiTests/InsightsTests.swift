@@ -131,7 +131,7 @@ final class BankAccountTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices.count, 2)
     }
 
-    func testAutomaticTransferRequiresOptInAndBothNoticesThenCanUndo() throws {
+    func testLegacyTransferRuleDoesNotPairNewNoticesOrResumeAfterRestore() throws {
         var source = BankAccount(name: "TNG", openingCents: 10000, openingDate: opening)
         var target = BankAccount(name: "Ryt", openingCents: 20000, openingDate: opening)
         source.automaticSource = "TNG"; target.automaticSource = "Ryt Bank"
@@ -145,22 +145,18 @@ final class BankAccountTests: XCTestCase {
         _ = try ledger.receiveTNG(body: outgoing, title: "DuitNow Transfer is successful!", date: stamp, eventID: "out", now: stamp, sourceApp: "TNG")
         XCTAssertTrue(ledger.bankTransfers.isEmpty)
         _ = try ledger.receiveTNG(body: incoming, title: "Your money is in!", date: stamp, eventID: "in", now: stamp, sourceApp: "Ryt Bank")
-        XCTAssertEqual(ledger.bankTransfers.count, 1)
-        XCTAssertEqual(ledger.bankBalance(source), 9990)
-        XCTAssertEqual(ledger.bankBalance(target), 20010)
-        XCTAssertTrue(ledger.expenses.isEmpty)
-        XCTAssertTrue(ledger.incomes.isEmpty)
-        _ = try ledger.receiveTNG(body: incoming, title: "Your money is in!", date: stamp, eventID: "in", now: stamp, sourceApp: "Ryt Bank")
-        XCTAssertEqual(ledger.bankTransfers.count, 1)
-        let id = try XCTUnwrap(ledger.bankTransfers.first?.noticeIDs?.first)
-        let restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
-        XCTAssertEqual(restored.bankTransfers.count, 1)
-        try ledger.reopenResolvedNotice(id: id)
         XCTAssertTrue(ledger.bankTransfers.isEmpty)
         XCTAssertEqual(ledger.bankBalance(source), 10000)
         XCTAssertEqual(ledger.bankBalance(target), 20000)
-        ledger.bankAccounts[0].transferDestinationID = nil
-        XCTAssertFalse(try ledger.matchAutomaticTransfer(newNoticeID: id))
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.incomes.isEmpty)
+        _ = try ledger.receiveTNG(body: incoming, title: "Your money is in!", date: stamp, eventID: "in", now: stamp, sourceApp: "Ryt Bank")
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        var restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        try restored.assignNoticeAccount(id: id, accountID: source.id)
+        XCTAssertTrue(restored.bankTransfers.isEmpty)
+        XCTAssertTrue(restored.tngNotices.allSatisfy { $0.resolution == nil })
     }
 
     func testAutomaticTransferRefusesAmbiguousCandidates() throws {
@@ -174,7 +170,7 @@ final class BankAccountTests: XCTestCase {
         incoming.bankAccountID = target.id
         var another = incoming; another.id = UUID().uuidString
         var ledger = Ledger(); ledger.bankAccounts = [source, target]; ledger.tngNotices = [out, incoming, another]
-        XCTAssertFalse(try ledger.matchAutomaticTransfer(newNoticeID: out.id))
+        try ledger.assignNoticeAccount(id: out.id, accountID: source.id)
         XCTAssertTrue(ledger.bankTransfers.isEmpty)
     }
 
@@ -446,7 +442,7 @@ final class BankNotificationAITests: XCTestCase {
         let restored = try LocalStore.decode(LocalStore.encode(ledger))
         XCTAssertEqual(restored.bankBalance(bank), 11250)
     }
-    func testPBToTNGReloadPairsBothDirectionsWithoutDoubleCreditOrExpense() throws {
+    func testAITransferNeedsConfirmationEvenWithLegacyRouteInEitherArrivalOrder() throws {
         for reversed in [false, true] {
             var bank = account("Public Bank"); let wallet = account("TNG")
             bank.transferDestinationID = wallet.id; bank.transferOwnerName = "OWNER"; bank.transferRuleSince = stamp.addingTimeInterval(-30)
@@ -458,17 +454,12 @@ final class BankNotificationAITests: XCTestCase {
                     sourceApp: isIncoming ? "TNG" : "Public Bank",
                     analysis: isIncoming ? nil : proposal(out, kind: "topup", amount: "10.00", party: "TNG", peer: "TNG"), automaticBalances: true)
             }
-            XCTAssertEqual(ledger.bankTransfers.count, 1)
-            XCTAssertEqual(ledger.bankBalance(bank), 9000)
+            XCTAssertTrue(ledger.bankTransfers.isEmpty)
+            XCTAssertEqual(ledger.bankBalance(bank), 10000)
             XCTAssertEqual(ledger.bankBalance(wallet), 11000)
             XCTAssertTrue(ledger.expenses.isEmpty)
             XCTAssertTrue(ledger.incomes.isEmpty)
-            XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.resolution == "ownTransfer" })
-            let transferNotice = try XCTUnwrap(ledger.bankTransfers.first?.noticeIDs?.first)
-            try ledger.reopenResolvedNotice(id: transferNotice)
-            XCTAssertTrue(ledger.bankTransfers.isEmpty)
-            XCTAssertEqual(ledger.bankBalance(bank), 10000)
-            XCTAssertEqual(ledger.bankBalance(wallet), 10000)
+            XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.resolution == nil })
         }
     }
     func testAITransferCannotGuessMissingSideOrOverrideLocalPayment() throws {

@@ -535,8 +535,6 @@ private struct BankAccountEditor: View {
     @State private var institution = ""
     @State private var automaticSource = ""
     @State private var automaticSuffix = ""
-    @State private var transferDestination = ""
-    @State private var transferOwner = ""
     @State private var amount = ""
     @State private var openingDate = Date()
     @State private var initialized = false
@@ -588,21 +586,6 @@ private struct BankAccountEditor: View {
                 } footer: {
                     Text(tr("仅影响保存后新导入的通知。来源和尾号匹配时自动关联；同一来源有多个账户而通知无法区分时，留待手动选择。付款扣余额，通知收入确认后加余额。", "Applies to newly imported notices only. Matching source and suffix link automatically; ambiguous accounts require selection. Payments reduce the balance; notification income increases it after confirmation.", "Untuk notifikasi baharu sahaja. Sumber dan digit sepadan dipaut automatik; akaun tidak jelas perlu dipilih. Bayaran mengurangkan baki; pendapatan menambahnya selepas pengesahan."))
                 }
-                if !automaticSource.isEmpty {
-                    Section {
-                        Picker(tr("自动转入我的账户", "Auto-transfer to my account", "Pindahan automatik ke akaun saya"), selection: $transferDestination) {
-                            Text(tr("关闭", "Off", "Tutup")).tag("")
-                            ForEach(model.ledger.bankAccounts.filter { $0.id != original?.id && $0.automaticSource != nil }) {
-                                Text($0.name).tag($0.id)
-                            }
-                        }
-                        if !transferDestination.isEmpty {
-                            TextField(tr("本人完整姓名（通知可包含其他姓名）", "My full name (notices may include other names)", "Nama penuh saya (notifikasi boleh mengandungi nama lain)"), text: $transferOwner)
-                        }
-                    } footer: {
-                        Text(tr("仅对保存后的新通知生效。两边账户均须配置自动记账来源；金额相同、本人姓名一致、相隔不超过 2 分钟且唯一匹配时自动记转账。缺一边或有歧义时待确认。可在转账记录删除，或在通知中撤销关联。", "New notices only. Both accounts need automatic sources. Equal amounts, your full name contained in both notices and a unique pair within 2 minutes record a transfer automatically. Missing or ambiguous notices stay for review. Delete the transfer or reopen the notice to undo.", "Notifikasi baharu sahaja. Kedua-dua akaun perlu sumber automatik. Amaun dan nama sama serta pasangan unik dalam 2 minit direkod automatik. Notifikasi tidak lengkap atau kabur menunggu semakan. Padam pindahan atau buka semula notifikasi untuk batal."))
-                    }
-                }
                 Text(tr("填写这个时间点之前的余额，可填 0 或负数。修改期初余额或时间会重新计算账面余额。无需银行卡号或银行密码。", "Enter the balance just before this time, including zero or a negative amount. Changing the opening balance or date recalculates your recorded balance. No bank number or password needed.", "Masukkan baki sebelum masa ini, termasuk sifar atau negatif. Perubahan baki atau tarikh awal mengira semula baki. Tidak perlu nombor atau kata laluan bank."))
                     .font(.footnote).foregroundStyle(.secondary)
             }.yuejiListSurface()
@@ -620,8 +603,6 @@ private struct BankAccountEditor: View {
                     institution = original.institution ?? ""
                     automaticSource = original.automaticSource ?? ""
                     automaticSuffix = original.automaticSuffix ?? ""
-                    transferDestination = original.transferDestinationID ?? ""
-                    transferOwner = original.transferOwnerName ?? ""
                     name = original.name; amount = Currency.input(original.openingCents, "MYR"); openingDate = original.openingDate
                 }
             }
@@ -636,17 +617,11 @@ private struct BankAccountEditor: View {
             let negative = raw.hasPrefix("-")
             let magnitude = negative ? String(raw.dropFirst()) : raw
             let cents = ["0", "0.0", "0.00"].contains(magnitude) ? 0 : try Currency.parse(magnitude, code: "MYR")
-            var account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            let account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                       openingCents: negative ? -cents : cents, openingDate: openingDate,
                                       institution: institution.isEmpty ? nil : institution,
                                       automaticSource: automaticSource.isEmpty ? nil : automaticSource,
                                       automaticSuffix: automaticSource.isEmpty || automaticSuffix.isEmpty ? nil : automaticSuffix)
-            if !automaticSource.isEmpty && !transferDestination.isEmpty {
-                account.transferDestinationID = transferDestination
-                account.transferOwnerName = transferOwner.trimmingCharacters(in: .whitespacesAndNewlines)
-                account.transferRuleSince = original?.transferDestinationID == transferDestination && original?.transferOwnerName == account.transferOwnerName
-                    ? (original?.transferRuleSince ?? Date()) : Date()
-            }
             let savedAccount = account
             let before = original
             model.perform(key: operationKey, action: { ledger in

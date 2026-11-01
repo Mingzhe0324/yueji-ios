@@ -712,9 +712,6 @@ extension Ledger {
         }
         tngNotices.append(notice)
         if let eventKey { seenEvents.insert(eventKey) }
-        if try matchAutomaticTransfer(newNoticeID: notice.id) {
-            return tr("已自动记录账户间转账，两边账面余额已更新。", "Transfer recorded automatically; both account balances updated.", "Pindahan direkod automatik; kedua-dua baki dikemas kini.")
-        }
         if notice.verifiedIncomingBalance == true {
             return tr("收款已更新匹配账户余额，用途待确认；尚未计入收入。", "Receipt updated the matched account balance. Purpose is awaiting review; not counted as income.", "Penerimaan mengemas kini baki akaun sepadan. Tujuan menunggu semakan; belum dikira sebagai pendapatan.")
         }

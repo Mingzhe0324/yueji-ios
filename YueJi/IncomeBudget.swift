@@ -27,6 +27,7 @@ struct BankAccount: Codable, Identifiable, Equatable {
     /// Explicit opt-in. Stored with the ledger, so mappings stay account-isolated.
     var automaticSource: String? = nil
     var automaticSuffix: String? = nil
+    // Legacy backup fields only. Saved routes no longer trigger automatic transfers.
     var transferDestinationID: String? = nil
     var transferOwnerName: String? = nil
     var transferRuleSince: Date? = nil
@@ -43,44 +44,6 @@ struct BankTransfer: Codable, Identifiable, Equatable {
 }
 
 extension Ledger {
-    /// Opted-in directional route; only new, unique two-sided notifications qualify.
-    mutating func matchAutomaticTransfer(newNoticeID: String) throws -> Bool {
-        func eligible(_ n: TNGNotice) -> Bool {
-            ["pending", "transfer"].contains(n.status) && !n.possibleDuplicate && n.expenseID == nil && n.resolution == nil
-        }
-        var pairs: [(TNGNotice, TNGNotice, BankAccount, String)] = []
-        for source in bankAccounts {
-            guard let destination = source.transferDestinationID, let owner = source.transferOwnerName,
-                  let since = source.transferRuleSince, !friendKey(owner).isEmpty else { continue }
-            let destinationProvider = bankAccounts.first(where: { $0.id == destination })?.automaticSource.flatMap { exactFinancialProvider($0) }
-            let outgoing = tngNotices.filter {
-                eligible($0) && $0.kind == "transfer" && $0.bankAccountID == source.id && $0.date >= since &&
-                (transferNameMatches($0.party ?? "", owner: owner) ||
-                 ($0.transferPeer == "TNG" && destinationProvider == "TNG"))
-            }
-            let incoming = tngNotices.filter { eligible($0) && $0.kind == "incoming" && $0.bankAccountID == destination && $0.date >= since && transferNameMatches($0.party ?? "", owner: owner) }
-            for out in outgoing {
-                let matches = incoming.filter { $0.cents == out.cents && abs($0.date.timeIntervalSince(out.date)) <= 120 }
-                guard matches.count == 1, let received = matches.first,
-                      outgoing.filter({ $0.cents == received.cents && abs($0.date.timeIntervalSince(received.date)) <= 120 }).count == 1,
-                      out.id == newNoticeID || received.id == newNoticeID else { continue }
-                pairs.append((out, received, source, destination))
-            }
-        }
-        guard pairs.count == 1, let (out, incoming, source, destination) = pairs.first,
-              let cents = out.cents, cents > 0 else { return false }
-        // A nearby existing transfer may have been entered manually already.
-        guard !bankTransfers.contains(where: { $0.fromAccountID == source.id && $0.toAccountID == destination && $0.cents == cents && abs($0.date.timeIntervalSince(out.date)) <= 300 }) else { return false }
-        let transfer = BankTransfer(fromAccountID: source.id, toAccountID: destination, cents: cents,
-                                    date: out.date, note: tr("通知自动配对", "Matched notifications", "Notifikasi dipadankan"), noticeIDs: [out.id, incoming.id])
-        try saveBankTransfer(transfer, replacing: nil)
-        for index in tngNotices.indices where tngNotices[index].id == out.id || tngNotices[index].id == incoming.id {
-            tngNotices[index].status = "ignored"
-            tngNotices[index].resolution = "ownTransfer"
-            tngNotices[index].relatedRecordID = tngNotices[index].id == out.id ? incoming.id : out.id
-        }
-        return true
-    }
     mutating func saveBankTransfer(_ transfer: BankTransfer, replacing original: BankTransfer?) throws {
         var copy = self
         if let original {
@@ -145,7 +108,6 @@ extension Ledger {
            let expenseIndex = expenses.firstIndex(where: { $0.id == expenseID }) {
             expenses[expenseIndex].bankAccountID = expenses[expenseIndex].paidByFriend == nil ? accountID : nil
         }
-        _ = try matchAutomaticTransfer(newNoticeID: id)
     }
 
     func bankBalance(_ account: BankAccount) -> Int {
