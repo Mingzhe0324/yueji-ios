@@ -3062,7 +3062,7 @@ struct ExpenseEditor: View {
             // Keep this navigation row mounted when the first item is inserted.
             // Removing it in the same Form update can invalidate native navigation.
             if itemDrafts.isEmpty {
-                AIClassificationRow(text: entryDescription, categories: model.ledger.categoryNames, category: $category, manuallySelected: manualCategory || fuel || saving || draftFinished || resumedDraft || recoverable != nil || (original != nil && entryDescription == original?.entryDescription) || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
+                AIClassificationRow(text: entryDescription, merchant: name, rememberedCategory: model.ledger.merchantCategories[friendKey(name)], categories: model.ledger.categoryNames, category: $category, manuallySelected: manualCategory || fuel || saving || draftFinished || resumedDraft || recoverable != nil || (original != nil && name == original?.merchant && entryDescription == (original?.entryDescription ?? "")) || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
             }
             Picker(tr("分类", "Category", "Kategori"), selection: Binding(get: { category }, set: { manualCategory = true; category = $0 })) {
                 ForEach(model.ledger.categoryNames, id: \.self) { item in

@@ -4331,6 +4331,8 @@ struct AssistantResult: Decodable {
 /// the text changes or a row disappears; manual selections always take priority.
 struct AIClassificationRow: View {
     let text: String
+    var merchant: String = ""
+    var rememberedCategory: String? = nil
     let categories: [String]
     @Binding var category: String
     var manuallySelected: Bool = false
@@ -4339,7 +4341,8 @@ struct AIClassificationRow: View {
     @State private var baseline: String?
     @State private var status = ""
     @State private var loading = false
-    private var requestKey: String { String(enabled) + String(manuallySelected) + text + categories.joined(separator: "\u{1F}") }
+    private var inputKey: String { String(merchant.count) + ":" + merchant + text }
+    private var requestKey: String { String(enabled) + String(manuallySelected) + inputKey + categories.joined(separator: "\u{1F}") + (rememberedCategory ?? "") }
     var body: some View {
         HStack(spacing: 8) {
             if loading { ProgressView().controlSize(.small) }
@@ -4350,18 +4353,28 @@ struct AIClassificationRow: View {
         .accessibilityElement(children: .combine)
         .task(id: requestKey) {
             loading = false; status = ""
-            if baseline == nil { baseline = classifyInitial || !enabled ? "" : text; if !classifyInitial { return } }
-            guard enabled, !manuallySelected, text != baseline,
-                  !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.count <= 1000 else { return }
-            let submitted = text, previous = category
+            if baseline == nil { baseline = classifyInitial || !enabled ? "" : inputKey; if !classifyInitial { return } }
+            guard enabled, !manuallySelected, inputKey != baseline,
+                  !(merchant + text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  text.count <= 1000, merchant.count <= 200 else { return }
+            let submitted = text, submittedMerchant = merchant, previous = category
             do {
                 try await Task.sleep(for: .milliseconds(900))
+                // An explicitly remembered merchant category is useful when no
+                // item description is available, and saves a cloud request.
+                if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                   let rememberedCategory, categories.contains(rememberedCategory) {
+                    try Task.checkCancellation()
+                    category = rememberedCategory
+                    status = tr("已使用记住的商户分类", "Used saved merchant category", "Kategori peniaga tersimpan digunakan")
+                    return
+                }
                 loading = true
                 status = tr("正在识别分类…", "Finding a category…", "Mengenal pasti kategori…")
-                let data = try await CloudAccount.shared.assistant(mode: "classify", text: submitted, categories: categories)
+                let data = try await CloudAccount.shared.assistant(mode: "classify", text: submitted, categories: categories, merchant: submittedMerchant)
                 let result = try JSONDecoder().decode(AssistantResult.self, from: data)
                 try Task.checkCancellation()
-                guard enabled, !manuallySelected, text == submitted, category == previous else { return }
+                guard enabled, !manuallySelected, text == submitted, merchant == submittedMerchant, category == previous else { return }
                 if categories.contains(result.category) {
                     category = result.category
                     status = tr("AI 已建议分类，可随时修改", "AI category suggested. You can change it.", "Kategori AI dicadangkan. Anda boleh menukarnya.")
@@ -4384,7 +4397,7 @@ struct AICategorySettings: View {
         Toggle(isOn: $enabled) {
             Label(tr("AI 自动分类", "AI auto-categorization", "Pengkategorian AI"), systemImage: "sparkles")
         }
-        Text(tr("开启后，输入停顿时会把描述和分类名称发送给 Google Gemini（包括你写在描述里的内容）。账户余额和完整账本不会发送；手动选择优先。", "When enabled, descriptions and category names are sent to Google Gemini after you pause typing, including anything you write in the description. Account balances and the full ledger are not sent. Manual choices take priority.", "Apabila diaktifkan, penerangan dan nama kategori dihantar ke Google Gemini selepas anda berhenti menaip, termasuk kandungan penerangan anda. Baki akaun dan lejar penuh tidak dihantar. Pilihan manual diutamakan."))
+        Text(tr("开启后，先根据商户名称判断，再结合描述细化分类。输入停顿时会把商户、描述及分类名称发送给 Google Gemini；具体物品描述优先于笼统的商户判断，手动选择优先。账户余额和完整账本不会发送。", "When enabled, classification starts with the merchant and is refined by the description. After you pause typing, merchant, description and category names are sent to Google Gemini. Specific item details override broad merchant assumptions; manual choices take priority. Balances and the full ledger are not sent.", "Apabila diaktifkan, kategori bermula daripada peniaga dan diperhalus dengan penerangan. Nama peniaga, penerangan dan kategori dihantar ke Google Gemini selepas anda berhenti menaip. Butiran item mengatasi andaian umum peniaga; pilihan manual diutamakan. Baki dan lejar penuh tidak dihantar."))
             .font(.footnote).foregroundStyle(.secondary)
     }
 }

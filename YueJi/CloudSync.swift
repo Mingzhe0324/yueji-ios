@@ -261,9 +261,9 @@ actor SupabaseCloudService: CloudRemote {
         let health = try await request("/rest/v1/rpc/yueji_sync_health", body: [:])
         guard (try? JSONDecoder().decode(Int.self, from: health)) == 1 else { throw CloudFailure.database }
     }
-    func assistant(mode: String, text: String, categories: [String]) async throws -> Data {
-        guard mode == "classify", text.count <= 1000 else { throw CloudFailure.invalidResponse }
-        do { return try await request("/functions/v1/assistant-gemini", body: ["mode": mode, "text": text, "categories": categories], authenticated: true) }
+    func assistant(mode: String, text: String, categories: [String], merchant: String = "") async throws -> Data {
+        guard mode == "classify", text.count <= 1000, merchant.count <= 200 else { throw CloudFailure.invalidResponse }
+        do { return try await request("/functions/v1/assistant-gemini", body: ["mode": mode, "text": text, "merchant": merchant, "categories": categories], authenticated: true) }
         catch CloudFailure.server(let status, _) {
             if status == 422 {
                 throw reviewError("AI 未能明确理解，请缩短描述并重试。", "AI could not interpret this clearly. Try a shorter description.", "AI tidak dapat mentafsir dengan jelas. Cuba penerangan lebih ringkas.")

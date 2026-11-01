@@ -75,17 +75,17 @@ import UserNotifications
         service = value
         return value
     }
-    func assistant(mode: String, text: String, categories: [String]) async throws -> Data {
+    func assistant(mode: String, text: String, categories: [String], merchant: String = "") async throws -> Data {
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
         let data: Data
-        do { data = try await api.assistant(mode: mode, text: text, categories: categories) }
+        do { data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant) }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
             guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
             try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
             session = refreshed
-            data = try await api.assistant(mode: mode, text: text, categories: categories)
+            data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant)
         }
         try Task.checkCancellation()
         guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
