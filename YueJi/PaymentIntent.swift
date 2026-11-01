@@ -59,6 +59,53 @@ struct BankNotificationAnalysis: Decodable {
     }
 }
 
+extension Ledger {
+    func automaticCategoryCandidate(id: String) -> Expense? {
+        guard let entry = expenses.first(where: { $0.id == id }), entry.category == "其他",
+              merchantCategories[friendKey(entry.merchant)] == nil,
+              (entry.items ?? []).isEmpty, (entry.categoryAllocations ?? []).isEmpty,
+              entry.paidByFriend == nil, !entry.fuel, !hasActiveSettlement(expenseID: id),
+              !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return entry
+    }
+    /// Compare the complete snapshot: a late answer cannot overwrite an edit,
+    /// account reassignment, deletion, itemization or a new merchant rule.
+    @discardableResult mutating func applyAutomaticCategory(_ category: String, expected: Expense) -> Bool {
+        guard categoryNames.contains(category), category != "其他",
+              automaticCategoryCandidate(id: expected.id) == expected,
+              let index = expenses.firstIndex(where: { $0.id == expected.id }) else { return false }
+        expenses[index].category = category
+        return true
+    }
+}
+
+enum AutomationCategoryAI {
+    static func refine(expenseID: String, store: LocalStore) async -> String? {
+        guard !Task.isCancelled, UserDefaults.standard.bool(forKey: "aiAutomaticCategories"), store.isActive,
+              let ledger = try? store.read(), let entry = ledger.automaticCategoryCandidate(id: expenseID),
+              let configuration = CloudConfiguration.bundled,
+              let credential = try? CloudCredentials.read(), credential.server == configuration.server,
+              let link = try? store.cloudLink(), link.accepts(userID: credential.session.user.id, server: credential.server) else { return nil }
+        let notice = ledger.tngNotices.first { $0.expenseID == expenseID }
+        let description = entry.entryDescription ?? notice.map { $0.title + " " + $0.body } ?? ""
+        // No account number is needed for classification, even if a notification
+        // includes one. Only merchant and description/notification text are sent;
+        // no ledger account IDs or separate account balances are attached.
+        let text = String(description.replacingOccurrences(of: #"\b\d[\d -]{6,}\d\b"#, with: "[redacted]", options: .regularExpression).prefix(1000))
+        let api = SupabaseCloudService(configuration: configuration, session: credential.session)
+        guard let data = try? await api.assistant(mode: "classify", text: text, categories: ledger.categoryNames, merchant: entry.merchant),
+              let answer = try? JSONDecoder().decode(AssistantResult.self, from: data),
+              !Task.isCancelled, store.isActive, UserDefaults.standard.bool(forKey: "aiAutomaticCategories"),
+              let current = try? CloudCredentials.read(), current.server == credential.server,
+              current.session.user.id == credential.session.user.id else { return nil }
+        let saved = try? store.change { ledger in
+            guard store.isActive, UserDefaults.standard.bool(forKey: "aiAutomaticCategories") else { return false }
+            return ledger.applyAutomaticCategory(answer.category, expected: entry)
+        }
+        return saved == true ? answer.category : nil
+    }
+}
+
 enum BankNotificationAI {
     static func key(for store: LocalStore) -> String { "bankNotificationGemini.v1." + store.folder.path }
     static func enabled(for store: LocalStore) -> Bool { UserDefaults.standard.bool(forKey: key(for: store)) }

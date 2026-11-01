@@ -195,7 +195,7 @@ actor AutomationRecovery {
         if alreadyProcessed { analysis = nil }
         else { analysis = await BankNotificationAI.analyse(delivery, store: store) }
         let automaticBalances = store.isActive && BankNotificationAI.enabled(for: store)
-        let result: AutomationResult
+        var result: AutomationResult
         do { result = try store.change { try $0.applyDelivery(delivery, analysis: analysis, automaticBalances: automaticBalances) } }
         catch {
             delivery.attempts += 1; delivery.lastAttempt = Date()
@@ -205,6 +205,12 @@ actor AutomationRecovery {
         }
         // A cleanup failure never changes a successful commit; its marker makes recovery safe.
         try? inbox.remove(delivery)
+        // Money is already durable. Optional categorization failure must never
+        // put the payment back into the inbox or create a second transaction.
+        if !alreadyProcessed, let id = result.expenseID,
+           let category = await AutomationCategoryAI.refine(expenseID: id, store: store) {
+            result.message += "\n" + tr("智能分类：", "AI category: ", "Kategori AI: ") + categoryLabel(category)
+        }
         if result.shouldNotify && sendsNotifications && store.isActive {
             await LedgerNotifications.result(title: result.title, body: result.message,
                                              expenseID: result.expenseID, noticeID: result.noticeID, deliveryID: delivery.id, sound: result.sound)

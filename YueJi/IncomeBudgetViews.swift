@@ -649,11 +649,10 @@ private struct BankAccountEditor: View {
 }
 import UIKit
 
-/// Income keeps a green/teal look, apart from spending red and the app's blue. The light
-/// variant is a deeper teal so white labels on it stay readable.
+/// Incoming amounts use cyan; the light variant is darker for legible small text.
 enum IncomeStyle {
     static let tint = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .systemTeal : UIColor(red: 0.0, green: 0.46, blue: 0.50, alpha: 1)
+        traits.userInterfaceStyle == .dark ? .systemCyan : UIColor(red: 0.0, green: 0.43, blue: 0.56, alpha: 1)
     })
 }
 
@@ -1378,7 +1377,7 @@ struct MonthlyBudgetBreakdown: View {
         VStack(spacing: 6) {
             row(tr("基本预算", "Base budget", "Bajet asas"), amount(budget.base))
             row(tr("收入加入", "Income added", "Pendapatan ditambah"), "+" + amount(budget.income), tint: IncomeStyle.tint)
-            row(tr("计入预算的消费", "Eligible spending", "Belanja dikira"), "−" + amount(spent))
+            row(tr("计入预算的消费", "Eligible spending", "Belanja dikira"), "−" + amount(spent), tint: .red)
             Divider()
             row(remaining >= 0 ? tr("剩余", "Remaining", "Baki") : tr("超出", "Over budget", "Melebihi"), amount(abs(remaining)), bold: true)
         }
@@ -1479,7 +1478,10 @@ private struct StatementImportView: View {
                             ForEach(statement.rows) { row in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(row.description).font(.subheadline)
-                                    Text(day(row.date) + " · " + (row.debit > 0 ? "−" : "+") + money(row.cents)).font(.caption).monospacedDigit()
+                                    HStack {
+                                        Text(day(row.date))
+                                        TransactionAmount(cents: row.cents, direction: row.debit > 0 ? .outgoing : .incoming)
+                                    }.font(.caption).monospacedDigit()
                                     if !row.detail.isEmpty { Text(row.detail).font(.caption).foregroundStyle(.secondary) }
                                 }
                             }

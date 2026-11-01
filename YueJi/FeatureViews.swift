@@ -4032,8 +4032,7 @@ private struct SavingsGoalDetail: View {
                         HStack {
                             Text(dateLabel(entry.date, time: true)).font(.subheadline)
                             Spacer()
-                            Text((entry.cents > 0 ? "+ " : "− ") + money(abs(entry.cents)))
-                                .monospacedDigit().foregroundStyle(entry.cents > 0 ? Color.green : Color.red)
+                            TransactionAmount(cents: abs(entry.cents), direction: entry.cents > 0 ? .incoming : .outgoing)
                         }
                     }
                 }
@@ -4398,6 +4397,8 @@ struct AICategorySettings: View {
             Label(tr("AI 自动分类", "AI auto-categorization", "Pengkategorian AI"), systemImage: "sparkles")
         }
         Text(tr("开启后，先根据商户名称判断，再结合描述细化分类。输入停顿时会把商户、描述及分类名称发送给 Google Gemini；具体物品描述优先于笼统的商户判断，手动选择优先。账户余额和完整账本不会发送。", "When enabled, classification starts with the merchant and is refined by the description. After you pause typing, merchant, description and category names are sent to Google Gemini. Specific item details override broad merchant assumptions; manual choices take priority. Balances and the full ledger are not sent.", "Apabila diaktifkan, kategori bermula daripada peniaga dan diperhalus dengan penerangan. Nama peniaga, penerangan dan kategori dihantar ke Google Gemini selepas anda berhenti menaip. Butiran item mengatasi andaian umum peniaga; pilihan manual diutamakan. Baki dan lejar penuh tidak dihantar."))
+            .font(.footnote).foregroundStyle(.secondary)
+        Text(tr("也用于自动记账：先使用商户规则和本机分类，仍为“其他”才请求 AI。会发送该笔商户及描述／通知原文（可能包含通知里的余额等信息，长数字标识会遮盖）。失败不影响已保存账目，已修改的账目不会被覆盖。", "Also applies to automatic entries: saved merchant rules and local classification run first; only Other asks AI. The merchant and description/notification text are sent, which may include balances printed in the notification; long numeric identifiers are redacted. Failures do not affect saved entries, and edited entries are never overwritten.", "Turut digunakan untuk rekod automatik: peraturan peniaga dan kategori setempat didahulukan; hanya Lain-lain meminta AI. Nama peniaga dan penerangan/teks notifikasi dihantar, termasuk maklumat baki dalam notifikasi; pengecam angka panjang disamarkan. Kegagalan tidak menjejaskan rekod tersimpan dan suntingan tidak ditimpa."))
             .font(.footnote).foregroundStyle(.secondary)
     }
 }

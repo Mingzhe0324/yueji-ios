@@ -904,3 +904,52 @@ final class AutoBackupTests: XCTestCase {
         try await writer.validateDestination(external)
     }
 }
+
+final class AutomaticCategoryTests: XCTestCase {
+    func testOnlyUncertainAutomaticPurchasesNeedAI() throws {
+        var ledger = Ledger()
+        let unknown = Expense(merchant: "Unfamiliar merchant", cents: 1234, category: "其他", source: "Apple Pay")
+        ledger.expenses = [unknown]
+        XCTAssertEqual(ledger.automaticCategoryCandidate(id: unknown.id), unknown)
+        ledger.expenses[0].category = "购物"
+        XCTAssertNil(ledger.automaticCategoryCandidate(id: unknown.id))
+        ledger.expenses[0] = unknown
+        ledger.merchantCategories[friendKey(unknown.merchant)] = "其他"
+        XCTAssertNil(ledger.automaticCategoryCandidate(id: unknown.id))
+        ledger.merchantCategories = [:]
+        ledger.expenses[0].items = [ExpenseItem(name: "Item", cents: 1234, category: "其他")]
+        XCTAssertNil(ledger.automaticCategoryCandidate(id: unknown.id))
+    }
+    func testCategoryUpdateChangesOnlyCategoryAndRejectsStaleAnswers() throws {
+        let account = BankAccount(name: "Bank", openingCents: 10000, openingDate: Date(timeIntervalSince1970: 1))
+        let entry = Expense(bankAccountID: account.id, merchant: "Unknown", cents: 1234, category: "其他", source: "Apple Pay")
+        var ledger = Ledger(); ledger.bankAccounts = [account]; ledger.expenses = [entry]
+        let before = ledger.bankBalance(account)
+        XCTAssertFalse(ledger.applyAutomaticCategory("invented", expected: entry))
+        XCTAssertFalse(ledger.applyAutomaticCategory("", expected: entry))
+        XCTAssertFalse(ledger.applyAutomaticCategory("其他", expected: entry))
+        XCTAssertTrue(ledger.applyAutomaticCategory("购物", expected: entry))
+        var expected = entry; expected.category = "购物"
+        XCTAssertEqual(ledger.expenses, [expected])
+        XCTAssertEqual(ledger.bankBalance(account), before)
+        XCTAssertFalse(ledger.applyAutomaticCategory("餐饮", expected: entry))
+        ledger.expenses = [entry]; ledger.expenses[0].note = "Edited while AI was running"
+        XCTAssertFalse(ledger.applyAutomaticCategory("购物", expected: entry))
+        ledger.expenses = [entry]; ledger.merchantCategories[friendKey(entry.merchant)] = "账单"
+        XCTAssertFalse(ledger.applyAutomaticCategory("购物", expected: entry))
+        ledger.expenses = []
+        XCTAssertFalse(ledger.applyAutomaticCategory("购物", expected: entry))
+    }
+    func testAutomaticDeliveryAndReplayDoNotCreateAnotherClassifiableExpense() throws {
+        var ledger = Ledger()
+        let delivery = AutomationDelivery(kind: "applePay", amount: 12.34, merchant: "Unknown shop")
+        let result = try ledger.applyDelivery(delivery)
+        let id = try XCTUnwrap(result.expenseID)
+        let original = try XCTUnwrap(ledger.automaticCategoryCandidate(id: id))
+        XCTAssertTrue(ledger.applyAutomaticCategory("购物", expected: original))
+        let replay = try ledger.applyDelivery(delivery)
+        XCTAssertNil(replay.expenseID)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses[0].category, "购物")
+    }
+}
