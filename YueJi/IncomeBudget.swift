@@ -859,7 +859,10 @@ private enum AdditionalStatementReader {
             creditCount = Int(try first.cell(0.36, 0.42, first.label("Total Deposits")))
             guard debitCount != nil, creditCount != nil else { throw RHBStatement.failure() }
             var running = opening
-            for m in first.entries(#"\b\d{2}-\d{2}-\d{4}\b"#, left: 0.08, right: 0.16) {
+            // PDFKit can concatenate the date and the adjacent description.
+            // Guard against extra digits rather than requiring a word boundary;
+            // entries still restricts matches to the physical date column.
+            for m in first.entries(#"(?<!\d)\d{2}-\d{2}-\d{4}(?!\d)"#, left: 0.08, right: 0.16) {
                 let b = first.box(m.range), dr = first.cell(0.677, 0.81, b), cr = first.cell(0.543, 0.677, b)
                 let debit = dr.isEmpty ? 0 : try amount(dr), credit = cr.isEmpty ? 0 : try amount(cr)
                 let printed = first.cell(0.81, 0.945, b)

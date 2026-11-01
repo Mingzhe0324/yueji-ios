@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
@@ -725,6 +726,11 @@ extension IncomeBudgetTests {
             do { result = try RHBStatement.read(data) }
             catch {
                 XCTFail("\(provider) synthetic PDF: \(error)", file: file, line: line)
+                // Synthetic fixture only: expose PDFKit's extraction in CI to
+                // distinguish text ordering from column/balance failures.
+                if let document = PDFDocument(data: data) {
+                    print("Synthetic \(provider) PDF text: \(document.string ?? "<empty>")")
+                }
                 return
             }
             XCTAssertEqual(result.provider, provider)
