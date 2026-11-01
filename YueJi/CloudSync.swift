@@ -262,7 +262,7 @@ actor SupabaseCloudService: CloudRemote {
         guard (try? JSONDecoder().decode(Int.self, from: health)) == 1 else { throw CloudFailure.database }
     }
     func assistant(mode: String, text: String, categories: [String]) async throws -> Data {
-        guard ["classify", "entry", "query"].contains(mode), text.count <= 1000 else { throw CloudFailure.invalidResponse }
+        guard mode == "classify", text.count <= 1000 else { throw CloudFailure.invalidResponse }
         do { return try await request("/functions/v1/assistant-gemini", body: ["mode": mode, "text": text, "categories": categories], authenticated: true) }
         catch CloudFailure.server(let status, _) {
             if status == 422 {

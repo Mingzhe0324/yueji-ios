@@ -4296,130 +4296,27 @@ struct FinancialNoticeReviewView: View {
     }
 }
 
-struct AIAssistantView: View {
-    @EnvironmentObject private var model: LedgerModel
-    @State private var mode = "entry"
-    @State private var text = ""
-    @State private var working = false
-    @State private var failure: String?
-    @State private var draft: Expense?
-    @State private var answer: AssistantResult?
-    @State private var answerMonth = Date()
-    @State private var requestTask: Task<Void, Never>?
-    private var evidence: [Expense] {
-        model.ledger.expenses.filter { entry in
-            monthKey(entry.date) == monthKey(answerMonth) && entry.personalSpending > 0 &&
-            (answer?.intent != "category" || entry.personalAmount(category: answer?.category ?? "") > 0)
-        }.sorted { $0.personalSpending > $1.personalSpending }
-    }
-    private var answerCents: Int {
-        evidence.reduce(0) { $0 + (answer?.intent == "category" ? $1.personalAmount(category: answer?.category ?? "") : $1.personalSpending) }
-    }
+struct AIFeaturesSettingsView: View {
     var body: some View {
         List {
-            Section {
-                VStack(alignment: .leading, spacing: 10) {
-                    Image(systemName: "sparkles").font(.largeTitle).foregroundStyle(.tint).accessibilityHidden(true)
-                    Text(tr("少填一点，记清每一笔", "Less typing. Clearer records.", "Kurang menaip. Rekod lebih jelas."))
-                        .font(.title2.bold())
-                    Text(tr("AI 整理描述，账本负责计算。保存前由你核对。", "AI interprets descriptions; your ledger calculates. Review before saving.", "AI mentafsir penerangan; lejar mengira. Semak sebelum menyimpan."))
-                        .font(.subheadline).foregroundStyle(.secondary)
-                }.padding(.vertical, 8)
-            }
-            Section {
-                Picker(tr("功能", "Action", "Tindakan"), selection: $mode) {
-                    Text(tr("一句话记账", "Quick entry", "Rekod pantas")).tag("entry")
-                    Text(tr("问账本", "Ask ledger", "Tanya lejar")).tag("query")
-                }.pickerStyle(.segmented)
-                TextField(mode == "entry" ? tr("例如：午餐 RM18.50", "e.g. Lunch RM18.50", "cth. Makan tengah hari RM18.50") : tr("例如：这个月购物花了多少？", "e.g. How much on shopping this month?", "cth. Berapa belanja membeli-belah bulan ini?"), text: $text, axis: .vertical)
-                    .lineLimit(2...5).accessibilityIdentifier("ai.input")
-                Button { submit() } label: {
-                    HStack {
-                        Label(mode == "entry" ? tr("生成待核对草稿", "Create draft", "Cipta draf") : tr("查询本月账目", "Ask about this month", "Tanya bulan ini"), systemImage: "sparkles")
-                        Spacer()
-                        if working { ProgressView() }
-                    }
-                }.disabled(working || text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || text.count > 1000)
-                    .accessibilityIdentifier("ai.submit")
-                if let failure { Text(failure).font(.footnote).foregroundStyle(.secondary) }
-            } footer: {
-                Text(tr("发送输入文字和分类名称给 Google Gemini。一句话记账目前支持单笔 MYR 支出；问答支持本月总额、分类、大额记录和核对。账目明细留在本机。", "Sends your text and category names to Google Gemini. Quick entry supports one MYR expense. Ask about this month's total, categories, largest expenses or checks. Ledger entries stay on device.", "Menghantar teks dan nama kategori ke Google Gemini. Rekod pantas menyokong satu belanja MYR. Tanya jumlah bulan ini, kategori, belanja terbesar atau semakan. Rekod lejar kekal pada peranti."))
-            }
-            if let answer {
-                if ["summary", "category", "largest"].contains(answer.intent ?? "") {
-                    Section(tr("本地账本计算 · ", "Calculated on device · ", "Dikira pada peranti · ") + monthKey(answerMonth)) {
-                        LabeledContent(answer.intent == "category" ? categoryLabel(answer.category) : tr("个人消费合计", "Personal spending", "Belanja peribadi"), value: money(answerCents))
-                            .font(.headline).monospacedDigit()
-                        Text(tr("按个人份额计算，已扣退款；转账不计入消费。下方最多展示 20 笔依据。", "Uses personal shares after refunds; transfers are excluded. Up to 20 supporting entries appear below.", "Menggunakan bahagian peribadi selepas bayaran balik; pindahan dikecualikan. Sehingga 20 rekod sokongan dipaparkan."))
-                            .font(.caption).foregroundStyle(.secondary)
-                        ForEach(Array(evidence.prefix(20))) { entry in
-                            NavigationLink {
-                                ExpenseDetailView(id: entry.id, embeddedInNavigation: true)
-                            } label: {
-                                LabeledContent(entry.displayName, value: money(answer.intent == "category" ? entry.personalAmount(category: answer.category) : entry.personalSpending))
-                            }
-                        }
-                    }
-                } else if answer.intent == "unknown" {
-                    Section { Text(tr("这个问题暂不支持。可以问本月总额、某个分类或大额支出。", "This question is not supported yet. Ask about this month's total, a category, or largest expenses.", "Soalan ini belum disokong. Tanya jumlah bulan ini, kategori atau belanja terbesar.")) }
-                }
-            }
-            Section(tr("核对与自动记账", "Review and automation", "Semakan dan automasi")) {
-                NavigationLink { DuplicateReviewView() } label: { Label(tr("检查疑似重复", "Review possible duplicates", "Semak kemungkinan pendua"), systemImage: "doc.on.doc") }
-                NavigationLink { AutomationStatusView() } label: { Label(tr("待确认与自动记账状态", "Pending items and automation", "Item tertunda dan automasi"), systemImage: "checklist") }
-                NavigationLink { TNGSetupView() } label: { Label(tr("银行通知 AI", "Bank notification AI", "AI notifikasi bank"), systemImage: "building.columns") }
-                NavigationLink { ReceiptScanView() } label: { Label(tr("收据识别与分账", "Receipts and splitting", "Resit dan pembahagian"), systemImage: "doc.viewfinder") }
-            }
-            UnusualSpendingSection(alerts: SpendingAlerts.make(ledger: model.ledger, month: Date()), month: Date())
             Section { AICategorySettings() }
-        }.yuejiListSurface()
-            .navigationTitle(tr("月记 AI", "YueJi AI", "YueJi AI"))
-            .navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $draft) { ExpenseEditor(original: nil, initialDraft: $0) }
-            .onChange(of: mode) { _, _ in cancel(); answer = nil; failure = nil }
-            .onChange(of: text) { _, _ in cancel(); answer = nil; failure = nil }
-            .onDisappear { cancel() }
-    }
-    private func cancel() { requestTask?.cancel(); requestTask = nil; working = false }
-    private func submit() {
-        cancel(); working = true; failure = nil; answer = nil
-        let submitted = text, action = mode, categories = model.ledger.categoryNames
-        requestTask = Task { @MainActor in
-            do {
-                let data = try await CloudAccount.shared.assistant(mode: action, text: submitted, categories: categories)
-                let result = try JSONDecoder().decode(AssistantResult.self, from: data)
-                try Task.checkCancellation()
-                if action == "entry" {
-                    guard let amount = result.amount, let cents = try? toCents(amount), cents > 0,
-                          let name = result.name, !name.isEmpty, submitted.contains(name),
-                          result.category.isEmpty || categories.contains(result.category) else {
-                        throw reviewError("请描述一笔支出和明确的 MYR 金额。多笔交易请分别输入。", "Describe one expense with an explicit MYR amount. Enter multiple transactions separately.", "Nyatakan satu belanja dengan amaun MYR yang jelas. Masukkan transaksi berasingan.")
-                    }
-                    var expense = Expense(merchant: name, cents: cents, category: result.category.isEmpty ? "其他" : result.category, source: "AI")
-                    expense.entryDescription = submitted
-                    draft = expense
-                } else {
-                    guard ["summary", "category", "largest", "audit", "unknown"].contains(result.intent ?? ""),
-                          result.category.isEmpty || categories.contains(result.category) else { throw CloudFailure.invalidResponse }
-                    answerMonth = Date(); answer = result
+            Section {
+                NavigationLink { TNGSetupView() } label: {
+                    Label(tr("银行通知 AI", "Bank notification AI", "AI notifikasi bank"), systemImage: "building.columns")
                 }
-                working = false
-            } catch {
-                guard !Task.isCancelled else { return }
-                working = false
-                failure = error.localizedDescription
+                NavigationLink { ReceiptScanView() } label: {
+                    Label(tr("收据识别与分账", "Receipts and splitting", "Resit dan pembahagian"), systemImage: "doc.viewfinder")
+                }
             }
-        }
+        }.yuejiListSurface()
+            .navigationTitle(tr("AI 功能", "AI features", "Ciri AI"))
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 
 struct AssistantResult: Decodable {
     let category: String
-    let name: String?
-    let amount: String?
-    let intent: String?
 }
-
 /// Each mounted field owns its request. SwiftUI cancels obsolete requests when
 /// the text changes or a row disappears; manual selections always take priority.
 struct AIClassificationRow: View {

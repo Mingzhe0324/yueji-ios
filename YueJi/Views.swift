@@ -662,7 +662,7 @@ struct MonthPicker: View {
     }
 }
 /// Pages the Overview's quick actions and section links open.
-private enum OverviewRoute: Hashable { case receipt, automation, assistant, savings, travel, comparison(Date), year(Date) }
+private enum OverviewRoute: Hashable { case receipt, automation, savings, travel, comparison(Date), year(Date) }
 
 struct DashboardView: View {
     @Environment(\.locale) private var uiLocale
@@ -817,11 +817,6 @@ struct DashboardView: View {
                 // follow, each card under a bold heading with "View all" where there is
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
-                Section {
-                    NavigationLink(value: OverviewRoute.assistant) {
-                        Label(tr("月记 AI · 记账与核对", "YueJi AI · Record and review", "YueJi AI · Rekod dan semak"), systemImage: "sparkles")
-                    }
-                }
                 budgetSection
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
@@ -848,7 +843,6 @@ struct DashboardView: View {
                 switch route {
                 case .receipt: ReceiptScanView()
                 case .automation: AutomationSetupView()
-                case .assistant: AIAssistantView()
                 case .savings: SavingsGoalsView()
                 case .travel: TravelBooksView()
                 case .comparison(let month): SpendingComparisonView(month: month)
@@ -3490,8 +3484,8 @@ struct SettingsView: View {
                     AccountSettingsCard()
                 }
                 Section {
-                    NavigationLink { AIAssistantView() } label: {
-                        Label(tr("月记 AI", "YueJi AI", "YueJi AI"), systemImage: "sparkles")
+                    NavigationLink { AIFeaturesSettingsView() } label: {
+                        Label(tr("AI 功能", "AI features", "Ciri AI"), systemImage: "sparkles")
                     }
                 }
 

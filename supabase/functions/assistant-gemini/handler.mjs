@@ -1,13 +1,8 @@
-const string = { type: "string" };
 const schemas = {
-  classify: { type: "object", required: ["category"], properties: { category: string } },
-  entry: { type: "object", required: ["name", "amount", "category"], properties: { name: string, amount: string, category: string } },
-  query: { type: "object", required: ["intent", "category"], properties: { intent: string, category: string } },
+  classify: { type: "object", required: ["category"], properties: { category: { type: "string" } } },
 };
 const instructions = {
   classify: "Classify the described purchase into exactly one provided category. Return an empty category when ambiguous or multiple unrelated items. Do not default uncertain purchases to food.",
-  entry: "Extract one expense draft. name is an exact substring of text, at most 200 characters. amount is a positive MYR amount explicitly stated in text, normalized to two decimals. Multiple amounts, income, transfers or unknown currency: empty amount. category is one provided category or empty. Do not calculate or invent amounts.",
-  query: "Interpret a ledger question. intent is summary (this month's personal spending), category (one category this month), largest (largest personal expenses this month), or audit (duplicates/problems). Unsupported periods, income, balances, transfers, comparisons or other requests: unknown. category must be one provided category for category intent, otherwise empty. Never produce an answer or figures.",
 };
 function reply(status, body) { return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } }); }
 async function read(stream, max) {
@@ -28,17 +23,9 @@ export function validInput(input) {
     input.categories.every(c => typeof c === "string" && c.trim().length > 0 && c.length <= 200) && new Set(input.categories).size === input.categories.length;
 }
 export function cleanResult(value, input) {
-  if (!value || typeof value.category !== "string" || (value.category !== "" && !input.categories.includes(value.category))) return null;
-  if (input.mode === "classify") return { category: value.category };
-  if (input.mode === "query") return ["summary", "category", "largest", "audit", "unknown"].includes(value.intent) && (value.intent !== "category" || value.category !== "") ? { intent: value.intent, category: value.category } : null;
-  if (typeof value.name !== "string" || value.name.length > 200 || !input.text.includes(value.name) || typeof value.amount !== "string") return null;
-  if (value.amount !== "") {
-    if (!/^\d{1,8}\.\d{2}$/.test(value.amount) || Number(value.amount) <= 0) return null;
-    if (!/\b(?:RM|MYR)\s*\d|\d\s*MYR\b/i.test(input.text) || /\b(?:USD|SGD|EUR|GBP|CNY|JPY)\b|[$€£¥]/i.test(input.text)) return null;
-    const amounts = [...input.text.matchAll(/(?:^|[^\d.,])(\d{1,8}(?:\.\d{1,2})?)(?![\d.,])/g)].map(m => Number(m[1]));
-    if (amounts.length !== 1 || amounts[0] !== Number(value.amount)) return null;
-  }
-  return { name: value.name, amount: value.amount, category: value.category };
+  if (input.mode !== "classify" || !value || typeof value.category !== "string" ||
+      (value.category !== "" && !input.categories.includes(value.category))) return null;
+  return { category: value.category };
 }
 export async function handleAssistant(request, deps) {
   if (request.method !== "POST") return reply(405, { error: "method" });

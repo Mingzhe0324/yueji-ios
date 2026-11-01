@@ -60,19 +60,17 @@ test('timeout, transport and malformed responses have distinct safe diagnostics'
     assert.deepEqual(deps.logs, [{ event: 'assistant_failure', stage, error: expected }]);
   }
 });
-test('entry amounts must match a single explicit number; fabricated name and sums fail', () => {
-  const entry = { ...input, mode: 'entry', text: '午餐 RM18.50' };
-  const value = { name: '午餐', amount: '18.50', category: '餐饮' };
-  assert.deepEqual(cleanResult(value, entry), value);
-  assert.equal(cleanResult({ ...value, amount: '20.00' }, entry), null);
-  assert.equal(cleanResult({ ...value, name: 'invented' }, entry), null);
-  assert.equal(cleanResult(value, { ...entry, text: '午餐 RM18.50 饮料 RM2.00' }), null);
-  assert.equal(cleanResult(value, { ...entry, text: '午餐 USD18.50' }), null);
-  assert.equal(cleanResult(value, { ...entry, text: '午餐 18.50' }), null);
+test('removed entry and query modes are rejected before quota and model calls', async () => {
+  for (const mode of ['entry', 'query']) {
+    const deps = harness();
+    const response = await handleAssistant(request({ ...input, mode }), deps);
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), { error: 'invalid_input' });
+    assert.equal(deps.calls.length, 1);
+    assert.equal(cleanResult({ category: '购物' }, { ...input, mode }), null);
+  }
 });
-test('query produces only a supported intent/filter, never invented figures', () => {
-  const query = { ...input, mode: 'query' };
-  assert.deepEqual(cleanResult({ intent: 'summary', category: '', total: 1000 }, query), { intent: 'summary', category: '' });
-  assert.equal(cleanResult({ intent: 'delete', category: '' }, query), null);
-  assert.equal(cleanResult({ intent: 'category', category: '' }, query), null);
+test('classification preserves uncertainty and strips unrelated output fields', () => {
+  assert.deepEqual(cleanResult({ category: '', amount: '18.50', name: 'draft' }, input), { category: '' });
+  assert.deepEqual(cleanResult({ category: '购物', intent: 'summary' }, input), { category: '购物' });
 });
