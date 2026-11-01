@@ -286,14 +286,6 @@ actor SupabaseCloudService: CloudRemote {
             if path == "/functions/v1/bank-notification-gemini", response.statusCode != 401,
                let code = object?["error"] as? String,
                let failure = BankAnalysisFailure(rawValue: code) { throw failure }
-            if path == "/functions/v1/google-places", response.statusCode != 401 {
-                let code = object?["error"] as? String ?? ""
-                if response.statusCode == 429 { throw CloudFailure.rateLimit }
-                if ["not_configured", "quota_unavailable", "places_access_denied"].contains(code) || response.statusCode == 404 {
-                    throw reviewError("店铺服务尚未启用，请完成 Google Places 服务配置。", "Place search is not enabled. Complete the Google Places setup.", "Carian tempat belum diaktifkan. Lengkapkan persediaan Google Places.")
-                }
-                throw reviewError("暂时无法加载 Google 店铺资料，请稍后重试。", "Google place details are unavailable. Please retry later.", "Butiran tempat Google tidak tersedia. Cuba lagi kemudian.")
-            }
             let code = object?["error_code"] as? String ?? object?["code"] as? String ?? ""
             if code == "40001" { throw CloudFailure.changed }
             if ["42P01", "42883", "PGRST202", "PGRST205"].contains(code) { throw CloudFailure.database }
@@ -314,14 +306,6 @@ actor SupabaseCloudService: CloudRemote {
         _ = try await request("/auth/v1/settings", method: "GET")
         let health = try await request("/rest/v1/rpc/yueji_sync_health", body: [:])
         guard (try? JSONDecoder().decode(Int.self, from: health)) == 1 else { throw CloudFailure.database }
-    }
-    func places(query: String, id: String?, latitude: Double?, longitude: Double?) async throws -> Data {
-        var body: [String: Any] = ["mode": id == nil ? "search" : "details"]
-        if let id { body["id"] = id } else {
-            body["query"] = query
-            if let latitude, let longitude { body["latitude"] = latitude; body["longitude"] = longitude }
-        }
-        return try await request("/functions/v1/google-places", body: body, authenticated: true)
     }
     func assistant(mode: String, text: String, categories: [String], merchant: String = "") async throws -> Data {
         guard mode == "classify", text.count <= 1000, merchant.count <= 200 else { throw CloudFailure.invalidResponse }
