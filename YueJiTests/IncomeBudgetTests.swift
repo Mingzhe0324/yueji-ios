@@ -616,6 +616,9 @@ extension IncomeBudgetTests {
 
 extension IncomeBudgetTests {
     func testAdditionalStatementProviderGuardAndReviewOnlyImport() throws {
+        XCTAssertEqual(financialProvider("Wise"), "Wise")
+        XCTAssertEqual(financialProvider("Wise Payments Malaysia"), "Wise")
+        XCTAssertNil(financialProvider("Otherwise"))
         var (account, statement) = statementFixture()
         statement.provider = "Wise"
         var ledger = Ledger(); ledger.bankAccounts = [account]
@@ -665,8 +668,11 @@ extension IncomeBudgetTests {
         XCTAssertThrowsError(try RHBStatement.read(syntheticAmBankPDF(closing: "10.03")))
     }
 
-    func testNativeOtherBankLayoutsAndMissingPrintedBalance() throws {
-        for provider in ["Hong Leong", "Maybank", "Ryt Bank", "Wise"] {
+    func testNativeHongLeongLayoutAndMissingPrintedBalance() throws { try checkNativeStatementLayout("Hong Leong") }
+    func testNativeMaybankLayout() throws { try checkNativeStatementLayout("Maybank") }
+    func testNativeRytLayout() throws { try checkNativeStatementLayout("Ryt Bank") }
+    func testNativeWiseLayout() throws { try checkNativeStatementLayout("Wise") }
+    private func checkNativeStatementLayout(_ provider: String, file: StaticString = #filePath, line: UInt = #line) throws {
             let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 840)).pdfData { context in
                 context.beginPage()
                 func text(_ s: String, _ x: CGFloat, _ y: CGFloat) {
@@ -715,7 +721,12 @@ extension IncomeBudgetTests {
                     text("1 / 1", 540, 800)
                 }
             }
-            let result = try RHBStatement.read(data)
+            let result: RHBStatement
+            do { result = try RHBStatement.read(data) }
+            catch {
+                XCTFail("\(provider) synthetic PDF: \(error)", file: file, line: line)
+                return
+            }
             XCTAssertEqual(result.provider, provider)
             XCTAssertEqual(result.suffix, "1234")
             switch provider {
@@ -726,7 +737,6 @@ extension IncomeBudgetTests {
             case "Ryt Bank": XCTAssertEqual(result.closing, 101); XCTAssertEqual(result.rows.first?.isInterest, true)
             default: XCTAssertEqual(result.opening, 0); XCTAssertTrue(result.reviewOnly)
             }
-        }
     }
 
     func testOverlappingStatementSkipsExistingRowsAndSameDaySameAmountsNeedReview() throws {

@@ -1,6 +1,11 @@
 name: Build YueJi iPhone App
 on:
   workflow_dispatch:
+    inputs:
+      statement_tests_only:
+        description: 'Run statement/account unit tests only (diagnostics, no IPA)'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -49,9 +54,15 @@ jobs:
           PY
       - name: Build and test
         timeout-minutes: 45
+        env:
+          STATEMENT_TESTS_ONLY: ${{ inputs.statement_tests_only }}
         run: |
           set -o pipefail
-          xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
+          test_args=()
+          if [ "$STATEMENT_TESTS_ONLY" = "true" ]; then
+            test_args+=("-only-testing:YueJiTests/IncomeBudgetTests")
+          fi
+          xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult "${test_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
       # Compiler errors and failed tests become annotations on the run (and its summary), so
       # they can be read without downloading the log.
       - name: Report compiler errors and test failures
@@ -76,6 +87,12 @@ jobs:
               return value.replace('%', '%25').replace('\r', '%0D').replace('\n', '%0A')
           def prop(value):
               return text(value).replace(':', '%3A').replace(',', '%2C')
+          # XCTest throws can have no source location (<unknown>:0), so they
+          # must not disappear from the summary when compiler diagnostics are empty.
+          test_errors = list(dict.fromkeys(line.strip() for line in lines
+              if re.search(r'(?:<unknown>:0: error:|Test Case .* failed \(|^\s*IncomeBudgetTests\..*\(\))', line)))
+          for message in test_errors[:20]:
+              print('::error title=Test failure::' + text(message))
           for path, line, col, message in found[:9]:
               rel = path[len(root):] if path.startswith(root) else path
               where = 'file=' + prop(rel) + ',line=' + line + (',col=' + col if col else '')
@@ -87,6 +104,8 @@ jobs:
               summary.write('### Compiler errors and test failures\n\n')
               for path, line, col, message in found[:60]:
                   summary.write('- `' + path.split('/')[-1] + ':' + line + '` ' + message + '\n')
+              for message in test_errors[:30]:
+                  summary.write('- ' + message + '\n')
           # A failing UI case prints the app's accessibility hierarchy. Its windows, bars,
           # sheets and alerts show what was on screen, so keep those as one warning per case.
           landmark = re.compile(r"\b(Window|Sheet|NavigationBar|Alert|Keyboard|TabBar|Toolbar)\b|Grabber|Unsaved draft")
@@ -106,6 +125,7 @@ jobs:
               shown += 1
           PYCODE
       - name: Build unsigned device app
+        if: ${{ !inputs.statement_tests_only }}
         env:
           YUEJI_SUPABASE_URL: ${{ vars.YUEJI_SUPABASE_URL }}
           YUEJI_SUPABASE_PUBLIC_KEY: ${{ vars.YUEJI_SUPABASE_PUBLIC_KEY }}
@@ -115,6 +135,7 @@ jobs:
           python3 scripts/configure_cloud.py
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
       - name: Package for personal signing
+        if: ${{ !inputs.statement_tests_only }}
         run: |
           python3 - <<'PYCODE'
           import plistlib
@@ -133,6 +154,7 @@ jobs:
           cd package
           zip -qr ../YueJi-${{ steps.release.outputs.label }}-unsigned.ipa Payload
       - name: Upload unsigned IPA
+        if: ${{ !inputs.statement_tests_only }}
         uses: actions/upload-artifact@v4
         with:
           name: YueJi-${{ steps.release.outputs.label }}-run${{ github.run_number }}

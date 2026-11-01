@@ -1415,6 +1415,7 @@ extension Expense {
 
 // Bank names improve labels only. Acceptance is not restricted to this directory.
 let financialProviderAliases: [(String, [String])] = [
+    ("Wise", ["wise", "transferwise"]),
     ("TNG", ["tng ewallet", "touch 'n go", "touch n go", "tng"]),
     ("Maybank", ["maybank", "maybank2u", "mae"]),
     ("Hong Leong", ["hong leong", "hlb connect", "hlb"]),
