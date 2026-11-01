@@ -188,6 +188,15 @@ struct RestoredLedgerFeedback {
     @Published var feedbackOwners = FeedbackPresentationOwners()
     @Published var savedNotice: UUID?
     @Published var feedbackMessage = ""
+    @Published var savedAmount: SavedAmountFeedback?
+    func floatSavedAmount(_ cents: Int, incoming: Bool) {
+        let value = SavedAmountFeedback(cents: cents, incoming: incoming)
+        savedAmount = value
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(1600))
+            if self?.savedAmount?.id == value.id { self?.savedAmount = nil }
+        }
+    }
     @Published var newTNGCount = 0
     @Published private(set) var newTNGToken = UUID()
     @Published private(set) var foregroundNotice: ForegroundLedgerNotice?
@@ -349,6 +358,7 @@ struct RestoredLedgerFeedback {
     /// The amount sheet, presented by the screen that showed the prompt (`presenter`).
     @Published var allocationRequest: IncomeAllocationRequest?
     func presentIncomeOutcome(_ outcome: IncomeBudgetOutcome) {
+        floatSavedAmount(outcome.cents, incoming: true)
         // This replaces the plain "Saved" banner: it already says the income was recorded.
         savedNotice = nil
         let prompt = IncomeBudgetPrompt(outcome: outcome)

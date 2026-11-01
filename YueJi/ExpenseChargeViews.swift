@@ -700,12 +700,14 @@ struct ExpenseChargeDetails: View {
     }
 }
 
-// Google content stays in this separate, map-free preview; it is not copied onto
+// Google content stays in this separate preview (with Google's own map fallback); it is not copied onto
 // the Apple map or persisted in the ledger. A search never changes a transaction.
 private struct GooglePlaceResult: Decodable, Identifiable {
     let id: String
     let name: String
     let address: String
+    let latitude: Double?
+    let longitude: Double?
     let mapsURL: String
     let attributions: [GooglePlaceCredit]
 }
@@ -722,6 +724,7 @@ private struct GooglePlaceSearch: Decodable { let places: [GooglePlaceResult] }
 private struct GooglePlaceDetail: Decodable {
     let place: GooglePlaceResult
     let photos: [GooglePlacePhoto]
+    let mapImage: String?
 }
 private struct GooglePlaceBrowser: View {
     @Environment(\.dismiss) private var dismiss
@@ -754,6 +757,7 @@ private struct GooglePlaceBrowser: View {
                     Section {
                         Text(detail.place.name).font(.title2.bold())
                         Text(detail.place.address).foregroundStyle(.secondary)
+                        if let distance = distanceLabel(detail.place) { Text(distance).font(.caption).foregroundStyle(.secondary) }
                         credits(detail.place.attributions)
                         if let url = URL(string: detail.place.mapsURL), url.scheme == "https" {
                             Link(tr("在 Google Maps 查看", "View on Google Maps", "Lihat di Google Maps"), destination: url)
@@ -761,7 +765,15 @@ private struct GooglePlaceBrowser: View {
                         Button(tr("返回搜索结果", "Back to results", "Kembali ke hasil")) { self.detail = nil }
                     }
                     if detail.photos.isEmpty {
-                        Text(tr("暂无可显示的店铺照片。", "No place photos available.", "Tiada foto tempat tersedia."))
+                        Section {
+                            if let encoded = detail.mapImage, let data = Data(base64Encoded: encoded), let image = UIImage(data: data) {
+                                Image(uiImage: image).resizable().scaledToFit()
+                                    .accessibilityLabel(tr("店铺位置地图", "Map of this place", "Peta tempat ini"))
+                                Text(tr("暂无照片，显示地图位置", "No photos · showing map", "Tiada foto · menunjukkan peta")).font(.caption)
+                            } else {
+                                Label(tr("照片和地图暂不可用，可通过上方链接查看位置。", "Photos and map unavailable. Use the link above to view the location.", "Foto dan peta tidak tersedia. Gunakan pautan di atas untuk melihat lokasi."), systemImage: "map")
+                            }
+                        }
                     }
                     ForEach(Array(detail.photos.enumerated()), id: \.offset) { _, photo in
                         Section {
@@ -778,6 +790,7 @@ private struct GooglePlaceBrowser: View {
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(place.name).font(.headline)
                                 Text(place.address).font(.caption).foregroundStyle(.secondary)
+                                if let distance = distanceLabel(place) { Text(distance).font(.caption).foregroundStyle(.secondary) }
                             }
                         }.disabled(loading)
                         credits(place.attributions)
@@ -804,6 +817,14 @@ private struct GooglePlaceBrowser: View {
                 Link(credit.name, destination: url).font(.caption)
             } else if !credit.name.isEmpty { Text(credit.name).font(.caption) }
         }
+    }
+    private func distanceLabel(_ place: GooglePlaceResult) -> String? {
+        guard let latitude, let longitude, let lat = place.latitude, let lon = place.longitude,
+              CLLocationCoordinate2DIsValid(.init(latitude: lat, longitude: lon)),
+              CLLocationCoordinate2DIsValid(.init(latitude: latitude, longitude: longitude)) else { return nil }
+        let meters = CLLocation(latitude: latitude, longitude: longitude).distance(from: CLLocation(latitude: lat, longitude: lon))
+        let distance = meters < 1000 ? "\(Int(meters.rounded())) m" : String(format: "%.1f km", meters / 1000)
+        return tr("距账目地点约 ", "Approx. distance from entry location: ", "Anggaran jarak dari lokasi rekod: ") + distance
     }
     private func load(id: String? = nil) {
         let text = query.trimmingCharacters(in: .whitespacesAndNewlines)

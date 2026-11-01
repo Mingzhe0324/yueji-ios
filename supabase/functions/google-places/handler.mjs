@@ -1,5 +1,5 @@
 const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
-async function read(stream, max = 200_000) {
+async function readBytes(stream, max = 200_000) {
   if (!stream) throw new Error("empty");
   const reader = stream.getReader(), chunks = []; let size = 0;
   try {
@@ -12,8 +12,9 @@ async function read(stream, max = 200_000) {
   } finally { reader.releaseLock(); }
   const bytes = new Uint8Array(size); let offset = 0;
   for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.length; }
-  return JSON.parse(new TextDecoder().decode(bytes));
+  return bytes;
 }
+const read = async (stream, max) => JSON.parse(new TextDecoder().decode(await readBytes(stream, max)));
 const placeID = v => typeof v === "string" && /^[A-Za-z0-9_-]{1,256}$/.test(v);
 export function validInput(v) {
   if (!v || !["search", "details"].includes(v.mode)) return false;
@@ -32,6 +33,7 @@ function safeURL(value, photo = false) {
 }
 function cleanPlace(p) {
   return { id: p.id, name: String(p.displayName?.text ?? ""), address: String(p.formattedAddress ?? ""),
+    latitude: p.location?.latitude, longitude: p.location?.longitude,
     mapsURL: safeURL(p.googleMapsUri), attributions: (p.attributions ?? []).map(a => ({ name: String(a.provider ?? ""), url: safeURL(a.providerUri) })) };
 }
 export async function handlePlaces(request, deps) {
@@ -57,7 +59,7 @@ export async function handlePlaces(request, deps) {
     if (await read(quota.body, 100) !== true) return reply(429, { error: "daily_limit" });
     const googleHeaders = { "Content-Type": "application/json", "X-Goog-Api-Key": key };
     const search = input.mode === "search";
-    const mask = "id,displayName,formattedAddress,googleMapsUri,attributions";
+    const mask = "id,displayName,formattedAddress,location,googleMapsUri,attributions";
     const body = { textQuery: input.query, pageSize: 5 };
     if (input.latitude !== undefined) body.locationBias = { circle: { center: { latitude: input.latitude, longitude: input.longitude }, radius: 500 } };
     const response = await get("https://places.googleapis.com/v1/" + (search ? "places:searchText" : "places/" + input.id), {
@@ -79,6 +81,23 @@ export async function handlePlaces(request, deps) {
       photos.push({ imageURL, mapsURL: safeURL(p.googleMapsUri) || safeURL(result.googleMapsUri),
         authors: (p.authorAttributions ?? []).map(a => ({ name: String(a.displayName ?? ""), url: safeURL(a.uri) })) });
     }
-    return reply(200, { place: cleanPlace(result), photos });
+    let mapImage = null;
+    const mapKey = deps.env("GOOGLE_MAPS_STATIC_API_KEY");
+    if (photos.length === 0 && mapKey) {
+      // Proxy a bounded image: the server key never reaches the app. Keep Google's
+      // built-in map attribution visible; this is not an Apple map overlay.
+      try {
+        const params = new URLSearchParams({ center: "place_id:" + input.id, markers: "place_id:" + input.id,
+          zoom: "16", size: "600x360", scale: "1", format: "png", key: mapKey });
+        const map = await get("https://maps.googleapis.com/maps/api/staticmap?" + params);
+        if (map.ok && map.headers.get("content-type")?.startsWith("image/png")) {
+          const bytes = await readBytes(map.body, 1_500_000);
+          let binary = "";
+          for (let i = 0; i < bytes.length; i += 8192) binary += String.fromCharCode(...bytes.subarray(i, i + 8192));
+          mapImage = btoa(binary);
+        }
+      } catch { /* The place card still works when the optional map fails. */ }
+    }
+    return reply(200, { place: cleanPlace(result), photos, mapImage });
   } catch { return reply(502, { error: signal.aborted ? "places_timeout" : "places_unavailable" }); }
 }

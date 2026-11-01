@@ -1243,6 +1243,7 @@ struct IncomeEditor: View {
                 return try ledger.updateIncome(entry, replacing: original)
             }, completion: { applied in
                 model.showSaved(message: applied.isEmpty ? nil : tr("已保存，预算已调整", "Saved · budgets updated", "Disimpan · bajet dikemas kini"))
+                model.floatSavedAmount(entry.cents, incoming: true)
                 dismiss()
             }, failure: { error = $0.localizedDescription })
         } else {
@@ -1250,7 +1251,9 @@ struct IncomeEditor: View {
             model.perform(key: operationKey, action: { ledger in
                 try ledger.addIncome(entry, autoPercent: percent)
             }, completion: { outcome in
-                if let outcome { model.presentIncomeOutcome(outcome) } else { model.showSaved() }
+                if let outcome { model.presentIncomeOutcome(outcome) } else {
+                    model.showSaved(); model.floatSavedAmount(entry.cents, incoming: true)
+                }
                 dismiss()
             }, failure: { error = $0.localizedDescription })
         }
@@ -1453,6 +1456,9 @@ private struct StatementImportView: View {
     @State private var error: String?
     @State private var undoBatch: String?
     @State private var task: Task<Void, Never>?
+    @State private var importResult: StatementImportResult?
+    @State private var classified = 0
+    @State private var classificationTotal = 0
     private var account: BankAccount? { model.ledger.bankAccounts.first { $0.id == accountID } }
     private var key: String { "statement-" + accountID }
     private var working: Bool { busy || model.isWorking(key) }
@@ -1503,7 +1509,29 @@ private struct StatementImportView: View {
                         }
                     }
                 }
-                if working { Section { ProgressView(tr("正在处理…", "Processing…", "Sedang memproses…")) } }
+                if working {
+                    Section {
+                        if classificationTotal > 0 {
+                            ProgressView(value: Double(classified), total: Double(classificationTotal))
+                            Text(tr("分类建议 \(classified)/\(classificationTotal)，随后保存核对结果", "Categories \(classified)/\(classificationTotal), then saving reconciliation", "Kategori \(classified)/\(classificationTotal), kemudian simpan semakan")).font(.caption)
+                        } else { ProgressView(tr("正在核对并处理…", "Checking and processing…", "Menyemak dan memproses…")) }
+                    }
+                }
+                if let result = importResult {
+                    Section {
+                        HStack {
+                            DrawnCheckmark(color: IncomeStyle.tint).frame(width: 22, height: 22).id(result.batch)
+                            Text(tr("本次处理完成", "Processing complete", "Pemprosesan selesai")).font(.headline)
+                        }
+                        LabeledContent(tr("已匹配", "Matched", "Sepadan"), value: "\(result.matched)")
+                        LabeledContent(tr("待确认", "Needs review", "Perlu semakan"), value: "\(result.pending + result.existingPending)")
+                        LabeledContent(tr("新增", "Added", "Ditambah"), value: "\(result.added)")
+                        if result.skipped > result.matched + result.existingPending {
+                            LabeledContent(tr("期初前跳过", "Before opening · skipped", "Sebelum baki awal · dilangkau"), value: "\(result.skipped - result.matched - result.existingPending)")
+                        }
+                        Text(tr("已匹配指已处理过的同一月结单记录；疑似重复仍待确认。完成处理不代表账户差额已归零。", "Matched means previously processed statement entries; possible duplicates still need review. Processing complete does not mean the balance difference is zero.", "Sepadan bermaksud rekod penyata yang telah diproses; kemungkinan pendua masih perlu semakan. Pemprosesan selesai tidak bermaksud perbezaan baki sifar.")).font(.caption).foregroundStyle(.secondary)
+                    }.accessibilityIdentifier("statement.result")
+                }
                 if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
                 if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
                 ForEach(batches) { batch in
@@ -1538,7 +1566,7 @@ private struct StatementImportView: View {
             if let batch = undoBatch {
                 Button(tr("撤销导入", "Undo import", "Batal import"), role: .destructive) {
                     model.perform(key: key, postRecurring: false, action: { try $0.undoStatementImport(batch: batch) }, completion: { _ in
-                        message = tr("已撤销导入。", "Import undone.", "Import dibatalkan."); error = nil
+                        message = tr("已撤销导入。", "Import undone.", "Import dibatalkan."); error = nil; importResult = nil
                     }, failure: { error = $0.localizedDescription })
                     undoBatch = nil
                 }
@@ -1569,6 +1597,7 @@ private struct StatementImportView: View {
     }
     private func load(_ url: URL) {
         task?.cancel(); statement = nil; confirmed = false; error = nil; message = ""; busy = true
+        importResult = nil; classificationTotal = 0; classified = 0
         let store = LocalStore.shared
         task = Task {
             defer { busy = false }
@@ -1594,8 +1623,10 @@ private struct StatementImportView: View {
             return
         }
         busy = true; error = nil; message = ""
+        importResult = nil; classified = 0; classificationTotal = 0
         let store = LocalStore.shared, allowed = model.ledger.categoryNames, ai = useAI
         let texts = Array(Set(statement.rows.filter { $0.isExpense && $0.date >= account.openingDate && !model.ledger.seenEvents.contains($0.id) && !model.ledger.statementMayExist($0, accountID: account.id) }.map(\.analysisText))).sorted().prefix(100)
+        classificationTotal = ai ? texts.count : 0
         task = Task {
             defer { busy = false }
             var categories: [String: String] = [:], aiFailed = false
@@ -1607,6 +1638,7 @@ private struct StatementImportView: View {
                         let data = try await CloudAccount.shared.assistant(mode: "classify", text: text, categories: allowed)
                         let answer = try JSONDecoder().decode(AssistantResult.self, from: data)
                         if allowed.contains(answer.category) { categories[text] = answer.category }
+                        classified += 1
                     } catch is CancellationError { return }
                     catch { aiFailed = true; break }
                 }
@@ -1617,6 +1649,8 @@ private struct StatementImportView: View {
                 guard store.isActive else { throw CancellationError() }
                 return try ledger.importStatement(statement, account: account, categories: suggestions)
             }, completion: { result in
+                importResult = result
+                FeedbackHaptics.success()
                 message = tr("已补录 \(result.added) 笔，待确认 \(result.pending) 笔，跳过 \(result.skipped) 笔。", "Added \(result.added), pending \(result.pending), skipped \(result.skipped).", "Ditambah \(result.added), menunggu \(result.pending), dilangkau \(result.skipped).")
                 if fallback { message += tr(" AI 暂不可用，未分类支出使用“其他”。", " AI unavailable; unclassified expenses use Other.", " AI tidak tersedia; perbelanjaan tanpa kategori menggunakan Lain-lain.") }
                 confirmed = false

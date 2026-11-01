@@ -1,8 +1,8 @@
-﻿# Google 店铺与照片（应用内预览）
+# Google 店铺与照片（应用内预览）
 
 入口：账目 → 消费地点 → Google 店铺与照片。输入店名/分店/地区，点击搜索，选择结果后在月记内查看地址和最多三张照片。不需要安装 Google Maps。
 
-这是独立的 Google 内容预览页，没有地图，不将 Google 内容绘制到 Apple 地图上，也不自动修改账目。原有地点编辑和 Apple 地图继续可用。商场内定位不能确定楼层或唯一店铺，用户需核对分店。无照片或服务失败时显示提示。
+这是独立的 Google 内容预览页，无照片时显示 Google 静态地图，不将 Google 内容绘制到 Apple 地图上，也不自动修改账目。原有地点编辑和 Apple 地图继续可用。商场内定位不能确定楼层或唯一店铺，用户需核对分店。无照片或服务失败时显示提示。
 
 ## 部署（必须完成后才可联网使用）
 
@@ -32,3 +32,11 @@
 - https://developers.google.com/maps/documentation/places/web-service/place-photos
 - https://developers.google.com/maps/documentation/places/web-service/policies
 - https://developers.google.com/maps/documentation/places/web-service/usage-and-billing
+
+## 店铺卡片与地图回退
+
+搜索结果和详情卡片显示分店地址及「距账目地点」的直线距离（不是实时当前位置或驾车路线；缺少坐标时不显示距离）。真实照片存在时优先显示。无可用照片时，服务请求一张 Google 静态地图，保留整张图及内置归属标识；没有伪造店铺图片。
+
+地图回退需在 Google Cloud 额外启用 **Maps Static API**，创建仅限该 API 的服务器密钥，并在 Supabase Secrets 添加 `GOOGLE_MAPS_STATIC_API_KEY`。随后重新部署 `google-places`。它也需要计费；仅无照片的详情查询额外请求一次地图。未配置或上游失败仍显示店名/地址和查看位置链接，不能凭空显示地图。
+
+静态地图由服务器转为有大小上限的图片数据传给客户端，不泄露 API Key，不存入账本。官方说明：https://developers.google.com/maps/documentation/maps-static/start

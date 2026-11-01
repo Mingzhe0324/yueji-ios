@@ -173,6 +173,12 @@ private struct CountingMoneyText: ViewModifier, Animatable {
 // MARK: - A checkmark that draws itself
 
 /// A checkmark drawn stroke by stroke as it appears, for "Saved" and goals reached.
+struct SavedAmountFeedback: Identifiable {
+    let id = UUID()
+    let cents: Int
+    let incoming: Bool
+}
+
 struct DrawnCheckmark: View {
     var lineWidth: CGFloat = 2
     var color: Color = .white

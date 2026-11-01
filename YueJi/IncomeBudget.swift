@@ -975,6 +975,8 @@ struct StatementImportResult: Sendable {
     var added = 0
     var pending = 0
     var skipped = 0
+    var matched = 0
+    var existingPending = 0
 }
 extension Ledger {
     /// A same-amount posting within three days may be an existing notification,
@@ -1013,6 +1015,10 @@ extension Ledger {
             // Day-only statement dates cannot safely be placed after a midday
             // opening balance. Earlier rows are already covered by that balance.
             if row.date < account.openingDate || seenEvents.contains(row.id) || tngNotices.contains(where: { $0.id == row.id }) {
+                if row.date >= account.openingDate {
+                    if tngNotices.contains(where: { $0.id == row.id && $0.status == "pending" }) { result.existingPending += 1 }
+                    else { result.matched += 1 }
+                }
                 result.skipped += 1; continue
             }
             let possible = statementMayExist(row, accountID: account.id) || statement.rows.contains {

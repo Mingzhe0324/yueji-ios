@@ -46,3 +46,16 @@ test('details with no photos succeeds without media calls',async()=>{
   const deps=setup([json({id:'u'}),json(true),json({id:'abc',displayName:{text:'Cafe'}})]);
   const response=await handlePlaces(request({mode:'details',id:'abc'}),deps); assert.deepEqual((await response.json()).photos,[]); assert.equal(deps.calls.length,3);
 });
+test('missing photos fall back to a bounded Google map without exposing the key',async()=>{
+  const deps=setup([json({id:'u'}),json(true),json({id:'abc',displayName:{text:'Cafe'},location:{latitude:1,longitude:2}}),new Response(new Uint8Array([137,80,78,71]),{headers:{'Content-Type':'image/png'}})]);
+  const env=deps.env; deps.env=name=>name==='GOOGLE_MAPS_STATIC_API_KEY'?'map-secret':env(name);
+  const response=await handlePlaces(request({mode:'details',id:'abc'}),deps); const body=await response.json();
+  assert.equal(body.mapImage,'iVBORw=='); assert.equal(body.place.latitude,1); assert.ok(!JSON.stringify(body).includes('map-secret'));
+  assert.equal(new URL(deps.calls[3].url).searchParams.get('center'),'place_id:abc');
+});
+test('map provider failure preserves place details',async()=>{
+  const deps=setup([json({id:'u'}),json(true),json({id:'abc',displayName:{text:'Cafe'}}),json({error:'map-secret'},403)]);
+  const env=deps.env; deps.env=name=>name==='GOOGLE_MAPS_STATIC_API_KEY'?'map-secret':env(name);
+  const response=await handlePlaces(request({mode:'details',id:'abc'}),deps); const body=await response.json();
+  assert.equal(response.status,200); assert.equal(body.mapImage,null); assert.equal(body.place.name,'Cafe');
+});
