@@ -260,6 +260,7 @@ struct ExpensePlaceMapSheet: View {
     @FocusState private var searchFocused: Bool
     @State private var initialized = false
     @State private var confirmingDiscard = false
+    @State private var showingGooglePlaces = false
     @StateObject private var mapLocator = ExpensePlaceLocator()
     @State private var movingMap = false
     @State private var visible = false
@@ -310,6 +311,11 @@ struct ExpensePlaceMapSheet: View {
             ScrollView {
                 VStack(spacing: 18) {
                     mapCard
+                    Button { showingGooglePlaces = true } label: {
+                        Label(tr("Google 店铺与照片", "Google places & photos", "Tempat & foto Google"), systemImage: "storefront")
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(18)
+                            .background(.background, in: RoundedRectangle(cornerRadius: 22))
+                    }.accessibilityIdentifier("place.googleDetails")
                     merchantSuggestions
                     if #available(iOS 18.0, *) {
                         AppleMerchantCard(placeID: draft.applePlaceID)
@@ -344,6 +350,10 @@ struct ExpensePlaceMapSheet: View {
             .scrollDismissesKeyboard(.interactively)
             .navigationTitle(tr("消费地点", "Spending location", "Lokasi belanja"))
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $showingGooglePlaces) {
+                GooglePlaceBrowser(query: [merchantHint.isEmpty ? draft.name : merchantHint, draft.address].filter { !$0.isEmpty }.joined(separator: " "),
+                                   latitude: draft.latitude, longitude: draft.longitude)
+            }
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button(editing ? tr("取消", "Cancel", "Batal") : tr("完成", "Done", "Selesai"), systemImage: "xmark") {
@@ -686,6 +696,162 @@ struct ExpenseChargeDetails: View {
             } header: { Text("SST & Service Charge") } footer: {
                 Text(tr("税费已计入付款总额和分账。", "Charges are included in the payment and shares.", "Caj termasuk dalam bayaran dan bahagian."))
             }.monospacedDigit()
+        }
+    }
+}
+
+// Google content stays in this separate, map-free preview; it is not copied onto
+// the Apple map or persisted in the ledger. A search never changes a transaction.
+private struct GooglePlaceResult: Decodable, Identifiable {
+    let id: String
+    let name: String
+    let address: String
+    let mapsURL: String
+    let attributions: [GooglePlaceCredit]
+}
+private struct GooglePlaceCredit: Decodable {
+    let name: String
+    let url: String
+}
+private struct GooglePlacePhoto: Decodable {
+    let imageURL: String
+    let mapsURL: String
+    let authors: [GooglePlaceCredit]
+}
+private struct GooglePlaceSearch: Decodable { let places: [GooglePlaceResult] }
+private struct GooglePlaceDetail: Decodable {
+    let place: GooglePlaceResult
+    let photos: [GooglePlacePhoto]
+}
+private struct GooglePlaceBrowser: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var query: String
+    let latitude: Double?
+    let longitude: Double?
+    @State private var places: [GooglePlaceResult] = []
+    @State private var detail: GooglePlaceDetail?
+    @State private var loading = false
+    @State private var searched = false
+    @State private var message: String?
+    @State private var operation: Task<Void, Never>?
+    @State private var generation = UUID()
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    TextField(tr("店名、分店或地址", "Merchant, branch or address", "Kedai, cawangan atau alamat"), text: $query)
+                        .submitLabel(.search).onSubmit { load() }
+                        .accessibilityIdentifier("place.google.query")
+                    Button(tr("搜索店铺", "Search places", "Cari tempat")) { load() }
+                        .disabled(loading || query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || query.count > 300)
+                    Text(tr("点击搜索后，将搜索词及此账目地点的坐标（如有）发送给 Google。请核对具体分店；搜索不会修改账目。", "Searching sends your query and this entry's coordinates, if available, to Google. Check the branch; search does not change your entry.", "Carian menghantar pertanyaan dan koordinat rekod ini, jika ada, kepada Google. Semak cawangan; carian tidak mengubah rekod."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if loading { ProgressView(tr("正在加载…", "Loading…", "Memuatkan…")) }
+                if let message { Text(message).foregroundStyle(.secondary) }
+                if let detail {
+                    Section {
+                        Text(detail.place.name).font(.title2.bold())
+                        Text(detail.place.address).foregroundStyle(.secondary)
+                        credits(detail.place.attributions)
+                        if let url = URL(string: detail.place.mapsURL), url.scheme == "https" {
+                            Link(tr("在 Google Maps 查看", "View on Google Maps", "Lihat di Google Maps"), destination: url)
+                        }
+                        Button(tr("返回搜索结果", "Back to results", "Kembali ke hasil")) { self.detail = nil }
+                    }
+                    if detail.photos.isEmpty {
+                        Text(tr("暂无可显示的店铺照片。", "No place photos available.", "Tiada foto tempat tersedia."))
+                    }
+                    ForEach(Array(detail.photos.enumerated()), id: \.offset) { _, photo in
+                        Section {
+                            GooglePlaceImage(url: photo.imageURL)
+                            credits(photo.authors)
+                            if let url = URL(string: photo.mapsURL), url.scheme == "https" {
+                                Link(tr("照片来源 · Google Maps", "Photo source · Google Maps", "Sumber foto · Google Maps"), destination: url).font(.caption)
+                            }
+                        }
+                    }
+                } else {
+                    ForEach(places) { place in
+                        Button { load(id: place.id) } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text(place.name).font(.headline)
+                                Text(place.address).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.disabled(loading)
+                        credits(place.attributions)
+                    }
+                    if searched && !loading && places.isEmpty && message == nil {
+                        Text(tr("没有找到店铺，请补充分店或地区再搜索。", "No matches. Add a branch or area and search again.", "Tiada padanan. Tambah cawangan atau kawasan dan cari semula."))
+                    }
+                }
+                Section {
+                    Text("Google Maps").font(.system(size: 16, weight: .medium)).foregroundStyle(.primary)
+                    Link("Google Maps Terms", destination: URL(string: "https://maps.google.com/help/terms_maps/")!)
+                    Link("Google Privacy Policy", destination: URL(string: "https://policies.google.com/privacy")!)
+                }
+            }
+            .navigationTitle(tr("店铺与照片", "Places & photos", "Tempat & foto"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
+            .onDisappear { generation = UUID(); operation?.cancel(); operation = nil; places = []; detail = nil }
+        }
+    }
+    @ViewBuilder private func credits(_ values: [GooglePlaceCredit]) -> some View {
+        ForEach(Array(values.enumerated()), id: \.offset) { _, credit in
+            if let url = URL(string: credit.url), url.scheme == "https" {
+                Link(credit.name, destination: url).font(.caption)
+            } else if !credit.name.isEmpty { Text(credit.name).font(.caption) }
+        }
+    }
+    private func load(id: String? = nil) {
+        let text = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !loading, id != nil || (!text.isEmpty && text.count <= 300) else { return }
+        operation?.cancel(); generation = UUID()
+        let token = generation
+        loading = true; message = nil; detail = nil
+        if id == nil { places = []; searched = true }
+        operation = Task { @MainActor in
+            do {
+                let data = try await CloudAccount.shared.places(query: text, id: id, latitude: latitude, longitude: longitude)
+                guard !Task.isCancelled, token == generation else { return }
+                if id == nil { places = try JSONDecoder().decode(GooglePlaceSearch.self, from: data).places }
+                else { detail = try JSONDecoder().decode(GooglePlaceDetail.self, from: data) }
+            } catch {
+                guard !Task.isCancelled, token == generation else { return }
+                message = error.localizedDescription
+            }
+            loading = false
+        }
+    }
+}
+private struct GooglePlaceImage: View {
+    let url: String
+    @State private var image: UIImage?
+    @State private var failed = false
+    var body: some View {
+        Group {
+            if let image { Image(uiImage: image).resizable().scaledToFit() }
+            else if failed { Label(tr("照片暂时无法加载", "Photo unavailable", "Foto tidak tersedia"), systemImage: "photo") }
+            else { ProgressView().frame(maxWidth: .infinity, minHeight: 150) }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .task(id: url) {
+            image = nil; failed = false
+            guard let address = URL(string: url), address.scheme == "https",
+                  address.host?.hasSuffix(".googleusercontent.com") == true else { failed = true; return }
+            let session = URLSession(configuration: .ephemeral)
+            defer { session.invalidateAndCancel() }
+            do {
+                var request = URLRequest(url: address)
+                request.timeoutInterval = 20
+                let (data, response) = try await session.data(for: request)
+                try Task.checkCancellation()
+                guard (response as? HTTPURLResponse)?.statusCode == 200, data.count <= 8_000_000,
+                      let value = UIImage(data: data) else { failed = true; return }
+                image = value
+            } catch { if !Task.isCancelled { failed = true } }
         }
     }
 }

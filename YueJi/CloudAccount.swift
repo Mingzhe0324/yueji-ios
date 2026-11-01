@@ -75,6 +75,22 @@ import UserNotifications
         service = value
         return value
     }
+    func places(query: String, id: String? = nil, latitude: Double? = nil, longitude: Double? = nil) async throws -> Data {
+        guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
+        let api = try connectedService()
+        let data: Data
+        do { data = try await api.places(query: query, id: id, latitude: latitude, longitude: longitude) }
+        catch CloudFailure.session {
+            let refreshed = try await api.refresh()
+            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+            try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+            session = refreshed
+            data = try await api.places(query: query, id: id, latitude: latitude, longitude: longitude)
+        }
+        try Task.checkCancellation()
+        guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+        return data
+    }
     func assistant(mode: String, text: String, categories: [String], merchant: String = "") async throws -> Data {
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
