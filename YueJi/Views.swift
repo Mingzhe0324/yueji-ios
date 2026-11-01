@@ -1666,11 +1666,9 @@ struct TransactionAmount: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let cents: Int
     let direction: AccountDirection
-    /// Overrides the direction colour when a screen needs a single text colour.
-    var tint: Color? = nil
     var body: some View {
         let _ = uiLocale.identifier
-        Text(direction.formattedAmount(cents)).foregroundStyle(tint ?? direction.amountColor).monospacedDigit()
+        Text(direction.formattedAmount(cents)).foregroundStyle(direction.amountColor).monospacedDigit()
             .contentTransition(reduceMotion ? .identity : .numericText(value: direction == .outgoing ? -Double(cents) : Double(cents)))
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: cents)
     }

@@ -441,7 +441,12 @@ private struct BankTransfersView: View {
                         HStack {
                             Text(dateLabel(transfer.date, time: true)).font(.caption).foregroundStyle(.secondary)
                             Spacer()
-                            Text(money(transfer.cents)).monospacedDigit()
+                            if let accountID {
+                                TransactionAmount(cents: transfer.cents, direction: transfer.toAccountID == accountID ? .incoming : .outgoing)
+                            } else {
+                                // Both sides of an own-account transfer; no net income.
+                                TransactionAmount(cents: transfer.cents, direction: .neutral)
+                            }
                         }
                         if !transfer.note.isEmpty { Text(transfer.note).font(.caption).foregroundStyle(.secondary) }
                     }.foregroundStyle(.primary)
