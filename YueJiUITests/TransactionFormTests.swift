@@ -39,6 +39,42 @@ final class TransactionFormTests: XCTestCase {
         verifyFirstAddItem(opening: true)
     }
 
+    func testBankInterestFirstPresentationAfterColdLaunch() {
+        let app = XCUIApplication()
+        runningApp = app
+        app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
+                               "-openingAnimationEnabled", "NO", "-playfulAnimations", "NO",
+                               "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
+        app.launch()
+        XCTAssertTrue(app.tabBars.buttons["Accounts"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["Accounts"].tap()
+        app.buttons["bankAccount.add"].tap()
+        let name = "Interest regression " + UUID().uuidString.prefix(8)
+        let field = app.textFields["e.g. Maybank savings"]
+        XCTAssertTrue(field.waitForExistence(timeout: 5))
+        field.tap(); field.typeText(name); finishKeyboard(in: app)
+        let opening = app.textFields["Opening balance MYR"]
+        opening.tap(); opening.typeText("0"); finishKeyboard(in: app)
+        app.navigationBars["Bank / wallet account"].buttons["Save"].tap()
+        waitUntilGone(app.navigationBars["Bank / wallet account"])
+        app.terminate(); app.launch()
+        XCTAssertTrue(app.tabBars.buttons["Accounts"].waitForExistence(timeout: 20))
+        app.tabBars.buttons["Accounts"].tap()
+        let account = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
+        reveal(account, in: app); account.tap()
+        for _ in 0..<2 {
+            let interest = app.buttons["bankAccount.interest"]
+            reveal(interest, in: app); interest.tap()
+            let editor = app.navigationBars["Record income"]
+            XCTAssertTrue(editor.waitForExistence(timeout: 5))
+            XCTAssertEqual(app.state, .runningForeground)
+            XCTAssertEqual(app.textFields["income.source"].value as? String, name)
+            editor.buttons["Cancel"].tap()
+            waitUntilGone(editor)
+            XCTAssertTrue(app.navigationBars["Account details"].exists)
+        }
+    }
+
     func testFreshLaunchOffersRecoveryBeforeUsageGuide() {
         let app = XCUIApplication()
         runningApp = app

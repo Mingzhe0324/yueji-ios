@@ -612,6 +612,120 @@ extension IncomeBudgetTests {
 }
 
 extension IncomeBudgetTests {
+    func testAdditionalStatementProviderGuardAndReviewOnlyImport() throws {
+        var (account, statement) = statementFixture()
+        statement.provider = "Wise"
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        XCTAssertThrowsError(try ledger.importStatement(statement, account: account, categories: [:]))
+        account.institution = "Wise"; account.automaticSource = "Wise"
+        ledger.bankAccounts = [account]
+        statement.reviewOnly = true
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(result.added, 0)
+        XCTAssertEqual(result.pending, 4)
+        XCTAssertEqual(ledger.bankBalance(account), account.openingCents)
+        XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.sourceBank == "Wise" && $0.title == "Wise statement" })
+        let again = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(again.skipped, 4)
+        try ledger.undoStatementImport(batch: result.batch)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+    }
+
+    private func syntheticAmBankPDF(closing: String = "10.02") -> Data {
+        UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 840)).pdfData { context in
+            context.beginPage()
+            func text(_ s: String, _ x: CGFloat, _ y: CGFloat) {
+                (s as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: UIFont.systemFont(ofSize: 8)])
+            }
+            text("AmBank ACCOUNT SUMMARY", 30, 30)
+            text("ACCOUNT NO. / NO. AKAUN:", 300, 60); text("999999991234", 470, 60)
+            text("STATEMENT DATE / TARIKH PENYATA: 01/09/2026 - 30/09/2026", 30, 90)
+            text("MYR 1 of 1", 30, 110)
+            text("OPENING BALANCE", 30, 160); text("0.00", 520, 160)
+            text("TOTAL DEBITS", 30, 180); text("0", 420, 180); text("0.00", 520, 180)
+            text("TOTAL CREDITS", 30, 200); text("2", 420, 200); text("10.02", 520, 200)
+            text("CLOSING BALANCE", 30, 220); text(closing, 520, 220)
+            text("02Sep", 42, 280); text("DuitNow CR TRF", 85, 280); text("10.00", 450, 280); text("10.00", 520, 280)
+            text("30Sep", 42, 310); text("HIBAH/PROFIT, , ,", 85, 310); text("0.02", 450, 310); text("10.02", 520, 310)
+        }
+    }
+
+    func testNativeAmBankStatementChecksTotalsAndProfit() throws {
+        let statement = try RHBStatement.read(syntheticAmBankPDF())
+        XCTAssertEqual(statement.provider, "AmBank")
+        XCTAssertEqual(statement.suffix, "1234")
+        XCTAssertEqual(statement.rows.count, 2)
+        XCTAssertEqual(statement.rows.last?.credit, 2)
+        XCTAssertEqual(statement.rows.last?.isInterest, true)
+        XCTAssertEqual(statement.rows.first?.isInterest, false)
+        XCTAssertEqual(statement.closing, 1002)
+        XCTAssertThrowsError(try RHBStatement.read(syntheticAmBankPDF(closing: "10.03")))
+    }
+
+    func testNativeOtherBankLayoutsAndMissingPrintedBalance() throws {
+        for provider in ["Hong Leong", "Maybank", "Ryt Bank", "Wise"] {
+            let data = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 600, height: 840)).pdfData { context in
+                context.beginPage()
+                func text(_ s: String, _ x: CGFloat, _ y: CGFloat) {
+                    (s as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: [.font: UIFont.systemFont(ofSize: 8)])
+                }
+                switch provider {
+                case "Hong Leong":
+                    text("Hong Leong Bank SAVINGS ACCOUNT STATEMENT MYR 1 of 1", 30, 30)
+                    text("A/C No / No Akaun : 9999991234", 30, 60)
+                    text("01/09/26 - 30/09/26", 30, 90)
+                    text("Balance from previous statement", 100, 140); text("100.00", 520, 140)
+                    text("02-09-2026", 52, 180); text("POS Purchase", 101, 180); text("10.00", 430, 180)
+                    text("03-09-2026", 52, 210); text("POS Purchase", 101, 210); text("20.00", 430, 210); text("70.00", 520, 210)
+                    text("Total Withdrawals", 30, 300); text("2", 225, 300); text("30.00", 290, 300)
+                    text("Total Deposits", 30, 320); text("0", 225, 320); text("0.00", 290, 320)
+                    text("Closing Balance", 380, 320); text("70.00", 520, 320)
+                case "Maybank":
+                    text("Maybank SAVINGS ACCOUNT-I", 30, 30)
+                    text("30/09/26", 510, 60); text("999999-991234", 450, 90)
+                    text("BEGINNING BALANCE", 100, 140); text("100.00", 520, 140)
+                    text("02/09/26", 52, 180); text("SALE DEBIT", 101, 180); text("30.00-", 410, 180); text("70.00", 520, 180)
+                    text("ENDING BALANCE", 100, 300); text("70.00", 410, 300)
+                    text("TOTAL CREDIT", 100, 320); text("0.00", 410, 320)
+                    text("TOTAL DEBIT", 100, 340); text("30.00", 410, 340)
+                case "Ryt Bank":
+                    text("YTL Digital Bank MYR", 30, 30)
+                    text("From 1 Sep 2026 to 30 Sep 2026", 30, 60)
+                    text("Nombor Akaun Simpanan : 99 9999 1234", 30, 90)
+                    text("Main Savings", 40, 160)
+                    text("1.00", 200, 166); text("+0.01", 270, 166); text("0.00", 360, 166); text("0.00", 440, 166); text("1.01", 530, 166)
+                    text("Ryt Pocket 999.00", 40, 200)
+                    context.beginPage()
+                    text("Main Account / Akaun Utama", 30, 30)
+                    text("1 Sep 2026", 46, 100); text("Opening balance", 125, 100); text("1.00", 530, 100)
+                    text("20 Sep 2026", 46, 160); text("Daily interest payout", 125, 160); text("+0.01", 445, 160); text("1.01", 530, 160)
+                    text("Closing balance (MYR)", 340, 220); text("1.01", 530, 220)
+                    text("END OF STATEMENT", 200, 280)
+                    context.beginPage(); text("Notes", 30, 30)
+                default:
+                    text("Wise Payments Malaysia MYR statement", 30, 30)
+                    text("1 October 2026 [GMT+08:00] - 31 October 2026 [GMT+08:00]", 30, 60)
+                    text("999999999991234", 310, 100)
+                    text("MYR on 31 October 2026 [GMT+08:00] 0.01 MYR", 30, 140)
+                    text("Received money from SAMPLE", 45, 200); text("0.01", 400, 200); text("0.01", 530, 200)
+                    text("1 October 2026 | Transaction: TRANSFER-123 | Reference: Test", 45, 220)
+                    text("1 / 1", 540, 800)
+                }
+            }
+            let result = try RHBStatement.read(data)
+            XCTAssertEqual(result.provider, provider)
+            XCTAssertEqual(result.suffix, "1234")
+            switch provider {
+            case "Hong Leong":
+                XCTAssertEqual(result.rows.map(\.balance), [9000, 7000])
+                XCTAssertFalse(result.verificationNote.isEmpty)
+            case "Maybank": XCTAssertEqual(result.rows.first?.debit, 3000)
+            case "Ryt Bank": XCTAssertEqual(result.closing, 101); XCTAssertEqual(result.rows.first?.isInterest, true)
+            default: XCTAssertEqual(result.opening, 0); XCTAssertTrue(result.reviewOnly)
+            }
+        }
+    }
+
     func testOverlappingStatementSkipsExistingRowsAndSameDaySameAmountsNeedReview() throws {
         let (account, full) = statementFixture()
         let partial = RHBStatement(accountHash: full.accountHash, suffix: full.suffix, start: full.start, end: full.end,

@@ -322,8 +322,11 @@ struct BankAccountsView: View {
 private struct BankAccountDetail: View {
     @EnvironmentObject var model: LedgerModel
     let accountID: String
-    @State private var editing = false
-    @State private var recordingInterest = false
+    private enum Editor: String, Identifiable {
+        case account, interest
+        var id: String { rawValue }
+    }
+    @State private var editor: Editor?
     var body: some View {
         List {
             if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
@@ -335,7 +338,7 @@ private struct BankAccountDetail: View {
                         .font(.title3).monospacedDigit()
                     LabeledContent(tr("期初余额", "Opening balance", "Baki awal"), value: money(account.openingCents))
                     LabeledContent(tr("期初时间", "Opening date", "Tarikh awal")) { Text(account.openingDate, format: .dateTime.year().month().day().hour().minute()) }
-                    Button(tr("编辑账户", "Edit account", "Edit akaun")) { editing = true }
+                    Button(tr("编辑账户", "Edit account", "Edit akaun")) { editor = .account }
                 } footer: {
                     Text(tr("期初余额指此时间之前的余额；更早的收支不会重复计入。", "Opening balance is the balance just before this time; earlier entries are not counted again.", "Baki awal ialah baki sebelum masa ini; rekod lebih awal tidak dikira semula."))
                 }
@@ -353,7 +356,7 @@ private struct BankAccountDetail: View {
                     }
                 }
                 Section(tr("已分配的收入", "Assigned income", "Pendapatan ditetapkan")) {
-                    Button { recordingInterest = true } label: {
+                    Button { editor = .interest } label: {
                         Label(tr("记录银行利息", "Record bank interest", "Rekod faedah bank"), systemImage: "percent")
                     }.accessibilityIdentifier("bankAccount.interest")
                     ForEach(model.ledger.incomes.filter { $0.bankAccountID == accountID }.sorted { $0.date > $1.date }) { entry in
@@ -367,10 +370,6 @@ private struct BankAccountDetail: View {
                             }
                         }
                     }
-                }
-                .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
-                .sheet(isPresented: $recordingInterest) {
-                    IncomeEditor(initialKind: .interest, initialAccountID: account.id)
                 }
                 Section {
                     ForEach(model.ledger.tngNotices.filter {
@@ -404,6 +403,17 @@ private struct BankAccountDetail: View {
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("账户详情", "Account details", "Butiran akaun"))
+        // Present from the stable screen, not a lazily hosted List section.
+        .sheet(item: $editor) { destination in
+            if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
+                switch destination {
+                case .account:
+                    BankAccountEditor(original: account).environmentObject(model)
+                case .interest:
+                    IncomeEditor(initialKind: .interest, initialAccountID: account.id).environmentObject(model)
+                }
+            }
+        }
     }
 }
 
@@ -1460,7 +1470,7 @@ private struct StatementImportView: View {
                         Label(tr("选择银行 PDF", "Choose bank PDF", "Pilih PDF bank"), systemImage: "doc.badge.plus")
                     }.disabled(working)
                 } footer: {
-                    Text(tr("目前支持 RHB 储蓄账户六栏文字版月结单。PDF 在本机读取，逐笔核对借贷、余额及总计；不支持扫描件或加密文件。", "Supports RHB savings statements with six text columns. PDF parsing and balance checks run on this device. Scans and encrypted files are unsupported.", "Menyokong penyata simpanan RHB enam lajur teks. PDF dan baki disemak pada peranti. Imbasan dan fail disulitkan tidak disokong."))
+                    Text(tr("支持已适配的 RHB、AmBank、HLB、Maybank、Ryt 主账户及 Wise MYR 文字版格式。PDF 在本机核对；扫描件、需密码的文件及其他版式暂不支持。Wise 推算期初的交易仅待确认。", "Supports adapted RHB, AmBank, HLB, Maybank, Ryt main account and Wise MYR text layouts. Checks run on device. Scans, password-locked PDFs and other layouts are unsupported. Wise entries with a derived opening await review.", "Menyokong format teks RHB, AmBank, HLB, Maybank, akaun utama Ryt dan Wise MYR yang disesuaikan. Semakan setempat; imbasan, PDF berkunci dan format lain belum disokong. Rekod Wise dengan baki awal dikira perlu disemak."))
                 }
                 if let statement {
                     summary(statement, account: account)
@@ -1533,6 +1543,10 @@ private struct StatementImportView: View {
     }
     @ViewBuilder private func summary(_ statement: RHBStatement, account: BankAccount) -> some View {
         Section {
+            LabeledContent(tr("银行", "Bank", "Bank"), value: statement.provider)
+            if !statement.verificationNote.isEmpty {
+                Text(statement.verificationNote).font(.footnote).foregroundStyle(.secondary)
+            }
             LabeledContent(tr("期间", "Period", "Tempoh"), value: day(statement.start) + " – " + day(statement.end))
             LabeledContent(tr("月结单期初", "Statement opening", "Baki awal penyata"), value: money(statement.opening))
             LabeledContent(tr("月结单期末", "Statement closing", "Baki akhir penyata"), value: money(statement.closing))
@@ -1569,9 +1583,9 @@ private struct StatementImportView: View {
         }
     }
     private func importRows(_ statement: RHBStatement, account: BankAccount) {
-        guard financialProvider(account.institution ?? account.automaticSource ?? "") == "RHB",
+        guard financialProvider(account.institution ?? account.automaticSource ?? "") == statement.provider,
               account.automaticSuffix == nil || account.automaticSuffix == statement.suffix else {
-            error = tr("请选择这份月结单对应的 RHB 账户，并核对设置中的账号尾号。", "Select this statement's RHB account and check its configured suffix.", "Pilih akaun RHB penyata ini dan semak akhiran akaun.")
+            error = tr("请选择月结单对应银行的账户，并核对设置中的账号尾号。", "Select an account at the statement's bank and check its configured suffix.", "Pilih akaun bank penyata ini dan semak akhiran akaun.")
             return
         }
         busy = true; error = nil; message = ""
