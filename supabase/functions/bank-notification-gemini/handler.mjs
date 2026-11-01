@@ -44,8 +44,16 @@ export async function handleBankNotification(request, deps) {
   const key = deps.env("GEMINI_API_KEY"), model = deps.env("GEMINI_BANK_MODEL");
   if (!url || !anon || !key || !model || !/^gemini-[a-zA-Z0-9.-]+$/.test(model)) return reply(503, { error: "not_configured" });
   const headers = { apikey: anon, Authorization: auth, "Content-Type": "application/json" };
-  const signal = AbortSignal.timeout(18_000);
+  // Leave time for the client (30 seconds) to receive a diagnostic response.
+  const signal = AbortSignal.timeout(25_000);
   const get = (address, options = {}) => deps.fetch(address, { ...options, signal });
+  let stage = "auth";
+  const failure = (error, upstreamStatus) => {
+    // Fixed codes only: never log notification text, keys or provider bodies.
+    (deps.log ?? (value => console.error(JSON.stringify(value))))({ event: "bank_analysis_failure", stage, error,
+      ...(upstreamStatus === undefined ? {} : { upstream_status: upstreamStatus }) });
+    return reply(upstreamStatus === 429 ? 429 : 502, { error });
+  };
   try {
     const authResult = await get(url + "/auth/v1/user", { headers });
     if (!authResult.ok) return reply(401, { error: "sign_in_required" });
@@ -58,15 +66,22 @@ export async function handleBankNotification(request, deps) {
         typeof input.title !== "string" || input.title.length > 500 || typeof input.source !== "string" || input.source.length > 120) {
       return reply(400, { error: "invalid_notification" });
     }
+    stage = "quota";
     const quota = await get(url + "/rest/v1/rpc/claim_bank_analysis", { method: "POST", headers, body: "{}" });
     if (!quota.ok) return reply(503, { error: "quota_unavailable" });
     if (await limitedJSON(quota.body, 100) !== true) return reply(429, { error: "daily_limit" });
+    stage = "gemini";
     const response = await get(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: prompt }, { text: JSON.stringify({ body: input.body, title: input.title, source: input.source }) }] }],
-        generationConfig: { temperature: 0, maxOutputTokens: 4096, responseMimeType: "application/json", responseSchema: schema } }),
+        generationConfig: { maxOutputTokens: 4096, responseMimeType: "application/json", responseSchema: schema } }),
     });
-    if (!response.ok) return reply(response.status === 429 ? 429 : 502, { error: "analysis_unavailable" });
+    if (!response.ok) {
+      const error = ({ 400: "model_request_rejected", 401: "model_access_denied", 403: "model_access_denied",
+        404: "model_unavailable", 429: "model_rate_limit", 500: "model_server_error", 503: "model_overloaded" })[response.status] ?? "analysis_unavailable";
+      return failure(error, response.status);
+    }
+    stage = "gemini_response";
     const result = await limitedJSON(response.body, 60_000);
     const candidate = result.candidates?.[0];
     if (candidate?.finishReason !== "STOP") return reply(422, { error: "incomplete_analysis" });
@@ -75,5 +90,8 @@ export async function handleBankNotification(request, deps) {
     catch { return reply(422, { error: "invalid_analysis" }); }
     if (!validAnalysis(value, input)) return reply(422, { error: "invalid_analysis" });
     return reply(200, Object.fromEntries([...fields, "completed"].map(k => [k, value[k]])));
-  } catch { return reply(502, { error: "analysis_unavailable" }); }
+  } catch (error) {
+    return failure(signal.aborted || error?.name === "TimeoutError" ? "analysis_timeout"
+      : stage === "gemini_response" ? "invalid_model_response" : "analysis_connection_failed");
+  }
 }

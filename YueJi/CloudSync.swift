@@ -60,6 +60,49 @@ enum CloudFailure: LocalizedError {
     }
 }
 
+enum BankAnalysisFailure: String, LocalizedError {
+    case notConfigured = "not_configured", quotaUnavailable = "quota_unavailable", dailyLimit = "daily_limit"
+    case modelUnavailable = "model_unavailable", modelAccessDenied = "model_access_denied"
+    case modelRequestRejected = "model_request_rejected", modelRateLimit = "model_rate_limit"
+    case modelServerError = "model_server_error", modelOverloaded = "model_overloaded"
+    case timeout = "analysis_timeout", connection = "analysis_connection_failed", unavailable = "analysis_unavailable"
+    case invalidResponse = "invalid_model_response", incomplete = "incomplete_analysis", invalid = "invalid_analysis"
+    case invalidNotification = "invalid_notification"
+
+    var errorDescription: String? {
+        let message: String
+        switch self {
+        case .notConfigured:
+            message = tr("银行 AI 尚未配置，请检查服务端 GEMINI_BANK_MODEL 和密钥。", "Bank AI is not configured. Check GEMINI_BANK_MODEL and the server key.", "AI bank belum dikonfigurasi. Semak GEMINI_BANK_MODEL dan kunci pelayan.")
+        case .quotaUnavailable:
+            message = tr("无法检查银行 AI 使用额度，请检查 claim_bank_analysis 数据库函数。", "Cannot check the bank AI allowance. Check claim_bank_analysis.", "Kuota AI bank tidak dapat disemak. Semak claim_bank_analysis.")
+        case .dailyLimit:
+            message = tr("今天的银行 AI 分析次数已用完，暂时使用本机规则。", "Today's bank AI allowance is used up. Local rules remain available.", "Kuota AI bank hari ini habis. Peraturan setempat masih tersedia.")
+        case .modelUnavailable:
+            message = tr("找不到所配置的 Gemini 银行模型，请核对 GEMINI_BANK_MODEL 的完整模型 ID。", "The configured Gemini bank model was not found. Check the exact GEMINI_BANK_MODEL ID.", "Model Gemini bank tidak ditemui. Semak ID GEMINI_BANK_MODEL yang tepat.")
+        case .modelAccessDenied:
+            message = tr("Gemini 拒绝访问，请检查服务端 API Key、项目权限或密钥限制。", "Gemini denied access. Check the server API key, project access and key restrictions.", "Gemini menolak akses. Semak kunci API, akses projek dan sekatan kunci.")
+        case .modelRequestRejected:
+            message = tr("Gemini 不接受当前请求，请检查模型与请求格式是否兼容。", "Gemini rejected the request. Check model and request compatibility.", "Gemini menolak permintaan. Semak keserasian model dan format.")
+        case .modelRateLimit:
+            message = tr("Gemini 额度不足或请求过于频繁，请检查 Google 项目用量，稍后重试。", "Gemini quota or rate limit reached. Check Google project usage and retry later.", "Had kuota atau kadar Gemini dicapai. Semak penggunaan projek Google dan cuba kemudian.")
+        case .timeout:
+            message = tr("银行 AI 分析超时，请稍后重试；自动记账会使用本机规则，不明确的留待确认。", "Bank AI analysis timed out. Retry later; automatic entries use local rules and unclear cases await review.", "Analisis AI bank tamat masa. Cuba kemudian; peraturan setempat digunakan dan kes tidak jelas perlu disemak.")
+        case .connection:
+            message = tr("银行 AI 服务连接失败，请稍后重试。", "Bank AI service connection failed. Retry later.", "Sambungan perkhidmatan AI bank gagal. Cuba kemudian.")
+        case .modelServerError, .modelOverloaded:
+            message = tr("Gemini 服务暂时出错或繁忙，请稍后重试。", "Gemini is temporarily failing or busy. Retry later.", "Gemini bermasalah atau sibuk buat sementara. Cuba kemudian.")
+        case .invalidResponse, .incomplete, .invalid:
+            message = tr("银行 AI 未返回完整有效的分析，未根据此结果更新余额。", "Bank AI did not return a complete valid analysis. This result did not update balances.", "AI bank tidak memulangkan analisis lengkap yang sah. Hasil ini tidak mengubah baki.")
+        case .invalidNotification:
+            message = tr("通知内容无效或过长，请检查输入。", "Notification content is invalid or too long. Check the input.", "Kandungan notifikasi tidak sah atau terlalu panjang. Semak input.")
+        case .unavailable:
+            message = tr("银行 AI 暂时不可用；若仍只有此错误，请更新服务端函数以获取具体原因。", "Bank AI is unavailable. Update the server function if this generic error persists.", "AI bank tidak tersedia. Kemas kini fungsi pelayan jika ralat umum ini berterusan.")
+        }
+        return message + " (" + rawValue + ")"
+    }
+}
+
 enum ReceiptRecognitionFailure: String, LocalizedError {
     case notConfigured = "not_configured", quotaUnavailable = "quota_unavailable"
     case dailyLimit = "daily_limit", invalidImage = "invalid_image"
@@ -240,6 +283,9 @@ actor SupabaseCloudService: CloudRemote {
             if path == "/functions/v1/receipt-gemini", response.statusCode != 401,
                let receiptCode = object?["error"] as? String,
                let failure = ReceiptRecognitionFailure(rawValue: receiptCode) { throw failure }
+            if path == "/functions/v1/bank-notification-gemini", response.statusCode != 401,
+               let code = object?["error"] as? String,
+               let failure = BankAnalysisFailure(rawValue: code) { throw failure }
             let code = object?["error_code"] as? String ?? object?["code"] as? String ?? ""
             if code == "40001" { throw CloudFailure.changed }
             if ["42P01", "42883", "PGRST202", "PGRST205"].contains(code) { throw CloudFailure.database }
@@ -287,7 +333,10 @@ actor SupabaseCloudService: CloudRemote {
             return try await request("/functions/v1/bank-notification-gemini",
                                      body: ["body": body, "title": title, "source": source], authenticated: true)
         } catch CloudFailure.server(let status, _) {
-            throw LedgerError.invalid(tr("银行 AI 服务未就绪，请检查 bank-notification-gemini 部署、GEMINI_BANK_MODEL、密钥及额度 SQL。", "Bank AI service is not ready. Check bank-notification-gemini deployment, GEMINI_BANK_MODEL, the API key and quota SQL.", "AI bank belum tersedia. Semak fungsi bank-notification-gemini, GEMINI_BANK_MODEL, kunci API dan SQL kuota.") + " (HTTP \(status))")
+            if status == 404 {
+                throw reviewError("未找到银行 AI 服务，请部署 bank-notification-gemini。", "Bank AI service was not found. Deploy bank-notification-gemini.", "Perkhidmatan AI bank tidak ditemui. Gunakan bank-notification-gemini.")
+            }
+            throw LedgerError.invalid(tr("银行 AI 服务返回错误，请查看同一时间的服务端日志。", "Bank AI returned an error. Check server logs at the same time.", "AI bank memulangkan ralat. Semak log pelayan pada masa yang sama.") + " (HTTP \(status))")
         }
     }
     func sendCode(email: String, createAccount: Bool = true) async throws {

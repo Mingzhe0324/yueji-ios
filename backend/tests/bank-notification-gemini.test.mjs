@@ -9,8 +9,8 @@ const request = (input = { body, title: 'Money Paid', source: 'Public Bank' }, a
   method: 'POST', headers: { Authorization: auth, 'Content-Type': 'application/json' }, body: JSON.stringify(input),
 });
 function harness({ quota = true, authStatus = 200, anonymous = false, quotaStatus = 200, modelStatus = 200, finish = 'STOP', value = draft, env = {}, modelText } = {}) {
-  const calls = [];
-  return { calls, env: name => ({ SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'public', GEMINI_API_KEY: 'private', GEMINI_BANK_MODEL: 'gemini-test', ...env })[name],
+  const calls = [], logs = [];
+  return { calls, logs, log: value => logs.push(value), env: name => ({ SUPABASE_URL: 'https://example.test', SUPABASE_ANON_KEY: 'public', GEMINI_API_KEY: 'private', GEMINI_BANK_MODEL: 'gemini-test', ...env })[name],
     fetch: async (url, options) => {
       calls.push({ url, options });
       if (url.endsWith('/auth/v1/user')) return json({ id: 'test', is_anonymous: anonymous }, authStatus);
@@ -51,9 +51,39 @@ test('rejects invented evidence, malformed fields and truncated output', async (
   assert.equal((await handleBankNotification(request(), harness({ modelText: 'not JSON' }))).status, 422);
 });
 test('upstream errors never leak provider response or credentials', async () => {
-  for (const modelStatus of [400, 403, 404, 429, 500]) {
-    const response = await handleBankNotification(request(), harness({ modelStatus }));
+  for (const [modelStatus, error] of [[400, 'model_request_rejected'], [401, 'model_access_denied'], [403, 'model_access_denied'],
+    [404, 'model_unavailable'], [429, 'model_rate_limit'], [500, 'model_server_error'], [503, 'model_overloaded']]) {
+    const deps = harness({ modelStatus });
+    const response = await handleBankNotification(request(), deps);
     assert.equal(response.status, modelStatus === 429 ? 429 : 502);
-    assert.deepEqual(await response.json(), { error: 'analysis_unavailable' });
+    assert.deepEqual(await response.json(), { error });
+    assert.deepEqual(deps.logs, [{ event: 'bank_analysis_failure', stage: 'gemini', error, upstream_status: modelStatus }]);
   }
+});
+
+test('timeout, transport and malformed model responses have private stage diagnostics', async () => {
+  for (const [name, expected] of [['TimeoutError', 'analysis_timeout'], ['TypeError', 'analysis_connection_failed']]) {
+    const deps = harness(), fetch = deps.fetch;
+    deps.fetch = async (url, options) => {
+      if (url.includes('googleapis')) { const e = new Error('private secret notification'); e.name = name; throw e; }
+      return fetch(url, options);
+    };
+    const response = await handleBankNotification(request(), deps);
+    assert.equal(response.status, 502);
+    assert.deepEqual(await response.json(), { error: expected });
+    assert.deepEqual(deps.logs, [{ event: 'bank_analysis_failure', stage: 'gemini', error: expected }]);
+  }
+  const deps = harness(), fetch = deps.fetch;
+  deps.fetch = (url, options) => url.includes('googleapis') ? Promise.resolve(new Response('private invalid JSON')) : fetch(url, options);
+  assert.deepEqual(await (await handleBankNotification(request(), deps)).json(), { error: 'invalid_model_response' });
+  assert.deepEqual(deps.logs, [{ event: 'bank_analysis_failure', stage: 'gemini_response', error: 'invalid_model_response' }]);
+});
+
+test('Gemini 3.6 request omits deprecated sampling parameters and retains schema', async () => {
+  const deps = harness({ env: { GEMINI_BANK_MODEL: 'gemini-3.6-flash' } });
+  assert.equal((await handleBankNotification(request(), deps)).status, 200);
+  const config = JSON.parse(deps.calls[2].options.body).generationConfig;
+  assert.equal(config.temperature, undefined);
+  assert.equal(config.responseMimeType, 'application/json');
+  assert.ok(config.responseSchema.required.includes('completed'));
 });

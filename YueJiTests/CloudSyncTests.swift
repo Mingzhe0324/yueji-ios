@@ -274,6 +274,20 @@ final class CloudHTTPTests: XCTestCase {
             }
         }
     }
+    func testBankFailuresPreserveCodesWithoutLosingSessionRefresh() async throws {
+        for (status, failure) in [(502, BankAnalysisFailure.timeout), (502, .modelAccessDenied),
+                                  (502, .modelUnavailable), (429, .modelRateLimit), (503, .quotaUnavailable)] {
+            let (api, _) = try service(replies: [(status, "{\"error\":\"\(failure.rawValue)\"}")], signedIn: true)
+            do { _ = try await api.analyseBankNotification(body: "Test", title: "", source: ""); XCTFail("Expected bank failure") }
+            catch let actual as BankAnalysisFailure { XCTAssertEqual(actual, failure) }
+        }
+        let (expired, _) = try service(replies: [(401, #"{"error":"sign_in_required"}"#)], signedIn: true)
+        do { _ = try await expired.analyseBankNotification(body: "Test", title: "", source: ""); XCTFail("Expected session refresh") }
+        catch CloudFailure.session {}
+        let (unknown, _) = try service(replies: [(502, #"{"error":"private provider content"}"#)], signedIn: true)
+        do { _ = try await unknown.analyseBankNotification(body: "Test", title: "", source: ""); XCTFail("Expected error") }
+        catch { XCTAssertFalse(error.localizedDescription.contains("private provider content")) }
+    }
     func testReceiptExpiredSessionStillAllowsAccountRefresh() async throws {
         let (api, _) = try service(replies: [(401, #"{"error":"sign_in_required"}"#)], signedIn: true)
         do { _ = try await api.recognizeReceipt(image: Data([0xff, 0xd8, 0xff])); XCTFail("Expected session failure") }
