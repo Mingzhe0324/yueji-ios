@@ -68,34 +68,37 @@ enum ReceiptRecognitionFailure: String, LocalizedError {
     case modelUnavailable = "model_unavailable", modelAccessDenied = "model_access_denied"
     case modelRequestRejected = "model_request_rejected", modelRateLimit = "model_rate_limit"
     case recognitionFailed = "recognition_failed", recognitionUnavailable = "recognition_unavailable"
+    case receiptRefused = "receipt_refused"
 
     var errorDescription: String? {
         let message: String
         switch self {
         case .notConfigured:
-            message = tr("Gemini 收据服务尚未配置完成，请检查服务端密钥及收据模型设置。", "Gemini receipts are not configured. Check the server key and receipt model settings.", "Resit Gemini belum dikonfigurasi. Semak kunci pelayan dan tetapan model resit.")
+            message = tr("OpenAI 收据服务尚未配置完成，请检查服务端密钥及收据模型设置。", "OpenAI receipts are not configured. Check the server key and receipt model settings.", "Resit OpenAI belum dikonfigurasi. Semak kunci pelayan dan tetapan model resit.")
         case .quotaUnavailable:
             message = tr("无法检查收据识别额度，请检查服务端收据额度数据库设置。", "Cannot check the scan allowance. Check the receipt quota database setup.", "Tidak dapat menyemak kuota imbasan. Semak tetapan pangkalan data kuota resit.")
         case .dailyLimit:
-            message = tr("今天的 Gemini 收据识别次数已用完，请稍后再试或使用本机识别。", "Today's Gemini scan allowance is used up. Try later or use on-device recognition.", "Kuota imbasan Gemini hari ini telah habis. Cuba kemudian atau gunakan pengecaman setempat.")
+            message = tr("今天的 OpenAI 收据识别次数已用完，请稍后再试或使用本机识别。", "Today's OpenAI scan allowance is used up. Try later or use on-device recognition.", "Kuota imbasan OpenAI hari ini telah habis. Cuba kemudian atau gunakan pengecaman setempat.")
         case .invalidImage:
             message = tr("收据图片无效或过大，请重新选择或拍摄。", "The receipt image is invalid or too large. Choose another photo or scan again.", "Imej resit tidak sah atau terlalu besar. Pilih foto lain atau imbas semula.")
         case .incompleteReceipt:
-            message = tr("Gemini 未返回完整识别结果，请用清晰的单张收据重试。", "Gemini did not return a complete result. Retry with one clear receipt.", "Gemini tidak memulangkan hasil lengkap. Cuba semula dengan satu resit yang jelas.")
+            message = tr("OpenAI 未返回完整识别结果，请用清晰的单张收据重试。", "OpenAI did not return a complete result. Retry with one clear receipt.", "OpenAI tidak memulangkan hasil lengkap. Cuba semula dengan satu resit yang jelas.")
         case .invalidReceipt:
-            message = tr("Gemini 返回的收据格式无效，请重试。", "Gemini returned an invalid receipt format. Please retry.", "Gemini memulangkan format resit tidak sah. Cuba semula.")
+            message = tr("OpenAI 返回的收据格式无效，请重试。", "OpenAI returned an invalid receipt format. Please retry.", "OpenAI memulangkan format resit tidak sah. Cuba semula.")
+        case .receiptRefused:
+            message = tr("OpenAI 无法处理这张图片，请换一张清晰的收据或使用本机识别。", "OpenAI could not process this image. Try a clear receipt or on-device recognition.", "OpenAI tidak dapat memproses imej ini. Cuba resit jelas atau pengecaman setempat.")
         case .invalidOrNonMYRReceipt:
             message = tr("识别结果金额格式不正确，或未确认收据币种为 MYR／RM。请确保币种清晰可见后重试。", "The amounts are invalid or MYR/RM could not be confirmed. Ensure the currency is visible and retry.", "Format amaun tidak sah atau MYR/RM tidak dapat disahkan. Pastikan mata wang jelas dan cuba semula.")
         case .modelUnavailable:
-            message = tr("收据识别模型不可用，请检查服务端 GEMINI_RECEIPT_MODEL 设置。", "The receipt model is unavailable. Check GEMINI_RECEIPT_MODEL on the server.", "Model resit tidak tersedia. Semak GEMINI_RECEIPT_MODEL pada pelayan.")
+            message = tr("收据识别模型不可用，请检查服务端 OPENAI_RECEIPT_MODEL 设置。", "The receipt model is unavailable. Check OPENAI_RECEIPT_MODEL on the server.", "Model resit tidak tersedia. Semak OPENAI_RECEIPT_MODEL pada pelayan.")
         case .modelAccessDenied:
-            message = tr("Gemini 拒绝服务端访问，请检查 API 密钥及模型权限。", "Gemini denied server access. Check the API key and model permissions.", "Gemini menolak akses pelayan. Semak kunci API dan kebenaran model.")
+            message = tr("OpenAI 拒绝服务端访问，请检查 API 密钥及模型权限。", "OpenAI denied server access. Check the API key and model permissions.", "OpenAI menolak akses pelayan. Semak kunci API dan kebenaran model.")
         case .modelRequestRejected:
-            message = tr("Gemini 拒绝识别请求，请检查服务端模型是否支持图片及结构化输出。", "Gemini rejected the request. Check that the server model supports images and structured output.", "Gemini menolak permintaan. Semak sokongan imej dan output berstruktur model pelayan.")
+            message = tr("OpenAI 拒绝识别请求，请检查服务端模型是否支持图片及结构化输出。", "OpenAI rejected the request. Check that the server model supports images and structured output.", "OpenAI menolak permintaan. Semak sokongan imej dan output berstruktur model pelayan.")
         case .modelRateLimit:
-            message = tr("Gemini 服务额度不足或请求过于频繁，请稍后重试。", "Gemini quota is exhausted or requests are too frequent. Try again later.", "Kuota Gemini habis atau permintaan terlalu kerap. Cuba lagi kemudian.")
+            message = tr("OpenAI 服务额度不足或请求过于频繁，请稍后重试。", "OpenAI quota is exhausted or requests are too frequent. Try again later.", "Kuota OpenAI habis atau permintaan terlalu kerap. Cuba lagi kemudian.")
         case .recognitionFailed:
-            message = tr("Gemini 服务返回错误，请稍后重试。", "Gemini returned a service error. Try again later.", "Gemini memulangkan ralat perkhidmatan. Cuba lagi kemudian.")
+            message = tr("OpenAI 服务返回错误，请稍后重试。", "OpenAI returned a service error. Try again later.", "OpenAI memulangkan ralat perkhidmatan. Cuba lagi kemudian.")
         case .recognitionUnavailable:
             message = tr("收据识别连接失败或超时，请稍后重试。", "Receipt recognition could not connect or timed out. Please retry later.", "Sambungan pengecaman resit gagal atau tamat masa. Cuba lagi kemudian.")
         }
@@ -237,7 +240,7 @@ actor SupabaseCloudService: CloudRemote {
         guard (200..<300).contains(response.statusCode) else {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             // Keep 401 as a session error so CloudAccount can refresh and retry.
-            if path == "/functions/v1/receipt-gemini", response.statusCode != 401,
+            if path == "/functions/v1/receipt-openai", response.statusCode != 401,
                let receiptCode = object?["error"] as? String,
                let failure = ReceiptRecognitionFailure(rawValue: receiptCode) { throw failure }
             let code = object?["error_code"] as? String ?? object?["code"] as? String ?? ""
@@ -273,12 +276,12 @@ actor SupabaseCloudService: CloudRemote {
     }
     func recognizeReceipt(image: Data) async throws -> Data {
         guard image.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
-        do { return try await request("/functions/v1/receipt-gemini", body: ["image": image.base64EncodedString()], authenticated: true) }
+        do { return try await request("/functions/v1/receipt-openai", body: ["image": image.base64EncodedString()], authenticated: true) }
         catch CloudFailure.server(let status, _) {
             if status == 404 {
-                throw reviewError("未找到收据识别服务，请检查当前 Supabase 项目是否已部署 receipt-gemini。", "Receipt recognition was not found. Check that receipt-gemini is deployed to the current Supabase project.", "Perkhidmatan resit tidak ditemui. Semak bahawa receipt-gemini telah digunakan pada projek Supabase semasa.")
+                throw reviewError("未找到收据识别服务，请检查当前 Supabase 项目是否已部署 receipt-openai。", "Receipt recognition was not found. Check that receipt-openai is deployed to the current Supabase project.", "Perkhidmatan resit tidak ditemui. Semak bahawa receipt-openai telah digunakan pada projek Supabase semasa.")
             }
-            throw LedgerError.invalid(tr("Gemini 收据服务暂时不可用，请稍后重试。", "Gemini receipt service is unavailable. Please retry later.", "Perkhidmatan resit Gemini tidak tersedia. Cuba lagi kemudian.") + " (HTTP \(status))")
+            throw LedgerError.invalid(tr("OpenAI 收据服务暂时不可用，请稍后重试。", "OpenAI receipt service is unavailable. Please retry later.", "Perkhidmatan resit OpenAI tidak tersedia. Cuba lagi kemudian.") + " (HTTP \(status))")
         }
     }
     func analyseBankNotification(body: String, title: String, source: String) async throws -> Data {
