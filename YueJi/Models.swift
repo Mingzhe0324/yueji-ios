@@ -485,6 +485,8 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var settlementID: String? = nil
     /// The `IncomeKind` chosen when this incoming payment was confirmed as income.
     var incomeKind: String? = nil
+    /// Local provenance for atomic statement-import undo, separate from user notes.
+    var statementImport: StatementImportStamp? = nil
     var provider: String { sourceBank ?? "TNG" }
     var accountDirection: AccountDirection {
         switch kind { case "incoming": return .incoming; case "payment", "transfer": return .outgoing; default: return .neutral }

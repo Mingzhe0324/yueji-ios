@@ -1,4 +1,6 @@
 import Foundation
+import CryptoKit
+import PDFKit
 
 /// Match a complete name phrase, never a substring inside another word.
 func transferNameMatches(_ noticeName: String, owner: String) -> Bool {
@@ -616,5 +618,251 @@ extension Ledger {
             monthKey(entry.date) == key && (query.isEmpty || entry.source.localizedCaseInsensitiveContains(query)
                 || (entry.note ?? "").localizedCaseInsensitiveContains(query) || entry.kind.label.localizedCaseInsensitiveContains(query))
         }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
+    }
+}
+
+// MARK: - RHB statement reconciliation
+struct StatementRow: Identifiable, Equatable, Sendable {
+    let id: String
+    let date: Date
+    let description: String
+    let serial: String
+    let debit: Int
+    let credit: Int
+    let balance: Int
+    var detail = ""
+    var analysisText: String {
+        // Long numeric identifiers are unnecessary for purchase categorization.
+        String((description + " " + detail).replacingOccurrences(of: #"\b\d[\d -]{6,}\d\b"#, with: "[redacted]", options: .regularExpression).prefix(1000))
+    }
+    var cents: Int { debit + credit }
+    var isExpense: Bool { debit > 0 && ["DEBITCARD TXN D", "SERVICE CHARGE", "SERVICE FEE", "BANK CHARGES"].contains(description.uppercased()) }
+    var isInterest: Bool { credit > 0 && ["PROFIT CREDIT", "INTEREST CREDIT", "CREDIT INTEREST"].contains(description.uppercased()) }
+}
+struct RHBStatement: Sendable {
+    let accountHash: String
+    let suffix: String
+    let start: Date
+    let end: Date
+    let opening: Int
+    let closing: Int
+    let debitCount: Int
+    let creditCount: Int
+    let debitTotal: Int
+    let creditTotal: Int
+    let rows: [StatementRow]
+    static var calendar: Calendar {
+        var c = Calendar(identifier: .gregorian); c.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")!; return c
+    }
+    static func hash(_ text: String) -> String { SHA256.hash(data: Data(text.utf8)).map { String(format: "%02x", $0) }.joined() }
+    static func failure() -> Error {
+        reviewError("月结单格式或余额校验未通过。请使用完整的 RHB 原始文字版 PDF，不能缺页；本次未写入账目。", "Statement format or balance checks failed. Use a complete original RHB text PDF. No entries were written.", "Format atau semakan baki gagal. Gunakan PDF teks RHB asal yang lengkap. Tiada rekod ditulis.")
+    }
+    func validate() throws {
+        guard start <= end, !rows.isEmpty, rows.count <= 500, Set(rows.map(\.id)).count == rows.count,
+              debitCount == rows.filter({ $0.debit > 0 }).count, creditCount == rows.filter({ $0.credit > 0 }).count,
+              debitTotal == rows.reduce(0, { $0 + $1.debit }), creditTotal == rows.reduce(0, { $0 + $1.credit }),
+              opening - debitTotal + creditTotal == closing else { throw Self.failure() }
+        var previous = opening, previousDate = start
+        for row in rows {
+            guard row.date >= previousDate, row.date <= end, row.date >= start,
+                  row.debit >= 0, row.credit >= 0, row.debit <= 10_000_000_000, row.credit <= 10_000_000_000,
+                  (row.debit > 0) != (row.credit > 0), row.description.count <= 200,
+                  !row.description.isEmpty, previous - row.debit + row.credit == row.balance else { throw Self.failure() }
+            previous = row.balance; previousDate = row.date
+        }
+        guard previous == closing else { throw Self.failure() }
+    }
+    /// Reads only the sampled RHB six-column layout. Amounts and directions are
+    /// obtained from column positions, never inferred by an LLM.
+    static func read(_ data: Data) throws -> RHBStatement {
+        guard data.count <= 10_000_000, let document = PDFDocument(data: data), !document.isLocked,
+              (1...20).contains(document.pageCount) else { throw failure() }
+        let pages = (0..<document.pageCount).compactMap { document.page(at: $0) }
+        guard pages.allSatisfy({ $0.numberOfCharacters <= 60_000 && $0.rotation == 0 }) else { throw failure() }
+        let full = pages.compactMap(\.string).joined(separator: "\n")
+        func matches(_ pattern: String, _ text: String) -> [NSTextCheckingResult] {
+            (try? NSRegularExpression(pattern: pattern).matches(in: text, range: NSRange(location: 0, length: (text as NSString).length))) ?? []
+        }
+        let flat = full.replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+        guard full.contains("RHB"), full.contains("Debit"), full.contains("Credit"),
+              let period = matches(#"Statement Period\s*/\s*Tempoh Penyata\s*:\s*(\d{2} [A-Za-z]{3} \d{2})\s*[–-]\s*(\d{2} [A-Za-z]{3} \d{2})"#, flat).first else { throw failure() }
+        let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = calendar; formatter.timeZone = calendar.timeZone; formatter.dateFormat = "dd MMM yy"; formatter.isLenient = false
+        formatter.twoDigitStartDate = calendar.date(from: DateComponents(year: 2000, month: 1, day: 1))
+        guard let start = formatter.date(from: (flat as NSString).substring(with: period.range(at: 1))),
+              let end = formatter.date(from: (flat as NSString).substring(with: period.range(at: 2))), end >= start,
+              end <= Date(), (calendar.dateComponents([.day], from: start, to: end).day ?? 999) <= 366 else { throw failure() }
+        // Only one savings account is supported. Hash the number; do not retain
+        // the full number, statement holder, address, or YTD profit summary.
+        let numbers = matches(#"SAVINGS ACCOUNT-i\s+(\d{8,20})\b"#, flat).map { (flat as NSString).substring(with: $0.range(at: 1)) }
+        guard Set(numbers).count == 1, let account = numbers.first else { throw failure() }
+        let accountHash = hash("RHB:" + account)
+        func moneyValue(_ text: String) throws -> Int {
+            let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard clean.range(of: #"^-?(?:\d{1,3}(?:,\d{3})+|\d+)\.\d{2}$"#, options: .regularExpression) != nil,
+                  let value = Decimal(string: clean.replacingOccurrences(of: ",", with: ""), locale: Locale(identifier: "en_US_POSIX")), abs(value) <= 100_000_000 else { throw failure() }
+            return NSDecimalNumber(decimal: value * 100).intValue
+        }
+        var rows: [StatementRow] = [], opening: Int?, closing: Int?, counts: (Int, Int)?, totals: (Int, Int)?
+        for page in pages {
+            try Task.checkCancellation()
+            let text = page.string ?? "", ns = text as NSString, bounds = page.bounds(for: .mediaBox)
+            guard bounds.width > 0, bounds.height > 0 else { throw failure() }
+            func box(_ range: NSRange) -> CGRect { page.selection(for: range)?.bounds(for: page) ?? .zero }
+            func cell(_ x1: Double, _ x2: Double, _ band: CGRect) -> String {
+                let rect = CGRect(x: bounds.minX + bounds.width * x1, y: band.minY - 0.8,
+                                  width: bounds.width * (x2 - x1), height: band.height + 1.6)
+                return (page.selection(for: rect)?.string ?? "").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+            }
+            let dateMatches = matches(#"\b\d{2} [A-Za-z]{3}\b"#, text).filter {
+                let b = box($0.range); return b.width > 0 && b.minX / bounds.width < 0.13 && b.minX / bounds.width > 0.05
+            }.sorted { box($0.range).midY > box($1.range).midY }
+            for (index, match) in dateMatches.enumerated() {
+                let band = box(match.range), day = ns.substring(with: match.range)
+                let description = cell(0.13, 0.45, band), serial = cell(0.45, 0.60, band)
+                let debitText = cell(0.60, 0.72, band), creditText = cell(0.72, 0.85, band), balanceText = cell(0.85, 0.95, band)
+                let balance = try moneyValue(balanceText)
+                if description == "B/F BALANCE" { guard opening == nil else { throw failure() }; opening = balance; continue }
+                if description == "C/F BALANCE" { guard closing == nil else { throw failure() }; closing = balance; continue }
+                guard closing == nil else { throw failure() }
+                let dates = (calendar.component(.year, from: start)...calendar.component(.year, from: end)).compactMap { year in
+                    formatter.dateFormat = "dd MMM yyyy"
+                    return formatter.date(from: day + " " + String(year))
+                }.filter { $0 >= start && $0 <= end }
+                guard dates.count == 1, let date = dates.first else { throw failure() }
+                let debit = debitText.isEmpty ? 0 : try moneyValue(debitText), credit = creditText.isEmpty ? 0 : try moneyValue(creditText)
+                let rowID = "statement:" + hash([accountHash, String(date.timeIntervalSince1970), description, serial, String(debit), String(credit), String(balance)].joined(separator: "|"))
+                let nextY = index + 1 < dateMatches.count ? box(dateMatches[index + 1].range).maxY + 1 : band.minY - 40
+                let lower = max(nextY, band.minY - 40)
+                let detailRect = CGRect(x: bounds.width * 0.13, y: lower, width: bounds.width * 0.32, height: max(0, band.minY - 1 - lower))
+                let detail = (page.selection(for: detailRect)?.string ?? "").split(whereSeparator: { $0.isWhitespace }).joined(separator: " ")
+                rows.append(StatementRow(id: rowID, date: date, description: description, serial: serial, debit: debit, credit: credit, balance: balance, detail: String(detail.prefix(1000))))
+            }
+            for match in matches("Total Count", text) {
+                let band = box(match.range)
+                guard counts == nil, let d = Int(cell(0.60, 0.72, band)), let c = Int(cell(0.72, 0.85, band)) else { throw failure() }
+                counts = (d,c)
+                for m in matches(#"\(RM\)"#, text) {
+                    let b = box(m.range)
+                    if b.midY < band.midY && band.midY - b.midY < 40 && b.minX / bounds.width > 0.40 {
+                        guard totals == nil else { throw failure() }
+                        totals = (try moneyValue(cell(0.60, 0.72, b)), try moneyValue(cell(0.72, 0.85, b)))
+                    }
+                }
+            }
+        }
+        guard let opening, let closing, let counts, let totals else { throw failure() }
+        let result = RHBStatement(accountHash: accountHash, suffix: String(account.suffix(4)), start: start, end: end,
+                                  opening: opening, closing: closing, debitCount: counts.0, creditCount: counts.1, debitTotal: totals.0, creditTotal: totals.1, rows: rows)
+        try result.validate(); return result
+    }
+}
+
+struct StatementImportStamp: Codable, Equatable {
+    let batch: String
+    let count: Int
+    let created: Date
+    let noticeHash: String
+    let expenseHash: String?
+    static func digest<T: Encodable>(_ value: T) throws -> String {
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        return RHBStatement.hash(String(decoding: try encoder.encode(value), as: UTF8.self))
+    }
+    static func read(_ notice: TNGNotice) -> StatementImportStamp? {
+        notice.statementImport
+    }
+}
+struct StatementImportResult: Sendable {
+    let batch: String
+    var added = 0
+    var pending = 0
+    var skipped = 0
+}
+extension Ledger {
+    /// A same-amount posting within three days may be an existing notification,
+    /// manual entry, refund or transfer. Ambiguity must never auto-create money.
+    func statementMayExist(_ row: StatementRow, accountID: String) -> Bool {
+        func near(_ date: Date) -> Bool { abs(RHBStatement.calendar.startOfDay(for: date).timeIntervalSince(row.date)) <= 3 * 86400 }
+        func account(_ id: String?) -> Bool { id == nil || id == accountID }
+        if tngNotices.contains(where: { account($0.bankAccountID) && $0.cents == row.cents && near($0.date) }) { return true }
+        if row.debit > 0 {
+            return expenses.contains { $0.paidByFriend == nil && account($0.bankAccountID) && $0.cents == row.cents && near($0.date) } ||
+                bankTransfers.contains { $0.fromAccountID == accountID && $0.cents == row.cents && near($0.date) }
+        }
+        return incomes.contains { account($0.bankAccountID) && $0.cents == row.cents && near($0.date) } ||
+            bankTransfers.contains { $0.toAccountID == accountID && $0.cents == row.cents && near($0.date) } ||
+            expenses.contains { entry in account(entry.bankAccountID) && (entry.refunds ?? []).contains { $0.receivedByMe != false && $0.cents == row.cents && near($0.date) } }
+    }
+    func statementBalance(_ account: BankAccount, before cutoff: Date) -> Int? {
+        guard account.openingDate <= cutoff else { return nil }
+        var copy = self
+        copy.bankTransfers.removeAll { $0.date >= cutoff }; copy.incomes.removeAll { $0.date >= cutoff }
+        copy.tngNotices.removeAll { $0.date >= cutoff }
+        copy.expenses = expenses.map { entry in
+            var e = entry; e.refunds = (e.refunds ?? []).filter { $0.date < cutoff }
+            if e.date >= cutoff { e.date = account.openingDate.addingTimeInterval(-1) }
+            return e
+        }
+        return copy.bankBalance(account)
+    }
+    mutating func importStatement(_ statement: RHBStatement, account: BankAccount, categories: [String: String], now: Date = Date()) throws -> StatementImportResult {
+        try statement.validate()
+        guard bankAccounts.contains(account), financialProvider(account.institution ?? account.automaticSource ?? "") == "RHB",
+              account.automaticSuffix == nil || account.automaticSuffix == statement.suffix else { throw RHBStatement.failure() }
+        var copy = self, result = StatementImportResult(batch: UUID().uuidString)
+        let count = statement.rows.filter { row in row.date >= account.openingDate && !seenEvents.contains(row.id) && !tngNotices.contains(where: { $0.id == row.id }) }.count
+        for row in statement.rows {
+            // Day-only statement dates cannot safely be placed after a midday
+            // opening balance. Earlier rows are already covered by that balance.
+            if row.date < account.openingDate || seenEvents.contains(row.id) || tngNotices.contains(where: { $0.id == row.id }) {
+                result.skipped += 1; continue
+            }
+            let possible = statementMayExist(row, accountID: account.id) || statement.rows.contains {
+                $0.id != row.id && $0.date == row.date && $0.cents == row.cents && ($0.debit > 0) == (row.debit > 0)
+            }
+            var notice = TNGNotice(bankAccountID: account.id, id: row.id, body: row.description + "\n" + row.detail + (row.debit > 0 ? "\nDebit: " : "\nCredit: ") + money(row.cents) + "\nStatement balance: " + money(row.balance), title: "RHB statement", date: row.date, usesReceivedDate: false,
+                                   kind: row.credit > 0 ? "incoming" : "unknown", status: "pending", cents: row.cents, party: row.description)
+            notice.sourceBank = "RHB"; notice.accountSuffix = statement.suffix; notice.bankReference = row.id
+            notice.balanceHeldForReview = true; notice.possibleDuplicate = possible
+            notice.reviewReason = possible ? tr("可能已有相同交易，请核对后处理。", "A matching transaction may already exist. Review first.", "Transaksi sepadan mungkin sudah wujud. Semak dahulu.") : tr("月结单用途待确认。", "Statement purpose needs review.", "Tujuan penyata perlu disemak.")
+            var expense: Expense?
+            if !possible && row.isExpense {
+                let suggested = categories[row.analysisText] ?? "其他"
+                let category = categoryNames.contains(suggested) ? suggested : "其他"
+                expense = Expense(bankAccountID: account.id, id: row.id + ":expense", merchant: "RHB · " + row.description, cents: row.cents, date: row.date, category: category, source: "RHB", transactionReference: row.id, timeSource: "supplied")
+                notice.kind = "payment"; notice.status = "recorded"; notice.expenseID = expense?.id
+                result.added += 1
+            } else if !possible && row.isInterest {
+                notice.status = "income"; notice.incomeKind = IncomeKind.interest.rawValue
+                result.added += 1
+            } else { result.pending += 1 }
+            let stamp = StatementImportStamp(batch: result.batch, count: count, created: now, noticeHash: try StatementImportStamp.digest(notice), expenseHash: try expense.map { try StatementImportStamp.digest($0) })
+            notice.statementImport = stamp
+            if let expense { copy.expenses.append(expense) }
+            copy.tngNotices.append(notice); copy.seenEvents.insert(row.id)
+        }
+        self = try copy.validated(); return result
+    }
+    mutating func undoStatementImport(batch: String) throws {
+        let notices = tngNotices.filter { StatementImportStamp.read($0)?.batch == batch }
+        guard !notices.isEmpty else { throw RHBStatement.failure() }
+        var copy = self
+        for notice in notices {
+            guard let stamp = StatementImportStamp.read(notice), stamp.count == notices.count else { throw RHBStatement.failure() }
+            var original = notice; original.statementImport = nil
+            guard try StatementImportStamp.digest(original) == stamp.noticeHash,
+                  !budgetAllocations.contains(where: { $0.source == IncomeSourceKey.notice(notice.id) }),
+                  !tngNotices.contains(where: { $0.id != notice.id && ($0.relatedRecordID == notice.id || (notice.expenseID != nil && $0.relatedRecordID == notice.expenseID)) }),
+                  !bankTransfers.contains(where: { $0.noticeIDs?.contains(notice.id) == true }) else {
+                throw reviewError("本次导入的记录已被修改或用于预算／转账，请先撤销相关处理。", "Imported records were edited or used in budgets/transfers. Undo those changes first.", "Rekod import telah diubah atau digunakan dalam bajet/pindahan. Batalkan perubahan itu dahulu.")
+            }
+            if let id = notice.expenseID {
+                guard let entry = copy.expenses.first(where: { $0.id == id }), try StatementImportStamp.digest(entry) == stamp.expenseHash else { throw RHBStatement.failure() }
+                try copy.deleteExpense(entry)
+            }
+            copy.tngNotices.removeAll { $0.id == notice.id }; copy.seenEvents.remove(notice.id)
+        }
+        self = try copy.validated()
     }
 }

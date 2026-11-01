@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
@@ -489,5 +490,156 @@ final class IncomeBudgetTests: XCTestCase {
         model.dismissIncomePrompt(id: second.id)
         XCTAssertNil(model.activeBanner)
         XCTAssertEqual(try encoder.encode(model.ledger), before)
+    }
+}
+
+extension IncomeBudgetTests {
+    private func statementFixture() -> (BankAccount, RHBStatement) {
+        let start = RHBStatement.calendar.date(from: DateComponents(year: 2026, month: 7, day: 1))!
+        let account = BankAccount(name: "RHB", openingCents: 100000, openingDate: start, institution: "RHB Bank", automaticSource: "RHB", automaticSuffix: "1234")
+        let rows = [
+            StatementRow(id: "statement:a", date: start, description: "DEBITCARD TXN D", serial: "1", debit: 1000, credit: 0, balance: 99000),
+            StatementRow(id: "statement:b", date: start.addingTimeInterval(86400), description: "PROFIT CREDIT", serial: "2", debit: 0, credit: 123, balance: 99123),
+            StatementRow(id: "statement:c", date: start.addingTimeInterval(2 * 86400), description: "MB FUND TRF DR", serial: "3", debit: 2000, credit: 0, balance: 97123),
+            StatementRow(id: "statement:d", date: start.addingTimeInterval(3 * 86400), description: "RPP INWD INST C", serial: "4", debit: 0, credit: 3000, balance: 100123)
+        ]
+        return (account, RHBStatement(accountHash: "sample", suffix: "1234", start: start, end: start.addingTimeInterval(30 * 86400), opening: 100000, closing: 100123, debitCount: 2, creditCount: 2, debitTotal: 3000, creditTotal: 3123, rows: rows))
+    }
+    func testStatementImportAddsSafeEntriesHoldsTransfersAndCanUndoAfterReload() throws {
+        let (account, statement) = statementFixture()
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let before = try LocalStore.encode(ledger)
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(result.added, 2); XCTAssertEqual(result.pending, 2); XCTAssertEqual(result.skipped, 0)
+        XCTAssertEqual(ledger.bankBalance(account), 99123)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertTrue(ledger.incomes.isEmpty); XCTAssertTrue(ledger.budgetAllocations.isEmpty)
+        XCTAssertEqual(ledger.tngNotices.first(where: { $0.id == "statement:b" })?.confirmedIncomeKind, .interest)
+        XCTAssertTrue(ledger.tngNotices.filter { $0.status == "pending" }.allSatisfy { $0.balanceHeldForReview == true })
+        XCTAssertEqual(ledger.statementBalance(account, before: statement.start.addingTimeInterval(86400)), 99000)
+        let again = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(again.skipped, 4); XCTAssertEqual(ledger.bankBalance(account), 99123)
+        ledger = try LocalStore.decode(LocalStore.encode(ledger))
+        try ledger.undoStatementImport(batch: result.batch)
+        XCTAssertEqual(ledger.bankBalance(account), 100000)
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+    }
+    func testStatementPossibleExistingPaymentDoesNotDoubleDebit() throws {
+        let (account, statement) = statementFixture()
+        let expense = Expense(bankAccountID: account.id, merchant: "Existing purchase", cents: 1000, date: statement.start.addingTimeInterval(3600))
+        var ledger = Ledger(expenses: [expense]); ledger.bankAccounts = [account]
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(result.added, 1); XCTAssertEqual(result.pending, 3)
+        XCTAssertEqual(ledger.expenses, [expense]); XCTAssertEqual(ledger.bankBalance(account), 99123)
+        XCTAssertEqual(ledger.tngNotices.first?.possibleDuplicate, true)
+    }
+    func testStatementRejectsWrongAccountOrCorruptBalancesAtomically() throws {
+        let (account, statement) = statementFixture()
+        var wrong = account; wrong.automaticSuffix = "5678"
+        var ledger = Ledger(); ledger.bankAccounts = [wrong]
+        XCTAssertThrowsError(try ledger.importStatement(statement, account: wrong, categories: [:]))
+        ledger.bankAccounts = [account]
+        let bad = RHBStatement(accountHash: statement.accountHash, suffix: statement.suffix, start: statement.start, end: statement.end, opening: statement.opening, closing: statement.closing + 1, debitCount: 2, creditCount: 2, debitTotal: 3000, creditTotal: 3123, rows: statement.rows)
+        XCTAssertThrowsError(try ledger.importStatement(bad, account: account, categories: [:]))
+        XCTAssertTrue(ledger.expenses.isEmpty); XCTAssertTrue(ledger.tngNotices.isEmpty)
+        XCTAssertEqual(ledger.bankBalance(account), 100000)
+    }
+    func testStatementUndoRefusesEditedOrPartlyDeletedBatchWithoutPartialRemoval() throws {
+        let (account, statement) = statementFixture()
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        ledger.expenses[0].merchant = "Edited"
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.undoStatementImport(batch: result.batch))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+        ledger.tngNotices.removeLast()
+        XCTAssertThrowsError(try ledger.undoStatementImport(batch: result.batch))
+        XCTAssertEqual(ledger.tngNotices.count, 3)
+    }
+    func testStatementOpeningTimeSkipsCoveredDay() throws {
+        var (account, statement) = statementFixture()
+        account.openingDate = statement.start.addingTimeInterval(3600)
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(result.skipped, 1); XCTAssertEqual(result.added, 1)
+        XCTAssertTrue(ledger.expenses.isEmpty); XCTAssertEqual(ledger.bankBalance(account), 100123)
+    }
+}
+
+extension IncomeBudgetTests {
+    /// Synthetic six-column PDF: never commit a customer's bank statement.
+    private func syntheticStatementPDF(closing: String = "991.23") -> Data {
+        let renderer = UIGraphicsPDFRenderer(bounds: CGRect(x: 0, y: 0, width: 595, height: 842))
+        return renderer.pdfData { context in
+            context.beginPage()
+            let attributes: [NSAttributedString.Key: Any] = [.font: UIFont.systemFont(ofSize: 9)]
+            func text(_ value: String, _ x: Double, _ y: Double) {
+                (value as NSString).draw(at: CGPoint(x: x, y: y), withAttributes: attributes)
+            }
+            text("RHB", 40, 30)
+            text("Statement Period / Tempoh Penyata : 01 Jul 26 - 31 Jul 26", 40, 50)
+            text("PRO SAVINGS ACCOUNT-i 123456781234", 40, 70)
+            text("Debit", 370, 100); text("Credit", 440, 100); text("Balance", 510, 100)
+            func row(_ y: Double, _ date: String, _ name: String, _ serial: String, _ debit: String, _ credit: String, _ balance: String) {
+                text(date, 40, y); text(name, 85, y); text(serial, 280, y)
+                text(debit, 370, y); text(credit, 440, y); text(balance, 510, y)
+            }
+            row(130, "01 Jul", "B/F BALANCE", "", "", "", "1,000.00")
+            row(160, "02 Jul", "DEBITCARD TXN D", "1001", "10.00", "", "990.00")
+            row(190, "31 Jul", "PROFIT CREDIT", "1002", "", "1.23", "991.23")
+            row(220, "31 Jul", "C/F BALANCE", "", "", "", closing)
+            text("Total Count", 280, 250); text("1", 370, 250); text("1", 440, 250)
+            text("(RM)", 280, 270); text("10.00", 370, 270); text("1.23", 440, 270)
+            text("YTD profit 9.99", 40, 310)
+        }
+    }
+    func testNativePDFParserIgnoresSummaryAndChecksRunningTotals() throws {
+        let statement = try RHBStatement.read(syntheticStatementPDF())
+        XCTAssertEqual(statement.rows.count, 2)
+        XCTAssertEqual(statement.rows.map(\.debit), [1000, 0])
+        XCTAssertEqual(statement.rows.map(\.credit), [0, 123])
+        XCTAssertEqual(statement.closing, 99123)
+        XCTAssertEqual(statement.suffix, "1234")
+        XCTAssertFalse(statement.accountHash.contains("123456781234"))
+        XCTAssertThrowsError(try RHBStatement.read(syntheticStatementPDF(closing: "991.24")))
+        XCTAssertThrowsError(try RHBStatement.read(Data("not a PDF".utf8)))
+    }
+    func testStatementClassificationRedactsAccountIdentifiers() {
+        let row = StatementRow(id: "x", date: Date(), description: "DEBITCARD TXN D", serial: "", debit: 1, credit: 0, balance: 0, detail: "SHOP 1234 5678 9012 3456")
+        XCTAssertFalse(row.analysisText.contains("1234"))
+        XCTAssertTrue(row.analysisText.contains("SHOP"))
+    }
+}
+
+extension IncomeBudgetTests {
+    func testOverlappingStatementSkipsExistingRowsAndSameDaySameAmountsNeedReview() throws {
+        let (account, full) = statementFixture()
+        let partial = RHBStatement(accountHash: full.accountHash, suffix: full.suffix, start: full.start, end: full.end,
+                                   opening: 100000, closing: 99123, debitCount: 1, creditCount: 1, debitTotal: 1000, creditTotal: 123, rows: Array(full.rows.prefix(2)))
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        _ = try ledger.importStatement(partial, account: account, categories: [:])
+        let second = try ledger.importStatement(full, account: account, categories: [:])
+        XCTAssertEqual(second.skipped, 2); XCTAssertEqual(second.added, 0); XCTAssertEqual(second.pending, 2)
+        XCTAssertEqual(ledger.bankBalance(account), 99123)
+        let rows = [
+            StatementRow(id: "repeat:1", date: full.start, description: "DEBITCARD TXN D", serial: "1", debit: 1000, credit: 0, balance: 99000),
+            StatementRow(id: "repeat:2", date: full.start, description: "DEBITCARD TXN D", serial: "2", debit: 1000, credit: 0, balance: 98000)
+        ]
+        let repeated = RHBStatement(accountHash: full.accountHash, suffix: full.suffix, start: full.start, end: full.end,
+                                    opening: 100000, closing: 98000, debitCount: 2, creditCount: 0, debitTotal: 2000, creditTotal: 0, rows: rows)
+        var fresh = Ledger(); fresh.bankAccounts = [account]
+        let result = try fresh.importStatement(repeated, account: account, categories: [:])
+        XCTAssertEqual(result.pending, 2); XCTAssertEqual(result.added, 0)
+        XCTAssertEqual(fresh.bankBalance(account), 100000)
+    }
+    func testStatementUndoRefusesConfirmedPendingReceipt() throws {
+        let (account, statement) = statementFixture()
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        try ledger.resolveNotice(id: "statement:d", purpose: "income", party: "Allowance", cents: 3000, date: statement.rows[3].date, incomeKind: .allowance)
+        XCTAssertEqual(ledger.bankBalance(account), 102123)
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.undoStatementImport(batch: result.batch))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
     }
 }

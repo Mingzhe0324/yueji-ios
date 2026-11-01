@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 private struct BankWalletCard: View {
     let account: BankAccount
@@ -394,6 +395,9 @@ private struct BankAccountDetail: View {
                     Text(tr("到账与收入不同：本人互转不计收入。早于期初时间的款项不重复计入余额。", "Receipts are not necessarily income: own transfers are excluded from income. Amounts before the opening date are not counted again.", "Penerimaan tidak semestinya pendapatan: pindahan sendiri dikecualikan. Amaun sebelum tarikh awal tidak dikira semula.")).font(.caption)
                 }
                 Section {
+                    NavigationLink { StatementImportView(accountID: accountID) } label: {
+                        Label(tr("导入月结单核对", "Reconcile statement", "Semak penyata"), systemImage: "doc.text.magnifyingglass")
+                    }.accessibilityIdentifier("bankAccount.statement")
                     NavigationLink { BankTransfersView(accountID: accountID) } label: {
                         Label(tr("转账／充值记录", "Transfer history", "Sejarah pindahan"), systemImage: "arrow.left.arrow.right")
                     }
@@ -1412,6 +1416,190 @@ struct IncomeAutoAllocationSection: View {
             Text(tr("默认关闭。开启后，每笔记录或确认为收入（工资、自由职业、兼职、奖金或其他收入）的金额会按比例加入当月预算一次，并显示一条简短确认。转账、充值、退款、朋友还款和疑似重复的收入不会自动加入。可在收入详情修改或移除。",
                     "Off by default. When on, each income you record or confirm (salary, freelance, part-time, bonus or other income) adds this share to the current month's budget once, with one short confirmation. Transfers, top-ups, refunds, repayments and possible duplicates are never added automatically. Change or remove it from the income's details.",
                     "Dimatikan secara lalai. Apabila dihidupkan, setiap pendapatan yang anda rekod atau sahkan (gaji, kerja bebas, kerja sambilan, bonus atau lain-lain) menambah bahagian ini ke bajet bulan semasa sekali, dengan satu pengesahan ringkas. Pindahan, tambah nilai, bayaran balik, bayaran rakan dan kemungkinan pendua tidak ditambah secara automatik. Ubah atau buang daripada butiran pendapatan."))
+        }
+    }
+}
+
+private struct StatementBatch: Identifiable {
+    let id: String
+    let date: Date
+    let notices: [TNGNotice]
+}
+
+/// PDF parsing is local. Gemini may suggest categories, never amounts or balances.
+private struct StatementImportView: View {
+    @EnvironmentObject private var model: LedgerModel
+    let accountID: String
+    @State private var statement: RHBStatement?
+    @State private var picking = false
+    @State private var busy = false
+    @State private var confirmed = false
+    @State private var useAI = false
+    @State private var message = ""
+    @State private var error: String?
+    @State private var undoBatch: String?
+    @State private var task: Task<Void, Never>?
+    private var account: BankAccount? { model.ledger.bankAccounts.first { $0.id == accountID } }
+    private var key: String { "statement-" + accountID }
+    private var working: Bool { busy || model.isWorking(key) }
+    private var batches: [StatementBatch] {
+        let notices = model.ledger.tngNotices.filter { $0.bankAccountID == accountID && StatementImportStamp.read($0) != nil }
+        return Dictionary(grouping: notices, by: { StatementImportStamp.read($0)!.batch }).map { batch, items in
+            StatementBatch(id: batch, date: StatementImportStamp.read(items[0])!.created, notices: items)
+        }.sorted { $0.date > $1.date }.prefix(10).map { $0 }
+    }
+    private func day(_ date: Date) -> String {
+        let f = DateFormatter(); f.calendar = RHBStatement.calendar; f.timeZone = RHBStatement.calendar.timeZone
+        f.dateFormat = "yyyy-MM-dd"; return f.string(from: date)
+    }
+    var body: some View {
+        Form {
+            if let account {
+                Section {
+                    Label(account.name, systemImage: "building.columns")
+                    Button { picking = true } label: {
+                        Label(tr("选择银行 PDF", "Choose bank PDF", "Pilih PDF bank"), systemImage: "doc.badge.plus")
+                    }.disabled(working)
+                } footer: {
+                    Text(tr("目前支持 RHB 储蓄账户六栏文字版月结单。PDF 在本机读取，逐笔核对借贷、余额及总计；不支持扫描件或加密文件。", "Supports RHB savings statements with six text columns. PDF parsing and balance checks run on this device. Scans and encrypted files are unsupported.", "Menyokong penyata simpanan RHB enam lajur teks. PDF dan baki disemak pada peranti. Imbasan dan fail disulitkan tidak disokong."))
+                }
+                if let statement {
+                    summary(statement, account: account)
+                    Section {
+                        Toggle(tr("确认尾号 \(statement.suffix) 是此账户", "Confirm ••••\(statement.suffix) belongs to this account", "Sahkan ••••\(statement.suffix) ialah akaun ini"), isOn: $confirmed)
+                        Toggle(tr("使用 Gemini 建议支出分类", "Suggest expense categories with Gemini", "Cadangkan kategori dengan Gemini"), isOn: $useAI)
+                        Button { importRows(statement, account: account) } label: {
+                            Label(tr("补录明确交易，其余待确认", "Add clear entries; review the rest", "Tambah rekod jelas; semak selebihnya"), systemImage: "checkmark.circle")
+                        }.disabled(!confirmed || working)
+                    } footer: {
+                        Text(tr("开启 AI 后，仅发送交易描述和分类名称给 Google Gemini。金额、方向和余额由本机校验。AI 不可用时用“其他”分类。疑似重复、转账和不明收款待确认；早于账户期初时间的记录跳过。", "When enabled, transaction descriptions and category names are sent to Google Gemini. Amounts, direction and balances are checked locally. If AI is unavailable, entries use Other. Possible duplicates, transfers and unclear receipts await review. Entries before the opening time are skipped.", "Jika diaktifkan, perihalan transaksi dan nama kategori dihantar ke Google Gemini. Amaun, arah dan baki disemak setempat. Jika AI gagal, kategori Lain-lain digunakan. Pendua, pindahan dan penerimaan tidak jelas menunggu semakan. Rekod sebelum waktu awal dilangkau."))
+                    }.disabled(working)
+                    Section {
+                        DisclosureGroup(tr("查看原始交易（\(statement.rows.count)）", "Review source entries (\(statement.rows.count))", "Semak rekod asal (\(statement.rows.count))")) {
+                            ForEach(statement.rows) { row in
+                                VStack(alignment: .leading, spacing: 4) {
+                                    Text(row.description).font(.subheadline)
+                                    Text(day(row.date) + " · " + (row.debit > 0 ? "−" : "+") + money(row.cents)).font(.caption).monospacedDigit()
+                                    if !row.detail.isEmpty { Text(row.detail).font(.caption).foregroundStyle(.secondary) }
+                                }
+                            }
+                        }
+                    }
+                }
+                if working { Section { ProgressView(tr("正在处理…", "Processing…", "Sedang memproses…")) } }
+                if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
+                if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
+                ForEach(batches) { batch in
+                    Section {
+                        ForEach(batch.notices.filter { $0.status == "pending" }) { notice in
+                            NavigationLink { FinancialNoticeReviewView(id: notice.id) } label: {
+                                VStack(alignment: .leading) {
+                                    Text(notice.party ?? "RHB")
+                                    Text(day(notice.date) + " · " + money(notice.cents ?? 0)).font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                        Button(tr("撤销这次导入", "Undo this import", "Batal import ini"), role: .destructive) { undoBatch = batch.id }.disabled(working)
+                    } header: {
+                        Text(tr("导入于 ", "Imported ", "Diimport ") + day(batch.date) + " · \(batch.notices.count)")
+                    } footer: {
+                        Text(tr("待确认记录尚未影响余额。已编辑、确认或用于预算／转账的批次不能整体撤销。", "Pending entries do not affect the balance. A batch cannot be undone after its entries are edited, confirmed or used in budgets/transfers.", "Rekod menunggu semakan tidak menjejaskan baki. Kelompok yang diubah, disahkan atau digunakan dalam bajet/pindahan tidak boleh dibatalkan."))
+                    }
+                }
+            }
+        }
+        .yuejiListSurface()
+        .navigationTitle(tr("月结单核对", "Statement reconciliation", "Semakan penyata"))
+        .navigationBarTitleDisplayMode(.inline)
+        .fileImporter(isPresented: $picking, allowedContentTypes: [.pdf]) { result in
+            switch result {
+            case .success(let url): load(url)
+            case .failure(let issue): error = issue.localizedDescription
+            }
+        }
+        .confirmationDialog(tr("撤销本批次新增记录？", "Undo entries added by this import?", "Batalkan rekod import ini?"), isPresented: Binding(get: { undoBatch != nil }, set: { if !$0 { undoBatch = nil } })) {
+            if let batch = undoBatch {
+                Button(tr("撤销导入", "Undo import", "Batal import"), role: .destructive) {
+                    model.perform(key: key, postRecurring: false, action: { try $0.undoStatementImport(batch: batch) }, completion: { _ in
+                        message = tr("已撤销导入。", "Import undone.", "Import dibatalkan."); error = nil
+                    }, failure: { error = $0.localizedDescription })
+                    undoBatch = nil
+                }
+            }
+        }
+        .onDisappear { task?.cancel() }
+    }
+    @ViewBuilder private func summary(_ statement: RHBStatement, account: BankAccount) -> some View {
+        Section {
+            LabeledContent(tr("期间", "Period", "Tempoh"), value: day(statement.start) + " – " + day(statement.end))
+            LabeledContent(tr("月结单期初", "Statement opening", "Baki awal penyata"), value: money(statement.opening))
+            LabeledContent(tr("月结单期末", "Statement closing", "Baki akhir penyata"), value: money(statement.closing))
+            if let cutoff = RHBStatement.calendar.date(byAdding: .day, value: 1, to: statement.end),
+               let balance = model.ledger.statementBalance(account, before: cutoff) {
+                LabeledContent(tr("账本同期余额", "Ledger closing balance", "Baki akhir lejar"), value: money(balance))
+                LabeledContent(tr("仍需核对差额", "Difference to reconcile", "Perbezaan untuk disemak"), value: money(statement.closing - balance))
+            }
+            if account.openingDate > statement.start {
+                Text(tr("账户期初晚于月结单开始，较早记录已包含于期初余额，不会补录。请核对期初金额与时间。", "The account opens after this statement starts. Earlier entries are covered by the opening balance and will be skipped. Check that amount and time.", "Akaun bermula selepas penyata. Rekod terdahulu diliputi baki awal dan dilangkau. Semak amaun dan waktu awal.")).font(.caption).foregroundStyle(.secondary)
+            }
+        } footer: {
+            Text(tr("差额不会直接覆盖账户余额。处理待确认记录后再核对。", "The difference never overwrites your balance. Review pending entries, then compare again.", "Perbezaan tidak menimpa baki. Semak rekod tertunda, kemudian banding semula."))
+        }
+    }
+    private func load(_ url: URL) {
+        task?.cancel(); statement = nil; confirmed = false; error = nil; message = ""; busy = true
+        let store = LocalStore.shared
+        task = Task {
+            defer { busy = false }
+            do {
+                let worker = Task.detached(priority: .userInitiated) {
+                    let access = url.startAccessingSecurityScopedResource()
+                    defer { if access { url.stopAccessingSecurityScopedResource() } }
+                    guard let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 10_000_000 else { throw RHBStatement.failure() }
+                    return try RHBStatement.read(Data(contentsOf: url, options: .mappedIfSafe))
+                }
+                let parsed = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
+                try Task.checkCancellation()
+                guard store.isActive else { throw CancellationError() }
+                statement = parsed
+            } catch is CancellationError { }
+            catch { self.error = error.localizedDescription }
+        }
+    }
+    private func importRows(_ statement: RHBStatement, account: BankAccount) {
+        guard financialProvider(account.institution ?? account.automaticSource ?? "") == "RHB",
+              account.automaticSuffix == nil || account.automaticSuffix == statement.suffix else {
+            error = tr("请选择这份月结单对应的 RHB 账户，并核对设置中的账号尾号。", "Select this statement's RHB account and check its configured suffix.", "Pilih akaun RHB penyata ini dan semak akhiran akaun.")
+            return
+        }
+        busy = true; error = nil; message = ""
+        let store = LocalStore.shared, allowed = model.ledger.categoryNames, ai = useAI
+        let texts = Array(Set(statement.rows.filter { $0.isExpense && $0.date >= account.openingDate && !model.ledger.seenEvents.contains($0.id) && !model.ledger.statementMayExist($0, accountID: account.id) }.map(\.analysisText))).sorted().prefix(100)
+        task = Task {
+            defer { busy = false }
+            var categories: [String: String] = [:], aiFailed = false
+            if ai {
+                for text in texts {
+                    do {
+                        try Task.checkCancellation()
+                        guard store.isActive else { throw CancellationError() }
+                        let data = try await CloudAccount.shared.assistant(mode: "classify", text: text, categories: allowed)
+                        let answer = try JSONDecoder().decode(AssistantResult.self, from: data)
+                        if allowed.contains(answer.category) { categories[text] = answer.category }
+                    } catch is CancellationError { return }
+                    catch { aiFailed = true; break }
+                }
+            }
+            guard !Task.isCancelled, store.isActive else { return }
+            let suggestions = categories, fallback = aiFailed
+            model.perform(key: key, postRecurring: false, action: { ledger in
+                guard store.isActive else { throw CancellationError() }
+                return try ledger.importStatement(statement, account: account, categories: suggestions)
+            }, completion: { result in
+                message = tr("已补录 \(result.added) 笔，待确认 \(result.pending) 笔，跳过 \(result.skipped) 笔。", "Added \(result.added), pending \(result.pending), skipped \(result.skipped).", "Ditambah \(result.added), menunggu \(result.pending), dilangkau \(result.skipped).")
+                if fallback { message += tr(" AI 暂不可用，未分类支出使用“其他”。", " AI unavailable; unclassified expenses use Other.", " AI tidak tersedia; perbelanjaan tanpa kategori menggunakan Lain-lain.") }
+                confirmed = false
+            }, failure: { error = $0.localizedDescription })
         }
     }
 }
