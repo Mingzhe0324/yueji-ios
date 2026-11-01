@@ -1,5 +1,3 @@
-> Legacy app versions only. Current receipt setup: [OpenAI receipts](openai-receipts.md). Do not replace this legacy endpoint with an OpenAI implementation: older apps disclose Google as the recipient.
-
 # Gemini receipt recognition
 
 The receipt screen initially defaults to on-device OCR and remembers the Gemini toggle on this device across navigation and app launches. Enabling Gemini explicitly discloses that the photo goes to Google. Each scan sends a resized JPEG (maximum 2000 pixels, 4 MB) through the authenticated Supabase function. Results remain editable drafts; the existing totals check and review step are required to save. Unknown/non-MYR currencies are rejected rather than silently relabelled as RM. Disabling Gemini restores local OCR. Network errors never silently upload elsewhere or post expenses.

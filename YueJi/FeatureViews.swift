@@ -3035,7 +3035,7 @@ struct ReceiptCamera: UIViewControllerRepresentable {
 }
 
 /// Strictly typed cloud draft. Never saves or posts an expense.
-struct AIReceiptDraft: Decodable {
+struct GeminiReceiptDraft: Decodable {
     struct Line: Decodable { let name: String; let amount: String }
     let merchant: String
     let date: String
@@ -3061,7 +3061,7 @@ struct AIReceiptDraft: Decodable {
         value.subtotal = subtotal; value.tax = tax; value.service = service
         value.discount = discount; value.rounding = rounding; value.total = total
         value.items = items.map { ScannedReceipt.Item(name: $0.name, amount: $0.amount) }
-        value.scanNotice = tr("OpenAI 识别结果：请对照原图核对商品、日期与总额，确认后才会保存。", "OpenAI draft: check items, date and total against the photo before saving.", "Draf OpenAI: semak item, tarikh dan jumlah dengan foto sebelum menyimpan.")
+        value.scanNotice = tr("Gemini 识别结果：请对照原图核对商品、日期与总额，确认后才会保存。", "Gemini draft: check items, date and total against the photo before saving.", "Draf Gemini: semak item, tarikh dan jumlah dengan foto sebelum menyimpan.")
         return value
     }
 }
@@ -3097,7 +3097,7 @@ struct ReceiptScanView: View {
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
     @State private var comparingItem: ScannedReceipt.Item?
-    @AppStorage("receiptUseOpenAI") private var useOpenAI = false
+    @AppStorage("receiptUseGemini") private var useGemini = false
     @State private var category = "其他"
 
     @State private var itemizeCategories = false
@@ -3161,9 +3161,9 @@ struct ReceiptScanView: View {
     }
     private var captureSection: some View {
         Section {
-            Toggle(tr("使用 OpenAI 识别", "Use OpenAI recognition", "Gunakan pengecaman OpenAI"), isOn: $useOpenAI).disabled(busy)
-            if useOpenAI {
-                Text(tr("扫描时会将收据照片发送至 OpenAI。需要登录及联网；识别后仍需核对。关闭可使用本机识别。", "Scanning sends the receipt photo to OpenAI. Sign-in and internet are required; review before saving. Turn off for on-device recognition.", "Imbasan menghantar foto resit ke OpenAI. Log masuk dan internet diperlukan; semak sebelum menyimpan. Matikan untuk pengecaman setempat.")).font(.caption).foregroundStyle(.secondary)
+            Toggle(tr("使用 Gemini 识别", "Use Gemini recognition", "Gunakan pengecaman Gemini"), isOn: $useGemini).disabled(busy)
+            if useGemini {
+                Text(tr("扫描时会将收据照片发送至 Google Gemini。需要登录及联网；识别后仍需核对。关闭可使用本机识别。", "Scanning sends the receipt photo to Google Gemini. Sign-in and internet are required; review before saving. Turn off for on-device recognition.", "Imbasan menghantar foto resit ke Google Gemini. Log masuk dan internet diperlukan; semak sebelum menyimpan. Matikan untuk pengecaman setempat.")).font(.caption).foregroundStyle(.secondary)
             }
             Button { camera = true } label: { Label(tr("扫描收据", "Scan receipt", "Imbas resit"), systemImage: "doc.viewfinder") }
                 .disabled(!VNDocumentCameraViewController.isSupported || busy)
@@ -3455,7 +3455,7 @@ struct ReceiptScanView: View {
         do {
             guard data.count < 25_000_000 else { throw LedgerError.invalid("Image too large") }
             let receipt: ScannedReceipt
-            if useOpenAI {
+            if useGemini {
                 guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { throw CloudFailure.invalidResponse }
                 let scale = min(1, 2000 / max(image.size.width, image.size.height))
                 let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
@@ -3466,7 +3466,7 @@ struct ReceiptScanView: View {
                 }
                 guard let jpeg = resized.jpegData(compressionQuality: 0.85), jpeg.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
                 let response = try await CloudAccount.shared.recognizeReceipt(image: jpeg)
-                receipt = try JSONDecoder().decode(AIReceiptDraft.self, from: response).reviewedDraft()
+                receipt = try JSONDecoder().decode(GeminiReceiptDraft.self, from: response).reviewedDraft()
             } else {
                 receipt = try await ReceiptOCR.scan(data)
             }

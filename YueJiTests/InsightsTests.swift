@@ -34,12 +34,12 @@ final class ReceiptCategoryAllocationTests: XCTestCase {
     }
 }
 
-final class AIReceiptDraftTests: XCTestCase {
-    private func draft(currency: String = "MYR", total: String = "10.00") throws -> AIReceiptDraft {
+final class GeminiReceiptDraftTests: XCTestCase {
+    private func draft(currency: String = "MYR", total: String = "10.00") throws -> GeminiReceiptDraft {
         let object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": currency,
             "subtotal": "10.00", "tax": "", "service": "", "discount": "", "rounding": "-0.01", "total": total,
             "items": [["name": "Rice", "amount": "10.00"]]]
-        return try JSONDecoder().decode(AIReceiptDraft.self, from: JSONSerialization.data(withJSONObject: object))
+        return try JSONDecoder().decode(GeminiReceiptDraft.self, from: JSONSerialization.data(withJSONObject: object))
     }
     func testMissingDateAndAmountsRemainMissingForReview() throws {
         let receipt = try draft().reviewedDraft()
