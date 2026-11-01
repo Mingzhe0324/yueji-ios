@@ -322,6 +322,7 @@ private struct BankAccountDetail: View {
     @EnvironmentObject var model: LedgerModel
     let accountID: String
     @State private var editing = false
+    @State private var recordingInterest = false
     var body: some View {
         List {
             if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
@@ -351,6 +352,9 @@ private struct BankAccountDetail: View {
                     }
                 }
                 Section(tr("已分配的收入", "Assigned income", "Pendapatan ditetapkan")) {
+                    Button { recordingInterest = true } label: {
+                        Label(tr("记录银行利息", "Record bank interest", "Rekod faedah bank"), systemImage: "percent")
+                    }.accessibilityIdentifier("bankAccount.interest")
                     ForEach(model.ledger.incomes.filter { $0.bankAccountID == accountID }.sorted { $0.date > $1.date }) { entry in
                         NavigationLink {
                             IncomeDetailView(id: entry.id)
@@ -364,6 +368,9 @@ private struct BankAccountDetail: View {
                     }
                 }
                 .sheet(isPresented: $editing) { BankAccountEditor(original: account) }
+                .sheet(isPresented: $recordingInterest) {
+                    IncomeEditor(initialKind: .interest, initialAccountID: account.id)
+                }
                 Section {
                     ForEach(model.ledger.tngNotices.filter {
                         $0.bankAccountID == accountID && $0.kind == "incoming" && $0.status != "ignored" && $0.resolution == nil
@@ -1052,6 +1059,8 @@ struct IncomeEditor: View {
     @Environment(\.dismiss) private var dismiss
     @EnvironmentObject var model: LedgerModel
     var original: IncomeEntry? = nil
+    var initialKind: IncomeKind = .salary
+    var initialAccountID: String? = nil
     @State private var draftID = UUID().uuidString
     @State private var bankAccountID: String?
     @State private var source = ""
@@ -1067,6 +1076,9 @@ struct IncomeEditor: View {
     private var operationKey: String { "income-" + (original?.id ?? draftID) }
     private var saving: Bool { model.isWorking(operationKey) }
     private func draft() throws -> IncomeEntry {
+        if kind == .interest, !model.ledger.bankAccounts.contains(where: { $0.id == bankAccountID }) {
+            throw reviewError("请选择利息到账的账户。", "Choose the account that received the interest.", "Pilih akaun yang menerima faedah.")
+        }
         let name = source.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw reviewError("请填写收入来源。", "Enter where the income came from.", "Masukkan sumber pendapatan.") }
         var entry = original ?? IncomeEntry(id: draftID, source: name, cents: 1)
@@ -1127,12 +1139,16 @@ struct IncomeEditor: View {
                     }
                 }
                 Section {
-                    TextField(tr("雇主、客户或说明", "Employer, client or description", "Majikan, pelanggan atau penerangan"), text: $source)
+                    TextField(kind == .interest ? tr("银行或利息说明", "Bank or interest description", "Bank atau penerangan faedah") : tr("雇主、客户或说明", "Employer, client or description", "Majikan, pelanggan atau penerangan"), text: $source)
                         .accessibilityIdentifier("income.source")
                     Picker(tr("类型", "Type", "Jenis"), selection: $kind) {
                         ForEach(IncomeKind.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
                     }
                     BankAccountPicker(selection: $bankAccountID)
+                    if kind == .interest {
+                        Text(tr("填写银行实际到账的利息和日期。保存后计入所选账户余额，不自动加入消费预算；已包含在期初余额中的利息无需再记。", "Enter the interest actually credited and its date. It updates the selected account without automatic budget allocation. Do not re-enter interest already included in the opening balance.", "Isi faedah sebenar diterima dan tarikhnya. Baki akaun dikemas kini tanpa peruntukan bajet automatik. Jangan rekod semula faedah yang sudah termasuk dalam baki awal."))
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                     DatePicker(tr("收到日期", "Date received", "Tarikh diterima"), selection: $date, in: ...Date())
                     TextField(tr("备注（可选）", "Note (optional)", "Nota (pilihan)"), text: $note, axis: .vertical).lineLimit(1...4)
                 } footer: {
@@ -1166,7 +1182,11 @@ struct IncomeEditor: View {
             .onAppear {
                 guard !initialized else { return }
                 initialized = true
-                guard let original else { return }
+                guard let original else {
+                    kind = initialKind; bankAccountID = initialAccountID
+                    if initialKind == .interest { source = model.ledger.bankAccounts.first { $0.id == initialAccountID }?.name ?? "" }
+                    return
+                }
                 bankAccountID = original.bankAccountID
                 source = original.source; kind = original.kind; date = original.date; note = original.note ?? ""
                 currency = original.foreign?.currency ?? "MYR"

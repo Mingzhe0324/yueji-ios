@@ -191,7 +191,7 @@ extension Ledger {
 /// between their own accounts, top-ups, refunds and friend repayments are never income here, so
 /// they can never reach a budget.
 enum IncomeKind: String, Codable, CaseIterable, Identifiable {
-    case salary, freelance, partTime, bonus, allowance, other
+    case salary, freelance, partTime, bonus, allowance, interest, other
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -200,6 +200,7 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable {
         case .partTime: return tr("兼职收入", "Part-time work", "Kerja sambilan")
         case .bonus: return tr("奖金", "Bonus", "Bonus")
         case .allowance: return tr("生活费", "Living allowance", "Wang sara hidup")
+        case .interest: return tr("银行利息", "Bank interest", "Faedah bank")
         case .other: return tr("其他收入", "Other income", "Pendapatan lain")
         }
     }
@@ -210,6 +211,7 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable {
         case .partTime: return "clock.fill"
         case .bonus: return "gift.fill"
         case .allowance: return "house.fill"
+        case .interest: return "percent"
         case .other: return "plus.circle.fill"
         }
     }
@@ -531,6 +533,9 @@ extension Ledger {
     /// it is on and says what to show. Nil for anything that isn't income.
     mutating func settleNewIncome(source: String, autoPercent: Int?, now: Date = Date()) throws -> IncomeBudgetOutcome? {
         guard let income = incomeSource(source) else { return nil }
+        // Interest stays in the account even when automatic budget allocation is on.
+        // Explicit allocations remain available from income details.
+        guard income.kind != .interest else { return nil }
         let duplicate = allocatedTotal(for: source) == 0 ? likelyDuplicateIncome(of: source) : nil
         var automatic: Int?
         if let autoPercent, duplicate == nil, let allocation = try autoAllocateIncome(source: source, percent: autoPercent, now: now) {

@@ -57,6 +57,25 @@ final class IncomeBudgetTests: XCTestCase {
         XCTAssertEqual(ledger.monthlyBudget(key).total, 180000)
     }
 
+    func testBankInterestCreditsAccountWithoutAutomaticBudgetAllocation() throws {
+        let date = noon(2026, 6, 15)
+        let account = BankAccount(name: "Public Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-60))
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let entry = IncomeEntry(bankAccountID: account.id, source: "Public Bank interest", cents: 123, date: date, kind: .interest)
+        XCTAssertNil(try ledger.addIncome(entry, autoPercent: 100, now: date))
+        XCTAssertEqual(ledger.bankBalance(account), 10123)
+        XCTAssertTrue(ledger.budgetAllocations.isEmpty)
+        XCTAssertThrowsError(try ledger.addIncome(entry, autoPercent: 100, now: date))
+        XCTAssertEqual(ledger.bankBalance(account), 10123)
+        let restored = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertEqual(restored.incomes.first?.kind, .interest)
+        XCTAssertEqual(restored.bankBalance(account), 10123)
+        // An explicit later budget choice is still permitted.
+        try ledger.setIncomeAllocation(source: entry.sourceKey, month: monthKey(date), cents: 100, expected: 0, now: date)
+        XCTAssertEqual(ledger.bankBalance(account), 10123)
+        XCTAssertEqual(ledger.monthlyBudget(monthKey(date)).income, 100)
+    }
+
     func testCapturedBankIncomeIsOfferedOnlyAfterItsPurposeIsConfirmed() throws {
         let received = noon(2026, 6, 25)
         let key = monthKey(received)
