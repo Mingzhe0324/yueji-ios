@@ -6,6 +6,29 @@ final class IncomeBudgetTests: XCTestCase {
         Calendar.current.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
     }
 
+    func testAllowanceConfirmationPersistsAndNeverCreditsVerifiedReceiptTwice() throws {
+        let date = noon(2026, 6, 10)
+        for alreadyCredited in [false, true] {
+            let account = BankAccount(name: "Public Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-60))
+            var notice = TNGNotice(body: "Living allowance", title: "", date: date, usesReceivedDate: false,
+                                   kind: "incoming", status: "pending", cents: 50000, party: "Family")
+            notice.sourceBank = "Public Bank"
+            notice.bankAccountID = account.id
+            notice.verifiedIncomingBalance = alreadyCredited
+            var ledger = Ledger()
+            ledger.bankAccounts = [account]; ledger.tngNotices = [notice]
+            XCTAssertEqual(ledger.bankBalance(account), alreadyCredited ? 60000 : 10000)
+            try ledger.resolveTNGIncoming(id: notice.id, purpose: "income", date: date, incomeKind: .allowance)
+            XCTAssertEqual(ledger.bankBalance(account), 60000)
+            XCTAssertEqual(ledger.incomeSource(IncomeSourceKey.notice(notice.id))?.kind, .allowance)
+            XCTAssertTrue(ledger.incomes.isEmpty)
+            XCTAssertTrue(ledger.budgetAllocations.isEmpty)
+            let restored = try LocalStore.decode(LocalStore.encode(ledger))
+            XCTAssertEqual(restored.tngNotices.first?.confirmedIncomeKind, .allowance)
+            XCTAssertEqual(restored.bankBalance(account), 60000)
+        }
+    }
+
     func testManualIncomeRaisesTheBudgetWithoutChangingIncomeOrSpending() throws {
         let now = noon(2026, 6, 15)
         let key = monthKey(now)

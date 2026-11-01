@@ -3635,6 +3635,7 @@ struct TNGIncomingView: View {
             Picker(tr("用途", "Purpose", "Tujuan"), selection: $purpose) {
                 Text(tr("请选择", "Choose", "Pilih")).tag("")
                 Text(tr("朋友还款", "Friend repayment", "Bayaran balik rakan")).tag("repayment")
+                Text(IncomeKind.allowance.label).tag("allowance")
                 Text(tr("其他收入", "Other income", "Pendapatan lain")).tag("income")
                 Text(tr("自己账户转入", "Own-account transfer", "Pindahan akaun sendiri")).tag("ownTransfer")
                 Text(tr("忽略", "Ignore", "Abaikan")).tag("ignored")
@@ -3668,6 +3669,10 @@ struct TNGIncomingView: View {
                     ForEach(IncomeKind.allCases) { Label($0.label, systemImage: $0.symbol).tag($0) }
                 }
             }
+            if purpose == "allowance" {
+                Text(tr("别人给你的生活费记为生活费收入；自己账户转来的钱请选择“自己账户转入”。", "Living allowance from someone else is recorded as allowance income. For money from your own account, choose own-account transfer.", "Wang sara hidup daripada orang lain direkod sebagai pendapatan sara hidup. Untuk wang daripada akaun sendiri, pilih pindahan akaun sendiri."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
             DatePicker(tr("实际收到日期", "Date received", "Tarikh diterima"), selection: $date, in: ...Date())
             Text(tr("优先使用通知中的交易日期，缺少时使用接收时间。只有确认为收入的钱可以加入预算，并且由你决定；朋友还款和自己账户转入不是收入，不改变预算。", "Uses the transaction date in the notification, or received time when absent. Only money confirmed as income can go into a budget, and only when you choose. Repayments and transfers from your own accounts aren't income and never change budgets.", "Tarikh transaksi digunakan jika ada, jika tiada masa diterima digunakan. Hanya wang yang disahkan sebagai pendapatan boleh dimasukkan ke bajet, dan hanya apabila anda pilih. Bayaran balik rakan dan pindahan akaun sendiri bukan pendapatan dan tidak mengubah bajet.")).font(.caption)
             if notice?.possibleDuplicate == true {
@@ -3686,6 +3691,8 @@ struct TNGIncomingView: View {
     }
     private func save() {
         let percent = IncomeBudgetSettings.autoPercent
+        let purpose = self.purpose == "allowance" ? "income" : self.purpose
+        let incomeKind = self.purpose == "allowance" ? IncomeKind.allowance : self.incomeKind
         model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct, selectedDebts, repaymentPreview, incomeKind] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
             if purpose == "repayment" {
                 guard let notice = ledger.tngNotices.first(where: { $0.id == id }),
@@ -4216,6 +4223,7 @@ struct FinancialNoticeReviewView: View {
                         Text(tr("请选择用途", "Select a purpose", "Pilih tujuan")).tag("")
                         if notice.kind != "incoming" { Text(tr("消费支出", "Expense", "Perbelanjaan")).tag("expense") }
                         Text(tr("收入", "Income", "Pendapatan")).tag("income")
+                        Text(IncomeKind.allowance.label).tag("allowance")
                         Text(tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")).tag("ownTransfer")
                         Text(tr("退款到账", "Refund received", "Bayaran balik diterima")).tag("refund")
                         if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
@@ -4281,6 +4289,8 @@ struct FinancialNoticeReviewView: View {
                 Button(tr("确认", "Confirm", "Sahkan")) {
                     let drafts = itemDrafts
                     let percent = IncomeBudgetSettings.autoPercent
+                    let purpose = self.purpose == "allowance" ? "income" : self.purpose
+                    let incomeKind = self.purpose == "allowance" ? IncomeKind.allowance : self.incomeKind
                     model.perform(key: "notice-" + id, action: { [id, purpose, party, amount, date, category, remember, relatedID, incomeKind] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
                         if purpose == "ignore" { try ledger.excludeTNG(id: id) }
                         else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }

@@ -191,7 +191,7 @@ extension Ledger {
 /// between their own accounts, top-ups, refunds and friend repayments are never income here, so
 /// they can never reach a budget.
 enum IncomeKind: String, Codable, CaseIterable, Identifiable {
-    case salary, freelance, partTime, bonus, other
+    case salary, freelance, partTime, bonus, allowance, other
     var id: String { rawValue }
     var label: String {
         switch self {
@@ -199,6 +199,7 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable {
         case .freelance: return tr("自由职业收入", "Freelance", "Kerja bebas")
         case .partTime: return tr("兼职收入", "Part-time work", "Kerja sambilan")
         case .bonus: return tr("奖金", "Bonus", "Bonus")
+        case .allowance: return tr("生活费", "Living allowance", "Wang sara hidup")
         case .other: return tr("其他收入", "Other income", "Pendapatan lain")
         }
     }
@@ -208,6 +209,7 @@ enum IncomeKind: String, Codable, CaseIterable, Identifiable {
         case .freelance: return "laptopcomputer"
         case .partTime: return "clock.fill"
         case .bonus: return "gift.fill"
+        case .allowance: return "house.fill"
         case .other: return "plus.circle.fill"
         }
     }
