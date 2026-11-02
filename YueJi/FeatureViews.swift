@@ -371,6 +371,7 @@ enum SubscriptionCoverage {
     }
 }
 struct RecurringView: View {
+    @AppStorage(SubscriptionChangeNotifier.enabledKey) private var subscriptionAlerts = true
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
@@ -396,6 +397,20 @@ struct RecurringView: View {
                     }
                 } footer: { Text(tr("这里只记账，不会替你付款。", "Records expenses; never makes payments.", "Merekod belanja; tidak membuat bayaran.")) }
                 // Possible subscriptions: only when there's something to show.
+                Section {
+                    Toggle(tr("新增订阅与涨价提醒", "New subscriptions & price alerts", "Langganan baharu & amaran harga"), isOn: $subscriptionAlerts)
+                    Text(tr("根据已记录付款探测，疑似订阅需确认。系统提醒需要允许月记通知。", "Detected from recorded payments; suggestions need confirmation. Allow YueJi notifications for system alerts.", "Dikesan daripada bayaran direkod; cadangan perlu disahkan. Benarkan notifikasi YueJi."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(model.ledger.subscriptionChangeAlerts().filter { $0.previous != nil }) { alert in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(alert.title, systemImage: "arrow.up.right").foregroundStyle(.orange)
+                            Text(alert.detail).font(.subheadline)
+                            if let id = alert.ruleID, let rule = model.ledger.recurring.first(where: { $0.id == id }) {
+                                Button(tr("查看订阅", "Review subscription", "Semak langganan")) { editor = .edit(rule) }
+                            }
+                        }
+                    }
+                }
                 if !suggestions.isEmpty || hidden != nil {
                     Section {
                         if let hidden {

@@ -346,6 +346,7 @@ struct RecordApplePayIntent: AppIntent {
             let result = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
             await UnusualSpendingNotifier.shared.check()
+            await SubscriptionChangeNotifier.shared.check()
             if result.expenseID != nil {
                 if paymentAccount == nil {
                     return .result(dialog: "支出已保存，但未分配资金账户。请在本自动化的「扣款账户」选择对应账户，之后的付款才会更新该账户的账面余额。")
@@ -377,6 +378,7 @@ struct PostRecurringIntent: AppIntent {
         }
         await BudgetAlertService.shared.check()
         await UnusualSpendingNotifier.shared.check()
+        await SubscriptionChangeNotifier.shared.check()
         if let ledger = try? LocalStore.shared.read() { await RenewalReminders.sync(ledger) }
         return .result(dialog: "已检查到期项目。缺少汇率的项目仍保留待记。")
     }
@@ -409,6 +411,7 @@ struct RecordTNGIntent: AppIntent {
             _ = try await AutomationRecovery.shared.submit(delivery)
             await BudgetAlertService.shared.check()
             await UnusualSpendingNotifier.shared.check()
+            await SubscriptionChangeNotifier.shared.check()
             return .result()
         } catch {
             try? LocalStore.shared.change { $0.logAutomation(source: "银行 / TNG", outcome: "failed", detail: error.localizedDescription) }

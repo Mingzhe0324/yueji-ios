@@ -285,6 +285,7 @@ struct RestoredLedgerFeedback {
         if !loaded { loaded = true }
         Task { await BudgetAlertService.shared.check() }
         Task { await UnusualSpendingNotifier.shared.check() }
+        Task { await SubscriptionChangeNotifier.shared.check() }
         // Edits, matched payments and restores move expected payments; reminders follow.
         Task { await RenewalReminders.sync(fresh) }
     }

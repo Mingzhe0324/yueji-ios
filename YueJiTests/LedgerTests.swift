@@ -5011,6 +5011,35 @@ final class DirectionNotificationSoundTests: XCTestCase {
 }
 
 final class SubscriptionTrackingTests: XCTestCase {
+    func testSubscriptionChangeAlertsNewPriceAndExclusions() throws {
+        let date = noon(2026, 6, 5), now = noon(2026, 6, 6)
+        var ledger = Ledger(expenses: [Expense(merchant: "Spotify", cents: 1590, date: date)])
+        let suggestion = try XCTUnwrap(ledger.subscriptionChangeAlerts(now: now).first)
+        XCTAssertNil(suggestion.previous)
+        var rule = RecurringExpense(name: "Spotify", minor: 1490, start: date, kind: .subscription)
+        ledger.recurring = [rule]
+        let increase = try XCTUnwrap(ledger.subscriptionChangeAlerts(now: now).first)
+        XCTAssertEqual(increase.previous, 1490)
+        XCTAssertEqual(increase.amount, 1590)
+        XCTAssertEqual(increase.ruleID, rule.id)
+        XCTAssertEqual(ledger.recurring[0].minor, 1490)
+        // An unchanged higher price is the same event, not a new alert every month.
+        ledger.expenses.append(Expense(merchant: "Spotify", cents: 1590, date: noon(2026, 7, 5)))
+        XCTAssertEqual(ledger.subscriptionChangeAlerts(now: noon(2026, 7, 6)).first?.id, increase.id)
+        ledger.expenses = [Expense(merchant: "Spotify", cents: 1390, date: date)]
+        XCTAssertTrue(ledger.subscriptionChangeAlerts(now: now).isEmpty)
+        ledger.expenses[0].cents = 1590
+        ledger.expenses[0].paidByFriend = "Friend"
+        XCTAssertTrue(ledger.subscriptionChangeAlerts(now: now).isEmpty)
+        ledger.expenses[0].paidByFriend = nil
+        rule.kind = .bill
+        ledger.recurring = [rule]
+        XCTAssertTrue(ledger.subscriptionChangeAlerts(now: now).isEmpty)
+        rule.kind = .subscription
+        ledger.recurring = [rule, rule]
+        XCTAssertTrue(ledger.subscriptionChangeAlerts(now: now).isEmpty)
+    }
+
     private func noon(_ year: Int, _ month: Int, _ day: Int) -> Date {
         Calendar.current.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
     }

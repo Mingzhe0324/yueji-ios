@@ -693,6 +693,93 @@ extension Ledger {
         }
     }
 }
+struct SubscriptionChangeAlert: Identifiable {
+    let id: String
+    let name: String
+    let previous: Int?
+    let amount: Int
+    let currency: String
+    let expenseID: String
+    let ruleID: String?
+    var title: String {
+        previous == nil ? tr("发现疑似订阅", "Possible subscription found", "Kemungkinan langganan ditemui")
+            : tr("订阅可能涨价", "Possible subscription price increase", "Harga langganan mungkin meningkat")
+    }
+    var detail: String {
+        let value = Currency.display(amount, currency)
+        if let previous {
+            return name + ": " + Currency.display(previous, currency) + " → " + value +
+                tr("。请核对是否涨价或更换套餐，原固定金额未修改。", ". Check for a price or plan change; the saved amount is unchanged.", ". Semak perubahan harga atau pelan; amaun asal tidak berubah.")
+        }
+        return name + " · " + value + tr("，可在固定消费中确认并添加。", ". Review and add it in Recurring expenses.", ". Semak dan tambah dalam Belanja berulang.")
+    }
+}
+
+extension Ledger {
+    func subscriptionChangeAlerts(now: Date = Date()) -> [SubscriptionChangeAlert] {
+        var alerts = subscriptionCandidates(now: now).filter { $0.kind != .bill && $0.lastDate <= now && now.timeIntervalSince($0.lastDate) <= 40 * 86_400 }.compactMap { candidate -> SubscriptionChangeAlert? in
+            guard let expense = candidate.expenseIDs.last else { return nil }
+            let previous = candidate.previousMinor.flatMap { $0 < candidate.minor ? $0 : nil }
+            let event = previous.map { "|rise|\($0)|\(candidate.minor)" } ?? "|new"
+            return SubscriptionChangeAlert(id: "candidate|" + candidate.id + event,
+                                           name: candidate.name, previous: previous, amount: candidate.minor,
+                                           currency: candidate.currency, expenseID: expense, ruleID: nil)
+        }
+        let transfers = Set(tngNotices.filter { $0.kind == "transfer" }.compactMap(\.expenseID))
+        for rule in recurring where rule.isTracking && rule.displayKind == .subscription {
+            let payments = expenses.filter { entry in
+                entry.recurringKey == nil && entry.paidByFriend == nil && entry.refunded == 0 &&
+                (entry.renewalOf == nil || entry.renewalOf.map { rule.owns($0) } == true) &&
+                !transfers.contains(entry.id) && entry.date <= now && now.timeIntervalSince(entry.date) <= 40 * 86_400 &&
+                !(rule.ignoredPaymentIDs ?? []).contains(entry.id) && rule.merchantMatch(entry) == .exact &&
+                rule.paymentMinor(entry).map { $0 > rule.minor } == true &&
+                rule.nearestOccurrence(to: entry.date, from: max(0, rule.nextIndex - 1)) != nil
+            }
+            guard let entry = payments.max(by: { $0.date < $1.date }),
+                  recurring.filter({ $0.isTracking && $0.merchantMatch(entry) == .exact && $0.currency == entry.chargedCurrency }).count == 1 else { continue }
+            alerts.append(SubscriptionChangeAlert(id: "rule|\(rule.id)|\(rule.minor)|\(entry.chargedMinor)", name: rule.name,
+                                                   previous: rule.minor, amount: entry.chargedMinor, currency: rule.currency,
+                                                   expenseID: entry.id, ruleID: rule.id))
+        }
+        return alerts.sorted { $0.id < $1.id }
+    }
+}
+
+actor SubscriptionChangeNotifier {
+    static let shared = SubscriptionChangeNotifier()
+    static let enabledKey = "subscriptionChangeAlerts.v1"
+    private var checking = false
+    func check(now: Date = Date()) async {
+        let defaults = UserDefaults.standard
+        guard !checking, defaults.object(forKey: Self.enabledKey) as? Bool ?? true else { return }
+        checking = true
+        defer { checking = false }
+        let store = LocalStore.shared
+        guard store.isActive, let ledger = try? store.read() else { return }
+        let key = "subscriptionChangeSent.v1." + store.folder.path
+        var sent = Set(defaults.stringArray(forKey: key) ?? [])
+        let alerts = ledger.subscriptionChangeAlerts(now: now).filter { !sent.contains($0.id) }
+        guard !alerts.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        let settings = await center.notificationSettings()
+        guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else { return }
+        for alert in alerts.prefix(3) {
+            guard store.isActive, defaults.object(forKey: Self.enabledKey) as? Bool ?? true else { return }
+            let content = UNMutableNotificationContent()
+            let hidden = defaults.bool(forKey: "hideNotificationDetails")
+            content.title = alert.title
+            content.body = hidden ? tr("打开月记的固定消费查看。", "Open Recurring expenses in YueJi.", "Buka Belanja berulang dalam YueJi.") : alert.detail
+            content.sound = LedgerNotifications.automationSound
+            content.userInfo = ["recordID": alert.ruleID ?? alert.expenseID, "recordKind": alert.ruleID == nil ? "expense" : "recurring"]
+            do {
+                try await center.add(UNNotificationRequest(identifier: "yueji.subscription." + UUID().uuidString, content: content, trigger: nil))
+                sent.insert(alert.id)
+                defaults.set(Array(sent), forKey: key)
+            } catch { return }
+        }
+    }
+}
+
 struct FXService {
     struct Response: Decodable { let base: String; let quote: String; let rate: Decimal; let date: String }
     static func fetch(_ currency: String) async throws -> RateQuote {
