@@ -2477,6 +2477,8 @@ import PhotosUI
 import UIKit
 
 struct ScannedReceipt {
+    var merchantAddress = ""
+    var merchantPhone = ""
     struct Item: Identifiable {
         var id = UUID()
         var name: String
@@ -3036,6 +3038,8 @@ struct ReceiptCamera: UIViewControllerRepresentable {
 
 /// Strictly typed cloud draft. Never saves or posts an expense.
 struct GeminiReceiptDraft: Decodable {
+    var merchantAddress: String? = nil
+    var merchantPhone: String? = nil
     struct Line: Decodable { let name: String; let amount: String }
     let merchant: String
     let date: String
@@ -3049,6 +3053,7 @@ struct GeminiReceiptDraft: Decodable {
     let items: [Line]
 
     func reviewedDraft() throws -> ScannedReceipt {
+        guard (merchantAddress?.count ?? 0) <= 1000, (merchantPhone?.count ?? 0) <= 80 else { throw CloudFailure.invalidResponse }
         guard currency == "MYR", merchant.count <= 200, items.count <= 200 else { throw CloudFailure.invalidResponse }
         for amount in [subtotal, tax, service, discount, total] + items.map(\.amount) {
             guard amount.isEmpty || (amount.range(of: #"\A[0-9]{1,8}\.[0-9]{2}\z"#, options: .regularExpression) != nil && (try? toCents(amount)) != nil) else { throw CloudFailure.invalidResponse }
@@ -3057,6 +3062,7 @@ struct GeminiReceiptDraft: Decodable {
               items.allSatisfy({ !$0.name.isEmpty && $0.name.count <= 200 }),
               date.isEmpty || date.range(of: #"\A[0-9]{4}-[0-9]{2}-[0-9]{2}\z"#, options: .regularExpression) != nil else { throw CloudFailure.invalidResponse }
         var value = ScannedReceipt()
+        value.merchantAddress = merchantAddress ?? ""; value.merchantPhone = merchantPhone ?? ""
         value.merchant = merchant; value.date = date.isEmpty ? nil : ScannedReceipt.receiptDate(date)
         value.subtotal = subtotal; value.tax = tax; value.service = service
         value.discount = discount; value.rounding = rounding; value.total = total
@@ -3067,6 +3073,8 @@ struct GeminiReceiptDraft: Decodable {
 }
 
 struct ReceiptScanView: View {
+    @State private var merchantAddress = ""
+    @State private var merchantPhone = ""
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var guideReduceMotion
     var guideSection: Int? = nil
@@ -3182,6 +3190,8 @@ struct ReceiptScanView: View {
             LabeledContent(tr("商家", "Merchant", "Peniaga")) {
                 TextField(tr("商家名称", "Merchant name", "Nama peniaga"), text: $merchant).multilineTextAlignment(.trailing).guideTarget("receipt.merchant")
             }
+            TextField(tr("店铺地址（核对分店）", "Store address (verify branch)", "Alamat kedai (semak cawangan)"), text: $merchantAddress, axis: .vertical)
+            TextField(tr("店铺电话", "Store phone", "Telefon kedai"), text: $merchantPhone)
             DatePicker(tr("消费日期", "Receipt date", "Tarikh resit"), selection: Binding(get: { date }, set: { date = $0; dateMissing = false }), displayedComponents: .date).guideTarget("receipt.date")
             if dateMissing { Text(tr("没有识别到日期，请按收据调整日期。", "Date not found. Set the date shown on the receipt.", "Tarikh tidak dikesan. Tetapkan tarikh pada resit.")).font(.caption).foregroundStyle(.orange) }
             amountRow(tr("商品小计", "Items subtotal", "Subjumlah item"), $subtotal)
@@ -3472,6 +3482,7 @@ struct ReceiptScanView: View {
             }
             guard !Task.isCancelled, scanRequest == request else { return false }
             scanNotice = receipt.scanNotice
+            merchantAddress = receipt.merchantAddress; merchantPhone = receipt.merchantPhone
             merchant = receipt.merchant; category = "其他"; subtotal = receipt.subtotal; tax = receipt.tax
             service = receipt.service; discount = receipt.discount; rounding = receipt.rounding
             printedTotal = receipt.total; items = receipt.items; date = receipt.date ?? Date()
@@ -3503,6 +3514,9 @@ struct ReceiptScanView: View {
             } else { previous = nil }
             let recordedDate = date
             var newExpense = Expense(merchant: merchant, cents: total, date: recordedDate, category: category, source: "Receipt", shares: shares, receiptSummary: summary)
+            newExpense.receiptMerchantAddress = merchantAddress.isEmpty ? nil : merchantAddress
+            newExpense.receiptMerchantPhone = merchantPhone.isEmpty ? nil : merchantPhone
+            if !merchantAddress.isEmpty { newExpense.place = ExpensePlace(name: merchant, address: merchantAddress) }
             if savesCategories {
                 newExpense.items = try classifiedItems()
                 newExpense = try newExpense.applyingItemOwnership()
@@ -3513,6 +3527,9 @@ struct ReceiptScanView: View {
                 if let previous {
                     guard let i = ledger.expenses.firstIndex(where: { $0.id == previous.id }), ledger.expenses[i] == previous else { throw LedgerError.invalid("Record changed. Reopen it.") }
                     ledger.expenses[i].shares = shares; ledger.expenses[i].receiptSummary = summary; ledger.expenses[i].date = recordedDate
+                    ledger.expenses[i].receiptMerchantAddress = savedExpense.receiptMerchantAddress
+                    ledger.expenses[i].receiptMerchantPhone = savedExpense.receiptMerchantPhone
+                    if ledger.expenses[i].place == nil { ledger.expenses[i].place = savedExpense.place }
                 } else { ledger.expenses.append(savedExpense) }
             }, completion: { _ in
                 model.showSaved(); hasReceipt = false; photo = nil; receiptImage = nil; items = []; existingID = ""; reviewed = false

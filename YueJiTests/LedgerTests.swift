@@ -80,6 +80,28 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(MerchantMatching.automaticID(name: "Cafe ABC", candidates: [near, near]), "a")
     }
 
+    func testMerchantMemoryUsesOnlyConfirmedSavedAliasAndKeepsBranches() throws {
+        let confirmed = ExpensePlace(name: "Cafe ABC", address: "1 Jalan A", latitude: 3, longitude: 101,
+                                     applePlaceID: "branch-a", userConfirmed: true)
+        var a = Expense(merchant: "ABC SDN BHD", cents: 100)
+        a.place = confirmed
+        var b = a; b.id = "b"; b.place?.applePlaceID = "branch-b"
+        var preview = a; preview.id = "preview"; preview.place?.applePlaceID = "preview"; preview.place?.userConfirmed = nil
+        XCTAssertEqual(Set(MerchantMatching.confirmedPlaces(merchant: "abc sdn bhd", expenses: [a, a, b, preview]).compactMap(\.applePlaceID)), ["branch-a", "branch-b"])
+        XCTAssertTrue(MerchantMatching.confirmedPlaces(merchant: "Other", expenses: [a]).isEmpty)
+        XCTAssertEqual(try JSONDecoder().decode(Expense.self, from: JSONEncoder().encode(a)).place, confirmed)
+    }
+
+    func testReceiptBranchEvidenceRejectsConflictsAndMissingDetails() {
+        let candidate = MerchantMatchCandidate(id: "a", name: "Cafe ABC", distance: 20,
+            address: "Cafe ABC, 16 Jalan A, 46300", phone: "+60 3-1234 5678")
+        XCTAssertTrue(MerchantMatching.receiptAgrees(address: "16 Jalan A 46300", phone: "03 1234 5678", candidate: candidate))
+        XCTAssertFalse(MerchantMatching.receiptAgrees(address: "18 Jalan A 46300", phone: "", candidate: candidate))
+        XCTAssertFalse(MerchantMatching.receiptAgrees(address: "", phone: "03 8888 9999", candidate: candidate))
+        XCTAssertFalse(MerchantMatching.receiptAgrees(address: "16 Jalan A 46300", phone: "", candidate: MerchantMatchCandidate(id: "a", name: "Cafe ABC", distance: 20)))
+        XCTAssertTrue(MerchantMatching.receiptAgrees(address: "", phone: "", candidate: candidate))
+    }
+
     func testAutomaticPlaceTimeAndAccuracyRemainOptional() throws {
         let now = Date()
         let automatic = ExpensePlace(name: "Approximate", latitude: 3, longitude: 101,

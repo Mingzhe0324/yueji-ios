@@ -10,6 +10,9 @@ struct MerchantMatchInput: Equatable {
     var accuracy: Double?
     var capturedAt: Date?
     var transactionDate: Date?
+    var remembered: [ExpensePlace]
+    var receiptAddress: String
+    var receiptPhone: String
 }
 
 @MainActor
@@ -58,11 +61,18 @@ final class ExpenseMerchantMatcher: ObservableObject {
                 }
             }
             let operation: MKLocalSearch
+            let nearbyMemory = input.remembered.filter { place in
+                guard let anchor, let lat = place.latitude, let lon = place.longitude else { return false }
+                return anchor.distance(from: CLLocation(latitude: lat, longitude: lon)) <= 500
+            }
+            let rememberedNames = Set(nearbyMemory.map { $0.name })
+            let searchName = rememberedNames.count == 1 ? (rememberedNames.first ?? name) : name
+            if nearbyMemory.count > 1 { precise = false }
             if name.isEmpty, let anchor {
                 operation = MKLocalSearch(request: MKLocalPointsOfInterestRequest(center: anchor.coordinate, radius: 500))
             } else {
                 let request = MKLocalSearch.Request()
-                request.naturalLanguageQuery = [name, address].filter { !$0.isEmpty }.joined(separator: " ")
+                request.naturalLanguageQuery = [searchName, address].filter { !$0.isEmpty }.joined(separator: " ")
                 request.resultTypes = .pointOfInterest
                 if let anchor {
                     request.region = MKCoordinateRegion(center: anchor.coordinate, latitudinalMeters: 1000, longitudinalMeters: 1000)
@@ -83,16 +93,20 @@ final class ExpenseMerchantMatcher: ObservableObject {
                 if anchor != nil && distance > 500 { continue }
                 places.append(ExpensePlace(name: title, address: item.placemark.title ?? "",
                     latitude: coordinate.latitude, longitude: coordinate.longitude, applePlaceID: id))
-                ranked.append(MerchantMatchCandidate(id: id, name: title, distance: distance))
+                ranked.append(MerchantMatchCandidate(id: id, name: title, distance: distance,
+                    address: item.placemark.title ?? "", phone: item.phoneNumber ?? ""))
             }
             loading = false; search = nil
-            if precise, let id = MerchantMatching.automaticID(name: name, candidates: ranked) {
+            if precise, let id = MerchantMatching.automaticID(name: searchName, candidates: ranked),
+               let candidate = ranked.first(where: { $0.id == id }),
+               (nearbyMemory.isEmpty || nearbyMemory.contains(where: { $0.applePlaceID == id })),
+               MerchantMatching.receiptAgrees(address: input.receiptAddress, phone: input.receiptPhone, candidate: candidate) {
                 automatic = places.first { $0.applePlaceID == id }
             } else {
                 candidates = Array(places.prefix(6))
                 message = places.isEmpty
                     ? tr("没有找到对应店铺，可保留地点或搜索店名。", "No matching place found. Keep this location or search by name.", "Tiada tempat sepadan. Kekalkan lokasi atau cari nama kedai.")
-                    : tr("请选择正确店铺，避免关联到附近其他商户。", "Choose the correct place from nearby matches.", "Pilih kedai yang betul daripada padanan berdekatan.")
+                    : tr("资料尚未完全核对，请确认地址与分店后选择。", "Details are not fully verified. Confirm the address and branch before choosing.", "Butiran belum disahkan sepenuhnya. Sahkan alamat dan cawangan sebelum memilih.")
             }
         } catch {
             guard !Task.isCancelled, generation == token else { return }
@@ -246,12 +260,17 @@ struct ExpensePlaceDestination: Identifiable {
     let place: ExpensePlace
     let merchant: String
     let transactionDate: Date
+    var receiptAddress: String = ""
+    var receiptPhone: String = ""
 }
 
 struct ExpensePlaceMapSheet: View {
+    @EnvironmentObject private var model: LedgerModel
     let initial: ExpensePlace?
     var merchantHint: String = ""
     var transactionDate: Date?
+    var receiptAddress: String
+    var receiptPhone: String
     var onSave: ((ExpensePlace) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -274,10 +293,12 @@ struct ExpensePlaceMapSheet: View {
     @State private var movingMap = false
     @State private var visible = false
     @StateObject private var merchantMatcher = ExpenseMerchantMatcher()
-    init(initial: ExpensePlace?, merchantHint: String = "", transactionDate: Date? = nil, onSave: ((ExpensePlace) -> Void)? = nil) {
+    init(initial: ExpensePlace?, merchantHint: String = "", transactionDate: Date? = nil, receiptAddress: String = "", receiptPhone: String = "", onSave: ((ExpensePlace) -> Void)? = nil) {
         self.initial = initial
         self.merchantHint = merchantHint
         self.transactionDate = transactionDate
+        self.receiptAddress = receiptAddress
+        self.receiptPhone = receiptPhone
         self.onSave = onSave
         _selected = State(initialValue: initial)
         _name = State(initialValue: initial?.name ?? "")
@@ -305,7 +326,9 @@ struct ExpensePlaceMapSheet: View {
                                   longitude: sameAddress ? selected?.longitude : nil,
                                   accuracy: sameAddress ? selected?.accuracyMeters : nil,
                                   capturedAt: sameAddress ? selected?.capturedAt : nil,
-                                  transactionDate: transactionDate)
+                                  transactionDate: transactionDate,
+                                  remembered: MerchantMatching.confirmedPlaces(merchant: hint, expenses: model.ledger.expenses),
+                                  receiptAddress: receiptAddress, receiptPhone: receiptPhone)
     }
     private var googleMapsURL: URL? {
         let place = draft
@@ -330,7 +353,8 @@ struct ExpensePlaceMapSheet: View {
             latitude: unchanged ? selected?.latitude : nil, longitude: unchanged ? selected?.longitude : nil,
             accuracyMeters: unchanged ? selected?.accuracyMeters : nil,
             capturedAt: unchanged ? selected?.capturedAt : nil,
-            applePlaceID: unchanged ? selected?.applePlaceID : nil)
+            applePlaceID: unchanged ? selected?.applePlaceID : nil,
+            userConfirmed: unchanged ? selected?.userConfirmed : nil)
     }
     var body: some View {
         NavigationStack {
@@ -340,6 +364,13 @@ struct ExpensePlaceMapSheet: View {
                         mapCard
                     }
                     merchantSuggestions
+                    if !receiptAddress.isEmpty || !receiptPhone.isEmpty {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(tr("收据上的店铺资料", "Store details on receipt", "Butiran kedai pada resit")).font(.headline)
+                            if !receiptAddress.isEmpty { Text(receiptAddress) }
+                            if !receiptPhone.isEmpty { Text(receiptPhone) }
+                        }.font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(18)
+                    }
                     if #available(iOS 18.0, *) {
                         AppleMerchantCard(placeID: draft.applePlaceID, automaticallyPresent: !editing)
                     }
@@ -361,6 +392,8 @@ struct ExpensePlaceMapSheet: View {
                             Divider()
                             TextField(tr("地址", "Address", "Alamat"), text: $address, axis: .vertical)
                                 .lineLimit(2...4).accessibilityIdentifier("place.address")
+                            Text(tr("选择分店并保存账目后，下次相同商户会优先参考这次确认。", "Choose a branch and save the entry to remember this merchant match.", "Pilih cawangan dan simpan rekod untuk mengingati padanan peniaga ini."))
+                                .font(.caption).foregroundStyle(.secondary)
                         }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
                     } else {
                         VStack(alignment: .leading, spacing: 8) {

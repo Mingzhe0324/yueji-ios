@@ -2261,7 +2261,8 @@ struct ExpenseDetailView: View {
                     }
                     if let place = entry.place {
                         ExpensePlaceDetails(place: place) {
-                            mapDestination = ExpensePlaceDestination(place: place, merchant: entry.merchant, transactionDate: entry.date)
+                            mapDestination = ExpensePlaceDestination(place: place, merchant: entry.merchant, transactionDate: entry.date,
+                                receiptAddress: entry.receiptMerchantAddress ?? "", receiptPhone: entry.receiptMerchantPhone ?? "")
                         }
                     }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
@@ -2415,7 +2416,8 @@ struct ExpenseDetailView: View {
                 hiddenSuggestion = nil
             }
             .sheet(item: $mapDestination) { destination in
-                ExpensePlaceMapSheet(initial: destination.place, merchantHint: destination.merchant, transactionDate: destination.transactionDate, onSave: nil)
+                ExpensePlaceMapSheet(initial: destination.place, merchantHint: destination.merchant, transactionDate: destination.transactionDate,
+                    receiptAddress: destination.receiptAddress, receiptPhone: destination.receiptPhone, onSave: nil)
             }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
             .onAppear { if let liveDetail, lastVisibleDetail?.entry.id != liveDetail.entry.id { lastVisibleDetail = liveDetail } }
@@ -2950,10 +2952,12 @@ struct ExpenseEditor: View {
                 }
             }
             .sheet(isPresented: $editingPlace) {
-                ExpensePlaceMapSheet(initial: place, merchantHint: name, transactionDate: date) { value in
+                ExpensePlaceMapSheet(initial: place, merchantHint: name, transactionDate: date,
+                    receiptAddress: original?.receiptMerchantAddress ?? "", receiptPhone: original?.receiptMerchantPhone ?? "") { value in
                     placeNotice = nil
                     var chosen = value
                     chosen.capturedAt = nil // An explicit map choice is not an automatic recording-time guess.
+                    chosen.userConfirmed = chosen.applePlaceID != nil
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = chosen }
                 }
             }

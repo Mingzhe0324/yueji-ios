@@ -102,8 +102,41 @@ struct MerchantMatchCandidate {
     var id: String
     var name: String
     var distance: Double
+    var address: String = ""
+    var phone: String = ""
 }
 enum MerchantMatching {
+    static func confirmedPlaces(merchant: String, expenses: [Expense]) -> [ExpensePlace] {
+        let alias = key(merchant)
+        guard alias.count >= 3 else { return [] }
+        var seen = Set<String>()
+        return expenses.sorted { $0.date > $1.date }.compactMap { entry in
+            guard key(entry.merchant) == alias, let place = entry.place,
+                  place.userConfirmed == true, place.valid, let id = place.applePlaceID,
+                  seen.insert(id).inserted else { return nil }
+            return place
+        }
+    }
+    static func receiptAgrees(address: String, phone: String, candidate: MerchantMatchCandidate) -> Bool {
+        // Conservative: an unverified or differently formatted address needs review.
+        if !address.isEmpty {
+            var actual = key(candidate.address)
+            let name = key(candidate.name)
+            if !name.isEmpty && actual.hasPrefix(name) { actual = String(actual.dropFirst(name.count)) }
+            guard !key(address).isEmpty, key(address) == actual else { return false }
+        }
+        func telephone(_ value: String) -> String {
+            var digits = value.filter(\.isNumber)
+            if digits.hasPrefix("0060") { digits = "0" + digits.dropFirst(4) }
+            else if digits.hasPrefix("60") { digits = "0" + digits.dropFirst(2) }
+            return digits
+        }
+        if !phone.isEmpty {
+            let expected = telephone(phone)
+            if expected.count < 7 || expected != telephone(candidate.phone) { return false }
+        }
+        return true
+    }
     static func reliableAnchor(accuracy: Double?, capturedAt: Date?, transactionDate: Date?) -> Bool {
         if let accuracy, !accuracy.isFinite || accuracy < 0 || accuracy > 100 { return false }
         if let capturedAt {
@@ -132,6 +165,7 @@ struct ExpensePlace: Codable, Equatable {
     var accuracyMeters: Double? = nil
     var capturedAt: Date? = nil
     var applePlaceID: String? = nil
+    var userConfirmed: Bool? = nil
     func belongsToRecordingTime(_ date: Date) -> Bool {
         guard let capturedAt else { return true }
         return abs(date.timeIntervalSince(capturedAt)) <= 300
@@ -162,6 +196,8 @@ struct Expense: Codable, Identifiable, Equatable {
     var recurringKey: String? = nil
     var refunds: [RefundRecord]? = nil
     var receiptSummary: String? = nil
+    var receiptMerchantAddress: String? = nil
+    var receiptMerchantPhone: String? = nil
     var transactionReference: String? = nil
     var categoryAllocations: [CategoryAllocation]? = nil // Legacy backup input only; validated ledgers migrate it to items.
     var note: String? = nil
@@ -367,6 +403,7 @@ struct Ledger: Codable {
             }
             if let fx = e.foreign { guard try fx.myrCents() == e.cents else { throw LedgerError.invalid("外币金额与换算金额不符。") } }
             guard !e.id.isEmpty, (e.place?.valid ?? true), (e.entryDescription?.count ?? 0) <= 2000,
+                  (e.receiptMerchantAddress?.count ?? 0) <= 1000, (e.receiptMerchantPhone?.count ?? 0) <= 80,
                   e.merchant.count <= 200, (e.transactionReference?.count ?? 0) <= 500, (e.receiptSummary?.count ?? 0) <= 20_000, e.cents > 0, e.cents <= 10_000_000_000,
                   (e.timeSource == nil || ["received", "supplied", "notification", "edited"].contains(e.timeSource!)),
                   e.date.timeIntervalSince1970.isFinite, categoryNames.contains(e.category), e.shares.count <= 100,

@@ -3,6 +3,19 @@ import assert from 'node:assert/strict';
 import { handleReceipt, validDraft } from '../../supabase/functions/receipt-gemini/handler.mjs';
 
 const draft = { merchant: 'Cafe', date: '2026-10-30', currency: 'MYR', subtotal: '10.00', tax: '', service: '', discount: '', rounding: '', total: '10.00', items: [{ name: 'Rice', amount: '10.00' }] };
+test('branch contact fields are bounded and old receipt payloads remain compatible', () => {
+  assert.equal(validDraft(draft), true);
+  assert.equal(validDraft({ ...draft, merchantAddress: '16 Jalan A', merchantPhone: '03-12345678' }), true);
+  assert.equal(validDraft({ ...draft, merchantAddress: 'x'.repeat(1001) }), false);
+  assert.equal(validDraft({ ...draft, merchantPhone: 'x'.repeat(81) }), false);
+  assert.equal(validDraft({ ...draft, merchantPhone: 123 }), false);
+});
+test('returns branch contact fields for receipt review', async () => {
+  const result = { ...draft, merchantAddress: '16 Jalan A', merchantPhone: '03-12345678' };
+  const response = await handleReceipt(request(), harness({ result }));
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), result);
+});
 const json = (body, status = 200) => new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } });
 function request(body = { image: '/9j/AAAA' }, auth = 'Bearer test-user') {
   return new Request('https://example.test/functions/v1/receipt-gemini', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: auth }, body: JSON.stringify(body) });
