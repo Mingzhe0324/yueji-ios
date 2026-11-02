@@ -2,6 +2,169 @@ import SwiftUI
 import CoreLocation
 import MapKit
 
+/// Only a precisely named, geotagged Commons file with a supported license is shown.
+/// No account data or device GPS is sent; the query uses the selected public POI.
+enum CommonsMerchantPhotos {
+    struct Metadata: Decodable { let value: String }
+    struct Coordinate: Decodable { let lat: Double; let lon: Double }
+    struct Info: Decodable {
+        let thumburl: String?
+        let descriptionurl: String?
+        let mime: String?
+        let extmetadata: [String: Metadata]?
+    }
+    struct Page: Decodable {
+        let title: String
+        let coordinates: [Coordinate]?
+        let imageinfo: [Info]?
+    }
+    struct Response: Decodable {
+        struct Query: Decodable { let pages: [Page]? }
+        struct Failure: Decodable { let code: String }
+        let query: Query?
+        let error: Failure?
+    }
+    struct Photo {
+        let imageURL: URL
+        let sourceURL: URL
+        let licenseURL: URL
+        let title: String
+        let author: String
+        let credit: String
+        let license: String
+    }
+    static func plain(_ html: String) -> String {
+        html.replacingOccurrences(of: "<[^>]+>", with: "", options: .regularExpression)
+            .replacingOccurrences(of: "&amp;", with: "&")
+            .replacingOccurrences(of: "&quot;", with: "\"")
+            .replacingOccurrences(of: "&#39;", with: "'")
+            .replacingOccurrences(of: "&nbsp;", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+    static func safeURL(_ text: String?, host: String, prefix: String) -> URL? {
+        guard let text, let url = URL(string: text), url.scheme == "https", url.host == host,
+              url.user == nil, url.password == nil, url.port == nil, url.path.hasPrefix(prefix) else { return nil }
+        return url
+    }
+    static func photo(_ page: Page, place: ExpensePlace) -> Photo? {
+        guard place.valid, place.applePlaceID != nil, let lat = place.latitude, let lon = place.longitude,
+              let point = page.coordinates?.first, point.lat.isFinite, point.lon.isFinite,
+              (-90...90).contains(point.lat), (-180...180).contains(point.lon),
+              CLLocation(latitude: lat, longitude: lon).distance(from: CLLocation(latitude: point.lat, longitude: point.lon)) <= 75,
+              let info = page.imageinfo?.first, ["image/jpeg", "image/png"].contains(info.mime ?? ""),
+              let meta = info.extmetadata else { return nil }
+        let name = MerchantMatching.key(place.name)
+        let object = plain(meta["ObjectName"]?.value ?? "")
+        let filename = (String(page.title.dropFirst(page.title.hasPrefix("File:") ? 5 : 0)) as NSString).deletingPathExtension
+        guard name.count >= 5, name == MerchantMatching.key(object) || name == MerchantMatching.key(filename) else { return nil }
+        let author = plain(meta["Artist"]?.value ?? "")
+        let credit = plain(meta["Credit"]?.value ?? "")
+        let license = plain(meta["LicenseShortName"]?.value ?? "")
+        guard !author.isEmpty, author.count <= 2000, credit.count <= 2000, license.count <= 100,
+              plain(meta["Restrictions"]?.value ?? "").isEmpty,
+              let imageURL = safeURL(info.thumburl, host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"),
+              let sourceURL = safeURL(info.descriptionurl, host: "commons.wikimedia.org", prefix: "/wiki/File:"),
+              let licenseURL = safeURL(meta["LicenseUrl"]?.value, host: "creativecommons.org", prefix: "/") else { return nil }
+        let allowed = ["/licenses/by/4.0/", "/licenses/by-sa/4.0/", "/licenses/by/3.0/", "/licenses/by-sa/3.0/",
+                       "/licenses/by/2.0/", "/licenses/by-sa/2.0/", "/licenses/by/2.5/", "/licenses/by-sa/2.5/",
+                       "/publicdomain/zero/1.0/"]
+        guard !license.isEmpty, allowed.contains(licenseURL.path.hasSuffix("/") ? licenseURL.path : licenseURL.path + "/") else { return nil }
+        return Photo(imageURL: imageURL, sourceURL: sourceURL, licenseURL: licenseURL,
+                     title: String(page.title.prefix(500)), author: author, credit: credit, license: license)
+    }
+    static func queryURL(_ place: ExpensePlace) -> URL? {
+        guard place.valid, place.applePlaceID != nil, let lat = place.latitude, let lon = place.longitude else { return nil }
+        var url = URLComponents(string: "https://commons.wikimedia.org/w/api.php")!
+        let params = ["action": "query", "format": "json", "formatversion": "2", "generator": "geosearch",
+                      "ggscoord": "\(lat)|\(lon)", "ggsradius": "100", "ggsnamespace": "6", "ggslimit": "10",
+                      "prop": "coordinates|imageinfo", "coprimary": "all", "colimit": "1",
+                      "iiprop": "url|mime|extmetadata", "iiurlwidth": "800", "maxlag": "5",
+                      "iiextmetadatafilter": "ObjectName|Artist|Credit|LicenseShortName|LicenseUrl|Restrictions"]
+        url.queryItems = params.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
+        return url.url
+    }
+    static func fetch(_ url: URL, maximum: Int) async throws -> Data {
+        var request = URLRequest(url: url, cachePolicy: .useProtocolCachePolicy, timeoutInterval: 12)
+        request.setValue("YueJi/1.68 (https://github.com/Mingzhe0324/yueji-ios)", forHTTPHeaderField: "User-Agent")
+        let (bytes, response) = try await URLSession.shared.bytes(for: request)
+        guard let http = response as? HTTPURLResponse, http.statusCode == 200,
+              response.url?.host == url.host, response.expectedContentLength <= Int64(maximum) else { throw URLError(.badServerResponse) }
+        var data = Data()
+        for try await byte in bytes {
+            try Task.checkCancellation()
+            guard data.count < maximum else { throw URLError(.dataLengthExceedsMaximum) }
+            data.append(byte)
+        }
+        return data
+    }
+}
+
+private struct CommonsMerchantPhotoCard: View {
+    let place: ExpensePlace
+    @AppStorage("commonsMerchantPhotos") private var enabled = true
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var image: UIImage?
+    @State private var photo: CommonsMerchantPhotos.Photo?
+    @State private var loading = false
+    @State private var unavailable = false
+    private var requestID: String { enabled ? (CommonsMerchantPhotos.queryURL(place)?.absoluteString ?? "") + place.name : "" }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle(tr("自动查找开放店铺照片", "Find open-license store photos", "Cari foto kedai berlesen terbuka"), isOn: $enabled)
+                .font(.subheadline)
+            Text(tr("向 Wikimedia 查询所选店铺坐标；不会发送账目或金额。照片可能较旧，并非每家店都有。", "Queries Wikimedia with the selected store coordinates, never entries or amounts. Photos may be old or unavailable.", "Mencari di Wikimedia dengan koordinat kedai, bukan rekod atau amaun. Foto mungkin lama atau tiada."))
+                .font(.caption).foregroundStyle(.secondary)
+            if enabled {
+                if loading { ProgressView(tr("正在查找照片…", "Looking for photos…", "Mencari foto…")) }
+                if let image, let photo {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity).clipShape(RoundedRectangle(cornerRadius: 16))
+                        .accessibilityLabel(place.name + " · Wikimedia Commons")
+                        .transition(.opacity)
+                    Text(photo.title).font(.caption.weight(.medium))
+                    Text(photo.author).font(.caption)
+                    if !photo.credit.isEmpty { Text(photo.credit).font(.caption).foregroundStyle(.secondary) }
+                    HStack {
+                        Link("Wikimedia Commons", destination: photo.sourceURL)
+                        Spacer()
+                        Link(photo.license, destination: photo.licenseURL)
+                    }.font(.caption)
+                    Text(tr("按名称及附近坐标匹配，非店铺官方验证照片。", "Matched by name and nearby coordinates; not verified by the store.", "Dipadankan mengikut nama dan koordinat; bukan disahkan kedai."))
+                        .font(.caption2).foregroundStyle(.secondary)
+                } else if !loading {
+                    Text(unavailable
+                         ? tr("照片暂不可用，仍可查看地图或店铺资料。", "Photos unavailable. The map and place details remain available.", "Foto tidak tersedia. Peta dan butiran masih tersedia.")
+                         : tr("未找到可核对的开放照片，保留地图。", "No matching open-license photo found; keeping the map.", "Tiada foto berlesen terbuka yang sepadan; peta dikekalkan."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
+        }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: image != nil)
+            .task(id: requestID) {
+                image = nil; photo = nil; unavailable = false; loading = false
+                guard enabled, let url = CommonsMerchantPhotos.queryURL(place) else { return }
+                loading = true
+                do {
+                    try await Task.sleep(for: .milliseconds(400))
+                    let data = try await CommonsMerchantPhotos.fetch(url, maximum: 500_000)
+                    let response = try JSONDecoder().decode(CommonsMerchantPhotos.Response.self, from: data)
+                    guard response.error == nil else { throw URLError(.badServerResponse) }
+                    let candidates = (response.query?.pages ?? []).compactMap { CommonsMerchantPhotos.photo($0, place: place) }
+                    if let result = candidates.sorted(by: { $0.title < $1.title }).first {
+                        let bytes = try await CommonsMerchantPhotos.fetch(result.imageURL, maximum: 4_000_000)
+                        guard let decoded = UIImage(data: bytes) else { throw URLError(.cannotDecodeContentData) }
+                        try Task.checkCancellation()
+                        photo = result; image = decoded
+                    }
+                    try Task.checkCancellation(); loading = false
+                } catch {
+                    guard !Task.isCancelled else { return }
+                    loading = false; unavailable = true
+                }
+            }
+    }
+}
+
 struct MerchantMatchInput: Equatable {
     var name: String
     var address: String
@@ -372,6 +535,7 @@ struct ExpensePlaceMapSheet: View {
                             .transition(.opacity)
                     }
                     merchantSuggestions
+                    CommonsMerchantPhotoCard(place: draft)
                     if !receiptAddress.isEmpty || !receiptPhone.isEmpty {
                         VStack(alignment: .leading, spacing: 6) {
                             Text(tr("收据上的店铺资料", "Store details on receipt", "Butiran kedai pada resit")).font(.headline)
@@ -380,7 +544,7 @@ struct ExpensePlaceMapSheet: View {
                         }.font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(18)
                     }
                     if #available(iOS 18.0, *) {
-                        AppleMerchantCard(placeID: draft.applePlaceID, automaticallyPresent: !editing)
+                        AppleMerchantCard(placeID: draft.applePlaceID, automaticallyPresent: false)
                     }
                     if let url = googleMapsURL {
                         Link(destination: url) {

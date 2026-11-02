@@ -80,6 +80,41 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(MerchantMatching.automaticID(name: "Cafe ABC", candidates: [near, near]), "a")
     }
 
+    func testCommonsPhotoRequiresExactNameNearbyCoordinatesAndLicense() throws {
+        let place = ExpensePlace(name: "Cafe ABC", latitude: 3, longitude: 101, applePlaceID: "test")
+        func page(name: String = "Cafe ABC", lat: Double = 3, license: String = "https://creativecommons.org/licenses/by-sa/4.0/", author: String = "<b>Photographer</b>") throws -> CommonsMerchantPhotos.Page {
+            let json: [String: Any] = ["title": "File:Photo.jpg", "coordinates": [["lat": lat, "lon": 101]],
+                "imageinfo": [["mime": "image/jpeg", "thumburl": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/ab/Photo.jpg/800px-Photo.jpg",
+                    "descriptionurl": "https://commons.wikimedia.org/wiki/File:Photo.jpg",
+                    "extmetadata": ["ObjectName": ["value": name], "Artist": ["value": author],
+                        "Credit": ["value": "Own work"], "LicenseShortName": ["value": "CC BY-SA 4.0"], "LicenseUrl": ["value": license]]]]]
+            return try JSONDecoder().decode(CommonsMerchantPhotos.Page.self, from: JSONSerialization.data(withJSONObject: json))
+        }
+        let photo = CommonsMerchantPhotos.photo(try page(), place: place)
+        XCTAssertEqual(photo?.author, "Photographer")
+        XCTAssertNotNil(photo?.licenseURL)
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(name: "Cafe XYZ"), place: place))
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(lat: 3.01), place: place))
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(author: ""), place: place))
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(license: "https://creativecommons.org/licenses/by-nc/4.0/"), place: place))
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(license: "https://evil.example/licenses/by-sa/4.0/"), place: place))
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(), place: ExpensePlace(name: "Cafe ABC", latitude: 3, longitude: 101)))
+    }
+
+    func testCommonsQueryUsesOnlySelectedPublicPlaceAndSafeURLs() throws {
+        XCTAssertNil(CommonsMerchantPhotos.queryURL(ExpensePlace(name: "Private location", latitude: 3, longitude: 101)))
+        let place = ExpensePlace(name: "Cafe ABC", address: "Private note", latitude: 3, longitude: 101, applePlaceID: "poi")
+        let url = try XCTUnwrap(CommonsMerchantPhotos.queryURL(place))
+        XCTAssertFalse(url.absoluteString.contains("Private"))
+        XCTAssertFalse(url.absoluteString.contains("Cafe"))
+        XCTAssertEqual(url.host, "commons.wikimedia.org")
+        XCTAssertNil(CommonsMerchantPhotos.safeURL("https://upload.wikimedia.org.evil.example/wikipedia/commons/x.jpg", host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"))
+        XCTAssertNil(CommonsMerchantPhotos.safeURL("http://upload.wikimedia.org/wikipedia/commons/x.jpg", host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"))
+        let empty = try JSONDecoder().decode(CommonsMerchantPhotos.Response.self, from: Data(#"{"batchcomplete":true}"#.utf8))
+        XCTAssertNil(empty.error)
+        XCTAssertNil(empty.query)
+    }
+
     func testMerchantMemoryUsesOnlyConfirmedSavedAliasAndKeepsBranches() throws {
         let confirmed = ExpensePlace(name: "Cafe ABC", address: "1 Jalan A", latitude: 3, longitude: 101,
                                      applePlaceID: "branch-a", userConfirmed: true)
