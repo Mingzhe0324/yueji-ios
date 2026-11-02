@@ -56,6 +56,53 @@ final class GeminiReceiptDraftTests: XCTestCase {
     }
 }
 
+final class AppleOnDeviceAITests: XCTestCase {
+    private let transcript = "Cafe\nMYR\nRice 10.00\nSubtotal 10.00\nTax 0.60\nService 1.00\nTotal 11.60\nCash 20.00"
+    private func draft(_ changes: [String: Any] = [:]) throws -> GeminiReceiptDraft {
+        var object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": "MYR",
+            "subtotal": "10.00", "tax": "0.60", "service": "1.00", "discount": "", "rounding": "", "total": "11.60",
+            "items": [["name": "Rice", "amount": "10.00"]]]
+        object.merge(changes) { _, new in new }
+        return try JSONDecoder().decode(GeminiReceiptDraft.self, from: JSONSerialization.data(withJSONObject: object))
+    }
+    func testCloudRequiresExplicitNewProviderSelection() {
+        XCTAssertTrue(YueJiAI.usesApple(nil))
+        XCTAssertTrue(YueJiAI.usesApple("apple"))
+        XCTAssertTrue(YueJiAI.usesApple("unknown"))
+        XCTAssertTrue(YueJiAI.usesApple("true"), "Old boolean cloud flags cannot authorize cloud routing")
+        XCTAssertFalse(YueJiAI.usesApple("gemini"))
+    }
+    func testCategoryOutputCannotInventCategories() throws {
+        let data = try YueJiAI.validatedCategory("餐饮", categories: ["餐饮", "交通"])
+        XCTAssertEqual(try JSONDecoder().decode(AssistantResult.self, from: data).category, "餐饮")
+        XCTAssertThrowsError(try YueJiAI.validatedCategory("unknown model category", categories: ["餐饮"]))
+        XCTAssertEqual(try JSONDecoder().decode(AssistantResult.self, from: YueJiAI.validatedCategory("", categories: ["餐饮"])).category, "")
+    }
+    func testLocalReceiptRequiresPrintedAmountsNamesAndBalancedTotals() throws {
+        let receipt = try YueJiAI.groundedReceipt(draft(), text: transcript)
+        XCTAssertEqual(receipt.total, "11.60")
+        XCTAssertEqual(receipt.items.map(\.name), ["Rice"])
+        XCTAssertEqual(ReceiptOCR.quality(receipt), 4)
+        XCTAssertEqual(try YueJiAI.groundedReceipt(draft(), text: transcript.replacingOccurrences(of: "MYR", with: "RM10.00")).total, "11.60")
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["total": "12.00"]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["total": "20.00"]), text: transcript), "Cash tendered is not the balanced total")
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["merchant": "Invented Shop"]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["merchantAddress": "Invented Address"]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["merchantPhone": "0123456789"]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["items": [["name": "Noodles", "amount": "10.00"]]]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["items": [["name": "Total", "amount": "10.00"]]]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["date": "2026-10-01"]), text: transcript))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(), text: transcript.replacingOccurrences(of: "MYR", with: "USD")))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(), text: transcript + "\nUSD 2.00"))
+        XCTAssertThrowsError(try YueJiAI.groundedReceipt(draft(["currency": "USD"]), text: transcript))
+    }
+    func testInvalidLocalInputsFailBeforeInference() async {
+        do { _ = try await YueJiAI.classify(text: "", merchant: "", categories: ["餐饮"]); XCTFail("Empty input accepted") } catch { }
+        do { _ = try await YueJiAI.bank(body: String(repeating: "x", count: 3001), title: "", source: ""); XCTFail("Oversized notice accepted") } catch { }
+        do { _ = try await YueJiAI.receipt(text: String(repeating: "x", count: 6001)); XCTFail("Oversized receipt accepted") } catch { }
+    }
+}
+
 final class BankAccountTests: XCTestCase {
     let opening = Date(timeIntervalSince1970: 1_700_000_000)
 

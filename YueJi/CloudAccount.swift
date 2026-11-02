@@ -76,31 +76,49 @@ import UserNotifications
         return value
     }
     func assistant(mode: String, text: String, categories: [String], merchant: String = "") async throws -> Data {
+        if YueJiAI.usesApple {
+            let store = LocalStore.shared
+            guard mode == "classify", !changingAccount, store.isActive else { throw CloudFailure.invalidResponse }
+            let data = try await YueJiAI.classify(text: text, merchant: merchant, categories: categories)
+            try Task.checkCancellation()
+            guard YueJiAI.usesApple, !changingAccount, store.isActive else { throw CancellationError() }
+            return data
+        }
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
         let data: Data
         do { data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant) }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
-            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+            guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple else { throw CloudFailure.session }
             try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
             session = refreshed
             data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant)
         }
         try Task.checkCancellation()
-        guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
+        guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple else { throw CloudFailure.session }
         return data
     }
     func recognizeReceipt(image: Data) async throws -> Data {
+        guard !YueJiAI.usesApple else { throw CancellationError() }
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
-        do { return try await api.recognizeReceipt(image: image) }
+        do {
+            let data = try await api.recognizeReceipt(image: image)
+            try Task.checkCancellation()
+            guard !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            return data
+        }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
+            guard !YueJiAI.usesApple else { throw CancellationError() }
             guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
             try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
             session = refreshed
-            return try await api.recognizeReceipt(image: image)
+            let data = try await api.recognizeReceipt(image: image)
+            try Task.checkCancellation()
+            guard !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            return data
         }
     }
     func checkConnection() async {

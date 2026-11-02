@@ -2426,19 +2426,20 @@ struct TNGSetupView: View {
     var body: some View {
         let _ = uiLocale.identifier
         List {
-            Section(tr("Gemini 银行通知助手", "Gemini bank notification assistant", "Pembantu notifikasi bank Gemini")) {
+            Section(tr("银行通知 AI", "Bank notification AI", "AI notifikasi bank")) {
+                AIProviderPicker()
                 Toggle(tr("AI 自动分析与账户记账", "AI analysis and account recording", "Analisis AI dan rekod akaun"), isOn: $bankAI)
                     .accessibilityIdentifier("bank.gemini.enabled")
-                Text(tr("开启后，新收到的交易通知正文、标题及银行名称会发送给 Google Gemini，需要登录和联网。原文金额、交易状态、账户及重复检查通过后才自动处理；无法确认的留待核对。AI 不会操作银行实际转账。", "When enabled, new transaction notification text, titles and bank names are sent to Google Gemini. Sign-in and internet are required. Automatic processing requires amount, status, account and duplicate checks; uncertain entries need review. AI cannot move money at your bank.", "Apabila diaktifkan, teks, tajuk dan nama bank notifikasi transaksi baharu dihantar ke Google Gemini. Log masuk dan internet diperlukan. Rekod automatik memerlukan semakan amaun, status, akaun dan pendua; yang tidak pasti menunggu semakan. AI tidak memindahkan wang di bank.")).font(.caption).foregroundStyle(.secondary)
+                Text(tr("通知由所选 AI 分析，原文金额、交易状态、账户及重复检查通过后才自动处理；无法确认的留待核对。AI 不会操作银行实际转账。", "The selected AI analyzes notifications. Original amounts, status, accounts and duplicates must pass local checks; uncertain entries await review. AI cannot move money at your bank.", "AI pilihan menganalisis notifikasi. Amaun asal, status, akaun dan pendua mesti lulus semakan setempat; rekod tidak pasti menunggu semakan. AI tidak memindahkan wang bank.")).font(.caption).foregroundStyle(.secondary)
                 if bankAI {
-                    Button(tr("检查 AI 连接（使用示例通知）", "Check AI connection (sample notification)", "Semak sambungan AI (notifikasi contoh)")) {
+                    Button(tr("检查所选 AI（示例通知）", "Check selected AI (sample notification)", "Semak AI pilihan (notifikasi contoh)")) {
                         checkingBankAI = true
                         let store = LocalStore.shared
                         Task { @MainActor in
                             defer { checkingBankAI = false }
                             do {
                                 try await BankNotificationAI.checkConnection(store: store)
-                                bankAIMessage = tr("银行 AI 连接正常，未创建账目。", "Bank AI connection succeeded. No entry was created.", "Sambungan AI bank berjaya. Tiada rekod dicipta.")
+                                bankAIMessage = tr("示例通知分析与校验通过，未创建账目。", "Sample notification analysis and validation passed. No entry was created.", "Analisis dan semakan notifikasi contoh lulus. Tiada rekod dicipta.")
                             } catch { bankAIMessage = error.localizedDescription }
                         }
                     }.disabled(checkingBankAI)
@@ -2785,56 +2786,6 @@ struct ReceiptGrid {
     }
 }
 
-#if canImport(FoundationModels)
-@available(iOS 26.0, *)
-@Generable
-struct ReceiptAIItem {
-    @Guide(description: "Full description on the receipt, including wrapped continuation lines")
-    var name: String
-    @Guide(description: "Printed line amount from the Amount column, including two decimal places")
-    var amount: String
-}
-
-@available(iOS 26.0, *)
-@Generable
-struct ReceiptAIItems {
-    @Guide(description: "Every purchased line item in printed order; exclude subtotal, service, tax and final total")
-    var items: [ReceiptAIItem]
-}
-
-@available(iOS 26.0, *)
-enum ReceiptAI {
-    // The model receives text only; no receipt image, credentials or bank data
-    // leave the device. A generated answer is used only when it reconciles.
-    static func interpret(_ transcript: String, base: ScannedReceipt) async -> ScannedReceipt? {
-        guard SystemLanguageModel.default.availability == .available,
-              transcript.count <= 10_000, !base.subtotal.isEmpty, !base.total.isEmpty else { return nil }
-        let session = LanguageModelSession(instructions: "Read receipt OCR text. Return only printed food or product descriptions and their line totals. Join wrapped descriptions. Never invent an item, amount, unit price or tax. Keep original item order. A line amount is different from quantity and unit price.")
-        do {
-            let response = try await session.respond(to: "Receipt:\n\(transcript)", generating: ReceiptAIItems.self)
-            let suggestions = response.content.items
-            guard !suggestions.isEmpty, suggestions.count <= 80 else { return nil }
-            let evidence = Set(transcript.uppercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty })
-            var candidate = base
-            candidate.items = []
-            for suggestion in suggestions {
-                let name = suggestion.name.trimmingCharacters(in: .whitespacesAndNewlines)
-                let tokens = name.uppercased().components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }
-                guard !tokens.isEmpty, name.count <= 200,
-                      tokens.allSatisfy({ evidence.contains($0) }),
-                      !ReceiptGrid.summaryLabel(name),
-                      let amount = ReceiptGrid.amount(suggestion.amount),
-                      let cents = try? toCents(amount), cents >= 0 else { return nil }
-                candidate.items.append(ScannedReceipt.Item(name: name, amount: amount))
-            }
-            guard ReceiptOCR.quality(candidate) == 4 else { return nil }
-            candidate.scanNotice = tr("设备端 AI 已整理商品；请对照照片核对名称和每项金额。", "On-device AI organized the items. Check every name and amount against the photo.", "AI pada peranti menyusun item. Semak setiap nama dan amaun pada foto.")
-            return candidate
-        } catch { return nil }
-    }
-}
-#endif
-
 struct ReceiptOCR {
     // Use the plain-text pass only to restore a missing label when every row
     // already lines up with the table's Amount column in the same order.
@@ -2910,12 +2861,6 @@ struct ReceiptOCR {
                     text.scanNotice = tr("识别不完整，请对照照片修正漏项和金额。", "Reading is incomplete. Check missing items and amounts against the photo.", "Bacaan tidak lengkap. Semak item dan amaun pada foto.")
                     best = text
                 }
-                #if canImport(FoundationModels)
-                if #available(iOS 26.0, *), quality(best ?? text) < 4,
-                   let interpreted = await ReceiptAI.interpret(transcript, base: best ?? text) {
-                    best = interpreted
-                }
-                #endif
             } catch is CancellationError { throw CancellationError() }
             catch { if best == nil { throw error } }
         }
@@ -3084,6 +3029,7 @@ struct ReceiptScanView: View {
     @State private var camera = false
     @State private var busy = false
     @State private var scanRequest = UUID()
+    @State private var cameraRecognition: Task<Void, Never>?
     @State private var merchant = ""
     @State private var subtotal = ""
     @State private var tax = ""
@@ -3105,7 +3051,9 @@ struct ReceiptScanView: View {
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
     @State private var comparingItem: ScannedReceipt.Item?
-    @AppStorage("receiptUseGemini") private var useGemini = false
+    @AppStorage(YueJiAI.providerKey) private var aiProvider = "apple"
+    @AppStorage("receiptUseAppleAI.v1") private var receiptAI = true
+    private var useGemini: Bool { aiProvider == "gemini" && receiptAI }
     @State private var category = "其他"
 
     @State private var itemizeCategories = false
@@ -3169,7 +3117,8 @@ struct ReceiptScanView: View {
     }
     private var captureSection: some View {
         Section {
-            Toggle(tr("使用 Gemini 识别", "Use Gemini recognition", "Gunakan pengecaman Gemini"), isOn: $useGemini).disabled(busy)
+            AIProviderPicker().disabled(busy)
+            Toggle(tr("使用 AI 整理收据", "Organize receipt with AI", "Susun resit dengan AI"), isOn: $receiptAI).disabled(busy)
             if useGemini {
                 Text(tr("扫描时会将收据照片发送至 Google Gemini。需要登录及联网；识别后仍需核对。关闭可使用本机识别。", "Scanning sends the receipt photo to Google Gemini. Sign-in and internet are required; review before saving. Turn off for on-device recognition.", "Imbasan menghantar foto resit ke Google Gemini. Log masuk dan internet diperlukan; semak sebelum menyimpan. Matikan untuk pengecaman setempat.")).font(.caption).foregroundStyle(.secondary)
             }
@@ -3423,7 +3372,11 @@ struct ReceiptScanView: View {
                 ReceiptCamera { result in
                     camera = false
                     switch result {
-                    case .success(let data): if let data { photo = nil; processedPhoto = nil; Task { await recognize(data) } }
+                    case .success(let data): if let data {
+                        photo = nil; processedPhoto = nil
+                        cameraRecognition?.cancel()
+                        cameraRecognition = Task { _ = await recognize(data) }
+                    }
                     case .failure(let failure): error = failure.localizedDescription
                     }
                 }.ledgerFeedback(modal: true)
@@ -3437,6 +3390,10 @@ struct ReceiptScanView: View {
                     }
                 } catch is CancellationError { return }
                 catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            }
+            .onDisappear {
+                cameraRecognition?.cancel()
+                scanRequest = UUID(); busy = false
             }
             .alert(tr("收据", "Receipt", "Resit"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
             .task(id: guideSection) {
@@ -3460,12 +3417,14 @@ struct ReceiptScanView: View {
     }
     @discardableResult @MainActor private func recognize(_ data: Data) async -> Bool {
         let request = UUID(); scanRequest = request
+        let selectedProvider = aiProvider, selectedAI = receiptAI
+        let store = LocalStore.shared
         busy = true; reviewed = false
         defer { if scanRequest == request { busy = false } }
         do {
             guard data.count < 25_000_000 else { throw LedgerError.invalid("Image too large") }
             let receipt: ScannedReceipt
-            if useGemini {
+            if selectedProvider == "gemini" && selectedAI {
                 guard let image = UIImage(data: data), image.size.width > 0, image.size.height > 0 else { throw CloudFailure.invalidResponse }
                 let scale = min(1, 2000 / max(image.size.width, image.size.height))
                 let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
@@ -3478,9 +3437,20 @@ struct ReceiptScanView: View {
                 let response = try await CloudAccount.shared.recognizeReceipt(image: jpeg)
                 receipt = try JSONDecoder().decode(GeminiReceiptDraft.self, from: response).reviewedDraft()
             } else {
-                receipt = try await ReceiptOCR.scan(data)
+                var local = try await ReceiptOCR.scan(data)
+                if selectedAI {
+                    do {
+                        let text = try await ReceiptOCR.read(data)
+                        local = try await YueJiAI.receipt(text: text)
+                    } catch is CancellationError { throw CancellationError() }
+                    catch {
+                        local.scanNotice = tr("Apple 本机 AI 未完成整理，已保留本机 OCR 结果。没有上传照片，请逐项核对。", "Apple on-device AI could not finish. Local OCR results are kept; no photo was uploaded. Review every field.", "AI Apple tidak selesai. Hasil OCR setempat dikekalkan; foto tidak dimuat naik. Semak semua medan.") + "\n" + local.scanNotice
+                    }
+                }
+                receipt = local
             }
-            guard !Task.isCancelled, scanRequest == request else { return false }
+            guard !Task.isCancelled, scanRequest == request,
+                  store.isActive, aiProvider == selectedProvider, receiptAI == selectedAI else { return false }
             scanNotice = receipt.scanNotice
             merchantAddress = receipt.merchantAddress; merchantPhone = receipt.merchantPhone
             merchant = receipt.merchant; category = "其他"; subtotal = receipt.subtotal; tax = receipt.tax
@@ -4354,11 +4324,12 @@ struct AIClassificationRow: View {
     var manuallySelected: Bool = false
     var classifyInitial = false
     @AppStorage("aiAutomaticCategories") private var enabled = false
+    @AppStorage(YueJiAI.providerKey) private var aiProvider = "apple"
     @State private var baseline: String?
     @State private var status = ""
     @State private var loading = false
     private var inputKey: String { String(merchant.count) + ":" + merchant + text }
-    private var requestKey: String { String(enabled) + String(manuallySelected) + inputKey + categories.joined(separator: "\u{1F}") + (rememberedCategory ?? "") }
+    private var requestKey: String { aiProvider + String(enabled) + String(manuallySelected) + inputKey + categories.joined(separator: "\u{1F}") + (rememberedCategory ?? "") }
     var body: some View {
         HStack(spacing: 8) {
             if loading { ProgressView().controlSize(.small) }
@@ -4400,7 +4371,7 @@ struct AIClassificationRow: View {
             } catch {
                 guard !Task.isCancelled else { return }
                 loading = false
-                status = tr("AI 暂不可用，仍可手动分类。请检查登录和 AI 服务。", "AI unavailable. Choose a category manually; check sign-in and AI setup.", "AI tidak tersedia. Pilih kategori secara manual; semak log masuk dan persediaan AI.")
+                status = tr("所选 AI 暂不可用，可继续手动分类；不会自动切换云端。", "Selected AI unavailable. Choose manually; no automatic cloud fallback.", "AI pilihan tidak tersedia. Pilih secara manual; tiada pertukaran awan automatik.")
             }
         }
         .opacity(enabled && (!status.isEmpty || manuallySelected || loading) ? 1 : 0)
@@ -4408,15 +4379,38 @@ struct AIClassificationRow: View {
     }
 }
 
+struct AIProviderPicker: View {
+    @AppStorage(YueJiAI.providerKey) private var provider = "apple"
+    @Environment(\.scenePhase) private var phase
+    @State private var availability = ""
+    var body: some View {
+        Picker(tr("AI 引擎", "AI engine", "Enjin AI"), selection: $provider) {
+            Text(tr("Apple 本机 · 默认", "Apple on-device · default", "Apple setempat · lalai")).tag("apple")
+            Text(tr("Gemini 云端 · 可选", "Gemini cloud · optional", "Gemini awan · pilihan")).tag("gemini")
+        }.accessibilityIdentifier("ai.provider")
+            .task { availability = YueJiAI.availabilityText }
+            .onChange(of: phase) { _, value in if value == .active { availability = YueJiAI.availabilityText } }
+            .onChange(of: provider) { _, _ in availability = YueJiAI.availabilityText }
+        Text(YueJiAI.usesApple(provider)
+             ? tr("分类、银行通知与收据在本机处理，不自动上传至 Gemini。模型不可用时使用本机规则或手动核对；原有账本同步设置不变。", "Categories, bank notifications and receipts are processed on device, never automatically sent to Gemini. Unavailable models use local rules or manual review. Existing ledger sync settings still apply.", "Kategori, notifikasi bank dan resit diproses setempat, tanpa muat naik automatik ke Gemini. Jika model tidak tersedia, guna peraturan setempat atau semakan manual. Tetapan penyegerakan lejar kekal.")
+             : tr("你已选择 Gemini：商户、描述、通知内容或收据照片会发送至 Google Gemini，需要登录和联网，受服务额度及费用限制。分类、银行通知与收据共用此选择。", "Gemini selected: merchant, descriptions, notification content or receipt photos are sent to Google Gemini. Sign-in and internet required; service quotas and charges apply. Categories, bank notifications and receipts share this choice.", "Gemini dipilih: peniaga, penerangan, notifikasi atau foto resit dihantar ke Google Gemini. Perlu log masuk dan internet; kuota dan caj terpakai. Kategori, notifikasi bank dan resit berkongsi pilihan ini."))
+            .font(.caption).foregroundStyle(.secondary)
+        if YueJiAI.usesApple(provider) {
+            Text(availability).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("ai.availability")
+        }
+    }
+}
+
 struct AICategorySettings: View {
     @AppStorage("aiAutomaticCategories") private var enabled = false
     var body: some View {
+        AIProviderPicker()
         Toggle(isOn: $enabled) {
             Label(tr("AI 自动分类", "AI auto-categorization", "Pengkategorian AI"), systemImage: "sparkles")
         }
-        Text(tr("开启后，先根据商户名称判断，再结合描述细化分类。输入停顿时会把商户、描述及分类名称发送给 Google Gemini；具体物品描述优先于笼统的商户判断，手动选择优先。账户余额和完整账本不会发送。", "When enabled, classification starts with the merchant and is refined by the description. After you pause typing, merchant, description and category names are sent to Google Gemini. Specific item details override broad merchant assumptions; manual choices take priority. Balances and the full ledger are not sent.", "Apabila diaktifkan, kategori bermula daripada peniaga dan diperhalus dengan penerangan. Nama peniaga, penerangan dan kategori dihantar ke Google Gemini selepas anda berhenti menaip. Butiran item mengatasi andaian umum peniaga; pilihan manual diutamakan. Baki dan lejar penuh tidak dihantar."))
+        Text(tr("使用所选 AI 根据商户和描述建议分类。具体物品描述优先，手动选择不会被覆盖；无法判断时由你选择。", "The selected AI suggests categories from merchant and description. Specific items take priority; manual choices are never overwritten. Choose manually when uncertain.", "AI pilihan mencadangkan kategori berdasarkan peniaga dan penerangan. Item khusus diutamakan; pilihan manual tidak ditimpa. Pilih sendiri jika tidak pasti."))
             .font(.footnote).foregroundStyle(.secondary)
-        Text(tr("也用于自动记账：先使用商户规则和本机分类，仍为“其他”才请求 AI。会发送该笔商户及描述／通知原文（可能包含通知里的余额等信息，长数字标识会遮盖）。失败不影响已保存账目，已修改的账目不会被覆盖。", "Also applies to automatic entries: saved merchant rules and local classification run first; only Other asks AI. The merchant and description/notification text are sent, which may include balances printed in the notification; long numeric identifiers are redacted. Failures do not affect saved entries, and edited entries are never overwritten.", "Turut digunakan untuk rekod automatik: peraturan peniaga dan kategori setempat didahulukan; hanya Lain-lain meminta AI. Nama peniaga dan penerangan/teks notifikasi dihantar, termasuk maklumat baki dalam notifikasi; pengecam angka panjang disamarkan. Kegagalan tidak menjejaskan rekod tersimpan dan suntingan tidak ditimpa."))
+        Text(tr("自动记账优先使用商户记忆与本机规则，仍为“其他”才使用所选 AI。失败保留原账目。", "Automatic entries use merchant memory and local rules first; only Other asks the selected AI. Failures leave entries intact.", "Rekod automatik menggunakan ingatan peniaga dan peraturan setempat dahulu; hanya Lain-lain menggunakan AI pilihan. Kegagalan tidak mengubah rekod."))
             .font(.footnote).foregroundStyle(.secondary)
     }
 }

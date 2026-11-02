@@ -1441,7 +1441,7 @@ private struct StatementBatch: Identifiable {
     let notices: [TNGNotice]
 }
 
-/// PDF parsing is local. Gemini may suggest categories, never amounts or balances.
+/// PDF parsing is local. The selected AI suggests categories, never balances.
 private struct StatementImportView: View {
     @EnvironmentObject private var model: LedgerModel
     let accountID: String
@@ -1450,6 +1450,7 @@ private struct StatementImportView: View {
     @State private var busy = false
     @State private var confirmed = false
     @State private var useAI = false
+    @AppStorage(YueJiAI.providerKey) private var aiProvider = "apple"
     @State private var message = ""
     @State private var error: String?
     @State private var undoBatch: String?
@@ -1485,12 +1486,13 @@ private struct StatementImportView: View {
                     summary(statement, account: account)
                     Section {
                         Toggle(tr("确认尾号 \(statement.suffix) 是此账户", "Confirm ••••\(statement.suffix) belongs to this account", "Sahkan ••••\(statement.suffix) ialah akaun ini"), isOn: $confirmed)
-                        Toggle(tr("使用 Gemini 建议支出分类", "Suggest expense categories with Gemini", "Cadangkan kategori dengan Gemini"), isOn: $useAI)
+                        AIProviderPicker()
+                        Toggle(tr("使用 AI 建议支出分类", "Suggest expense categories with AI", "Cadangkan kategori dengan AI"), isOn: $useAI)
                         Button { importRows(statement, account: account) } label: {
                             Label(tr("补录明确交易，其余待确认", "Add clear entries; review the rest", "Tambah rekod jelas; semak selebihnya"), systemImage: "checkmark.circle")
                         }.disabled(!confirmed || working)
                     } footer: {
-                        Text(tr("开启 AI 后，仅发送交易描述和分类名称给 Google Gemini。金额、方向和余额由本机校验。AI 不可用时用“其他”分类。疑似重复、转账和不明收款待确认；早于账户期初时间的记录跳过。", "When enabled, transaction descriptions and category names are sent to Google Gemini. Amounts, direction and balances are checked locally. If AI is unavailable, entries use Other. Possible duplicates, transfers and unclear receipts await review. Entries before the opening time are skipped.", "Jika diaktifkan, perihalan transaksi dan nama kategori dihantar ke Google Gemini. Amaun, arah dan baki disemak setempat. Jika AI gagal, kategori Lain-lain digunakan. Pendua, pindahan dan penerimaan tidak jelas menunggu semakan. Rekod sebelum waktu awal dilangkau."))
+                        Text(tr("所选 AI 仅分析交易描述和分类名称。金额、方向和余额由本机校验。AI 不可用时用“其他”分类。疑似重复、转账和不明收款待确认；早于账户期初时间的记录跳过。", "Selected AI analyzes descriptions and category names only. Amounts, direction and balances are checked locally. If AI is unavailable, entries use Other. Possible duplicates, transfers and unclear receipts await review; entries before opening are skipped.", "AI pilihan menganalisis penerangan dan kategori sahaja. Amaun, arah dan baki disemak setempat. Jika AI gagal, guna Lain-lain. Pendua, pindahan dan penerimaan tidak jelas menunggu semakan; rekod sebelum baki awal dilangkau."))
                     }.disabled(working)
                     Section {
                         DisclosureGroup(tr("查看原始交易（\(statement.rows.count)）", "Review source entries (\(statement.rows.count))", "Semak rekod asal (\(statement.rows.count))")) {
@@ -1635,6 +1637,7 @@ private struct StatementImportView: View {
         busy = true; error = nil; message = ""
         importResult = nil; classified = 0; classificationTotal = 0
         let store = LocalStore.shared, allowed = model.ledger.categoryNames, ai = useAI
+        let selectedProvider = aiProvider
         let texts = Array(Set(statement.rows.filter { $0.isExpense && $0.date >= account.openingDate && !model.ledger.seenEvents.contains($0.id) && !model.ledger.statementMayExist($0, accountID: account.id) }.map(\.analysisText))).sorted().prefix(100)
         classificationTotal = ai ? texts.count : 0
         task = Task {
@@ -1644,7 +1647,7 @@ private struct StatementImportView: View {
                 for text in texts {
                     do {
                         try Task.checkCancellation()
-                        guard store.isActive else { throw CancellationError() }
+                        guard store.isActive, aiProvider == selectedProvider else { throw CancellationError() }
                         let data = try await CloudAccount.shared.assistant(mode: "classify", text: text, categories: allowed)
                         let answer = try JSONDecoder().decode(AssistantResult.self, from: data)
                         if allowed.contains(answer.category) { categories[text] = answer.category }
@@ -1653,7 +1656,7 @@ private struct StatementImportView: View {
                     catch { aiFailed = true; break }
                 }
             }
-            guard !Task.isCancelled, store.isActive else { return }
+            guard !Task.isCancelled, store.isActive, aiProvider == selectedProvider else { return }
             let suggestions = categories, fallback = aiFailed
             model.perform(key: key, postRecurring: false, action: { ledger in
                 guard store.isActive else { throw CancellationError() }
