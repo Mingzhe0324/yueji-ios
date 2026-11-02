@@ -4,6 +4,24 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testTNGCardHasSeparateBalanceAndNeverMatchesWalletNotices() throws {
+        let date = Date(timeIntervalSince1970: 1_780_000_000)
+        let wallet = BankAccount(name: "Wallet", openingCents: 10000, openingDate: date, institution: "TNG eWallet", automaticSource: "TNG")
+        let card = BankAccount(name: "My TNG card", openingCents: 2000, openingDate: date, institution: "TNG Card", automaticSource: "TNG")
+        var ledger = Ledger()
+        ledger.bankAccounts = [wallet, card]
+        XCTAssertTrue(MalaysianBanks.walletsAndPayments.contains("TNG Card"))
+        XCTAssertEqual(ledger.automaticBankAccount(source: "TNG", suffix: nil), wallet.id)
+        try ledger.saveBankTransfer(BankTransfer(fromAccountID: wallet.id, toAccountID: card.id, cents: 1000, date: date), replacing: nil)
+        XCTAssertEqual(ledger.bankBalance(wallet), 9000)
+        XCTAssertEqual(ledger.bankBalance(card), 3000)
+        var fare = Expense(merchant: "Parking", cents: 300, date: date)
+        fare.bankAccountID = card.id
+        ledger.expenses.append(fare)
+        XCTAssertEqual(ledger.bankBalance(card), 2700)
+        XCTAssertEqual(ledger.bankBalance(wallet), 9000)
+    }
+
     func testBudgetSavingsUsesOverviewSpendingAndExcludesFutureAndUnsetMonths() throws {
         let january = noon(2026, 1, 15), february = noon(2026, 2, 15)
         var travel = Expense(merchant: "Trip", cents: 9000, date: january)

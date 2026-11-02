@@ -591,10 +591,15 @@ private struct BankAccountEditor: View {
                 }.pickerStyle(.navigationLink)
                     .onChange(of: institution) { old, new in
                         if name.isEmpty || name == old { name = new }
+                        if new == "TNG Card" { automaticSource = ""; automaticSuffix = "" }
                     }
                 TextField(tr("例如 Maybank 储蓄账户", "e.g. Maybank savings", "cth. Simpanan Maybank"), text: $name)
                 TextField(tr("期初余额 MYR", "Opening balance MYR", "Baki awal MYR"), text: $amount).keyboardType(.numbersAndPunctuation)
                 DatePicker(tr("期初时间", "Opening date", "Tarikh awal"), selection: $openingDate, in: ...Date())
+                if institution == "TNG Card" {
+                    Text(tr("TNG 实体卡与 eWallet 分开记录。填写卡内余额；充值请用账户转账，消费选择这张卡。不会读取 NFC 或自动同步卡内余额。", "Track your TNG physical card separately from eWallet. Enter its stored balance; record reloads as account transfers and select this card for spending. NFC and live card balance sync are not supported.", "Rekod kad fizikal TNG berasingan daripada eWallet. Isi baki kad; rekod tambah nilai sebagai pindahan akaun dan pilih kad ini untuk belanja. NFC dan penyegerakan baki kad tidak disokong."))
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
                 Section {
                     Picker(tr("自动记账来源", "Automatic entry source", "Sumber rekod automatik"), selection: $automaticSource) {
                         Text(tr("关闭", "Off", "Tutup")).tag("")
@@ -602,7 +607,7 @@ private struct BankAccountEditor: View {
                         if !automaticSource.isEmpty && !financialProviderAliases.contains(where: { $0.0 == automaticSource }) {
                             Text(automaticSource).tag(automaticSource)
                         }
-                    }.pickerStyle(.navigationLink)
+                    }.pickerStyle(.navigationLink).disabled(institution == "TNG Card")
                     if !automaticSource.isEmpty {
                         TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
                             .keyboardType(.numberPad)
@@ -646,8 +651,8 @@ private struct BankAccountEditor: View {
             let account = BankAccount(id: original?.id ?? draftID, name: name.trimmingCharacters(in: .whitespacesAndNewlines),
                                       openingCents: negative ? -cents : cents, openingDate: openingDate,
                                       institution: institution.isEmpty ? nil : institution,
-                                      automaticSource: automaticSource.isEmpty ? nil : automaticSource,
-                                      automaticSuffix: automaticSource.isEmpty || automaticSuffix.isEmpty ? nil : automaticSuffix)
+                                      automaticSource: institution == "TNG Card" || automaticSource.isEmpty ? nil : automaticSource,
+                                      automaticSuffix: institution == "TNG Card" || automaticSource.isEmpty || automaticSuffix.isEmpty ? nil : automaticSuffix)
             let savedAccount = account
             let before = original
             model.perform(key: operationKey, action: { ledger in
