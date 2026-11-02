@@ -77,7 +77,7 @@ enum CommonsMerchantPhotos {
         var url = URLComponents(string: "https://commons.wikimedia.org/w/api.php")!
         let params = ["action": "query", "format": "json", "formatversion": "2", "generator": "geosearch",
                       "ggscoord": "\(lat)|\(lon)", "ggsradius": "100", "ggsnamespace": "6", "ggslimit": "10",
-                      "prop": "coordinates|imageinfo", "coprimary": "all", "colimit": "1",
+                      "prop": "coordinates|imageinfo", "coprimary": "all", "colimit": "max",
                       "iiprop": "url|mime|extmetadata", "iiurlwidth": "800", "maxlag": "5",
                       "iiextmetadatafilter": "ObjectName|Artist|Credit|LicenseShortName|LicenseUrl|Restrictions"]
         url.queryItems = params.sorted { $0.key < $1.key }.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -107,6 +107,19 @@ private struct CommonsMerchantPhotoCard: View {
     @State private var photo: CommonsMerchantPhotos.Photo?
     @State private var loading = false
     @State private var unavailable = false
+    @State private var foundNearbyFiles = false
+    private var emptyMessage: String {
+        if CommonsMerchantPhotos.queryURL(place) == nil {
+            return tr("请先匹配或选择具体店铺，才能查询照片。", "Match or select a specific store before looking for photos.", "Padankan atau pilih kedai sebelum mencari foto.")
+        }
+        if unavailable {
+            return tr("照片请求失败，可稍后重试；地图仍可使用。", "Photo request failed. Try again later; the map remains available.", "Permintaan foto gagal. Cuba lagi nanti; peta masih tersedia.")
+        }
+        if foundNearbyFiles {
+            return tr("附近有开放图片，但店名、位置或授权未通过核对，因此不展示。", "Nearby files found, but name, location or license checks did not pass.", "Fail berdekatan ditemui, tetapi semakan nama, lokasi atau lesen gagal.")
+        }
+        return tr("Commons 在此店铺附近未返回带坐标的照片，保留地图。", "Commons returned no geotagged photos near this store; keeping the map.", "Commons tiada foto berkoordinat berdekatan kedai ini; peta dikekalkan.")
+    }
     private var requestID: String { enabled ? (CommonsMerchantPhotos.queryURL(place)?.absoluteString ?? "") + place.name : "" }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -132,16 +145,14 @@ private struct CommonsMerchantPhotoCard: View {
                     Text(tr("按名称及附近坐标匹配，非店铺官方验证照片。", "Matched by name and nearby coordinates; not verified by the store.", "Dipadankan mengikut nama dan koordinat; bukan disahkan kedai."))
                         .font(.caption2).foregroundStyle(.secondary)
                 } else if !loading {
-                    Text(unavailable
-                         ? tr("照片暂不可用，仍可查看地图或店铺资料。", "Photos unavailable. The map and place details remain available.", "Foto tidak tersedia. Peta dan butiran masih tersedia.")
-                         : tr("未找到可核对的开放照片，保留地图。", "No matching open-license photo found; keeping the map.", "Tiada foto berlesen terbuka yang sepadan; peta dikekalkan."))
+                    Text(emptyMessage)
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
         }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: image != nil)
             .task(id: requestID) {
-                image = nil; photo = nil; unavailable = false; loading = false
+                image = nil; photo = nil; unavailable = false; loading = false; foundNearbyFiles = false
                 guard enabled, let url = CommonsMerchantPhotos.queryURL(place) else { return }
                 loading = true
                 do {
@@ -149,6 +160,8 @@ private struct CommonsMerchantPhotoCard: View {
                     let data = try await CommonsMerchantPhotos.fetch(url, maximum: 500_000)
                     let response = try JSONDecoder().decode(CommonsMerchantPhotos.Response.self, from: data)
                     guard response.error == nil else { throw URLError(.badServerResponse) }
+                    try Task.checkCancellation()
+                    foundNearbyFiles = !(response.query?.pages ?? []).isEmpty
                     let candidates = (response.query?.pages ?? []).compactMap { CommonsMerchantPhotos.photo($0, place: place) }
                     if let result = candidates.sorted(by: { $0.title < $1.title }).first {
                         let bytes = try await CommonsMerchantPhotos.fetch(result.imageURL, maximum: 4_000_000)

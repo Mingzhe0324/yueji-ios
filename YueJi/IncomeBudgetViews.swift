@@ -666,11 +666,8 @@ import UIKit
 
 /// Incoming amounts use cyan; the light variant is darker for legible small text.
 enum IncomeStyle {
-    static let tint = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.15, green: 0.95, blue: 0.90, alpha: 1)
-            : UIColor(red: 0.0, green: 0.46, blue: 0.44, alpha: 1)
-    })
+    // Keep incoming amounts bright light green in both appearances.
+    static let tint = Color(red: 0.40, green: 0.93, blue: 0.48)
 }
 
 struct IncomeBudgetPrompt: Identifiable, Equatable {

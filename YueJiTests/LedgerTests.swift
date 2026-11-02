@@ -108,6 +108,9 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertFalse(url.absoluteString.contains("Private"))
         XCTAssertFalse(url.absoluteString.contains("Cafe"))
         XCTAssertEqual(url.host, "commons.wikimedia.org")
+        let parameters = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        // colimit is shared across the returned pages, not a per-photo limit.
+        XCTAssertEqual(parameters.first(where: { $0.name == "colimit" })?.value, "max")
         XCTAssertNil(CommonsMerchantPhotos.safeURL("https://upload.wikimedia.org.evil.example/wikipedia/commons/x.jpg", host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"))
         XCTAssertNil(CommonsMerchantPhotos.safeURL("http://upload.wikimedia.org/wikipedia/commons/x.jpg", host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"))
         let empty = try JSONDecoder().decode(CommonsMerchantPhotos.Response.self, from: Data(#"{"batchcomplete":true}"#.utf8))
