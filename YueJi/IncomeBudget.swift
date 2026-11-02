@@ -290,6 +290,38 @@ struct MonthlyBudget: Equatable {
     func remaining(spent: Int) -> Int { total - spent }
 }
 
+struct BudgetSavingsMonth: Identifiable {
+    let id: String
+    let date: Date
+    let budget: MonthlyBudget
+    let spent: Int
+    let hasBudget: Bool
+    let isCurrent: Bool
+    let isFuture: Bool
+    var remaining: Int { budget.remaining(spent: spent) }
+    var included: Bool { hasBudget && !isFuture }
+}
+
+extension Ledger {
+    /// Mirrors Overview's personal, non-travel spending. No balance writes or carryover.
+    func budgetSavings(year: Int, now: Date = Date()) -> [BudgetSavingsMonth] {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let current = monthKey(now)
+        let spending = expenses.filter { $0.tripID == nil }.reduce(into: [String: Int]()) {
+            $0[monthKey($1.date), default: 0] += $1.personalSpending
+        }
+        return (1...12).compactMap { month in
+            guard let date = calendar.date(from: DateComponents(year: year, month: month, day: 1, hour: 12)) else { return nil }
+            let key = monthKey(date)
+            let budget = monthlyBudget(key)
+            return BudgetSavingsMonth(id: key, date: date, budget: budget, spent: spending[key] ?? 0,
+                                      hasBudget: budgets[key] != nil || budget.income > 0,
+                                      isCurrent: key == current, isFuture: key > current)
+        }
+    }
+}
+
 /// How one month's budget changes when an income is edited, deleted or reclassified.
 struct BudgetAdjustment: Identifiable, Equatable {
     var id: String { month }

@@ -818,6 +818,14 @@ struct DashboardView: View {
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
                 budgetSection
+                Section {
+                    NavigationLink {
+                        BudgetSavingsView(initialMonth: month, hidden: hideAmounts)
+                    } label: {
+                        Label(tr("每月与全年预算结余", "Monthly & annual budget savings", "Baki bajet bulanan & tahunan"), systemImage: "chart.bar.xaxis")
+                    }
+                    .accessibilityIdentifier("overview.budgetSavings")
+                }
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
                 recentCard

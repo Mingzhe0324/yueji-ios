@@ -1410,6 +1410,82 @@ struct MonthlyBudgetBreakdown: View {
     }
 }
 
+struct BudgetSavingsView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var year: Int
+    let hidden: Bool
+
+    init(initialMonth: Date, hidden: Bool) {
+        _year = State(initialValue: Calendar(identifier: .gregorian).component(.year, from: initialMonth))
+        self.hidden = hidden
+    }
+    private func amount(_ cents: Int) -> String {
+        hidden ? "••••" : (cents < 0 ? "−" : "+") + money(abs(cents))
+    }
+    var body: some View {
+        let rows = model.ledger.budgetSavings(year: year)
+        let counted = rows.filter(\.included)
+        let total = counted.reduce(0) { $0 + $1.remaining }
+        List {
+            Section {
+                HStack {
+                    Button { year -= 1 } label: { Image(systemName: "chevron.left") }
+                        .disabled(year <= 1900)
+                        .accessibilityLabel(tr("上一年", "Previous year", "Tahun sebelumnya"))
+                    Spacer()
+                    Text(String(year)).font(.title2.bold()).monospacedDigit()
+                    Spacer()
+                    Button { year += 1 } label: { Image(systemName: "chevron.right") }
+                        .disabled(year >= 9998)
+                        .accessibilityLabel(tr("下一年", "Next year", "Tahun seterusnya"))
+                }.buttonStyle(.borderless)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(tr("全年预算净结余", "Annual net budget savings", "Baki bersih bajet tahunan")).font(.headline)
+                    Text(counted.isEmpty ? "—" : amount(total))
+                        .font(.largeTitle.bold()).monospacedDigit()
+                        .foregroundStyle(total < 0 ? Color.red : IncomeStyle.tint)
+                    Text(tr("已计入 \(counted.count) 个月；超支会抵扣结余。", "Includes \(counted.count) months; overspending reduces savings.", "Termasuk \(counted.count) bulan; lebihan belanja mengurangkan baki."))
+                        .font(.caption).foregroundStyle(.secondary)
+                    if counted.contains(where: \.isCurrent) {
+                        Text(tr("包含本月未结算余额，会随记账变化。", "Includes this month's provisional balance, which changes with entries.", "Termasuk baki sementara bulan ini yang berubah mengikut rekod."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }.padding(.vertical, 8)
+            }
+            Section(tr("每月结余", "Monthly savings", "Baki bulanan")) {
+                ForEach(rows) { row in
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(row.date, format: .dateTime.month(.wide))
+                            if row.isCurrent {
+                                Text(tr("未结算", "Provisional", "Sementara")).font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if row.included {
+                                Text(amount(row.remaining)).monospacedDigit().fontWeight(.semibold)
+                                    .foregroundStyle(row.remaining < 0 ? Color.red : IncomeStyle.tint)
+                            } else {
+                                Text(row.isFuture ? tr("尚未到来", "Upcoming", "Akan datang") : tr("未设预算", "No budget", "Tiada bajet"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if row.included {
+                            Text(tr("预算 \(hidden ? "••••" : money(row.budget.total)) · 消费 \(hidden ? "••••" : money(row.spent))", "Budget \(hidden ? "••••" : money(row.budget.total)) · Spent \(hidden ? "••••" : money(row.spent))", "Bajet \(hidden ? "••••" : money(row.budget.total)) · Belanja \(hidden ? "••••" : money(row.spent))"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.padding(.vertical, 4).accessibilityElement(children: .combine)
+                }
+            }
+            Section {
+                Text(tr("结余 = 基本预算 + 加入预算的收入 − 计入预算的消费。旅行消费另计；未设预算和未来月份不计入。这是预算结余，不代表银行存款；修改历史账目或预算时会重新计算。", "Savings = base budget + allocated income − eligible spending. Travel, unbudgeted and future months are excluded. This is budget savings, not bank deposits; historical edits recalculate the totals.", "Baki = bajet asas + pendapatan diperuntukkan − belanja dikira. Perjalanan, bulan tanpa bajet dan bulan akan datang tidak dikira. Ini baki bajet, bukan deposit bank; suntingan mengira semula jumlah."))
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(tr("预算结余", "Budget savings", "Baki bajet"))
+        .navigationBarTitleDisplayMode(.inline)
+    }
+}
+
 /// The optional automatic allocation; off by default.
 struct IncomeAutoAllocationSection: View {
     @Environment(\.locale) private var uiLocale

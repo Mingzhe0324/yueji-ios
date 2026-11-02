@@ -4,6 +4,32 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testBudgetSavingsUsesOverviewSpendingAndExcludesFutureAndUnsetMonths() throws {
+        let january = noon(2026, 1, 15), february = noon(2026, 2, 15)
+        var travel = Expense(merchant: "Trip", cents: 9000, date: january)
+        travel.tripID = "trip"
+        var ledger = Ledger(expenses: [Expense(merchant: "Lunch", cents: 3000, date: january),
+                                       Expense(merchant: "Groceries", cents: 12000, date: february), travel],
+                            budgets: [monthKey(january): 10000, monthKey(february): 10000,
+                                      monthKey(noon(2026, 12, 1)): 10000])
+        ledger.budgetAllocations = [BudgetAllocation(source: "income", month: monthKey(january), cents: 2000)]
+        let rows = ledger.budgetSavings(year: 2026, now: noon(2026, 3, 10))
+        XCTAssertEqual(rows.count, 12)
+        XCTAssertEqual(rows[0].spent, 3000)
+        XCTAssertEqual(rows[0].remaining, 9000)
+        XCTAssertEqual(rows[1].remaining, -2000)
+        XCTAssertTrue(rows[2].isCurrent)
+        XCTAssertFalse(rows[2].included)
+        XCTAssertTrue(rows[11].isFuture)
+        XCTAssertFalse(rows[11].included)
+        XCTAssertEqual(rows.filter(\.included).reduce(0) { $0 + $1.remaining }, 7000)
+        ledger.budgets[monthKey(noon(2026, 3, 1))] = 0
+        let updated = ledger.budgetSavings(year: 2026, now: noon(2026, 3, 10))
+        XCTAssertTrue(updated[2].included)
+        XCTAssertEqual(updated[2].remaining, 0)
+        XCTAssertTrue(ledger.budgetSavings(year: 2027, now: noon(2026, 3, 10)).allSatisfy { !$0.included })
+    }
+
     private func noon(_ year: Int, _ month: Int, _ day: Int) -> Date {
         Calendar.current.date(from: DateComponents(year: year, month: month, day: day, hour: 12))!
     }
