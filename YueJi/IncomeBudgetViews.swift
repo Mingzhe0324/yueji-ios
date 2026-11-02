@@ -667,7 +667,9 @@ import UIKit
 /// Incoming amounts use cyan; the light variant is darker for legible small text.
 enum IncomeStyle {
     static let tint = Color(uiColor: UIColor { traits in
-        traits.userInterfaceStyle == .dark ? .systemCyan : UIColor(red: 0.0, green: 0.43, blue: 0.56, alpha: 1)
+        traits.userInterfaceStyle == .dark
+            ? UIColor(red: 0.10, green: 0.85, blue: 0.78, alpha: 1)
+            : UIColor(red: 0.0, green: 0.43, blue: 0.39, alpha: 1)
     })
 }
 

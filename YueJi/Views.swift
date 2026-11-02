@@ -1251,7 +1251,7 @@ struct DashboardView: View {
             if incoming > 0 {
                 NavigationLink { TNGInboxView() } label: {
                     LabeledContent(tr("银行 / TNG 本月收到", "Bank / TNG received this month", "Bank / TNG diterima bulan ini"), value: "+" + money(incoming))
-                        .foregroundStyle(.green)
+                        .foregroundStyle(IncomeStyle.tint)
                 }
             }
             NavigationLink { FriendSummaryView() } label: {

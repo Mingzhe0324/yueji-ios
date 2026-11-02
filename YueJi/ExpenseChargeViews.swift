@@ -41,7 +41,8 @@ final class ExpenseMerchantMatcher: ObservableObject {
                CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
                 anchor = CLLocation(latitude: lat, longitude: lon); precise = true
             } else if !address.isEmpty {
-                let marks = try await geocoder.geocodeAddressString(address)
+                // An address lookup failure must not prevent a merchant-name search.
+                let marks = (try? await geocoder.geocodeAddressString(address)) ?? []
                 guard !Task.isCancelled, generation == token else { return }
                 // A city or ambiguous address can suggest places, but cannot auto-link one.
                 if marks.count == 1 {
@@ -284,7 +285,7 @@ struct ExpensePlaceMapSheet: View {
         guard visible, initialized, draft.applePlaceID == nil else { return nil }
         let generic = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let expected = typedName != selected?.name && !generic.contains(typedName) ? typedName : merchantHint
+        let expected = !typedName.isEmpty && !generic.contains(typedName) ? typedName : merchantHint
         let sameAddress = address.trimmingCharacters(in: .whitespacesAndNewlines) == selected?.address
         return MerchantMatchInput(name: expected, address: address, latitude: sameAddress ? selected?.latitude : nil,
                                   longitude: sameAddress ? selected?.longitude : nil)
@@ -318,18 +319,20 @@ struct ExpensePlaceMapSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
-                    mapCard
+                    if editing || coordinate != nil {
+                        mapCard
+                    }
                     merchantSuggestions
                     if #available(iOS 18.0, *) {
-                        AppleMerchantCard(placeID: draft.applePlaceID)
+                        AppleMerchantCard(placeID: draft.applePlaceID, automaticallyPresent: !editing)
                     }
                     if let url = googleMapsURL {
                         Link(destination: url) {
-                            Label(tr("? Google Maps ???", "View photos on Google Maps", "Lihat foto di Google Maps"), systemImage: "arrow.up.right.square")
+                            Label(tr("去 Google Maps 看照片", "View photos on Google Maps", "Lihat foto di Google Maps"), systemImage: "arrow.up.right.square")
                                 .frame(maxWidth: .infinity, alignment: .leading).padding(18)
                                 .background(.background, in: RoundedRectangle(cornerRadius: 22))
                         }.accessibilityIdentifier("place.googleMaps")
-                        Text(tr("?? Google Maps ??????????????????", "Opens Google Maps to search this place; photos depend on availability.", "Membuka Google Maps untuk mencari tempat ini; foto bergantung pada ketersediaan."))
+                        Text(tr("打开 Google Maps 搜索此店铺，照片以店铺收录情况为准。", "Opens Google Maps to search this place; photos depend on availability.", "Membuka Google Maps untuk mencari tempat ini; foto bergantung pada ketersediaan."))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                     if editing || draft.applePlaceID == nil { searchPanel }
@@ -551,6 +554,8 @@ struct ExpensePlaceMapSheet: View {
 @available(iOS 18.0, *)
 private struct AppleMerchantCard: View {
     let placeID: String?
+    var automaticallyPresent = false
+    @State private var automaticallyPresentedID: String?
     @State private var presentedItem: MKMapItem?
     @State private var request: MKMapItemRequest?
     @State private var generation = UUID()
@@ -580,7 +585,12 @@ private struct AppleMerchantCard: View {
             if let message { Text(message).font(.caption).foregroundStyle(.secondary) }
         }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
             .mapItemDetailSheet(item: $presentedItem, displaysMap: true)
-            .onChange(of: placeID) { _, _ in cancel(); presentedItem = nil; message = nil }
+            .task(id: placeID) {
+                cancel(); presentedItem = nil; message = nil
+                guard automaticallyPresent, let placeID, automaticallyPresentedID != placeID else { return }
+                automaticallyPresentedID = placeID
+                open()
+            }
             .onDisappear { cancel() }
     }
     private func cancel() {
