@@ -37,10 +37,10 @@ final class ExpenseMerchantMatcher: ObservableObject {
         let name = input.name.trimmingCharacters(in: .whitespacesAndNewlines)
         let address = input.address.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty || !address.isEmpty || input.latitude != nil else { return }
+        loading = true
         do {
             try await Task.sleep(for: .milliseconds(700))
             guard !Task.isCancelled, generation == token else { return }
-            loading = true
             var anchor: CLLocation?
             var precise = false
             if let lat = input.latitude, let lon = input.longitude,
@@ -360,8 +360,16 @@ struct ExpensePlaceMapSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
+                    matchStatus
                     if editing || coordinate != nil {
-                        mapCard
+                        mapCard.transition(.opacity)
+                    } else if merchantMatcher.loading {
+                        VStack(spacing: 14) {
+                            Image(systemName: "map").font(.largeTitle).foregroundStyle(.secondary)
+                            ProgressView(tr("正在查找店铺位置", "Finding store location", "Mencari lokasi kedai"))
+                        }.frame(maxWidth: .infinity).frame(height: 300)
+                            .background(.quaternary, in: RoundedRectangle(cornerRadius: 24))
+                            .transition(.opacity)
                     }
                     merchantSuggestions
                     if !receiptAddress.isEmpty || !receiptPhone.isEmpty {
@@ -410,6 +418,8 @@ struct ExpensePlaceMapSheet: View {
                         }.frame(maxWidth: .infinity, alignment: .leading).padding(18)
                     }
                 }.padding(16)
+                    .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.22), value: merchantMatcher.loading)
+                    .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.22), value: draft.applePlaceID)
             }
             .background(IslandTheme.paper)
             .scrollDismissesKeyboard(.interactively)
@@ -453,6 +463,22 @@ struct ExpensePlaceMapSheet: View {
             .onChange(of: address) { _, _ in if mapLocator.busy { mapLocator.cancel() } }
             .editorDismissal(hasChanges: hasChanges, saving: false, confirming: $confirmingDiscard) { dismiss() }
         }.presentationDragIndicator(.visible)
+    }
+    private var matchStatus: some View {
+        let confirmed = draft.userConfirmed == true && draft.applePlaceID != nil
+        let matched = draft.applePlaceID != nil
+        let title = merchantMatcher.loading ? tr("正在匹配", "Matching", "Memadankan")
+            : confirmed ? tr("已确认分店", "Confirmed branch", "Cawangan disahkan")
+            : matched ? tr("已匹配 · 可核对", "Matched · review details", "Sepadan · semak butiran")
+            : !receiptAddress.isEmpty ? tr("地址待核对", "Address needs review", "Alamat perlu disemak")
+            : tr("待选分店", "Choose a branch", "Pilih cawangan")
+        let tint: Color = confirmed ? IncomeStyle.tint : matched ? .blue : .orange
+        return Label(title, systemImage: confirmed ? "checkmark.seal.fill" : matched ? "mappin.circle.fill" : "magnifyingglass")
+            .font(.subheadline.weight(.medium)).foregroundStyle(tint)
+            .padding(.horizontal, 12).padding(.vertical, 8)
+            .background(tint.opacity(0.12), in: Capsule())
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityIdentifier("place.matchStatus")
     }
     private var mapCard: some View {
         VStack(spacing: 0) {

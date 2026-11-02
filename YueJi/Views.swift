@@ -1898,6 +1898,7 @@ struct ExpensesView: View {
     @State private var deleting: Expense?
     @State private var timeline = LedgerTimelineSnapshot()
     @State private var loadedQuery: LedgerTimelineQuery?
+    @State private var scrollAnchors: [LedgerTimelineQuery: String] = [:]
     private var query: LedgerTimelineQuery {
         LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: search, filter: filter, provider: providerFilter)
     }
@@ -1910,7 +1911,9 @@ struct ExpensesView: View {
         let requestedMonth = month
         let query = self.query
         let days = timeline.days
+        let scrollKey = LedgerTimelineQuery(revision: 0, month: month, search: search, filter: filter, provider: providerFilter)
         NavigationStack(path: $path) {
+            ScrollViewReader { listReader in
             List {
                 // The month and its total head the list like a balance; the payments follow
                 // as plain rows, as Messages lists conversations.
@@ -1933,6 +1936,7 @@ struct ExpensesView: View {
                     .modifier(MonthSummaryMotion(month: loadedQuery?.month))
                     .listRowSeparator(.hidden)
                     LedgerActiveFilters(filter: $filter, provider: $providerFilter)
+                        .id("ledger-top")
                         .animation(reduceMotion ? nil : YueJiMotion.rows, value: filter)
                         .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)
                         .listRowSeparator(.hidden)
@@ -1955,20 +1959,24 @@ struct ExpensesView: View {
                 ForEach(days) { day in
                     Section {
                         ForEach(day.entries) { item in
+                            Group {
                             switch item {
                             case .settlement(let record):
-                                NavigationLink { SettlementDetailView(id: record.id) } label: {
+                                NavigationLink { SettlementDetailView(id: record.id).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     SettlementPaymentRow(record: record)
+                                        .yuejiZoomSource(id: item.id, namespace: expenseTransition)
                                 }
                             case .transfer(let notice):
-                                NavigationLink { TNGTimelineDetail(notice: notice) } label: {
+                                NavigationLink { TNGTimelineDetail(notice: notice).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     TNGTimelineRow(notice: notice, repaymentPreview: timeline.repaymentPreviews[notice.id])
                                         .modifier(RestoredRecordHighlight(recordID: notice.id, notice: true))
+                                        .yuejiZoomSource(id: item.id, namespace: expenseTransition)
                                 }
                                 .modifier(AutomaticRecordDeleteActions { deletingNotice = notice })
                             case .income(let entry):
-                                NavigationLink { IncomeDetailView(id: entry.id) } label: {
+                                NavigationLink { IncomeDetailView(id: entry.id).yuejiZoom(id: "income:" + entry.id, namespace: expenseTransition) } label: {
                                     IncomeRow(entry: entry)
+                                        .yuejiZoomSource(id: "income:" + entry.id, namespace: expenseTransition)
                                 }
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button { deletingIncome = entry } label: {
@@ -1978,6 +1986,7 @@ struct ExpensesView: View {
                             case .expense(let entry):
                             NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                                 ExpenseRow(entry: entry).foregroundStyle(.primary)
+                                    .yuejiZoomSource(id: "expense:" + entry.id, namespace: expenseTransition)
                             }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
                                 // Two round actions, as in the kit's Messages swipe actions.
@@ -1993,13 +2002,25 @@ struct ExpensesView: View {
                                     edit: { if sheet == nil { sheet = .edit(entry) } },
                                     delete: { deleting = entry }))
                             }
+                            }
+                            .id(item.id)
+                            .onGeometryChange(for: Bool.self) { geometry in
+                                let frame = geometry.frame(in: .named("ledger-list"))
+                                return frame.minY >= 0 && frame.minY < 100
+                            } action: { atTop in
+                                guard atTop, path.isEmpty, loadedQuery == query else { return }
+                                if scrollAnchors.count > 24 { scrollAnchors.removeAll() }
+                                scrollAnchors[scrollKey] = item.id
+                            }
                         }
                     } header: { LedgerDayHeader(day: day) }
                     .listRowBackground(Color.clear)
                 }
             }
+                .coordinateSpace(name: "ledger-list")
                 .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                     ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+                        .yuejiZoom(id: "expense:" + destination.id, namespace: expenseTransition)
                 }
                 .task(id: isActive ? query : nil) {
                     guard isActive, loadedQuery != query else { return }
@@ -2021,9 +2042,18 @@ struct ExpensesView: View {
                             let notices = feedback.noticeIDs.intersection(Set(fresh.transfers.map(\.id))).subtracting(Set(timeline.transfers.map(\.id)))
                             return feedback.date.timeIntervalSinceNow > -3 && (!expenses.isEmpty || !notices.isEmpty)
                         } ?? false
+                        let savedAnchor = scrollAnchors[scrollKey]
                         withAnimation(!reduceMotion && (changingSelection || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
                             timeline = fresh
                             loadedQuery = query
+                        }
+                        if changingSelection {
+                            await Task.yield()
+                            guard !Task.isCancelled, self.query == query else { return }
+                            let available = Set(fresh.days.flatMap { $0.entries.map(\.id) })
+                            let target = savedAnchor.flatMap { available.contains($0) ? $0 : nil } ?? "ledger-top"
+                            var transaction = Transaction(); transaction.disablesAnimations = true
+                            withTransaction(transaction) { listReader.scrollTo(target, anchor: .top) }
                         }
                     } catch is CancellationError { return }
                     catch {
@@ -2106,6 +2136,7 @@ struct ExpensesView: View {
                     month = request.month
                     monthRequest.wrappedValue = nil
                 }
+            }
         }
     }
 }
@@ -3822,19 +3853,28 @@ private struct YueJiGlassSurface: ViewModifier {
     }
 }
 
-// Transaction details use standard push/pop from every entry point, including Overview.
+// Native matched navigation keeps source identity stable when returning to the list.
 private struct YueJiZoomDestination: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: String
     let namespace: Namespace.ID
-    func body(content: Content) -> some View { content }
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), !reduceMotion, ElegantMotion.enabled {
+            content.navigationTransition(.zoom(sourceID: id, in: namespace))
+        } else { content }
+    }
 }
 
 private struct YueJiZoomSource: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let id: String
     let namespace: Namespace.ID
-    func body(content: Content) -> some View { content }
+    @ViewBuilder func body(content: Content) -> some View {
+        if #available(iOS 18.0, *), !reduceMotion, ElegantMotion.enabled {
+            content.matchedTransitionSource(id: id, in: namespace)
+        } else { content }
+    }
 }
-// Existing guide/source IDs remain stable; navigation uses the native system transitions.
 
 extension View {
     func yuejiZoom(id: String, namespace: Namespace.ID) -> some View {
