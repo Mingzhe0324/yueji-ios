@@ -1867,7 +1867,7 @@ private struct LedgerDayHeader: View {
             Text(dateLabel(day.date))
             Spacer(minLength: 8)
             if spent > 0 {
-                Text(money(spent)).monospacedDigit()
+                TransactionAmount(cents: spent, direction: .outgoing)
             }
         }
         .accessibilityElement(children: .combine)

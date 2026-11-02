@@ -668,8 +668,8 @@ import UIKit
 enum IncomeStyle {
     static let tint = Color(uiColor: UIColor { traits in
         traits.userInterfaceStyle == .dark
-            ? UIColor(red: 0.10, green: 0.85, blue: 0.78, alpha: 1)
-            : UIColor(red: 0.0, green: 0.43, blue: 0.39, alpha: 1)
+            ? UIColor(red: 0.15, green: 0.95, blue: 0.90, alpha: 1)
+            : UIColor(red: 0.0, green: 0.46, blue: 0.44, alpha: 1)
     })
 }
 
