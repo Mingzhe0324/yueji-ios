@@ -48,15 +48,16 @@ enum CommonsMerchantPhotos {
     }
     static func photo(_ page: Page, place: ExpensePlace) -> Photo? {
         guard place.valid, place.applePlaceID != nil, let lat = place.latitude, let lon = place.longitude,
-              let point = page.coordinates?.first, point.lat.isFinite, point.lon.isFinite,
-              (-90...90).contains(point.lat), (-180...180).contains(point.lon),
-              CLLocation(latitude: lat, longitude: lon).distance(from: CLLocation(latitude: point.lat, longitude: point.lon)) <= 75,
+              page.coordinates?.contains(where: { point in
+                  point.lat.isFinite && point.lon.isFinite && (-90...90).contains(point.lat) && (-180...180).contains(point.lon) &&
+                  CLLocation(latitude: lat, longitude: lon).distance(from: CLLocation(latitude: point.lat, longitude: point.lon)) <= 150
+              }) == true,
               let info = page.imageinfo?.first, ["image/jpeg", "image/png"].contains(info.mime ?? ""),
               let meta = info.extmetadata else { return nil }
         let name = MerchantMatching.key(place.name)
         let object = plain(meta["ObjectName"]?.value ?? "")
         let filename = (String(page.title.dropFirst(page.title.hasPrefix("File:") ? 5 : 0)) as NSString).deletingPathExtension
-        guard name.count >= 5, name == MerchantMatching.key(object) || name == MerchantMatching.key(filename) else { return nil }
+        guard name.count >= 5, matchesName(object, merchant: place.name) || matchesName(filename, merchant: place.name) else { return nil }
         let author = plain(meta["Artist"]?.value ?? "")
         let credit = plain(meta["Credit"]?.value ?? "")
         let license = plain(meta["LicenseShortName"]?.value ?? "")
@@ -72,11 +73,25 @@ enum CommonsMerchantPhotos {
         return Photo(imageURL: imageURL, sourceURL: sourceURL, licenseURL: licenseURL,
                      title: String(page.title.prefix(500)), author: author, credit: credit, license: license)
     }
+    /// Accept a full store name followed by photo/date suffixes, never a partial brand match.
+    static func matchesName(_ title: String, merchant: String) -> Bool {
+        func words(_ value: String) -> String {
+            value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
+                .components(separatedBy: CharacterSet.alphanumerics.inverted).filter { !$0.isEmpty }.joined(separator: " ")
+        }
+        let name = words(merchant), candidate = words(title)
+        guard name.count >= 5 else { return false }
+        if candidate == name { return true }
+        guard candidate.hasPrefix(name + " ") else { return false }
+        let suffix = candidate.dropFirst(name.count + 1).split(separator: " ")
+        let photoWords: Set<String> = ["exterior", "interior", "entrance", "facade", "front", "storefront", "view", "photo", "店面", "外观", "入口"]
+        return !suffix.isEmpty && suffix.allSatisfy { photoWords.contains(String($0)) || $0.allSatisfy(\.isNumber) }
+    }
     static func queryURL(_ place: ExpensePlace) -> URL? {
         guard place.valid, place.applePlaceID != nil, let lat = place.latitude, let lon = place.longitude else { return nil }
         var url = URLComponents(string: "https://commons.wikimedia.org/w/api.php")!
         let params = ["action": "query", "format": "json", "formatversion": "2", "generator": "geosearch",
-                      "ggscoord": "\(lat)|\(lon)", "ggsradius": "100", "ggsnamespace": "6", "ggslimit": "10",
+                      "ggscoord": "\(lat)|\(lon)", "ggsradius": "150", "ggsnamespace": "6", "ggslimit": "50", "ggsprimary": "all",
                       "prop": "coordinates|imageinfo", "coprimary": "all", "colimit": "max",
                       "iiprop": "url|mime|extmetadata", "iiurlwidth": "800", "maxlag": "5",
                       "iiextmetadatafilter": "ObjectName|Artist|Credit|LicenseShortName|LicenseUrl|Restrictions"]
@@ -108,6 +123,7 @@ private struct CommonsMerchantPhotoCard: View {
     @State private var loading = false
     @State private var unavailable = false
     @State private var foundNearbyFiles = false
+    @State private var retry = 0
     private var emptyMessage: String {
         if CommonsMerchantPhotos.queryURL(place) == nil {
             return tr("请先匹配或选择具体店铺，才能查询照片。", "Match or select a specific store before looking for photos.", "Padankan atau pilih kedai sebelum mencari foto.")
@@ -120,7 +136,7 @@ private struct CommonsMerchantPhotoCard: View {
         }
         return tr("Commons 在此店铺附近未返回带坐标的照片，保留地图。", "Commons returned no geotagged photos near this store; keeping the map.", "Commons tiada foto berkoordinat berdekatan kedai ini; peta dikekalkan.")
     }
-    private var requestID: String { enabled ? (CommonsMerchantPhotos.queryURL(place)?.absoluteString ?? "") + place.name : "" }
+    private var requestID: String { enabled ? (CommonsMerchantPhotos.queryURL(place)?.absoluteString ?? "") + place.name + String(retry) : "" }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Toggle(tr("自动查找开放店铺照片", "Find open-license store photos", "Cari foto kedai berlesen terbuka"), isOn: $enabled)
@@ -147,6 +163,10 @@ private struct CommonsMerchantPhotoCard: View {
                 } else if !loading {
                     Text(emptyMessage)
                         .font(.caption).foregroundStyle(.secondary)
+                    if unavailable {
+                        Button(tr("重试照片", "Retry photos", "Cuba semula foto")) { retry += 1 }
+                            .font(.caption)
+                    }
                 }
             }
         }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
@@ -157,17 +177,23 @@ private struct CommonsMerchantPhotoCard: View {
                 loading = true
                 do {
                     try await Task.sleep(for: .milliseconds(400))
-                    let data = try await CommonsMerchantPhotos.fetch(url, maximum: 500_000)
+                    let data = try await CommonsMerchantPhotos.fetch(url, maximum: 1_500_000)
                     let response = try JSONDecoder().decode(CommonsMerchantPhotos.Response.self, from: data)
                     guard response.error == nil else { throw URLError(.badServerResponse) }
                     try Task.checkCancellation()
                     foundNearbyFiles = !(response.query?.pages ?? []).isEmpty
                     let candidates = (response.query?.pages ?? []).compactMap { CommonsMerchantPhotos.photo($0, place: place) }
-                    if let result = candidates.sorted(by: { $0.title < $1.title }).first {
-                        let bytes = try await CommonsMerchantPhotos.fetch(result.imageURL, maximum: 4_000_000)
-                        guard let decoded = UIImage(data: bytes) else { throw URLError(.cannotDecodeContentData) }
-                        try Task.checkCancellation()
-                        photo = result; image = decoded
+                    for result in candidates.sorted(by: { $0.title < $1.title }).prefix(3) {
+                        do {
+                            let bytes = try await CommonsMerchantPhotos.fetch(result.imageURL, maximum: 4_000_000)
+                            guard let decoded = UIImage(data: bytes) else { throw URLError(.cannotDecodeContentData) }
+                            try Task.checkCancellation()
+                            photo = result; image = decoded; unavailable = false
+                            break
+                        } catch {
+                            try Task.checkCancellation()
+                            unavailable = true
+                        }
                     }
                     try Task.checkCancellation(); loading = false
                 } catch {

@@ -666,8 +666,8 @@ import UIKit
 
 /// Incoming amounts use cyan; the light variant is darker for legible small text.
 enum IncomeStyle {
-    // Keep incoming amounts bright light green in both appearances.
-    static let tint = Color(red: 0.40, green: 0.93, blue: 0.48)
+    // Use the same standard teal for incoming amounts throughout the app.
+    static let tint = Color.teal
 }
 
 struct IncomeBudgetPrompt: Identifiable, Equatable {

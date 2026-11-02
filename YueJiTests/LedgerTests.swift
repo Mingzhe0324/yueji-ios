@@ -94,6 +94,10 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(photo?.author, "Photographer")
         XCTAssertNotNil(photo?.licenseURL)
         XCTAssertNil(CommonsMerchantPhotos.photo(try page(name: "Cafe XYZ"), place: place))
+        XCTAssertNotNil(CommonsMerchantPhotos.photo(try page(name: "Cafe ABC exterior 2026-11-02"), place: place))
+        XCTAssertNil(CommonsMerchantPhotos.photo(try page(name: "Cafe ABC Other Branch"), place: place))
+        XCTAssertFalse(CommonsMerchantPhotos.matchesName("Cafe ABCD", merchant: "Cafe ABC"))
+        XCTAssertFalse(CommonsMerchantPhotos.matchesName("Street near Cafe ABC", merchant: "Cafe ABC"))
         XCTAssertNil(CommonsMerchantPhotos.photo(try page(lat: 3.01), place: place))
         XCTAssertNil(CommonsMerchantPhotos.photo(try page(author: ""), place: place))
         XCTAssertNil(CommonsMerchantPhotos.photo(try page(license: "https://creativecommons.org/licenses/by-nc/4.0/"), place: place))
@@ -111,6 +115,8 @@ final class EverydayFlowTests: XCTestCase {
         let parameters = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         // colimit is shared across the returned pages, not a per-photo limit.
         XCTAssertEqual(parameters.first(where: { $0.name == "colimit" })?.value, "max")
+        XCTAssertEqual(parameters.first(where: { $0.name == "ggsprimary" })?.value, "all")
+        XCTAssertEqual(parameters.first(where: { $0.name == "ggslimit" })?.value, "50")
         XCTAssertNil(CommonsMerchantPhotos.safeURL("https://upload.wikimedia.org.evil.example/wikipedia/commons/x.jpg", host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"))
         XCTAssertNil(CommonsMerchantPhotos.safeURL("http://upload.wikimedia.org/wikipedia/commons/x.jpg", host: "upload.wikimedia.org", prefix: "/wikipedia/commons/"))
         let empty = try JSONDecoder().decode(CommonsMerchantPhotos.Response.self, from: Data(#"{"batchcomplete":true}"#.utf8))
