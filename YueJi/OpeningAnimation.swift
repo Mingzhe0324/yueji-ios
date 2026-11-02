@@ -61,6 +61,7 @@ struct OpeningAnimationView: View {
                 .animation(.smooth(duration: 0.5), value: shown)
             moonlight
             stars
+            worldWelcome
             ZStack {
                 dial
                 moon
@@ -126,6 +127,65 @@ struct OpeningAnimationView: View {
     }
 
     // MARK: Sky
+
+    /// Decorative greetings and currency codes only, never quotes or exchange rates.
+    /// Kept outside the central moon and name, with no network work or extra launch delay.
+    private var worldWelcome: some View {
+        GeometryReader { geometry in
+            let compact = geometry.size.height < 600
+            VStack(spacing: 14) {
+                HStack(spacing: 14) {
+                    welcomeWord("你好", index: 0)
+                    welcomeWord("Hello", index: 1)
+                    welcomeWord("Selamat datang", index: 2)
+                }
+                HStack(spacing: 14) {
+                    welcomeWord("こんにちは", index: 3)
+                    welcomeWord("Hola", index: 4)
+                    welcomeWord("مرحبا", index: 5)
+                }
+                if !compact {
+                    HStack(spacing: 14) {
+                        welcomeWord("Bonjour", index: 6)
+                        welcomeWord("안녕하세요", index: 7)
+                        welcomeWord("नमस्ते", index: 8)
+                    }
+                }
+            }
+            .font(.system(size: compact ? 12 : 15, weight: .medium))
+            .minimumScaleFactor(0.7)
+            .lineLimit(1)
+            .frame(maxWidth: 360)
+            .padding(.horizontal, 20)
+            .position(x: geometry.size.width / 2, y: geometry.size.height / 2 - (compact ? 155 : 220))
+
+            HStack(spacing: 9) {
+                ForEach(Array(["MYR", "USD", "EUR", "JPY", "GBP"].enumerated()), id: \.offset) { index, code in
+                    Text(verbatim: code)
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .padding(.horizontal, 10).padding(.vertical, 7)
+                        .background(IslandTheme.accent.opacity(scheme == .dark ? 0.18 : 0.09), in: Capsule())
+                        .foregroundStyle(IslandTheme.accent)
+                        .opacity(shown >= .waxing ? 1 : 0)
+                        .offset(y: shown >= .waxing ? 0 : 12)
+                        .animation(animates ? .smooth(duration: 0.4).delay(Double(index) * 0.05) : nil, value: shown)
+                }
+            }
+            .frame(maxWidth: geometry.size.width - 32)
+            .position(x: geometry.size.width / 2, y: geometry.size.height / 2 + (compact ? 218 : 250))
+        }
+        .allowsHitTesting(false)
+        .accessibilityHidden(true)
+    }
+
+    private func welcomeWord(_ text: String, index: Int) -> some View {
+        Text(verbatim: text)
+            .foregroundStyle(index % 3 == 0 ? IslandTheme.accent : Color.secondary)
+            .opacity(shown >= .dusk ? 0.85 : 0)
+            .offset(y: shown >= .dusk ? 0 : 10)
+            .blur(radius: shown >= .dusk ? 0 : 3)
+            .animation(animates ? .smooth(duration: 0.5).delay(Double(index) * 0.045) : nil, value: shown)
+    }
 
     /// A soft blue glow behind the moon, like moonlight on haze.
     private var moonlight: some View {
