@@ -7,6 +7,9 @@ struct MerchantMatchInput: Equatable {
     var address: String
     var latitude: Double?
     var longitude: Double?
+    var accuracy: Double?
+    var capturedAt: Date?
+    var transactionDate: Date?
 }
 
 @MainActor
@@ -39,7 +42,9 @@ final class ExpenseMerchantMatcher: ObservableObject {
             var precise = false
             if let lat = input.latitude, let lon = input.longitude,
                CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)) {
-                anchor = CLLocation(latitude: lat, longitude: lon); precise = true
+                anchor = CLLocation(latitude: lat, longitude: lon)
+                precise = MerchantMatching.reliableAnchor(accuracy: input.accuracy,
+                    capturedAt: input.capturedAt, transactionDate: input.transactionDate)
             } else if !address.isEmpty {
                 // An address lookup failure must not prevent a merchant-name search.
                 let marks = (try? await geocoder.geocodeAddressString(address)) ?? []
@@ -47,7 +52,9 @@ final class ExpenseMerchantMatcher: ObservableObject {
                 // A city or ambiguous address can suggest places, but cannot auto-link one.
                 if marks.count == 1 {
                     anchor = marks.first?.location
-                    precise = marks.first?.thoroughfare != nil
+                    precise = marks.first?.thoroughfare != nil && marks.first?.subThoroughfare != nil
+                        && MerchantMatching.reliableAnchor(accuracy: input.accuracy,
+                            capturedAt: input.capturedAt, transactionDate: input.transactionDate)
                 }
             }
             let operation: MKLocalSearch
@@ -238,11 +245,13 @@ struct ExpensePlaceDestination: Identifiable {
     let id = UUID()
     let place: ExpensePlace
     let merchant: String
+    let transactionDate: Date
 }
 
 struct ExpensePlaceMapSheet: View {
     let initial: ExpensePlace?
     var merchantHint: String = ""
+    var transactionDate: Date?
     var onSave: ((ExpensePlace) -> Void)?
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -265,9 +274,10 @@ struct ExpensePlaceMapSheet: View {
     @State private var movingMap = false
     @State private var visible = false
     @StateObject private var merchantMatcher = ExpenseMerchantMatcher()
-    init(initial: ExpensePlace?, merchantHint: String = "", onSave: ((ExpensePlace) -> Void)? = nil) {
+    init(initial: ExpensePlace?, merchantHint: String = "", transactionDate: Date? = nil, onSave: ((ExpensePlace) -> Void)? = nil) {
         self.initial = initial
         self.merchantHint = merchantHint
+        self.transactionDate = transactionDate
         self.onSave = onSave
         _selected = State(initialValue: initial)
         _name = State(initialValue: initial?.name ?? "")
@@ -285,10 +295,17 @@ struct ExpensePlaceMapSheet: View {
         guard visible, initialized, draft.applePlaceID == nil else { return nil }
         let generic = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
-        let expected = !typedName.isEmpty && !generic.contains(typedName) ? typedName : merchantHint
+        let hint = merchantHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Reverse-geocoded names often describe a street/building, not the merchant.
+        let recordedLocation = typedName == selected?.name && selected?.accuracyMeters != nil
+        let expected = recordedLocation && !hint.isEmpty ? hint
+            : (!typedName.isEmpty && !generic.contains(typedName) ? typedName : hint)
         let sameAddress = address.trimmingCharacters(in: .whitespacesAndNewlines) == selected?.address
         return MerchantMatchInput(name: expected, address: address, latitude: sameAddress ? selected?.latitude : nil,
-                                  longitude: sameAddress ? selected?.longitude : nil)
+                                  longitude: sameAddress ? selected?.longitude : nil,
+                                  accuracy: sameAddress ? selected?.accuracyMeters : nil,
+                                  capturedAt: sameAddress ? selected?.capturedAt : nil,
+                                  transactionDate: transactionDate)
     }
     private var googleMapsURL: URL? {
         let place = draft

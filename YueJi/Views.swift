@@ -2261,7 +2261,7 @@ struct ExpenseDetailView: View {
                     }
                     if let place = entry.place {
                         ExpensePlaceDetails(place: place) {
-                            mapDestination = ExpensePlaceDestination(place: place, merchant: entry.merchant)
+                            mapDestination = ExpensePlaceDestination(place: place, merchant: entry.merchant, transactionDate: entry.date)
                         }
                     }
                     Section(tr("付款详情", "Payment details", "Butiran bayaran")) {
@@ -2415,7 +2415,7 @@ struct ExpenseDetailView: View {
                 hiddenSuggestion = nil
             }
             .sheet(item: $mapDestination) { destination in
-                ExpensePlaceMapSheet(initial: destination.place, merchantHint: destination.merchant, onSave: nil)
+                ExpensePlaceMapSheet(initial: destination.place, merchantHint: destination.merchant, transactionDate: destination.transactionDate, onSave: nil)
             }
             .modifier(ExpenseDeletionConfirmation(expense: $deleting))
             .onAppear { if let liveDetail, lastVisibleDetail?.entry.id != liveDetail.entry.id { lastVisibleDetail = liveDetail } }
@@ -2950,7 +2950,7 @@ struct ExpenseEditor: View {
                 }
             }
             .sheet(isPresented: $editingPlace) {
-                ExpensePlaceMapSheet(initial: place, merchantHint: name) { value in
+                ExpensePlaceMapSheet(initial: place, merchantHint: name, transactionDate: date) { value in
                     placeNotice = nil
                     var chosen = value
                     chosen.capturedAt = nil // An explicit map choice is not an automatic recording-time guess.

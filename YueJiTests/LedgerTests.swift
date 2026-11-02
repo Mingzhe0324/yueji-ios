@@ -93,6 +93,18 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertNil(legacy.accuracyMeters)
         XCTAssertFalse(ExpensePlace(name: "Invalid", accuracyMeters: -1).valid)
     }
+
+    func testMerchantAnchorRequiresAccurateTransactionTimeLocation() {
+        let transaction = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertTrue(MerchantMatching.reliableAnchor(accuracy: 30, capturedAt: transaction, transactionDate: transaction))
+        XCTAssertFalse(MerchantMatching.reliableAnchor(accuracy: 350, capturedAt: transaction, transactionDate: transaction))
+        XCTAssertFalse(MerchantMatching.reliableAnchor(accuracy: .nan, capturedAt: nil, transactionDate: transaction))
+        XCTAssertFalse(MerchantMatching.reliableAnchor(accuracy: -1, capturedAt: nil, transactionDate: transaction))
+        XCTAssertFalse(MerchantMatching.reliableAnchor(accuracy: 30, capturedAt: transaction.addingTimeInterval(3600), transactionDate: transaction))
+        XCTAssertFalse(MerchantMatching.reliableAnchor(accuracy: 30, capturedAt: transaction, transactionDate: nil))
+        // Explicitly chosen map locations do not expire when viewing old entries.
+        XCTAssertTrue(MerchantMatching.reliableAnchor(accuracy: nil, capturedAt: nil, transactionDate: transaction))
+    }
     func testAutomaticPlaceIsSavedAndRetryDoesNotOverwriteIt() throws {
         var delivery = AutomationDelivery(kind: "applePay", amount: 12, merchant: "Cafe")
         delivery.useTransactionDate = false

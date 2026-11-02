@@ -104,6 +104,13 @@ struct MerchantMatchCandidate {
     var distance: Double
 }
 enum MerchantMatching {
+    static func reliableAnchor(accuracy: Double?, capturedAt: Date?, transactionDate: Date?) -> Bool {
+        if let accuracy, !accuracy.isFinite || accuracy < 0 || accuracy > 100 { return false }
+        if let capturedAt {
+            guard let transactionDate, abs(transactionDate.timeIntervalSince(capturedAt)) <= 300 else { return false }
+        }
+        return true
+    }
     static func key(_ name: String) -> String {
         String(String.UnicodeScalarView(name.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "en_US_POSIX"))
             .unicodeScalars.filter { CharacterSet.alphanumerics.contains($0) }))
