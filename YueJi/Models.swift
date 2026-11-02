@@ -80,6 +80,17 @@ func automaticExpenseDetail(_ entry: Expense) -> String {
     return sourceLabel(entry.source) + " · " + amount + "\n" + entry.merchant + " · " + entry.categorySummary + "\n" + dateLabel(entry.date, time: true) + entry.timeSourceSuffix
 }
 
+extension Ledger {
+    /// A specific purchase description takes precedence over a broad merchant rule.
+    /// Raw bank notification bodies are not item descriptions.
+    func purchaseCategory(merchant: String, description: String = "") -> String {
+        let described = guessCategory("", description: description)
+        if described != "其他", categoryNames.contains(described) { return described }
+        if let saved = merchantCategories[friendKey(merchant)], categoryNames.contains(saved) { return saved }
+        return guessCategory(merchant)
+    }
+}
+
 struct Repayment: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var cents: Int
@@ -479,7 +490,7 @@ struct Ledger: Codable {
             seenEvents.insert(key)
             return false
         }
-        expenses.append(Expense(bankAccountID: bankAccountID, merchant: name, entryDescription: description.isEmpty ? nil : description, cents: value, date: date, category: merchantCategories[friendKey(name)] ?? guessCategory(name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
+        expenses.append(Expense(bankAccountID: bankAccountID, merchant: name, entryDescription: description.isEmpty ? nil : description, cents: value, date: date, category: purchaseCategory(merchant: name, description: description), source: "Apple Pay", foreign: fx, receiptSummary: description.isEmpty ? nil : description, transactionReference: explicit.isEmpty ? nil : explicit))
         seenEvents.insert(key)
         return true
     }

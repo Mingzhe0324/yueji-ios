@@ -3306,7 +3306,6 @@ struct ExpenseEditor: View {
             await model.refresh(postRecurring: false)
             finishDraft()
             model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil)
-            model.floatSavedAmount(n, incoming: false)
             dismiss(); onSaved?()
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
@@ -4663,17 +4662,6 @@ private struct LedgerFeedbackHost: ViewModifier {
     }
     func body(content: Content) -> some View {
         content
-            .overlay(alignment: .bottom) {
-                if visible, model.didFinishLaunch, !hideAmounts, let amount = model.savedAmount {
-                    TransactionAmount(cents: amount.cents, direction: amount.incoming ? .incoming : .outgoing)
-                        .font(.title2.bold()).padding(.horizontal, 22).padding(.vertical, 12)
-                        .background(.regularMaterial, in: Capsule())
-                        .padding(.bottom, 90).id(amount.id)
-                        .transition(reduceMotion || !ElegantMotion.enabled ? .opacity : .move(edge: .bottom).combined(with: .opacity))
-                        .allowsHitTesting(false).accessibilityHidden(true)
-                }
-            }
-            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.25), value: model.savedAmount?.id)
             .overlay(alignment: .top) {
                 // Keep the navigation bar's Back/Close and trailing buttons fully reachable.
                 topBanner.frame(maxWidth: 520).padding(.horizontal, 20).padding(.top, 52)
@@ -4708,13 +4696,31 @@ private struct LedgerFeedbackHost: ViewModifier {
             } else if let notice = model.foregroundNotice {
                 SwipeDismissBanner(onDismiss: { model.dismissForegroundNotice(id: notice.id) },
                     onInteraction: { model.setBannerInteraction(id: notice.id.uuidString, active: $0) }) { interaction in
-                    NotificationBannerCard(title: notice.title, message: notice.message, symbol: "bell.badge.fill", color: IslandPalette.sky,
+                    VStack(spacing: 4) {
+                      NotificationBannerCard(title: notice.title, message: notice.message, symbol: "bell.badge.fill", color: IslandPalette.sky,
                         interaction: interaction, action: notice.destination == nil ? nil : {
                             guard model.foregroundNotice?.id == notice.id, let destination = notice.destination else { return }
                             model.dismissForegroundNotice(id: notice.id)
                             UserDefaults.standard.set(destination, forKey: "pendingNotificationDestination")
                             NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil)
                         })
+                      if let recordID = notice.recordID,
+                         let entry = model.ledger.expenses.first(where: { candidate in
+                             (notice.kind == "expense" && candidate.id == recordID) ||
+                             (notice.kind == "notice" && model.ledger.tngNotices.contains { $0.id == recordID && $0.expenseID == candidate.id })
+                         }) {
+                          Button(tr("撤销这笔记账", "Undo this entry", "Batalkan rekod ini")) {
+                              guard interaction.canActivate, model.foregroundNotice?.id == notice.id else { return }
+                              Task {
+                                  do {
+                                      try await model.deleteExpense(entry)
+                                      model.dismissForegroundNotice(id: notice.id)
+                                  } catch { model.error = error.localizedDescription }
+                              }
+                          }.disabled(model.deletionInFlight)
+                            .buttonStyle(.bordered).accessibilityIdentifier("automation.undoEntry")
+                      }
+                    }
                 }.id(notice.id).transition(bannerTransition)
             } else if let prompt = model.incomePrompt {
                 SwipeDismissBanner(onDismiss: { model.dismissIncomePrompt(id: prompt.id) },

@@ -2933,7 +2933,11 @@ final class LedgerTests: XCTestCase {
         let date = Date()
         XCTAssertTrue(try ledger.addPayment(amount: 12.50, merchant: "Coffee", currency: "MYR", date: date, eventID: "bank-one"))
         XCTAssertFalse(try ledger.addPayment(amount: 12.50, merchant: "Coffee", currency: "MYR", date: date, eventID: "bank-one"))
-        ledger.expenses = []
+        let deletion = try ledger.deleteLedgerExpense(XCTUnwrap(ledger.expenses.first))
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertFalse(try ledger.addPayment(amount: 12.50, merchant: "Coffee", currency: "MYR", date: date, eventID: "bank-one"))
+        try ledger.restoreDeletedRecords([deletion])
+        XCTAssertEqual(ledger.expenses.count, 1)
         XCTAssertFalse(try ledger.addPayment(amount: 12.50, merchant: "Coffee", currency: "MYR", date: date, eventID: "bank-one"))
         XCTAssertThrowsError(try ledger.addPayment(amount: 12, merchant: "Shop", currency: "USD", date: date, eventID: nil))
         XCTAssertThrowsError(try ledger.addPayment(amount: -.infinity, merchant: "Shop", currency: "MYR", date: date, eventID: nil))
@@ -4393,7 +4397,9 @@ final class AutomaticCategoryNotificationTests: XCTestCase {
         XCTAssertEqual(ledger.expenses.last?.receiptSummary, "broadband bill")
         ledger.merchantCategories[friendKey("ABC")] = "购物"
         _ = try ledger.addPayment(amount: 13, merchant: "ABC", currency: "MYR", date: now, eventID: "description-2", description: "broadband bill")
-        XCTAssertEqual(ledger.expenses.last?.category, "购物")
+        XCTAssertEqual(ledger.expenses.last?.category, "账单", "Specific item descriptions override broad merchant defaults")
+        _ = try ledger.addPayment(amount: 14, merchant: "ABC", currency: "MYR", date: now, eventID: "description-3")
+        XCTAssertEqual(ledger.expenses.last?.category, "购物", "No item description uses the saved correction")
         _ = try ledger.validated()
     }
     func testTNGResultContainsPersistedCategoryAndAmount() throws {

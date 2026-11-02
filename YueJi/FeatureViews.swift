@@ -4370,7 +4370,7 @@ struct AIClassificationRow: View {
         .task(id: requestKey) {
             loading = false; status = ""
             if baseline == nil { baseline = classifyInitial || !enabled ? "" : inputKey; if !classifyInitial { return } }
-            guard enabled, !manuallySelected, inputKey != baseline,
+            guard !manuallySelected, inputKey != baseline,
                   !(merchant + text).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   text.count <= 1000, merchant.count <= 200 else { return }
             let submitted = text, submittedMerchant = merchant, previous = category
@@ -4385,6 +4385,7 @@ struct AIClassificationRow: View {
                     status = tr("已使用记住的商户分类", "Used saved merchant category", "Kategori peniaga tersimpan digunakan")
                     return
                 }
+                guard enabled else { return }
                 loading = true
                 status = tr("正在识别分类…", "Finding a category…", "Mengenal pasti kategori…")
                 let data = try await CloudAccount.shared.assistant(mode: "classify", text: submitted, categories: categories, merchant: submittedMerchant)

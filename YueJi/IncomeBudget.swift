@@ -980,6 +980,7 @@ struct StatementImportResult: Sendable {
     var skipped = 0
     var matched = 0
     var existingPending = 0
+    var possibleDuplicates = 0
 }
 extension Ledger {
     /// A same-amount posting within three days may be an existing notification,
@@ -1032,6 +1033,7 @@ extension Ledger {
             notice.title = statement.provider + " statement"
             notice.sourceBank = statement.provider; notice.accountSuffix = statement.suffix; notice.bankReference = row.id
             notice.balanceHeldForReview = true; notice.possibleDuplicate = possible
+            if possible { result.possibleDuplicates += 1 }
             notice.reviewReason = possible ? tr("可能已有相同交易，请核对后处理。", "A matching transaction may already exist. Review first.", "Transaksi sepadan mungkin sudah wujud. Semak dahulu.") : tr("月结单用途待确认。", "Statement purpose needs review.", "Tujuan penyata perlu disemak.")
             var expense: Expense?
             if !possible && !statement.reviewOnly && row.isExpense {

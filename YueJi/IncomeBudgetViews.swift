@@ -1242,7 +1242,6 @@ struct IncomeEditor: View {
                 return try ledger.updateIncome(entry, replacing: original)
             }, completion: { applied in
                 model.showSaved(message: applied.isEmpty ? nil : tr("已保存，预算已调整", "Saved · budgets updated", "Disimpan · bajet dikemas kini"))
-                model.floatSavedAmount(entry.cents, incoming: true)
                 dismiss()
             }, failure: { error = $0.localizedDescription })
         } else {
@@ -1251,7 +1250,7 @@ struct IncomeEditor: View {
                 try ledger.addIncome(entry, autoPercent: percent)
             }, completion: { outcome in
                 if let outcome { model.presentIncomeOutcome(outcome) } else {
-                    model.showSaved(); model.floatSavedAmount(entry.cents, incoming: true)
+                    model.showSaved()
                 }
                 dismiss()
             }, failure: { error = $0.localizedDescription })
@@ -1525,6 +1524,7 @@ private struct StatementImportView: View {
                         LabeledContent(tr("已匹配", "Matched", "Sepadan"), value: "\(result.matched)")
                         LabeledContent(tr("待确认", "Needs review", "Perlu semakan"), value: "\(result.pending + result.existingPending)")
                         LabeledContent(tr("新增", "Added", "Ditambah"), value: "\(result.added)")
+                        LabeledContent(tr("本次待确认中的疑似重复", "New pending · possible duplicates", "Tertunda baharu · kemungkinan pendua"), value: "\(result.possibleDuplicates)")
                         if result.skipped > result.matched + result.existingPending {
                             LabeledContent(tr("期初前跳过", "Before opening · skipped", "Sebelum baki awal · dilangkau"), value: "\(result.skipped - result.matched - result.existingPending)")
                         }
@@ -1539,6 +1539,11 @@ private struct StatementImportView: View {
                             NavigationLink { FinancialNoticeReviewView(id: notice.id) } label: {
                                 VStack(alignment: .leading) {
                                     Text(notice.party ?? "RHB")
+                                    if notice.possibleDuplicate == true {
+                                        Label(tr("疑似重复", "Possible duplicate", "Kemungkinan pendua"), systemImage: "doc.on.doc")
+                                            .font(.caption).foregroundStyle(.orange)
+                                    }
+                                    if let reason = notice.reviewReason { Text(reason).font(.caption).foregroundStyle(.secondary) }
                                     Text(day(notice.date) + " · " + money(notice.cents ?? 0)).font(.caption).foregroundStyle(.secondary)
                                 }
                             }
@@ -1581,6 +1586,12 @@ private struct StatementImportView: View {
             }
             LabeledContent(tr("期间", "Period", "Tempoh"), value: day(statement.start) + " – " + day(statement.end))
             LabeledContent(tr("月结单期初", "Statement opening", "Baki awal penyata"), value: money(statement.opening))
+            LabeledContent(tr("期间入账", "Period credits", "Kredit tempoh")) {
+                TransactionAmount(cents: statement.rows.reduce(0) { $0 + $1.credit }, direction: .incoming)
+            }
+            LabeledContent(tr("期间出账", "Period debits", "Debit tempoh")) {
+                TransactionAmount(cents: statement.rows.reduce(0) { $0 + $1.debit }, direction: .outgoing)
+            }
             LabeledContent(tr("月结单期末", "Statement closing", "Baki akhir penyata"), value: money(statement.closing))
             if let cutoff = RHBStatement.calendar.date(byAdding: .day, value: 1, to: statement.end),
                let balance = model.ledger.statementBalance(account, before: cutoff) {
