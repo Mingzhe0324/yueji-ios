@@ -2,6 +2,13 @@
 
 本实现不调用 Google Places API 或 Maps Static API，不需要 Google API Key 或新增 Supabase 函数。
 
+## 费用约定
+
+- 店铺地图与照片采用无需启用 Google 计费的方案：Apple 地图、Commons 开放照片，以及用户点击后打开的 Google Maps 搜索链接。
+- 不接入 Google Places 的免费额度模式，因为该模式仍需启用计费；不自动回退到任何付费照片服务。
+- Commons 未找到符合条件的照片时保留地图与查看店铺的按钮，不保证每家店都有照片。
+- 此约定仅针对店铺地图／照片功能；现有 Gemini 与 Supabase 服务的额度独立管理。
+
 ## 查看地点
 
 - 优先使用已保存的 Apple 店铺标识；没有标识时，用店名、地址与坐标匹配店铺。
