@@ -436,15 +436,15 @@ extension SpendingAlert {
         let name = categoryLabel(category)
         switch kind {
         case .overall:
-            return tr("本月消费比平时多 \(rise)%", "Spending is up \(rise)%", "Belanja naik \(rise)%")
+            return tr("本月消费比平时多 \(rise)%", LocalizedPhrase("Spending is up \(rise)%"), "Belanja naik \(rise)%")
         case .category:
-            return tr("\(name)比平时多 \(rise)%", "\(name) is up \(rise)%", "\(name) naik \(rise)%")
+            return tr("\(name)比平时多 \(rise)%", LocalizedPhrase("\(name) is up \(rise)%"), "\(name) naik \(rise)%")
         case .newCategory:
-            return tr("新的支出：\(name)", "New spending on \(name)", "Belanja baharu: \(name)")
+            return tr("新的支出：\(name)", LocalizedPhrase("New spending on \(name)"), "Belanja baharu: \(name)")
         case .purchase:
             let place = merchant ?? name
-            if hidden { return tr("\(place) 的一笔大额消费", "A large purchase at \(place)", "Belian besar di \(place)") }
-            return tr("在 \(place) 消费 \(money(cents))", "\(money(cents)) at \(place)", "\(money(cents)) di \(place)")
+            if hidden { return tr("\(place) 的一笔大额消费", LocalizedPhrase("A large purchase at \(place)"), "Belian besar di \(place)") }
+            return tr("在 \(place) 消费 \(money(cents))", LocalizedPhrase("\(money(cents)) at \(place)"), "\(money(cents)) di \(place)")
         }
     }
     /// What it is compared with, in a line.
@@ -454,27 +454,27 @@ extension SpendingAlert {
         case .overall, .category:
             if hidden {
                 if let day = throughDay {
-                    return tr("与前几个月的 1–\(day) 日相比", "Compared with days 1–\(day) of recent months", "Berbanding hari 1–\(day) bulan-bulan lalu")
+                    return tr("与前几个月的 1–\(day) 日相比", LocalizedPhrase("Compared with days 1–\(day) of recent months"), "Berbanding hari 1–\(day) bulan-bulan lalu")
                 }
                 return tr("与前几个月相比", "Compared with recent months", "Berbanding bulan-bulan lalu")
             }
             if let day = throughDay {
                 return tr("截至 \(day) 日 \(money(cents))；平时约 \(money(usual))",
-                          "\(money(cents)) by day \(day); usually about \(money(usual))",
+                          LocalizedPhrase("\(money(cents)) by day \(day); usually about \(money(usual))"),
                           "\(money(cents)) hingga hari ke-\(day); biasanya kira-kira \(money(usual))")
             }
             return tr("本月 \(money(cents))；平时约 \(money(usual))",
-                      "\(money(cents)) this month; usually about \(money(usual))",
+                      LocalizedPhrase("\(money(cents)) this month; usually about \(money(usual))"),
                       "\(money(cents)) bulan ini; biasanya kira-kira \(money(usual))")
         case .newCategory:
             let months = SpendingAlerts.monthsCompared
             if hidden {
-                return tr("前 \(months) 个月没有这类消费", "None in the previous \(months) months", "Tiada dalam \(months) bulan sebelumnya")
+                return tr("前 \(months) 个月没有这类消费", LocalizedPhrase("None in the previous \(months) months"), "Tiada dalam \(months) bulan sebelumnya")
             }
-            return tr("\(money(cents))；前 \(months) 个月没有", "\(money(cents)); none in the previous \(months) months",
+            return tr("\(money(cents))；前 \(months) 个月没有", LocalizedPhrase("\(money(cents)); none in the previous \(months) months"),
                       "\(money(cents)); tiada dalam \(months) bulan sebelumnya")
         case .purchase:
-            return tr("约为平常\(name)单笔消费的 \(multipleText) 倍", "About \(multipleText)× a typical \(name) purchase",
+            return tr("约为平常\(name)单笔消费的 \(multipleText) 倍", LocalizedPhrase("About \(multipleText)× a typical \(name) purchase"),
                       "Kira-kira \(multipleText)× belian \(name) biasa")
         }
     }

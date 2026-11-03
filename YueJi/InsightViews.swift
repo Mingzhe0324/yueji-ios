@@ -170,7 +170,7 @@ struct YearReviewView: View {
 
     private var hero: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text(tr("\(String(year)) 年个人消费", "Personal spending in \(String(year))", "Belanja peribadi \(String(year))"))
+            Text(tr("\(String(year)) 年个人消费", LocalizedPhrase("Personal spending in \(String(year))"), "Belanja peribadi \(String(year))"))
                 .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                 .textCase(.uppercase)
             Group {
@@ -200,14 +200,14 @@ struct YearReviewView: View {
         let sameDate = year == currentYear
         let text: String
         if percent == 0 {
-            text = sameDate ? tr("与 \(previous) 年同期持平", "Level with \(previous) to this date", "Sama dengan \(previous) hingga tarikh ini")
-                : tr("与 \(previous) 年持平", "Level with \(previous)", "Sama dengan \(previous)")
+            text = sameDate ? tr("与 \(previous) 年同期持平", LocalizedPhrase("Level with \(previous) to this date"), "Sama dengan \(previous) hingga tarikh ini")
+                : tr("与 \(previous) 年持平", LocalizedPhrase("Level with \(previous)"), "Sama dengan \(previous)")
         } else if change > 0 {
-            text = sameDate ? tr("比 \(previous) 年同期多 \(percent)%", "\(percent)% more than \(previous) to this date", "\(percent)% lebih daripada \(previous) hingga tarikh ini")
-                : tr("比 \(previous) 年多 \(percent)%", "\(percent)% more than \(previous)", "\(percent)% lebih daripada \(previous)")
+            text = sameDate ? tr("比 \(previous) 年同期多 \(percent)%", LocalizedPhrase("\(percent)% more than \(previous) to this date"), "\(percent)% lebih daripada \(previous) hingga tarikh ini")
+                : tr("比 \(previous) 年多 \(percent)%", LocalizedPhrase("\(percent)% more than \(previous)"), "\(percent)% lebih daripada \(previous)")
         } else {
-            text = sameDate ? tr("比 \(previous) 年同期少 \(percent)%", "\(percent)% less than \(previous) to this date", "\(percent)% kurang daripada \(previous) hingga tarikh ini")
-                : tr("比 \(previous) 年少 \(percent)%", "\(percent)% less than \(previous)", "\(percent)% kurang daripada \(previous)")
+            text = sameDate ? tr("比 \(previous) 年同期少 \(percent)%", LocalizedPhrase("\(percent)% less than \(previous) to this date"), "\(percent)% kurang daripada \(previous) hingga tarikh ini")
+                : tr("比 \(previous) 年少 \(percent)%", LocalizedPhrase("\(percent)% less than \(previous)"), "\(percent)% kurang daripada \(previous)")
         }
         let symbol = percent == 0 ? "equal.circle.fill" : (change > 0 ? "arrow.up.right.circle.fill" : "arrow.down.right.circle.fill")
         let tint: Color = percent == 0 ? .secondary : (change > 0 ? IslandPalette.pumpkin : IslandPalette.mint)
@@ -431,7 +431,7 @@ struct YearReviewView: View {
                 .accessibilityHint(tr("在日历中显示这一天", "Shows this day in the calendar", "Tunjukkan hari ini dalam kalendar"))
             }
             LabeledContent {
-                Text(tr("\(snapshot.noSpendDays) / \(snapshot.trackedDays) 天", "\(snapshot.noSpendDays) of \(snapshot.trackedDays) days",
+                Text(tr("\(snapshot.noSpendDays) / \(snapshot.trackedDays) 天", LocalizedPhrase("\(snapshot.noSpendDays) of \(snapshot.trackedDays) days"),
                         "\(snapshot.noSpendDays) daripada \(snapshot.trackedDays) hari")).monospacedDigit()
             } label: {
                 Label(tr("零消费日", "No-spend days", "Hari tanpa belanja"), systemImage: "leaf")

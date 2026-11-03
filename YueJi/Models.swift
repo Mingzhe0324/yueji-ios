@@ -1268,13 +1268,13 @@ struct ItemOwnership: Codable, Equatable {
 struct ExpenseItemPreview: Equatable {
     let names: String
     let remaining: Int
-    var moreLabel: String { tr("另有 \(remaining) 件", "+\(remaining) more", "+\(remaining) lagi") }
+    var moreLabel: String { tr("另有 \(remaining) 件", LocalizedPhrase("+\(remaining) more"), "+\(remaining) lagi") }
 }
 struct RepaymentPurchasePreview: Equatable {
     let names: String
     let remaining: Int
     var label: String {
-        names + (remaining > 0 ? tr(" · 另 \(remaining) 笔", " · +\(remaining) more", " · +\(remaining) lagi") : "")
+        names + (remaining > 0 ? tr(" · 另 \(remaining) 笔", LocalizedPhrase(" · +\(remaining) more"), " · +\(remaining) lagi") : "")
     }
     static func make(_ entries: [Expense]) -> RepaymentPurchasePreview? {
         var seen = Set<String>()

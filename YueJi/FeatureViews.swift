@@ -153,7 +153,7 @@ private struct TravelBookEditor: View {
                     }
                 }
             }.yuejiListSurface().navigationTitle(tr("旅行资料", "Trip details", "Butiran perjalanan"))
-                .confirmationDialog(tr("删除“\(original?.name ?? "")”？", "Delete “\(original?.name ?? "")”?", "Padam “\(original?.name ?? "")”?"),
+                .confirmationDialog(tr("删除“\(original?.name ?? "")”？", LocalizedPhrase("Delete “\(original?.name ?? "")”?"), "Padam “\(original?.name ?? "")”?"),
                                     isPresented: $confirmingDelete, titleVisibility: .visible) {
                     Button(tr("删除旅行账本", "Delete Travel Book", "Padam Buku Perjalanan"), role: .destructive) {
                         onDelete?()
@@ -185,7 +185,7 @@ private struct TravelBookEditor: View {
             return tr("这个旅行账本会被删除，无法撤销。它没有账目。", "This travel book will be deleted, and this can't be undone. It has no entries.", "Buku perjalanan ini akan dipadam dan tidak boleh dibuat asal. Ia tiada rekod.")
         }
         return tr("这个旅行账本会被删除，无法撤销。它的 \(count) 笔账目（我的消费 \(spent)）会保留在账本中，回到日常消费，并计入月度预算。",
-                  "This travel book will be deleted, and this can't be undone. Its \(count) entries (your spending \(spent)) stay in your ledger, return to everyday spending and count towards your monthly budget.",
+                  LocalizedPhrase("This travel book will be deleted, and this can't be undone. Its \(count) entries (your spending \(spent)) stay in your ledger, return to everyday spending and count towards your monthly budget."),
                   "Buku perjalanan ini akan dipadam dan tidak boleh dibuat asal. \(count) rekodnya (belanja anda \(spent)) kekal dalam lejar, kembali ke belanja harian dan dikira dalam bajet bulanan anda.")
     }
     private func save() {
@@ -415,7 +415,7 @@ struct RecurringView: View {
                     Section {
                         if let hidden {
                             HStack {
-                                Text(tr("已隐藏“\(hidden.name)”", "Hid “\(hidden.name)”", "“\(hidden.name)” disembunyikan"))
+                                Text(tr("已隐藏“\(hidden.name)”", LocalizedPhrase("Hid “\(hidden.name)”"), "“\(hidden.name)” disembunyikan"))
                                     .font(.subheadline).foregroundStyle(.secondary)
                                 Spacer()
                                 Button(tr("撤销", "Undo", "Buat asal")) { restore(hidden) }
@@ -451,12 +451,12 @@ struct RecurringView: View {
                 }
                 if hiddenCount > 0 {
                     Section {
-                        NavigationLink(tr("已隐藏的建议（\(hiddenCount)）", "Hidden suggestions (\(hiddenCount))", "Cadangan tersembunyi (\(hiddenCount))")) { HiddenSubscriptionsView() }
+                        NavigationLink(tr("已隐藏的建议（\(hiddenCount)）", LocalizedPhrase("Hidden suggestions (\(hiddenCount))"), "Cadangan tersembunyi (\(hiddenCount))")) { HiddenSubscriptionsView() }
                             .font(.subheadline)
                     }
                 }
             }.yuejiDashboardSurface().navigationTitle(tr("固定消费", "Recurring expenses", "Belanja berulang")).navigationBarTitleDisplayMode(.large)
-                .yuejiSubtitle(tr("\(activeCount) 项进行中", "\(activeCount) active", "\(activeCount) aktif"))
+                .yuejiSubtitle(tr("\(activeCount) 项进行中", LocalizedPhrase("\(activeCount) active"), "\(activeCount) aktif"))
                 .toolbar { Button { if editor == nil { editor = .new } } label: { Image(systemName: "plus") }.guideTarget("recurring.add").accessibilityLabel(tr("添加固定消费", "Add recurring expense", "Tambah belanja berulang")) }
                 .task(id: hidden?.id) {
                     guard hidden != nil else { return }
@@ -532,17 +532,17 @@ struct RecurringScheduleRow: View {
         if let awaited = model.ledger.awaitedPayment(of: rule) {
             let day = dateLabel(awaited.date)
             return awaited.missed
-                ? (tr("未检测到 \(day) 的付款", "No payment detected for \(day)", "Tiada bayaran dikesan untuk \(day)"), true)
-                : (tr("等待 \(day) 的付款", "Waiting for the \(day) payment", "Menunggu bayaran \(day)"), false)
+                ? (tr("未检测到 \(day) 的付款", LocalizedPhrase("No payment detected for \(day)"), "Tiada bayaran dikesan untuk \(day)"), true)
+                : (tr("等待 \(day) 的付款", LocalizedPhrase("Waiting for the \(day) payment"), "Menunggu bayaran \(day)"), false)
         }
         guard let next = rule.upcomingDate() else { return ("", false) }
         let day = dateLabel(next)
-        if rule.autoPost { return (tr("\(day) 自动记一笔", "Adds an entry on \(day)", "Menambah rekod pada \(day)"), false) }
+        if rule.autoPost { return (tr("\(day) 自动记一笔", LocalizedPhrase("Adds an entry on \(day)"), "Menambah rekod pada \(day)"), false) }
         let reminder = rule.reminderDays.map { days -> String in
             let lead = ReminderLead.label(days)
             return tr(" · " + lead + "提醒", " · Reminder " + lead.lowercased(), " · Peringatan " + lead.lowercased())
         } ?? ""
-        return (tr("下次预计 \(day)", "Next expected \(day)", "Seterusnya dijangka \(day)") + reminder, false)
+        return (tr("下次预计 \(day)", LocalizedPhrase("Next expected \(day)"), "Seterusnya dijangka \(day)") + reminder, false)
     }
 }
 /// A possible subscription: the service, its amount, the cycle it seems to keep and the next
@@ -695,8 +695,8 @@ struct RecurringEditor: View {
         }
         let last = dateLabel(candidate.lastDate)
         return candidate.cycle == nil
-            ? tr("目前只有一笔付款（\(last)），请选择付款周期并确认下次付款日。", "There's one payment so far (\(last)): choose the billing cycle and confirm the next payment date.", "Setakat ini ada satu bayaran (\(last)): pilih kitaran bil dan sahkan tarikh bayaran seterusnya.")
-            : tr("根据已记录的付款推测，请确认。上次付款（\(last)）已记账，从下一次开始。", "Estimated from your recorded payments; please confirm. The last payment (\(last)) is already recorded, so this starts with the next one.", "Dianggarkan daripada bayaran yang direkod; sila sahkan. Bayaran terakhir (\(last)) sudah direkod, jadi ini bermula dengan yang seterusnya.")
+            ? tr("目前只有一笔付款（\(last)），请选择付款周期并确认下次付款日。", LocalizedPhrase("There's one payment so far (\(last)): choose the billing cycle and confirm the next payment date."), "Setakat ini ada satu bayaran (\(last)): pilih kitaran bil dan sahkan tarikh bayaran seterusnya.")
+            : tr("根据已记录的付款推测，请确认。上次付款（\(last)）已记账，从下一次开始。", LocalizedPhrase("Estimated from your recorded payments; please confirm. The last payment (\(last)) is already recorded, so this starts with the next one."), "Dianggarkan daripada bayaran yang direkod; sila sahkan. Bayaran terakhir (\(last)) sudah direkod, jadi ini bermula dengan yang seterusnya.")
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -859,7 +859,7 @@ struct RecurringDetailView: View {
             }
         } message: {
             let name = rule?.name ?? ""
-            Text(tr("这只会停止月记的追踪和提醒，不会向 \(name) 取消订阅。请到服务商处取消；App Store 订阅在“设置”里你的名字下的“订阅”中。", "This only stops tracking and reminders in YueJi. It doesn't cancel your subscription with \(name): cancel it with the provider. App Store subscriptions are in Settings, under your name, then Subscriptions.", "Ini hanya menghentikan penjejakan dan peringatan dalam YueJi. Ia tidak membatalkan langganan anda dengan \(name): batalkan dengan pembekal. Langganan App Store berada dalam Tetapan, di bawah nama anda, kemudian Langganan."))
+            Text(tr("这只会停止月记的追踪和提醒，不会向 \(name) 取消订阅。请到服务商处取消；App Store 订阅在“设置”里你的名字下的“订阅”中。", LocalizedPhrase("This only stops tracking and reminders in YueJi. It doesn't cancel your subscription with \(name): cancel it with the provider. App Store subscriptions are in Settings, under your name, then Subscriptions."), "Ini hanya menghentikan penjejakan dan peringatan dalam YueJi. Ia tidak membatalkan langganan anda dengan \(name): batalkan dengan pembekal. Langganan App Store berada dalam Tetapan, di bawah nama anda, kemudian Langganan."))
         }
     }
     private func details(_ rule: RecurringExpense) -> some View {
@@ -941,7 +941,7 @@ struct RecurringDetailView: View {
                     .font(.headline).monospacedDigit()
                 Text(dateLabel(payment.date) + " · " + sourceLabel(payment.source)).font(.subheadline).foregroundStyle(.secondary)
                 if differs {
-                    Text(tr("与预计金额 \(expected) 不同；确认后按新金额提醒。", "Differs from the expected \(expected); confirming uses the new amount from now on.", "Berbeza daripada \(expected) yang dijangka; pengesahan menggunakan amaun baharu selepas ini."))
+                    Text(tr("与预计金额 \(expected) 不同；确认后按新金额提醒。", LocalizedPhrase("Differs from the expected \(expected); confirming uses the new amount from now on."), "Berbeza daripada \(expected) yang dijangka; pengesahan menggunakan amaun baharu selepas ini."))
                         .font(.footnote).foregroundStyle(.secondary)
                 }
             }
@@ -958,8 +958,8 @@ struct RecurringDetailView: View {
         let day = dateLabel(awaited.date)
         return Section {
             Text(awaited.missed
-                 ? tr("没有记录到预计 \(day) 的付款。可能是记录渠道没收到，也可能已经取消。", "No payment was recorded for the expected \(day). The recording channel may have missed it, or it may have been cancelled.", "Tiada bayaran direkod untuk \(day) yang dijangka. Saluran rakaman mungkin terlepas, atau ia mungkin telah dibatalkan.")
-                 : tr("预计 \(day) 付款，还没有记录，可能稍后才到。", "A payment was expected on \(day) and hasn't been recorded yet; it may still come.", "Bayaran dijangka pada \(day) dan belum direkod; ia mungkin masih tiba."))
+                 ? tr("没有记录到预计 \(day) 的付款。可能是记录渠道没收到，也可能已经取消。", LocalizedPhrase("No payment was recorded for the expected \(day). The recording channel may have missed it, or it may have been cancelled."), "Tiada bayaran direkod untuk \(day) yang dijangka. Saluran rakaman mungkin terlepas, atau ia mungkin telah dibatalkan.")
+                 : tr("预计 \(day) 付款，还没有记录，可能稍后才到。", LocalizedPhrase("A payment was expected on \(day) and hasn't been recorded yet; it may still come."), "Bayaran dijangka pada \(day) dan belum direkod; ia mungkin masih tiba."))
                 .font(.subheadline)
             Button(tr("仍在使用", "Still active", "Masih aktif")) { model.change { [id = rule.id] in $0.confirmStillActive(ruleID: id) } }
             Button(tr("记为一笔支出", "Record it as an expense", "Rekod sebagai belanja")) { model.change { [id = rule.id] in try $0.recordAwaitedPayment(ruleID: id) } }
@@ -3851,7 +3851,7 @@ private struct SavingsGoalEditor: View {
                     LabeledContent(tr("距离目标", "Remaining", "Baki"), value: money(remaining))
                     if hasDeadline && count > 0 && remaining > 0 {
                         LabeledContent(tr("每月需要", "Needed monthly", "Diperlukan setiap bulan"), value: money(needed))
-                        Text(tr("共 \(count) 次，最后一次按剩余金额存入。", "\(count) contributions; the last is capped at the remaining amount.", "\(count) simpanan; yang terakhir mengikut baki.")).font(.caption)
+                        Text(tr("共 \(count) 次，最后一次按剩余金额存入。", LocalizedPhrase("\(count) contributions; the last is capped at the remaining amount."), "\(count) simpanan; yang terakhir mengikut baki.")).font(.caption)
                         Button(tr("采用此每月金额", "Use this monthly amount", "Gunakan amaun bulanan ini")) { monthly = Currency.input(needed, "MYR") }
                     }
                     if let projected {
@@ -4554,7 +4554,7 @@ struct ExpenseItemsFields: View {
             } label: { Label(tr("添加物品", "Add item", "Tambah item"), systemImage: "plus.circle") }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("transaction.item.add")
-                .accessibilityValue(tr("共 \(items.count) 件物品", "\(items.count) items", "\(items.count) item"))
+                .accessibilityValue(tr("共 \(items.count) 件物品", LocalizedPhrase("\(items.count) items"), "\(items.count) item"))
                 .disabled(items.count >= 100)
             if !items.isEmpty {
                 LabeledContent(charges == nil ? tr("物品合计 / 交易总额", "Item total / transaction total", "Jumlah item / jumlah transaksi") : tr("物品合计 / 税前小计", "Item total / subtotal", "Jumlah item / subtotal"), value: money(itemTotal) + " / " + money(totalCents))
@@ -4819,7 +4819,7 @@ struct PendingBookkeepingCard: View {
             Section {
                 NavigationLink { TNGInboxView(pendingOnly: true) } label: {
                     SimpleSettingsRow(title: tr("待处理", "Needs attention", "Perlu tindakan"),
-                        subtitle: duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", "\(pending) to review · \(duplicates) possible duplicates", "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", "\(pending) notifications to review", "\(pending) notifikasi untuk semakan"),
+                        subtitle: duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", LocalizedPhrase("\(pending) to review · \(duplicates) possible duplicates"), "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", LocalizedPhrase("\(pending) notifications to review"), "\(pending) notifikasi untuk semakan"),
                         symbol: "tray.full.fill", color: IslandPalette.pumpkin)
                 }
                 NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)

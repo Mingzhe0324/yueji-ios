@@ -42,7 +42,10 @@ compiled = {objects[objects[i]['fileRef']]['path'] for i in source_phase['files'
 assert compiled == {p.name for p in (root / 'YueJi').glob('*.swift')}
 resource_phase = next(o for o in phases if o['isa'] == 'PBXResourcesBuildPhase')
 resources = {objects[objects[i]['fileRef']]['path'] for i in resource_phase['files']}
-assert {'Assets.xcassets', 'Localizable.xcstrings'} <= resources
+assert {'Assets.xcassets', 'Localizable.xcstrings', 'AppLanguageTemplates.json'} <= resources
+templates = json.loads((root / 'YueJi/AppLanguageTemplates.json').read_text(encoding='utf-8'))
+assert len(templates) > 1800 and templates == sorted(set(templates))
+assert all(isinstance(item, str) and item.strip() for item in templates)
 info = plistlib.loads((root / 'YueJi/Info.plist').read_bytes())
 scheme = ET.parse(root / 'YueJi.xcodeproj/xcshareddata/xcschemes/YueJi.xcscheme')
 testables = {ref.attrib['BlueprintName'] for ref in scheme.findall('.//TestableReference/BuildableReference')}

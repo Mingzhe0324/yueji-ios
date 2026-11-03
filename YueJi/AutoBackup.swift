@@ -432,7 +432,7 @@ struct AutoBackupSection: View {
         lastDate > 0 ? dateLabel(Date(timeIntervalSince1970: lastDate), time: true) : tr("尚未备份", "Not yet", "Belum lagi")
     }
     private func copies(_ count: Int) -> String {
-        tr("\(count) 份", "\(count) copies", "\(count) salinan")
+        tr("\(count) 份", LocalizedPhrase("\(count) copies"), "\(count) salinan")
     }
     private func backUpNow() {
         guard !working else { return }
@@ -442,7 +442,7 @@ struct AutoBackupSection: View {
             working = false
             switch outcome {
             case .saved:
-                model.showSaved(message: tr("已备份到「\(folderName)」", "Backed up to \(folderName)", "Disandarkan ke \(folderName)"))
+                model.showSaved(message: tr("已备份到「\(folderName)」", LocalizedPhrase("Backed up to \(folderName)"), "Disandarkan ke \(folderName)"))
             case .failed(let message):
                 model.error = message
             default:

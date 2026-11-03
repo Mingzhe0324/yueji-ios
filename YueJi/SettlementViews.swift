@@ -100,8 +100,8 @@ private func settledDebtLabel(_ cents: Int) -> String {
 }
 
 func settlementDirection(_ cents: Int, name: String) -> String {
-    if cents > 0 { return tr("\(name) 付给我", "\(name) pays me", "\(name) membayar saya") }
-    if cents < 0 { return tr("我付给 \(name)", "I pay \(name)", "Saya membayar \(name)") }
+    if cents > 0 { return tr("\(name) 付给我", LocalizedPhrase("\(name) pays me"), "\(name) membayar saya") }
+    if cents < 0 { return tr("我付给 \(name)", LocalizedPhrase("I pay \(name)"), "Saya membayar \(name)") }
     return tr("抵扣，无需转账", "Offset · no transfer", "Tolakan · tiada pindahan")
 }
 

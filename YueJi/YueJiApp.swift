@@ -8,14 +8,15 @@ import AVFoundation
 struct YueJiApp: App {
     @StateObject private var model = LedgerModel()
     @AppStorage("appLanguage") private var language = "system"
+    @AppStorage("languagePackRevision") private var languagePackRevision = 0
     @AppStorage("appAppearance") private var appearance = "system"
     private var colorScheme: ColorScheme? { appearance == "dark" ? .dark : appearance == "light" ? .light : nil }
     private var selectedLocale: Locale {
-        Locale(identifier: language == "zh" ? "zh_Hans_MY" : language == "ms" ? "ms_MY" : language == "en" ? "en_MY" : AppLanguage.localeID)
+        Locale(identifier: AppLanguage.localeID)
     }
     init() { UserDefaults.standard.register(defaults: ["automationNotifications": true]); UNUserNotificationCenter.current().delegate = LedgerNotifications.shared; LedgerNotifications.registerActions(); YueJiShortcuts.updateAppShortcutParameters() }
     // Typography is the system's SF Pro throughout: clean and elegant, with no overrides.
-    var body: some Scene { WindowGroup { CloudEntryView().font(.body).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).preferredColorScheme(colorScheme) } }
+    var body: some Scene { WindowGroup { CloudEntryView().id(language + ":" + String(languagePackRevision)).font(.body).tint(IslandTheme.accent).environment(\.defaultMinListRowHeight, 50).environmentObject(model).environment(\.locale, selectedLocale).environment(\.layoutDirection, AppLanguage.code == "ar" ? .rightToLeft : .leftToRight).preferredColorScheme(colorScheme) } }
 }
 struct RestoredLedgerFeedback {
     let id = UUID()

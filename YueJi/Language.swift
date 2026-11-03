@@ -1,15 +1,309 @@
 import Foundation
+import SwiftUI
+import Translation
 
 enum AppLanguage {
-    static var code: String {
-        let saved = UserDefaults.standard.string(forKey: "appLanguage") ?? "system"
-        if saved != "system" { return saved }
-        let first = Locale.preferredLanguages.first ?? "en"
-        return first.hasPrefix("zh") ? "zh" : first.hasPrefix("ms") ? "ms" : "en"
+    struct Option: Identifiable {
+        let id: String
+        let name: String
+        let locale: String
+        var bundled: Bool { ["zh", "en", "ms"].contains(id) }
     }
-    static var localeID: String { code == "zh" ? "zh_Hans_MY" : code == "ms" ? "ms_MY" : "en_MY" }
+    static let options: [Option] = [
+        .init(id: "zh", name: "简体中文", locale: "zh_Hans_MY"),
+        .init(id: "en", name: "English", locale: "en_MY"),
+        .init(id: "ms", name: "Bahasa Melayu", locale: "ms_MY"),
+        .init(id: "zh-Hant", name: "繁體中文", locale: "zh_Hant_MY"),
+        .init(id: "id", name: "Bahasa Indonesia", locale: "id_MY"),
+        .init(id: "ja", name: "日本語", locale: "ja_MY"),
+        .init(id: "ko", name: "한국어", locale: "ko_MY"),
+        .init(id: "th", name: "ไทย", locale: "th_MY"),
+        .init(id: "vi", name: "Tiếng Việt", locale: "vi_MY"),
+        .init(id: "es", name: "Español", locale: "es_MY"),
+        .init(id: "fr", name: "Français", locale: "fr_MY"),
+        .init(id: "de", name: "Deutsch", locale: "de_MY"),
+        .init(id: "pt-BR", name: "Português (Brasil)", locale: "pt_BR"),
+        .init(id: "ar", name: "العربية", locale: "ar_MY"),
+        .init(id: "hi", name: "हिन्दी", locale: "hi_MY")
+    ]
+    static func resolve(_ identifier: String) -> String {
+        let value = identifier.replacingOccurrences(of: "_", with: "-").lowercased()
+        if value.hasPrefix("zh") {
+            return value.contains("hant") || value.contains("-tw") || value.contains("-hk") || value.contains("-mo") ? "zh-Hant" : "zh"
+        }
+        if value == "pt" || value.hasPrefix("pt-") { return "pt-BR" }
+        return options.first { value == $0.id.lowercased() || value.hasPrefix($0.id.lowercased() + "-") }?.id ?? "en"
+    }
+    static var requestedCode: String {
+        let saved = UserDefaults.standard.string(forKey: "appLanguage") ?? "system"
+        return resolve(saved == "system" ? Locale.preferredLanguages.first ?? "en" : saved)
+    }
+    static var code: String {
+        let requested = requestedCode
+        return options.first(where: { $0.id == requested })?.bundled == true || LanguagePacks.shared.hasPack(requested) ? requested : "en"
+    }
+    static var localeID: String { options.first { $0.id == code }?.locale ?? "en_MY" }
 }
-func tr(_ zh: String, _ en: String, _ ms: String) -> String { AppLanguage.code == "zh" ? zh : AppLanguage.code == "ms" ? ms : en }
+func tr(_ zh: String, _ en: String, _ ms: String) -> String {
+    let code = AppLanguage.code
+    return code == "zh" ? zh : code == "ms" ? ms : LanguagePacks.shared.translation(en, language: code)
+}
+func tr(_ zh: String, _ en: LocalizedPhrase, _ ms: String) -> String {
+    let code = AppLanguage.code
+    if code == "zh" { return zh }
+    if code == "ms" { return ms }
+    return en.render(LanguagePacks.shared.translation(en.template, language: code), isolate: code == "ar")
+}
+
+/// Only the template is translated. Merchant names, amounts and all runtime values
+/// are substituted afterwards and never passed to TranslationSession or persisted.
+struct LocalizedPhrase: ExpressibleByStringLiteral, ExpressibleByStringInterpolation {
+    let template: String
+    let arguments: [String]
+    init(_ phrase: LocalizedPhrase) { self = phrase }
+    init(stringLiteral value: String) { template = value; arguments = [] }
+    init(stringInterpolation value: StringInterpolation) { template = value.template; arguments = value.arguments }
+    struct StringInterpolation: StringInterpolationProtocol {
+        var template = ""
+        var arguments: [String] = []
+        init(literalCapacity: Int, interpolationCount: Int) { arguments.reserveCapacity(interpolationCount) }
+        mutating func appendLiteral(_ literal: String) { template += literal }
+        mutating func appendInterpolation<T>(_ value: T) {
+            template += "⟦\(arguments.count)⟧"
+            arguments.append(String(describing: value))
+        }
+    }
+    func render(_ translated: String, isolate: Bool = false) -> String {
+        let source = LanguagePacks.validTranslation(translated, for: template) ? translated : template
+        let pattern = try! NSRegularExpression(pattern: "⟦([0-9]+)⟧")
+        let ns = source as NSString
+        var result = "", offset = 0
+        for match in pattern.matches(in: source, range: NSRange(location: 0, length: ns.length)) {
+            result += ns.substring(with: NSRange(location: offset, length: match.range.location - offset))
+            if let index = Int(ns.substring(with: match.range(at: 1))), arguments.indices.contains(index) {
+                result += isolate ? "\u{2068}" + arguments[index] + "\u{2069}" : arguments[index]
+            }
+            offset = NSMaxRange(match.range)
+        }
+        return result + ns.substring(from: offset)
+    }
+}
+
+final class LanguagePacks: @unchecked Sendable {
+    static let shared = LanguagePacks()
+    static let templates: [String] = {
+        guard let url = Bundle.main.url(forResource: "AppLanguageTemplates", withExtension: "json"),
+              let data = try? Data(contentsOf: url), let values = try? JSONDecoder().decode([String].self, from: data) else { return [] }
+        return values
+    }()
+    static let allowed = Set(templates)
+    private let lock = NSLock()
+    private var loaded: [String: [String: String]] = [:]
+    private let directory: URL
+    init(directory: URL? = nil) {
+        self.directory = directory ?? FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("YueJiLanguagePacks-v1", isDirectory: true)
+    }
+    static func validTranslation(_ text: String, for source: String) -> Bool {
+        guard !text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, text.utf8.count <= 16_000 else { return false }
+        func markers(_ value: String) -> [String] {
+            let regex = try! NSRegularExpression(pattern: "⟦[0-9]+⟧")
+            let ns = value as NSString
+            return regex.matches(in: value, range: NSRange(location: 0, length: ns.length)).map { ns.substring(with: $0.range) }.sorted()
+        }
+        return markers(text) == markers(source) &&
+            text.filter { $0 == "⟦" }.count == markers(source).count && text.filter { $0 == "⟧" }.count == markers(source).count
+    }
+    private func values(_ code: String) -> [String: String] {
+        guard AppLanguage.options.contains(where: { $0.id == code && !$0.bundled }) else { return [:] }
+        lock.lock(); defer { lock.unlock() }
+        if let pack = loaded[code] { return pack }
+        let url = directory.appendingPathComponent(code + ".json")
+        var pack: [String: String] = [:]
+        if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 5_000_000,
+           let data = try? Data(contentsOf: url), let decoded = try? JSONDecoder().decode([String: String].self, from: data) {
+            pack = decoded.filter { Self.allowed.contains($0.key) && Self.validTranslation($0.value, for: $0.key) }
+        }
+        loaded[code] = pack
+        return pack
+    }
+    func hasPack(_ code: String) -> Bool { !values(code).isEmpty }
+    func count(_ code: String) -> Int { values(code).count }
+    func missing(_ code: String) -> [String] {
+        let pack = values(code)
+        return Self.templates.filter { pack[$0] == nil }
+    }
+    func translation(_ source: String, language: String) -> String {
+        values(language)[source] ?? source
+    }
+    func save(_ additions: [String: String], language: String) throws {
+        guard AppLanguage.options.contains(where: { $0.id == language && !$0.bundled }) else { return }
+        var pack = values(language)
+        for (source, translated) in additions where Self.allowed.contains(source) && Self.validTranslation(translated, for: source) {
+            pack[source] = translated
+        }
+        let data = try JSONEncoder().encode(pack)
+        guard data.count <= 5_000_000 else { throw CocoaError(.fileWriteOutOfSpace) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        var folder = directory
+        var resource = URLResourceValues(); resource.isExcludedFromBackup = true
+        try folder.setResourceValues(resource)
+        try data.write(to: directory.appendingPathComponent(language + ".json"), options: .atomic)
+        lock.lock(); loaded[language] = pack; lock.unlock()
+    }
+}
+struct AppLanguageSettings: View {
+    @AppStorage("appLanguage") private var language = "system"
+    @State private var preparing: AppLanguage.Option?
+    var body: some View {
+        List {
+            Section {
+                Button { language = "system" } label: {
+                    HStack {
+                        Text(tr("跟随系统", "System default", "Ikut sistem"))
+                        Spacer()
+                        if language == "system" { Image(systemName: "checkmark") }
+                    }
+                }
+                ForEach(AppLanguage.options.filter(\.bundled)) { option in
+                    languageRow(option)
+                }
+            }
+            Section {
+                ForEach(AppLanguage.options.filter { !$0.bundled }) { option in
+                    languageRow(option)
+                }
+            } header: {
+                Text(tr("更多语言 · 本机机器翻译", "More languages · on-device machine translation", "Bahasa tambahan · terjemahan mesin setempat"))
+            } footer: {
+                Text(tr("首次使用需准备语言包，可能需要下载 Apple 翻译资源。只翻译 App 界面模板，不翻译账目、商户或银行通知原文。未翻译或校验失败的文案保留英文；系统不支持时使用英文。机器翻译可能不准确。", "Prepare a language pack before first use; Apple may need to download translation resources. Only app interface templates are translated, never entries, merchants or original bank notices. Missing or invalid translations stay in English; unsupported languages fall back to English. Machine translations may be inaccurate.", "Sediakan pek bahasa dahulu; Apple mungkin perlu memuat turun sumber terjemahan. Hanya templat antara muka diterjemah, bukan rekod, peniaga atau notifikasi bank asal. Terjemahan tiada atau tidak sah kekal dalam bahasa Inggeris; bahasa tidak disokong menggunakan Inggeris. Terjemahan mesin mungkin tidak tepat."))
+            }
+        }
+        .navigationTitle(tr("语言", "Language", "Bahasa"))
+        .sheet(item: $preparing) { option in
+            if #available(iOS 18.0, *) {
+                LanguagePackPreparation(option: option)
+            } else {
+                VStack(spacing: 20) {
+                    Text(tr("此功能需要 iOS 18 或更新版本。", "This feature requires iOS 18 or later.", "Ciri ini memerlukan iOS 18 atau lebih baharu."))
+                    Button(tr("关闭", "Close", "Tutup")) { preparing = nil }
+                }.padding()
+            }
+        }
+    }
+    private func languageRow(_ option: AppLanguage.Option) -> some View {
+        Button {
+            if option.bundled { language = option.id }
+            else { preparing = option }
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(verbatim: option.name).foregroundStyle(.primary)
+                    if !option.bundled {
+                        Text(tr("机器翻译 · 需准备语言包", "Machine translation · language pack", "Terjemahan mesin · pek bahasa"))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if language == option.id { Image(systemName: "checkmark") }
+                else if !option.bundled { Image(systemName: "chevron.right").font(.caption) }
+            }
+        }
+        .accessibilityIdentifier("language." + option.id)
+    }
+}
+
+@available(iOS 18.0, *)
+private struct LanguagePackPreparation: View {
+    let option: AppLanguage.Option
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage("appLanguage") private var language = "system"
+    @AppStorage("languagePackRevision") private var revision = 0
+    @State private var configuration: TranslationSession.Configuration?
+    @State private var busy = false
+    @State private var supported = false
+    @State private var checked = false
+    @State private var completed = 0
+    @State private var progress = 0
+    @State private var failure: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    Text(verbatim: option.name).font(.title2.bold())
+                    Text(tr("由 Apple 本机翻译生成，未经逐句人工校对。账目金额与原文保持不变。", "Generated by Apple on-device translation, without line-by-line human review. Entry amounts and original text remain unchanged.", "Dijana oleh terjemahan setempat Apple, tanpa semakan manusia setiap ayat. Amaun dan teks asal tidak berubah."))
+                    Text(tr("已准备 \(completed) / \(LanguagePacks.templates.count) 条界面文案", LocalizedPhrase("Prepared \(completed) / \(LanguagePacks.templates.count) interface strings"), "\(completed) / \(LanguagePacks.templates.count) teks antara muka disediakan"))
+                        .monospacedDigit()
+                    if busy {
+                        ProgressView(value: Double(progress), total: Double(max(LanguagePacks.templates.count, 1)))
+                        Text(tr("正在准备，请保留此页面。取消后可继续。", "Preparing; keep this page open. You can cancel and resume later.", "Sedang menyediakan; kekalkan halaman ini. Boleh batal dan sambung kemudian."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    if let failure { Text(failure).foregroundStyle(.red) }
+                    if checked && !supported {
+                        Text(tr("此设备或系统暂不支持该翻译语言；保留原界面语言。", "This device or system does not support this translation language; your interface language is unchanged.", "Peranti atau sistem ini belum menyokong bahasa terjemahan ini; bahasa antara muka tidak berubah."))
+                    }
+                    Button(tr("准备／补全语言包", "Prepare / complete language pack", "Sediakan / lengkapkan pek bahasa")) {
+                        failure = nil; busy = true; progress = completed
+                        if configuration == nil {
+                            configuration = .init(source: Locale.Language(identifier: "en"), target: Locale.Language(identifier: option.id))
+                        } else { configuration?.invalidate() }
+                    }.disabled(!supported || busy || LanguagePacks.templates.isEmpty)
+                    Button(tr("使用此语言（机器翻译）", "Use this language (machine translated)", "Guna bahasa ini (terjemahan mesin)")) {
+                        language = option.id
+                        revision += 1
+                        dismiss()
+                    }.disabled(busy || completed == 0)
+                    if completed < LanguagePacks.templates.count {
+                        Text(tr("未准备的文案继续显示英文。", "Unprepared strings continue to use English.", "Teks belum disediakan kekal dalam bahasa Inggeris."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle(tr("语言包", "Language pack", "Pek bahasa"))
+            .toolbar { ToolbarItem(placement: .cancellationAction) {
+                Button(tr("关闭", "Close", "Tutup")) { configuration = nil; dismiss() }
+            } }
+            .task {
+                completed = LanguagePacks.shared.count(option.id)
+                let status = await LanguageAvailability().status(from: Locale.Language(identifier: "en"), to: Locale.Language(identifier: option.id))
+                guard !Task.isCancelled else { return }
+                supported = status == .installed || status == .supported
+                checked = true
+            }
+            .translationTask(configuration) { session in
+                await prepare(using: session)
+            }
+            .onDisappear { configuration = nil }
+        }
+    }
+    @MainActor private func prepare(using session: TranslationSession) async {
+        defer { busy = false }
+        let missing = LanguagePacks.shared.missing(option.id)
+        do {
+            for start in stride(from: 0, to: missing.count, by: 20) {
+                try Task.checkCancellation()
+                let batch = Array(missing[start..<min(start + 20, missing.count)])
+                let requests = batch.enumerated().map { TranslationSession.Request(sourceText: $0.element, clientIdentifier: String($0.offset)) }
+                let responses = try await session.translations(from: requests)
+                try Task.checkCancellation()
+                var additions: [String: String] = [:]
+                for response in responses {
+                    guard let id = response.clientIdentifier, let index = Int(id), batch.indices.contains(index),
+                          response.sourceText == batch[index], LanguagePacks.validTranslation(response.targetText, for: batch[index]) else { continue }
+                    additions[batch[index]] = response.targetText
+                }
+                try LanguagePacks.shared.save(additions, language: option.id)
+                completed = LanguagePacks.shared.count(option.id)
+                progress = min(LanguagePacks.templates.count, progress + batch.count)
+            }
+        } catch {
+            guard !Task.isCancelled else { return }
+            failure = tr("语言包未完成，已保存准备好的部分。请检查系统翻译下载后重试。", "Language pack incomplete; prepared strings were saved. Check system translation downloads and retry.", "Pek bahasa belum lengkap; teks yang tersedia telah disimpan. Semak muat turun terjemahan sistem dan cuba lagi.")
+        }
+    }
+}
+
 func categoryLabel(_ key: String) -> String {
     switch key {
     case "餐饮": return tr("餐饮", "Food", "Makanan")

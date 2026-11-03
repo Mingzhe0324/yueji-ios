@@ -60,6 +60,8 @@
         "CF2000000000000000000006" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000005"; };
         "CF2000000000000000000007" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "image.png"; "path" = "YueJiNoticeBudget.png"; "sourceTree" = "<group>"; };
         "CF2000000000000000000008" = { "isa" = "PBXBuildFile"; "fileRef" = "CF2000000000000000000007"; };
+		"CF1200000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "text.json"; "path" = "AppLanguageTemplates.json"; "sourceTree" = "<group>"; };
+		"CF1200000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF1200000000000000000001"; };
 		"4272165E609CEB45988F02A0" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "text.json.xcstrings"; "path" = "Localizable.xcstrings"; "sourceTree" = "<group>"; };
 		"ABAD2E33A649C96D618F1E8D" = { "isa" = "PBXBuildFile"; "fileRef" = "4272165E609CEB45988F02A0"; };
 		"ED29F67A6CF18DB93C10A996" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "FeatureViews.swift"; "sourceTree" = "<group>"; };
@@ -188,6 +190,7 @@
                 "CF2000000000000000000005",
                 "CF2000000000000000000007",
                 "4272165E609CEB45988F02A0",
+                "CF1200000000000000000001",
 				"ED29F67A6CF18DB93C10A996",
 				"AD28BE70373820C47C519965",
 				"ABC6DE47CA143D858089030F",
@@ -291,6 +294,7 @@
                 "CF2000000000000000000006",
                 "CF2000000000000000000008",
                 "ABAD2E33A649C96D618F1E8D",
+                "CF1200000000000000000002",
 				"5522B3B3B2EACC1C8F9BEAAC",
 			);
 			"runOnlyForDeploymentPostprocessing" = 0;

@@ -685,7 +685,7 @@ struct IncomeBudgetPrompt: Identifiable, Equatable {
     var message: String {
         let month = budgetMonthLabel(outcome.month)
         if outcome.automatic != nil, let percent = outcome.percent {
-            return tr("收入 \(money(outcome.cents)) 的 \(percent)% 已自动加入 · ", "\(percent)% of \(money(outcome.cents)) added automatically · ", "\(percent)% daripada \(money(outcome.cents)) ditambah secara automatik · ") + outcome.name
+            return tr("收入 \(money(outcome.cents)) 的 \(percent)% 已自动加入 · ", LocalizedPhrase("\(percent)% of \(money(outcome.cents)) added automatically · "), "\(percent)% daripada \(money(outcome.cents)) ditambah secara automatik · ") + outcome.name
         }
         if let duplicate = outcome.duplicateName {
             return tr("可能与已加入预算的「" + duplicate + "」是同一笔钱，请先核对。", "It may be the same money as " + duplicate + ", already in a budget. Review it first.", "Ia mungkin wang yang sama dengan " + duplicate + " yang sudah dalam bajet. Semak dahulu.")
@@ -1449,7 +1449,7 @@ struct BudgetSavingsView: View {
                     Text(counted.isEmpty ? "—" : amount(total))
                         .font(.largeTitle.bold()).monospacedDigit()
                         .foregroundStyle(total < 0 ? Color.red : IncomeStyle.tint)
-                    Text(tr("已计入 \(counted.count) 个月；超支会抵扣结余。", "Includes \(counted.count) months; overspending reduces savings.", "Termasuk \(counted.count) bulan; lebihan belanja mengurangkan baki."))
+                    Text(tr("已计入 \(counted.count) 个月；超支会抵扣结余。", LocalizedPhrase("Includes \(counted.count) months; overspending reduces savings."), "Termasuk \(counted.count) bulan; lebihan belanja mengurangkan baki."))
                         .font(.caption).foregroundStyle(.secondary)
                     if counted.contains(where: \.isCurrent) {
                         Text(tr("包含本月未结算余额，会随记账变化。", "Includes this month's provisional balance, which changes with entries.", "Termasuk baki sementara bulan ini yang berubah mengikut rekod."))
@@ -1475,7 +1475,7 @@ struct BudgetSavingsView: View {
                             }
                         }
                         if row.included {
-                            Text(tr("预算 \(hidden ? "••••" : money(row.budget.total)) · 消费 \(hidden ? "••••" : money(row.spent))", "Budget \(hidden ? "••••" : money(row.budget.total)) · Spent \(hidden ? "••••" : money(row.spent))", "Bajet \(hidden ? "••••" : money(row.budget.total)) · Belanja \(hidden ? "••••" : money(row.spent))"))
+                            Text(tr("预算 \(hidden ? "••••" : money(row.budget.total)) · 消费 \(hidden ? "••••" : money(row.spent))", LocalizedPhrase("Budget \(hidden ? "••••" : money(row.budget.total)) · Spent \(hidden ? "••••" : money(row.spent))"), "Bajet \(hidden ? "••••" : money(row.budget.total)) · Belanja \(hidden ? "••••" : money(row.spent))"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }.padding(.vertical, 4).accessibilityElement(children: .combine)
@@ -1566,7 +1566,7 @@ private struct StatementImportView: View {
                 if let statement {
                     summary(statement, account: account)
                     Section {
-                        Toggle(tr("确认尾号 \(statement.suffix) 是此账户", "Confirm ••••\(statement.suffix) belongs to this account", "Sahkan ••••\(statement.suffix) ialah akaun ini"), isOn: $confirmed)
+                        Toggle(tr("确认尾号 \(statement.suffix) 是此账户", LocalizedPhrase("Confirm ••••\(statement.suffix) belongs to this account"), "Sahkan ••••\(statement.suffix) ialah akaun ini"), isOn: $confirmed)
                         AIProviderPicker()
                         Toggle(tr("使用 AI 建议支出分类", "Suggest expense categories with AI", "Cadangkan kategori dengan AI"), isOn: $useAI)
                         Button { importRows(statement, account: account) } label: {
@@ -1576,7 +1576,7 @@ private struct StatementImportView: View {
                         Text(tr("所选 AI 仅分析交易描述和分类名称。金额、方向和余额由本机校验。AI 不可用时用“其他”分类。疑似重复、转账和不明收款待确认；早于账户期初时间的记录跳过。", "Selected AI analyzes descriptions and category names only. Amounts, direction and balances are checked locally. If AI is unavailable, entries use Other. Possible duplicates, transfers and unclear receipts await review; entries before opening are skipped.", "AI pilihan menganalisis penerangan dan kategori sahaja. Amaun, arah dan baki disemak setempat. Jika AI gagal, guna Lain-lain. Pendua, pindahan dan penerimaan tidak jelas menunggu semakan; rekod sebelum baki awal dilangkau."))
                     }.disabled(working)
                     Section {
-                        DisclosureGroup(tr("查看原始交易（\(statement.rows.count)）", "Review source entries (\(statement.rows.count))", "Semak rekod asal (\(statement.rows.count))")) {
+                        DisclosureGroup(tr("查看原始交易（\(statement.rows.count)）", LocalizedPhrase("Review source entries (\(statement.rows.count))"), "Semak rekod asal (\(statement.rows.count))")) {
                             ForEach(statement.rows) { row in
                                 VStack(alignment: .leading, spacing: 4) {
                                     Text(row.description).font(.subheadline)
@@ -1594,7 +1594,7 @@ private struct StatementImportView: View {
                     Section {
                         if classificationTotal > 0 {
                             ProgressView(value: Double(classified), total: Double(classificationTotal))
-                            Text(tr("分类建议 \(classified)/\(classificationTotal)，随后保存核对结果", "Categories \(classified)/\(classificationTotal), then saving reconciliation", "Kategori \(classified)/\(classificationTotal), kemudian simpan semakan")).font(.caption)
+                            Text(tr("分类建议 \(classified)/\(classificationTotal)，随后保存核对结果", LocalizedPhrase("Categories \(classified)/\(classificationTotal), then saving reconciliation"), "Kategori \(classified)/\(classificationTotal), kemudian simpan semakan")).font(.caption)
                         } else { ProgressView(tr("正在核对并处理…", "Checking and processing…", "Menyemak dan memproses…")) }
                     }
                 }
@@ -1745,7 +1745,7 @@ private struct StatementImportView: View {
             }, completion: { result in
                 importResult = result
                 FeedbackHaptics.success()
-                message = tr("已补录 \(result.added) 笔，待确认 \(result.pending) 笔，跳过 \(result.skipped) 笔。", "Added \(result.added), pending \(result.pending), skipped \(result.skipped).", "Ditambah \(result.added), menunggu \(result.pending), dilangkau \(result.skipped).")
+                message = tr("已补录 \(result.added) 笔，待确认 \(result.pending) 笔，跳过 \(result.skipped) 笔。", LocalizedPhrase("Added \(result.added), pending \(result.pending), skipped \(result.skipped)."), "Ditambah \(result.added), menunggu \(result.pending), dilangkau \(result.skipped).")
                 if fallback { message += tr(" AI 暂不可用，未分类支出使用“其他”。", " AI unavailable; unclassified expenses use Other.", " AI tidak tersedia; perbelanjaan tanpa kategori menggunakan Lain-lain.") }
                 confirmed = false
             }, failure: { error = $0.localizedDescription })

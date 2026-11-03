@@ -4,6 +4,40 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testLanguageResolutionAndProtectedInterpolation() {
+        XCTAssertEqual(AppLanguage.resolve("zh-TW"), "zh-Hant")
+        XCTAssertEqual(AppLanguage.resolve("zh-Hans-MY"), "zh")
+        XCTAssertEqual(AppLanguage.resolve("pt-PT"), "pt-BR")
+        XCTAssertEqual(AppLanguage.resolve("ar-SA"), "ar")
+        XCTAssertEqual(AppLanguage.resolve("unknown"), "en")
+        XCTAssertEqual(AppLanguage.options.filter { !$0.bundled }.count, 12)
+        let merchant = "Shop ⟦1⟧"
+        let phrase = LocalizedPhrase("Paid \(merchant): \("RM 12.30")")
+        XCTAssertEqual(phrase.template, "Paid ⟦0⟧: ⟦1⟧")
+        XCTAssertEqual(phrase.render("⟦1⟧ — ⟦0⟧"), "RM 12.30 — Shop ⟦1⟧")
+        XCTAssertEqual(phrase.render("missing amount"), "Paid Shop ⟦1⟧: RM 12.30")
+        XCTAssertTrue(phrase.render(phrase.template, isolate: true).contains("\u{2068}RM 12.30\u{2069}"))
+        XCTAssertFalse(LanguagePacks.validTranslation("⟦0⟧ ⟦0⟧", for: phrase.template))
+        XCTAssertFalse(LanguagePacks.validTranslation("⟦0⟧ ⟦2⟧", for: phrase.template))
+        XCTAssertFalse(LanguagePacks.validTranslation(" ", for: "Save"))
+    }
+
+    func testLanguagePackPersistsOnlyBundledTemplatesAndFallsBack() throws {
+        XCTAssertGreaterThan(LanguagePacks.templates.count, 1800, "Language templates must be in the app bundle")
+        let folder = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        let packs = LanguagePacks(directory: folder)
+        XCTAssertEqual(packs.translation("Save", language: "fr"), "Save")
+        try packs.save(["Save": "Enregistrer", "Private merchant 123": "Must not persist"], language: "fr")
+        let reloaded = LanguagePacks(directory: folder)
+        XCTAssertEqual(reloaded.translation("Save", language: "fr"), "Enregistrer")
+        XCTAssertEqual(reloaded.count("fr"), 1)
+        XCTAssertEqual(reloaded.translation("Private merchant 123", language: "fr"), "Private merchant 123")
+        XCTAssertEqual(reloaded.translation("Save", language: "en"), "Save")
+        try Data("broken JSON".utf8).write(to: folder.appendingPathComponent("ja.json"))
+        XCTAssertFalse(LanguagePacks(directory: folder).hasPack("ja"))
+    }
+
     func testTNGCardHasSeparateBalanceAndNeverMatchesWalletNotices() throws {
         let date = Date(timeIntervalSince1970: 1_780_000_000)
         let wallet = BankAccount(name: "Wallet", openingCents: 10000, openingDate: date, institution: "TNG eWallet", automaticSource: "TNG")

@@ -75,7 +75,7 @@ enum ReminderLead {
         case nil: return tr("不提醒", "Off", "Tiada")
         case 0?: return tr("当天", "On the day", "Pada hari itu")
         case 1?: return tr("提前 1 天", "1 day before", "1 hari sebelum")
-        case let days?: return tr("提前 \(days) 天", "\(days) days before", "\(days) hari sebelum")
+        case let days?: return tr("提前 \(days) 天", LocalizedPhrase("\(days) days before"), "\(days) hari sebelum")
         }
     }
 }
@@ -266,15 +266,15 @@ extension Ledger {
             case .none: return nil
             case .renewed(let name, .some(let next)):
                 let date = dateLabel(next)
-                return tr("已对应 \(name) 的续费，下次预计 \(date)。", "Matched to your \(name) renewal. Next payment expected \(date).", "Dipadankan dengan pembaharuan \(name). Bayaran seterusnya dijangka \(date).")
+                return tr("已对应 \(name) 的续费，下次预计 \(date)。", LocalizedPhrase("Matched to your \(name) renewal. Next payment expected \(date)."), "Dipadankan dengan pembaharuan \(name). Bayaran seterusnya dijangka \(date).")
             case .renewed(let name, .none):
-                return tr("已对应 \(name) 的续费。", "Matched to your \(name) renewal.", "Dipadankan dengan pembaharuan \(name).")
+                return tr("已对应 \(name) 的续费。", LocalizedPhrase("Matched to your \(name) renewal."), "Dipadankan dengan pembaharuan \(name).")
             case .replacedScheduled(let name, let date):
                 let day = dateLabel(date)
-                return tr("已替换 \(name) 在 \(day) 的预计账目，只记一笔。", "Replaced the scheduled \(name) entry for \(day), so it's recorded once.", "Menggantikan rekod berjadual \(name) untuk \(day), jadi ia direkod sekali.")
+                return tr("已替换 \(name) 在 \(day) 的预计账目，只记一笔。", LocalizedPhrase("Replaced the scheduled \(name) entry for \(day), so it's recorded once."), "Menggantikan rekod berjadual \(name) untuk \(day), jadi ia direkod sekali.")
             case .uncertain(let name, let expected, let amount):
                 let day = dateLabel(expected)
-                return tr("可能是 \(name) 的续费（预计 \(day)，\(amount)），请在“固定”中确认。", "May be your \(name) renewal (expected \(day), \(amount)). Confirm it in Recurring.", "Mungkin pembaharuan \(name) (dijangka \(day), \(amount)). Sahkan dalam Berulang.")
+                return tr("可能是 \(name) 的续费（预计 \(day)，\(amount)），请在“固定”中确认。", LocalizedPhrase("May be your \(name) renewal (expected \(day), \(amount)). Confirm it in Recurring."), "Mungkin pembaharuan \(name) (dijangka \(day), \(amount)). Sahkan dalam Berulang.")
             }
         }
     }
@@ -1331,21 +1331,21 @@ enum RenewalReminders {
         let date = dateLabel(expected)
         if UserDefaults.standard.bool(forKey: "hideNotificationDetails") {
             return rule.displayKind == .subscription
-                ? tr("有一项订阅预计在 \(date) 续费。打开月记查看。", "A subscription is expected to renew on \(date). Open YueJi for details.", "Satu langganan dijangka diperbaharui pada \(date). Buka YueJi untuk butiran.")
-                : tr("有一项账单预计在 \(date) 到期。打开月记查看。", "A bill is expected to be due on \(date). Open YueJi for details.", "Satu bil dijangka perlu dibayar pada \(date). Buka YueJi untuk butiran.")
+                ? tr("有一项订阅预计在 \(date) 续费。打开月记查看。", LocalizedPhrase("A subscription is expected to renew on \(date). Open YueJi for details."), "Satu langganan dijangka diperbaharui pada \(date). Buka YueJi untuk butiran.")
+                : tr("有一项账单预计在 \(date) 到期。打开月记查看。", LocalizedPhrase("A bill is expected to be due on \(date). Open YueJi for details."), "Satu bil dijangka perlu dibayar pada \(date). Buka YueJi untuk butiran.")
         }
         let name = rule.name, amount = Currency.display(rule.minor, rule.currency)
         if rule.displayKind == .subscription {
             switch lead {
-            case 0: return tr("\(name) 预计今天续费，金额 \(amount)。", "\(name) is expected to renew today for \(amount).", "\(name) dijangka diperbaharui hari ini dengan \(amount).")
-            case 1: return tr("\(name) 预计明天（\(date)）续费，金额 \(amount)。", "\(name) is expected to renew tomorrow (\(date)) for \(amount).", "\(name) dijangka diperbaharui esok (\(date)) dengan \(amount).")
-            default: return tr("\(name) 预计 \(lead) 天后（\(date)）续费，金额 \(amount)。", "\(name) is expected to renew in \(lead) days (\(date)) for \(amount).", "\(name) dijangka diperbaharui dalam \(lead) hari (\(date)) dengan \(amount).")
+            case 0: return tr("\(name) 预计今天续费，金额 \(amount)。", LocalizedPhrase("\(name) is expected to renew today for \(amount)."), "\(name) dijangka diperbaharui hari ini dengan \(amount).")
+            case 1: return tr("\(name) 预计明天（\(date)）续费，金额 \(amount)。", LocalizedPhrase("\(name) is expected to renew tomorrow (\(date)) for \(amount)."), "\(name) dijangka diperbaharui esok (\(date)) dengan \(amount).")
+            default: return tr("\(name) 预计 \(lead) 天后（\(date)）续费，金额 \(amount)。", LocalizedPhrase("\(name) is expected to renew in \(lead) days (\(date)) for \(amount)."), "\(name) dijangka diperbaharui dalam \(lead) hari (\(date)) dengan \(amount).")
             }
         }
         switch lead {
-        case 0: return tr("\(name) 预计今天到期，约 \(amount)。", "\(name) is expected to be due today, about \(amount).", "\(name) dijangka perlu dibayar hari ini, kira-kira \(amount).")
-        case 1: return tr("\(name) 预计明天（\(date)）到期，约 \(amount)。", "\(name) is expected to be due tomorrow (\(date)), about \(amount).", "\(name) dijangka perlu dibayar esok (\(date)), kira-kira \(amount).")
-        default: return tr("\(name) 预计 \(lead) 天后（\(date)）到期，约 \(amount)。", "\(name) is expected to be due in \(lead) days (\(date)), about \(amount).", "\(name) dijangka perlu dibayar dalam \(lead) hari (\(date)), kira-kira \(amount).")
+        case 0: return tr("\(name) 预计今天到期，约 \(amount)。", LocalizedPhrase("\(name) is expected to be due today, about \(amount)."), "\(name) dijangka perlu dibayar hari ini, kira-kira \(amount).")
+        case 1: return tr("\(name) 预计明天（\(date)）到期，约 \(amount)。", LocalizedPhrase("\(name) is expected to be due tomorrow (\(date)), about \(amount)."), "\(name) dijangka perlu dibayar esok (\(date)), kira-kira \(amount).")
+        default: return tr("\(name) 预计 \(lead) 天后（\(date)）到期，约 \(amount)。", LocalizedPhrase("\(name) is expected to be due in \(lead) days (\(date)), about \(amount)."), "\(name) dijangka perlu dibayar dalam \(lead) hari (\(date)), kira-kira \(amount).")
         }
     }
     /// Brings the pending reminders in line with the ledger: adds missing or changed ones and

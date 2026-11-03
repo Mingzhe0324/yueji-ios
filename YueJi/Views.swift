@@ -745,9 +745,9 @@ struct DashboardView: View {
                 : tr("本月尚未开始", "Month not started", "Bulan belum bermula")
         }
         if pace.ahead {
-            return tr("花得比时间快 · 本月已过 \(gone)%", "Ahead of the month · \(gone)% gone", "Mendahului bulan · \(gone)% berlalu")
+            return tr("花得比时间快 · 本月已过 \(gone)%", LocalizedPhrase("Ahead of the month · \(gone)% gone"), "Mendahului bulan · \(gone)% berlalu")
         }
-        return tr("本月已过 \(gone)%", "\(gone)% of the month gone", "\(gone)% bulan berlalu")
+        return tr("本月已过 \(gone)%", LocalizedPhrase("\(gone)% of the month gone"), "\(gone)% bulan berlalu")
     }
     /// The dial beside its figures; stacked at accessibility text sizes.
     private var dialLayout: AnyLayout {
@@ -2259,7 +2259,7 @@ struct ExpenseDetailView: View {
                     if let key = entry.renewalOf, let schedule = model.ledger.recurring.first(where: { $0.owns(key) }) {
                         Section {
                             NavigationLink { RecurringDetailView(ruleID: schedule.id) } label: {
-                                Label(tr("\(schedule.name) 的续费", "Renewal of \(schedule.name)", "Pembaharuan \(schedule.name)"), systemImage: "arrow.triangle.2.circlepath")
+                                Label(tr("\(schedule.name) 的续费", LocalizedPhrase("Renewal of \(schedule.name)"), "Pembaharuan \(schedule.name)"), systemImage: "arrow.triangle.2.circlepath")
                             }
                         }
                     } else if let candidate = model.ledger.subscriptionCandidate(forExpense: entry.id) {
@@ -2274,7 +2274,7 @@ struct ExpenseDetailView: View {
                     } else if let hidden = hiddenSuggestion {
                         Section {
                             HStack {
-                                Text(tr("已隐藏“\(hidden.name)”", "Hid “\(hidden.name)”", "“\(hidden.name)” disembunyikan"))
+                                Text(tr("已隐藏“\(hidden.name)”", LocalizedPhrase("Hid “\(hidden.name)”"), "“\(hidden.name)” disembunyikan"))
                                     .font(.subheadline).foregroundStyle(.secondary)
                                 Spacer()
                                 Button(tr("撤销", "Undo", "Buat asal")) {
@@ -2312,7 +2312,7 @@ struct ExpenseDetailView: View {
                             LabeledContent(tr("购买总额", "Purchase total", "Jumlah pembelian")) { TransactionAmount(cents: entry.cents, direction: .outgoing) }
                             LabeledContent(tr("我尚欠付款朋友", "I still owe the payer", "Saya masih berhutang kepada pembayar"), value: money(detail.payableToPayer))
                             if let payer = entry.paidByFriend {
-                                NavigationLink(tr("\(payer) 的余额", "\(payer)'s balance", "Baki \(payer)")) { FriendDetailView(key: friendKey(payer)) }
+                                NavigationLink(tr("\(payer) 的余额", LocalizedPhrase("\(payer)'s balance"), "Baki \(payer)")) { FriendDetailView(key: friendKey(payer)) }
                             }
                         }
                         if entry.refunded > 0 {
@@ -3391,7 +3391,7 @@ struct FriendsView: View {
                     DashboardSectionHeader(title: tr("分账工具", "Split tools", "Alat pembahagian"))
                 }
             }.yuejiDashboardSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
-                .yuejiSubtitle(tr("\(unsettled) 位待结清", "\(unsettled) to settle up", "\(unsettled) belum selesai"))
+                .yuejiSubtitle(tr("\(unsettled) 位待结清", LocalizedPhrase("\(unsettled) to settle up"), "\(unsettled) belum selesai"))
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
         }
@@ -3578,14 +3578,13 @@ struct SettingsView: View {
     private var backupSubtitle: String {
         if autoBackupFolder.isEmpty { return tr("自动备份未开启", "Automatic backup is off", "Sandaran automatik dimatikan") }
         if !autoBackupError.isEmpty { return tr("自动备份需要处理", "Automatic backup needs attention", "Sandaran automatik perlu perhatian") }
-        return tr("自动备份到「\(autoBackupFolder)」", "Backing up to \(autoBackupFolder)", "Sandaran ke \(autoBackupFolder)")
+        return tr("自动备份到「\(autoBackupFolder)」", LocalizedPhrase("Backing up to \(autoBackupFolder)"), "Sandaran ke \(autoBackupFolder)")
     }
     private var appearancePage: some View {
         Form {
             Section {
-                    Picker(tr("语言", "Language", "Bahasa"), selection: $language) {
-                        Text(tr("跟随系统", "System default", "Ikut sistem")).tag("system")
-                        Text("简体中文").tag("zh"); Text("English").tag("en"); Text("Bahasa Melayu").tag("ms")
+                    NavigationLink { AppLanguageSettings() } label: {
+                        LabeledContent(tr("语言", "Language", "Bahasa"), value: AppLanguage.options.first(where: { $0.id == AppLanguage.code })?.name ?? "English")
                     }
                     Picker(tr("外观", "Appearance", "Paparan"), selection: $appearance) {
                         Text(tr("跟随系统", "System default", "Ikut sistem")).tag("system")
@@ -4741,7 +4740,7 @@ private struct LedgerFeedbackHost: ViewModifier {
                     onInteraction: { model.setBannerInteraction(id: token.uuidString, active: $0) }) { interaction in
                     NotificationBannerCard(title: model.newTNGCount == 1
                         ? tr("新增 1 笔记录", "1 new record", "1 rekod baharu")
-                        : tr("新增 \(model.newTNGCount) 笔记录", "\(model.newTNGCount) new records", "\(model.newTNGCount) rekod baharu"),
+                        : tr("新增 \(model.newTNGCount) 笔记录", LocalizedPhrase("\(model.newTNGCount) new records"), "\(model.newTNGCount) rekod baharu"),
                         message: tr("银行 · TNG", "Bank · TNG", "Bank · TNG"),
                         symbol: "tray.and.arrow.down.fill", color: IslandPalette.lagoon, interaction: interaction, action: {
                             guard model.newTNGToken == token, model.newTNGCount > 0 else { return }
