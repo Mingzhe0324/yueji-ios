@@ -129,7 +129,7 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertTrue(amount.waitForExistence(timeout: 5))
         amount.tap(); amount.typeText("35.00"); finishKeyboard(in: app)
         let merchant = app.textFields["transaction.merchant"]
-        reveal(merchant, in: app); merchant.tap(); merchant.typeText(merchantName); finishKeyboard(in: app)
+        enterText(merchantName, into: merchant, in: app); finishKeyboard(in: app)
         if !opening {
             let description = app.textViews["transaction.description"].exists
                 ? app.textViews["transaction.description"] : app.textFields["transaction.description"]
@@ -325,7 +325,7 @@ final class TransactionFormTests: XCTestCase {
         reveal(amount, in: app); amount.tap(); amount.typeText("35.00")
         finishKeyboard(in: app)
         let merchant = app.textFields["transaction.merchant"]
-        reveal(merchant, in: app); merchant.tap(); merchant.typeText("Unsaved purchase")
+        enterText("Unsaved purchase", into: merchant, in: app)
         finishKeyboard(in: app)
 
         if !opening {
@@ -508,16 +508,22 @@ final class TransactionFormTests: XCTestCase {
 
     private func unobscuredContent(in app: XCUIApplication) -> CGRect {
         let screen = app.frame
+        // A target at the bottom edge may be reported hittable even though its
+        // tap falls in the home-indicator/scroll-settling area. Keep the whole
+        // field inside a padded viewport, including when a sheet covers tabs.
+        var usableBottom = screen.maxY - 36
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists { usableBottom = min(usableBottom, keyboard.frame.minY - 12) }
         // An editor sheet covers the underlying tab bar and detail actions.
         // Query its navigation bar directly instead of probing hidden controls.
         let editorBar = app.navigationBars.matching(NSPredicate(
             format: "identifier == 'New entry' OR identifier == 'Edit items'")).firstMatch
         if editorBar.exists && editorBar.isHittable {
             let top = editorBar.frame.maxY
-            return CGRect(x: screen.minX, y: top, width: screen.width, height: max(0, screen.maxY - top))
+            return CGRect(x: screen.minX, y: top + 8, width: screen.width, height: max(0, usableBottom - top - 8))
         }
         var top = screen.minY
-        var bottom = screen.maxY
+        var bottom = usableBottom
         for bar in app.navigationBars.allElementsBoundByIndex where bar.isHittable {
             top = max(top, bar.frame.maxY)
         }
@@ -530,6 +536,20 @@ final class TransactionFormTests: XCTestCase {
             if control.exists && control.isHittable { bottom = min(bottom, control.frame.minY - 12) }
         }
         return CGRect(x: screen.minX, y: top, width: screen.width, height: max(0, bottom - top))
+    }
+
+    private func enterText(_ text: String, into field: XCUIElement, in app: XCUIApplication,
+                           file: StaticString = #filePath, line: UInt = #line) {
+        reveal(field, in: app, file: file, line: line)
+        field.tap()
+        // One tap only: a genuine focus regression should still fail. Wait for
+        // keyboard presentation rather than immediately dispatching key events.
+        guard app.keyboards.firstMatch.waitForExistence(timeout: 5) else {
+            XCTFail("Field did not open the keyboard after one tap: \(field.identifier), frame=\(field.frame)", file: file, line: line)
+            return
+        }
+        field.typeText(text)
+        XCTAssertEqual(field.value as? String, text, "Typed text must reach the intended field", file: file, line: line)
     }
 
     private func finishKeyboard(in app: XCUIApplication) {
