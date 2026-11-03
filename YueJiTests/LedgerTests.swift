@@ -3535,7 +3535,9 @@ final class TNGIncomingTests: XCTestCase {
         XCTAssertTrue(ledger.expenses.isEmpty)
     }
     func testIncomingRoundingRequiresConsentPreservesReceiptAndUndoes() throws {
-        let now = Date()
+        // LocalStore's ISO-8601 backup format stores whole seconds. Use the same
+        // precision so exact record equality still checks every persisted field.
+        let now = Date(timeIntervalSince1970: Date().timeIntervalSince1970.rounded(.down))
         for extra in [1, 2] {
             var ledger = Ledger()
             let account = BankAccount(name: "Wallet", openingCents: 5000, openingDate: now.addingTimeInterval(-172800))
