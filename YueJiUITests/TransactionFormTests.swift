@@ -4,6 +4,16 @@ final class TransactionFormTests: XCTestCase {
     private var runningApp: XCUIApplication?
     override func setUpWithError() throws {
         continueAfterFailure = false
+        addUIInterruptionMonitor(withDescription: "Notification permission") { alert in
+            // The simulator can inherit an outstanding request from the unit-test
+            // host. These form tests do not exercise notification delivery.
+            guard alert.label.contains("Would Like to Send You Notifications") else { return false }
+            let decline = alert.buttons["Don’t Allow"].exists
+                ? alert.buttons["Don’t Allow"] : alert.buttons["Don't Allow"]
+            guard decline.exists else { return false }
+            decline.tap()
+            return true
+        }
         addUIInterruptionMonitor(withDescription: "Location permission") { alert in
             let allow = alert.buttons["Allow While Using App"]
             guard allow.exists else { return false }
