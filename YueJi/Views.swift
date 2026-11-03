@@ -1015,15 +1015,12 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(budget > 0 ? tr("本月预算剩余", "Budget remaining this month", "Baki bajet bulan ini") : tr("本月个人消费", "Personal spending", "Belanja peribadi"))
+                    Text(tr("本月个人消费", "Personal spending", "Belanja peribadi"))
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         .textCase(.uppercase)
-                    Group {
-                        if budget > 0 { amount(budget - budgetSpent) }
-                        else { heroAmount }
-                    }
+                    heroAmount
                         .font(.system(size: heroSize, weight: .bold))
-                        .foregroundStyle(budget > 0 && budgetSpent > budget ? Color.red : Color.primary).minimumScaleFactor(0.5).lineLimit(1)
+                        .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 GlassIconButton(symbol: hideAmounts ? "eye.slash" : "eye") {
@@ -1032,21 +1029,6 @@ struct DashboardView: View {
                 }
                 .modifier(AttentionBounce(trigger: hideAmounts))
                 .accessibilityLabel(hideAmounts ? tr("显示金额", "Show amounts", "Tunjuk amaun") : tr("隐藏金额", "Hide amounts", "Sembunyi amaun"))
-            }
-            if budget > 0 {
-                SpendingMeter(value: budgetSpent, total: budget, color: budgetTint)
-                HStack {
-                    Text(tr("个人消费", "Personal spending", "Belanja peribadi"))
-                    Spacer()
-                    amount(personal).foregroundStyle(.red)
-                }.font(.subheadline).padding(.top, 8)
-                HStack {
-                    Text(tr("加入预算的收入", "Income allocated to budget", "Pendapatan dalam bajet"))
-                    Spacer()
-                    amount(monthBudget.income).foregroundStyle(IncomeStyle.tint)
-                }.font(.subheadline)
-                Text(tr("预算结余是可用额度，并非银行实际存款。", "Budget remaining is available allowance, not a bank savings balance.", "Baki bajet ialah peruntukan tersedia, bukan baki simpanan bank."))
-                    .font(.caption).foregroundStyle(.secondary)
             }
             Text(summary.reimbursementClaimed > 0
                  ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
