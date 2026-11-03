@@ -669,7 +669,7 @@ private struct BankAccountEditor: View {
 }
 import UIKit
 
-/// Incoming amounts use cyan; the light variant is darker for legible small text.
+/// Incoming amounts share the user's chosen light green in both appearances.
 enum IncomeStyle {
     // Fixed light green (#4CD964), shared by incoming amounts in both appearances.
     static let tint = Color(red: 76.0 / 255, green: 217.0 / 255, blue: 100.0 / 255)
@@ -1600,12 +1600,19 @@ private struct StatementImportView: View {
                 }
                 if let result = importResult {
                     Section {
+                        let remaining = model.ledger.tngNotices.filter {
+                            $0.bankAccountID == accountID && $0.status == "pending" && StatementImportStamp.read($0)?.batch == result.batch
+                        }.count
                         HStack {
-                            DrawnCheckmark(color: IncomeStyle.tint).frame(width: 22, height: 22).id(result.batch)
+                            if remaining == 0 && result.existingPending == 0 {
+                                DrawnCheckmark(color: IncomeStyle.tint).frame(width: 22, height: 22).id(result.batch)
+                            } else {
+                                Image(systemName: "clock.badge.exclamationmark").foregroundStyle(.orange)
+                            }
                             Text(tr("本次处理完成", "Processing complete", "Pemprosesan selesai")).font(.headline)
                         }
                         LabeledContent(tr("已匹配", "Matched", "Sepadan"), value: "\(result.matched)")
-                        LabeledContent(tr("待确认", "Needs review", "Perlu semakan"), value: "\(result.pending + result.existingPending)")
+                        LabeledContent(tr("待确认", "Needs review", "Perlu semakan"), value: "\(remaining + result.existingPending)")
                         LabeledContent(tr("新增", "Added", "Ditambah"), value: "\(result.added)")
                         LabeledContent(tr("本次待确认中的疑似重复", "New pending · possible duplicates", "Tertunda baharu · kemungkinan pendua"), value: "\(result.possibleDuplicates)")
                         if result.skipped > result.matched + result.existingPending {
@@ -1618,6 +1625,15 @@ private struct StatementImportView: View {
                 if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
                 ForEach(batches) { batch in
                     Section {
+                        let pendingCount = batch.notices.filter { $0.status == "pending" }.count
+                        HStack {
+                            Label(tr("已处理", "Processed", "Diproses"), systemImage: "checkmark.circle")
+                            Spacer()
+                            Text(String(batch.notices.count - pendingCount)).monospacedDigit()
+                            Text("·").foregroundStyle(.secondary)
+                            Text(tr("待确认", "Needs review", "Perlu semakan"))
+                            Text(String(pendingCount)).monospacedDigit().foregroundStyle(pendingCount > 0 ? Color.orange : IncomeStyle.tint)
+                        }.font(.subheadline).accessibilityElement(children: .combine)
                         ForEach(batch.notices.filter { $0.status == "pending" }) { notice in
                             NavigationLink { FinancialNoticeReviewView(id: notice.id) } label: {
                                 VStack(alignment: .leading) {

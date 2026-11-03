@@ -236,6 +236,9 @@ struct RestoredLedgerFeedback {
             showSaved(message: tr("已恢复", "Restored", "Dipulihkan"), sound: .restored)
         } catch { self.error = error.localizedDescription }
     }
+    func highlightSavedExpense(_ id: String) {
+        restoredFeedback = RestoredLedgerFeedback(expenseIDs: [id], noticeIDs: [])
+    }
     func showSaved(message: String? = nil, sound: FeedbackSounds.Cue = .saved, firstEntry: Bool = false) {
         feedbackMessage = message ?? tr("已保存", "Saved", "Disimpan")
         if firstEntry && !isPreview { UserDefaults.standard.set(true, forKey: "celebratedFirstEntry") }

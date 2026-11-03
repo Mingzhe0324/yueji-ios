@@ -144,7 +144,12 @@ private struct CommonsMerchantPhotoCard: View {
             Text(tr("向 Wikimedia 查询所选店铺坐标；不会发送账目或金额。照片可能较旧，并非每家店都有。", "Queries Wikimedia with the selected store coordinates, never entries or amounts. Photos may be old or unavailable.", "Mencari di Wikimedia dengan koordinat kedai, bukan rekod atau amaun. Foto mungkin lama atau tiada."))
                 .font(.caption).foregroundStyle(.secondary)
             if enabled {
-                if loading { ProgressView(tr("正在查找照片…", "Looking for photos…", "Mencari foto…")) }
+                if loading {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: 16).fill(.quaternary)
+                        ProgressView(tr("正在查找照片…", "Looking for photos…", "Mencari foto…"))
+                    }.frame(height: 140).accessibilityElement(children: .combine)
+                }
                 if let image, let photo {
                     Image(uiImage: image).resizable().scaledToFit()
                         .frame(maxWidth: .infinity).clipShape(RoundedRectangle(cornerRadius: 16))
@@ -562,6 +567,10 @@ struct ExpensePlaceMapSheet: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 18) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(draft.name.isEmpty ? merchantHint : draft.name).font(.title2.weight(.semibold))
+                        if !draft.address.isEmpty { Text(draft.address).font(.subheadline).foregroundStyle(.secondary) }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                     matchStatus
                     if editing || coordinate != nil {
                         mapCard.transition(.opacity)
@@ -588,8 +597,7 @@ struct ExpensePlaceMapSheet: View {
                     if let url = googleMapsURL {
                         Link(destination: url) {
                             Label(tr("去 Google Maps 看照片", "View photos on Google Maps", "Lihat foto di Google Maps"), systemImage: "arrow.up.right.square")
-                                .frame(maxWidth: .infinity, alignment: .leading).padding(18)
-                                .background(.background, in: RoundedRectangle(cornerRadius: 22))
+                                .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10)
                         }.accessibilityIdentifier("place.googleMaps")
                         Text(tr("打开 Google Maps 搜索此店铺，照片以店铺收录情况为准。", "Opens Google Maps to search this place; photos depend on availability.", "Membuka Google Maps untuk mencari tempat ini; foto bergantung pada ketersediaan."))
                             .font(.caption).foregroundStyle(.secondary)
@@ -608,8 +616,6 @@ struct ExpensePlaceMapSheet: View {
                         }.padding(18).background(.background, in: RoundedRectangle(cornerRadius: 22))
                     } else {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text(draft.name).font(.title3.weight(.semibold))
-                            Text(draft.address).font(.subheadline).foregroundStyle(.secondary)
                             if draft != initial {
                                 Text(tr("当前为店铺预览，不会修改账目中保存的地点。", "Place preview; the saved transaction location is unchanged.", "Pratonton tempat; lokasi transaksi yang disimpan tidak berubah."))
                                     .font(.caption).foregroundStyle(.secondary)

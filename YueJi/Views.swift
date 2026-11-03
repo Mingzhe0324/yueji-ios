@@ -131,12 +131,12 @@ struct AmbientGlowBackdrop: View {
 enum YueJiMotion {
     // Layout: rows, months, detail panels. No overshoot.
     static let standard = Animation.smooth(duration: 0.24)
-    static let detail = Animation.smooth(duration: 0.32)
-    static let month = Animation.smooth(duration: 0.42)
-    static let rows = Animation.smooth(duration: 0.34)
-    static let tone = Animation.easeInOut(duration: 0.55)
+    static let detail = Animation.smooth(duration: 0.26)
+    static let month = Animation.smooth(duration: 0.28)
+    static let rows = Animation.smooth(duration: 0.26)
+    static let tone = Animation.easeInOut(duration: 0.3)
     /// Text and labels that change in place.
-    static let content = Animation.smooth(duration: 0.35)
+    static let content = Animation.smooth(duration: 0.24)
     /// Button and control presses.
     static let press = Animation.spring(duration: 0.22, bounce: 0.15)
     /// Chips, badges and small reveals.
@@ -145,7 +145,7 @@ enum YueJiMotion {
     static let entrance = Animation.spring(duration: 0.55, bounce: 0.1)
     static let banner = Animation.spring(duration: 0.45, bounce: 0.12)
     /// Gauges, bars and charts filling.
-    static let meter = Animation.spring(duration: 0.8, bounce: 0.08)
+    static let meter = Animation.smooth(duration: 0.3)
 }
 
 /// Move only the completed monthly summary, keeping navigation and row identity stable.
@@ -1015,12 +1015,15 @@ struct DashboardView: View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(tr("本月个人消费", "Personal spending", "Belanja peribadi"))
+                    Text(budget > 0 ? tr("本月预算剩余", "Budget remaining this month", "Baki bajet bulan ini") : tr("本月个人消费", "Personal spending", "Belanja peribadi"))
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         .textCase(.uppercase)
-                    heroAmount
+                    Group {
+                        if budget > 0 { amount(budget - budgetSpent) }
+                        else { heroAmount }
+                    }
                         .font(.system(size: heroSize, weight: .bold))
-                        .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
+                        .foregroundStyle(budget > 0 && budgetSpent > budget ? Color.red : Color.primary).minimumScaleFactor(0.5).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 GlassIconButton(symbol: hideAmounts ? "eye.slash" : "eye") {
@@ -1029,6 +1032,21 @@ struct DashboardView: View {
                 }
                 .modifier(AttentionBounce(trigger: hideAmounts))
                 .accessibilityLabel(hideAmounts ? tr("显示金额", "Show amounts", "Tunjuk amaun") : tr("隐藏金额", "Hide amounts", "Sembunyi amaun"))
+            }
+            if budget > 0 {
+                SpendingMeter(value: budgetSpent, total: budget, color: budgetTint)
+                HStack {
+                    Text(tr("个人消费", "Personal spending", "Belanja peribadi"))
+                    Spacer()
+                    amount(personal).foregroundStyle(.red)
+                }.font(.subheadline).padding(.top, 8)
+                HStack {
+                    Text(tr("加入预算的收入", "Income allocated to budget", "Pendapatan dalam bajet"))
+                    Spacer()
+                    amount(monthBudget.income).foregroundStyle(IncomeStyle.tint)
+                }.font(.subheadline)
+                Text(tr("预算结余是可用额度，并非银行实际存款。", "Budget remaining is available allowance, not a bank savings balance.", "Baki bajet ialah peruntukan tersedia, bukan baki simpanan bank."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Text(summary.reimbursementClaimed > 0
                  ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
@@ -1353,6 +1371,11 @@ private struct SpendingCategoryBreakdown: View {
                 .padding(.vertical, 8)
                 // Another month starts with nothing picked.
                 .onChange(of: monthKey(month)) { _, _ in selectedCategory = nil }
+            }
+            if let selected = activeSelection {
+                NavigationLink { CategoryPaymentsView(category: selected, month: month) } label: {
+                    Label(categoryLabel(selected) + " · " + tr("查看账目", "View entries", "Lihat rekod"), systemImage: "list.bullet")
+                }.transition(.opacity)
             }
             // One row per category, as Messages lists conversations: the category's tinted
             // icon, its name and share of the month, and the amount.
@@ -1716,7 +1739,7 @@ struct ExpenseRow: View {
                 }
                 if !entry.merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                    let description = entry.entryDescription, !description.isEmpty {
-                    Text(description).font(.subheadline).foregroundStyle(.secondary)
+                    Text(description).font(.footnote).foregroundStyle(.secondary)
                         .lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 }
                 if let preview = entry.itemPreview {
@@ -1729,7 +1752,7 @@ struct ExpenseRow: View {
                             Text(preview.names).lineLimit(2)
                             if preview.remaining > 0 { Text(preview.moreLabel) }
                         }
-                    }.font(.subheadline).foregroundStyle(.secondary)
+                    }.font(.footnote).foregroundStyle(.secondary)
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("transaction.items.preview")
                 }
@@ -1771,7 +1794,7 @@ private struct RestoredRecordHighlight: ViewModifier {
             withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { highlighted = true }
             do { try await Task.sleep(for: .milliseconds(450)) }
             catch { highlighted = false; return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.9)) { highlighted = false }
+            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) { highlighted = false }
         }
     }
 }
@@ -3313,7 +3336,8 @@ struct ExpenseEditor: View {
             try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty)
             await model.refresh(postRecurring: false)
             finishDraft()
-            model.showSaved(message: tr("已记 ", "Recorded ", "Direkod ") + money(n), firstEntry: original == nil)
+            model.highlightSavedExpense(entry.id)
+            model.showSaved(firstEntry: original == nil)
             dismiss(); onSaved?()
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
