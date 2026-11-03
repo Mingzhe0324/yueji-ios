@@ -6,6 +6,16 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testScreenshotAIOnlyAllowsCompletedMYRPurchases() {
+        func draft(kind: String = "payment", completed: Bool = true, currency: String = "MYR", amount: String = "3.00") -> ScreenshotAIDraft {
+            ScreenshotAIDraft(merchant: "Parking", amount: amount, date: "2026-09-02", currency: currency, kind: kind, description: "Parking fee", completed: completed)
+        }
+        XCTAssertTrue(draft().eligible)
+        for kind in ["transfer", "incoming", "refund", "topup", "unknown"] { XCTAssertFalse(draft(kind: kind).eligible) }
+        XCTAssertFalse(draft(completed: false).eligible)
+        XCTAssertFalse(draft(currency: "").eligible)
+        XCTAssertFalse(draft(amount: "0.00").eligible)
+    }
     func testScreenshotDraftOnlyPrefillsExplicitSingleMYRAmount() {
         let draft = ScreenshotPaymentDraft.parse("Payment successful\nMerchant: Mall Parking\nRM 3.00\n2026-09-02")
         XCTAssertEqual(draft.amount, "3.00")

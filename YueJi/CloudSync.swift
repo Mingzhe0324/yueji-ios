@@ -317,9 +317,11 @@ actor SupabaseCloudService: CloudRemote {
             throw reviewError("AI 服务尚未就绪，请检查 assistant-gemini、GEMINI_ASSISTANT_MODEL 和额度 SQL。", "AI service is not ready. Check assistant-gemini, GEMINI_ASSISTANT_MODEL and quota SQL.", "Perkhidmatan AI belum tersedia. Semak assistant-gemini, GEMINI_ASSISTANT_MODEL dan SQL kuota.")
         }
     }
-    func recognizeReceipt(image: Data) async throws -> Data {
+    func recognizeReceipt(image: Data, transaction: Bool = false) async throws -> Data {
         guard image.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
-        do { return try await request("/functions/v1/receipt-gemini", body: ["image": image.base64EncodedString()], authenticated: true) }
+        var body = ["image": image.base64EncodedString()]
+        if transaction { body["mode"] = "transaction" }
+        do { return try await request("/functions/v1/receipt-gemini", body: body, authenticated: true) }
         catch CloudFailure.server(let status, _) {
             if status == 404 {
                 throw reviewError("未找到收据识别服务，请检查当前 Supabase 项目是否已部署 receipt-gemini。", "Receipt recognition was not found. Check that receipt-gemini is deployed to the current Supabase project.", "Perkhidmatan resit tidak ditemui. Semak bahawa receipt-gemini telah digunakan pada projek Supabase semasa.")

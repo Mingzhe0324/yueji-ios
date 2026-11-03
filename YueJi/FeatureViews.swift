@@ -3002,6 +3002,17 @@ struct ScreenshotPaymentDraft {
     }
 }
 
+struct ScreenshotAIDraft: Decodable {
+    let merchant: String
+    let amount: String
+    let date: String
+    let currency: String
+    let kind: String
+    let description: String
+    let completed: Bool
+    var eligible: Bool { completed && kind == "payment" && currency == "MYR" && (try? toCents(amount)).map { $0 > 0 } == true }
+}
+
 struct TransactionScreenshotView: View {
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -3021,10 +3032,13 @@ struct TransactionScreenshotView: View {
     @State private var digest = ""
     @State private var error: String?
     @State private var editor: Expense?
+    @State private var aiRequest: UUID?
+    @State private var aiStatus = ""
+    @State private var paymentDescription = ""
     var body: some View {
         Form {
             Section {
-                Text(tr("导入单笔已完成的付款详情，例如 TNG 停车费。照片仅在本机识别，不上传，也不会自动扣余额。", "Import one completed payment detail, such as TNG parking. Recognition stays on this device; no upload or automatic balance change.", "Import butiran satu bayaran selesai, seperti parkir TNG. Pengecaman pada peranti sahaja; tiada muat naik atau perubahan baki automatik."))
+                Text(tr("导入单笔付款详情，例如 TNG 停车费。先在本机识别；也可选择 Gemini AI 协助，确认保存后才更新余额。", "Import one payment detail, such as TNG parking. Start with local recognition, optionally use Gemini AI, then review and save to update the balance.", "Import satu butiran bayaran seperti parkir TNG. Mulakan pengecaman setempat, pilih AI Gemini jika perlu, kemudian semak dan simpan untuk mengemas kini baki."))
                     .font(.footnote)
                 PhotosPicker(selection: $photo, matching: .images) {
                     Label(tr("选择交易截图", "Choose transaction screenshot", "Pilih tangkapan skrin transaksi"), systemImage: "photo")
@@ -3044,6 +3058,13 @@ struct TransactionScreenshotView: View {
                     if !text.isEmpty {
                         DisclosureGroup(tr("识别文字", "Recognized text", "Teks dikenal pasti")) { Text(text).textSelection(.enabled) }
                     }
+                }
+                Section {
+                    Button { aiRequest = UUID() } label: {
+                        Label(tr("使用 Gemini AI 识别", "Recognize with Gemini AI", "Kenal pasti dengan AI Gemini"), systemImage: "sparkles")
+                    }.disabled(busy)
+                    Text(tr("点击后会将此截图发送给 Google Gemini，需要登录及联网，使用现有收据识别额度。AI 结果仍需核对。", "Tapping sends this screenshot to Google Gemini. Sign-in and internet are required; this uses your receipt recognition quota. Review the AI results.", "Mengetik menghantar tangkapan skrin ke Google Gemini. Log masuk dan internet diperlukan; menggunakan kuota pengecaman resit. Semak hasil AI.")).font(.caption).foregroundStyle(.secondary)
+                    if !aiStatus.isEmpty { Text(aiStatus).font(.footnote).accessibilityIdentifier("screenshot.ai.status") }
                 }
                 if busy {
                     Text(tr("正在读取商户、金额和日期", "Reading merchant, amount and date", "Membaca peniaga, amaun dan tarikh")).font(.footnote).foregroundStyle(.secondary)
@@ -3074,7 +3095,7 @@ struct TransactionScreenshotView: View {
                                 guard cents > 0 else { throw CloudFailure.invalidResponse }
                                 var entry = Expense(bankAccountID: accountID, id: "screenshot-" + digest, merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date,
                                                     category: guessCategory(merchant, description: parking ? "parking" : ""), source: "交易截图")
-                                entry.entryDescription = parking ? tr("停车费", "Parking fee", "Bayaran parkir") : nil
+                                entry.entryDescription = paymentDescription.isEmpty ? (parking ? tr("停车费", "Parking fee", "Bayaran parkir") : nil) : paymentDescription
                                 editor = entry
                             } catch { self.error = error.localizedDescription }
                         }.disabled(busy || !dateConfirmed || !completedPayment || accountID == nil || merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount.isEmpty)
@@ -3089,12 +3110,14 @@ struct TransactionScreenshotView: View {
                 guard let photo else { return }
                 let store = LocalStore.shared
                 busy = true; image = nil; text = ""; completedPayment = false; dateConfirmed = false
+                merchant = ""; amount = ""; paymentDescription = ""; aiStatus = ""; blocked = false; dateRecognized = false; parking = false; date = Date()
                 defer { busy = false }
                 do {
                     guard let data = try await photo.loadTransferable(type: Data.self), data.count <= 25_000_000,
                           let decoded = UIImage(data: data) else { throw CloudFailure.invalidResponse }
                     try Task.checkCancellation()
                     image = decoded
+                    digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
                     let recognized = try await ReceiptOCR.read(data)
                     try Task.checkCancellation()
                     guard store.isActive else { image = nil; return }
@@ -3106,7 +3129,39 @@ struct TransactionScreenshotView: View {
                     date = min(parsed.date ?? Date(), Date()); parking = parsed.parking; blocked = parsed.blocked
                 } catch is CancellationError { image = nil }
                 catch {
-                    image = nil
+                    if !Task.isCancelled { self.error = error.localizedDescription }
+                }
+            }
+            .task(id: aiRequest) {
+                guard aiRequest != nil, let image else { return }
+                let store = LocalStore.shared
+                busy = true; completedPayment = false; dateConfirmed = false
+                aiStatus = tr("AI 正在分析截图…", "AI is analyzing the screenshot…", "AI sedang menganalisis tangkapan skrin…")
+                defer { busy = false }
+                do {
+                    let scale = min(1, 2000 / max(image.size.width, image.size.height))
+                    let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                    let format = UIGraphicsImageRendererFormat(); format.scale = 1; format.opaque = true
+                    let resized = UIGraphicsImageRenderer(size: size, format: format).image { context in
+                        UIColor.white.setFill(); context.fill(CGRect(origin: .zero, size: size))
+                        image.draw(in: CGRect(origin: .zero, size: size))
+                    }
+                    guard let jpeg = resized.jpegData(compressionQuality: 0.85), jpeg.count <= 4_000_000 else { throw CloudFailure.invalidResponse }
+                    let response = try await CloudAccount.shared.recognizeReceipt(image: jpeg, transaction: true)
+                    let draft = try JSONDecoder().decode(ScreenshotAIDraft.self, from: response)
+                    try Task.checkCancellation()
+                    guard store.isActive else { return }
+                    blocked = !draft.eligible
+                    merchant = draft.merchant; amount = draft.amount; paymentDescription = draft.description
+                    let parsedDate = ScannedReceipt.receiptDate(draft.date)
+                    dateRecognized = parsedDate.map { $0 <= Date() } ?? false
+                    date = min(parsedDate ?? Date(), Date())
+                    aiStatus = draft.eligible
+                        ? tr("AI 已识别，请核对后继续。", "AI recognition complete. Review before continuing.", "Pengecaman AI selesai. Semak sebelum meneruskan.")
+                        : tr("AI 无法确认这是单笔已完成的马币消费，暂不允许作为消费导入。", "AI could not confirm one completed MYR purchase. Purchase import is blocked.", "AI tidak dapat mengesahkan satu belian MYR selesai. Import belian disekat.")
+                } catch is CancellationError { }
+                catch {
+                    aiStatus = tr("AI 识别未完成，保留之前的结果。", "AI recognition failed; previous results are preserved.", "Pengecaman AI gagal; hasil terdahulu dikekalkan.")
                     if !Task.isCancelled { self.error = error.localizedDescription }
                 }
             }

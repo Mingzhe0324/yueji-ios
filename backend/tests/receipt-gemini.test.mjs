@@ -1,6 +1,33 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { handleReceipt, validDraft } from '../../supabase/functions/receipt-gemini/handler.mjs';
+import { handleReceipt, validDraft, validTransaction } from '../../supabase/functions/receipt-gemini/handler.mjs';
+
+const payment = { merchant: 'Mall Parking', amount: '3.00', date: '2026-09-02', currency: 'MYR', kind: 'payment', description: 'Parking fee', completed: true };
+test('transaction screenshots use dedicated schema and preserve review fields', async () => {
+  const deps = harness({ result: { ...payment, accountNumber: 'private' } });
+  const response = await handleReceipt(request({ image: '/9j/AAAA', mode: 'transaction' }), deps);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), payment);
+  const payload = JSON.parse(deps.calls[2].options.body);
+  assert.ok(payload.generationConfig.responseSchema.required.includes('completed'));
+  assert.match(payload.contents[0].parts[0].text, /never wallet balance/);
+});
+test('transaction validation rejects impossible dates, zero amounts and malformed completion', async () => {
+  for (const value of [{ ...payment, date: '2026-02-30' }, { ...payment, amount: '0.00' }, { ...payment, completed: 'true' }, { ...payment, kind: 'unknown' }, { ...payment, amount: '' }]) {
+    assert.equal(validTransaction(value), false);
+    assert.equal((await handleReceipt(request({ image: '/9j/AAAA', mode: 'transaction' }), harness({ result: value }))).status, 422);
+  }
+  assert.equal(validTransaction({ ...payment, kind: 'transfer' }), true);
+  assert.equal(validTransaction({ ...payment, kind: 'unknown', completed: false, amount: '', currency: '' }), true);
+});
+test('screenshot mode honors quota and rejects unsupported modes before quota', async () => {
+  const deps = harness({ quota: false });
+  assert.equal((await handleReceipt(request({ image: '/9j/AAAA', mode: 'transaction' }), deps)).status, 429);
+  assert.equal(deps.calls.length, 2);
+  const invalid = harness();
+  assert.equal((await handleReceipt(request({ image: '/9j/AAAA', mode: 'other' }), invalid)).status, 400);
+  assert.equal(invalid.calls.length, 1);
+});
 
 const draft = { merchant: 'Cafe', date: '2026-10-30', currency: 'MYR', subtotal: '10.00', tax: '', service: '', discount: '', rounding: '', total: '10.00', items: [{ name: 'Rice', amount: '10.00' }] };
 test('branch contact fields are bounded and old receipt payloads remain compatible', () => {

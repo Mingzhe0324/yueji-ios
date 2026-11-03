@@ -101,25 +101,26 @@ import ImageIO
         guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple else { throw CloudFailure.session }
         return data
     }
-    func recognizeReceipt(image: Data) async throws -> Data {
-        guard !YueJiAI.usesApple else { throw CancellationError() }
+    func recognizeReceipt(image: Data, transaction: Bool = false) async throws -> Data {
+        // Transaction mode is explicitly requested by the Gemini screenshot button.
+        guard transaction || !YueJiAI.usesApple else { throw CancellationError() }
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
         do {
-            let data = try await api.recognizeReceipt(image: image)
+            let data = try await api.recognizeReceipt(image: image, transaction: transaction)
             try Task.checkCancellation()
-            guard !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            guard transaction || !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
             return data
         }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
-            guard !YueJiAI.usesApple else { throw CancellationError() }
+            guard transaction || !YueJiAI.usesApple else { throw CancellationError() }
             guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
             try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
             session = refreshed
-            let data = try await api.recognizeReceipt(image: image)
+            let data = try await api.recognizeReceipt(image: image, transaction: transaction)
             try Task.checkCancellation()
-            guard !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            guard transaction || !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
             return data
         }
     }
