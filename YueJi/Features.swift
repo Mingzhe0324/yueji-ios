@@ -833,6 +833,27 @@ struct DuplicatePair: Identifiable {
 struct FriendBalance: Identifiable {
     let id: String; var name: String; var owed: Int = 0; var payable: Int = 0; var count: Int = 0
 }
+extension Ledger {
+    func screenshotMatches(cents: Int, date: Date) -> Set<String> {
+        guard cents > 0 else { return [] }
+        let entries = expenses.filter { $0.cents == cents && Calendar.current.isDate($0.date, inSameDayAs: date) }.map { "expense:" + $0.id }
+        let notices = tngNotices.filter {
+            $0.cents == cents && Calendar.current.isDate($0.date, inSameDayAs: date) && $0.status != "ignored"
+        }.map { "notice:" + $0.id }
+        return Set(entries + notices)
+    }
+    func validateScreenshotImport(_ entry: Expense, acknowledged: Set<String>) throws {
+        guard entry.source == "交易截图" else { return }
+        guard !expenses.contains(where: { $0.id == entry.id }) else {
+            throw reviewError("这张截图已导入，请查看已有账目。", "This screenshot was already imported. View the existing entry.", "Tangkapan skrin ini sudah diimport. Lihat rekod sedia ada.")
+        }
+        guard entry.bankAccountID != nil, entry.paidByFriend == nil, entry.foreign == nil,
+              entry.date <= Date(), screenshotMatches(cents: entry.cents, date: entry.date).isSubset(of: acknowledged) else {
+            throw reviewError("请核对重复记录、付款账户、日期及马币金额后再保存。", "Review matching records, payment account, date and MYR amount before saving.", "Semak rekod sepadan, akaun bayaran, tarikh dan amaun MYR sebelum menyimpan.")
+        }
+    }
+}
+
 struct IncomingRepaymentLine: Identifiable, Equatable {
     var id: String { expense.id + "|" + shareID }
     let expense: Expense

@@ -279,9 +279,10 @@ actor LedgerRefreshWorker {
         try Task.checkCancellation()
         return try store.readSnapshot()
     }
-    func saveExpense(_ entry: Expense, replacing original: Expense?, rememberCategory: Bool, notice: TNGNotice? = nil) throws {
+    func saveExpense(_ entry: Expense, replacing original: Expense?, rememberCategory: Bool, notice: TNGNotice? = nil, screenshotAcknowledged: Set<String> = []) throws {
         try Task.checkCancellation()
         try store.change { ledger in
+            if original == nil { try ledger.validateScreenshotImport(entry, acknowledged: screenshotAcknowledged) }
             if let notice {
                 try ledger.saveNoticeExpense(entry, notice: notice)
             } else if let original {

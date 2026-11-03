@@ -319,6 +319,7 @@ func categoryLabel(_ key: String) -> String {
 func sourceLabel(_ key: String) -> String {
     switch key {
     case "手动": return tr("手动", "Manual", "Manual")
+    case "交易截图": return tr("交易截图", "Transaction screenshot", "Tangkapan skrin transaksi")
     case "固定消费", "Recurring": return tr("固定消费", "Recurring", "Berulang")
     case "账单补录": return tr("账单补录", "Bill entry", "Rekod bil")
     case "银行 / TNG", "银行/TNG": return tr("银行 / TNG", "Bank / TNG", "Bank / TNG")

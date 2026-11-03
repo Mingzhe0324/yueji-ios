@@ -1562,6 +1562,7 @@ struct OverviewToolsView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
+                NavigationLink { TransactionScreenshotView() } label: { IslandRowLabel(title: tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"), symbol: "photo.badge.plus", color: IslandPalette.lagoon) }
                 NavigationLink { ReimbursementsView() } label: { IslandRowLabel(title: tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), symbol: "doc.text.fill", color: IslandPalette.lavender) }
                 NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")
@@ -2783,6 +2784,10 @@ struct ExpenseEditor: View {
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
     var pendingNotice: TNGNotice? = nil
+    @State private var screenshotAcknowledged = Set<String>()
+    private var screenshotImport: Bool { original == nil && initialDraft?.source == "交易截图" }
+    private var draftStorageID: String? { pendingNotice.map { "notice-" + $0.id } ?? original?.id ?? (screenshotImport ? initialDraft?.id : nil) }
+    private var screenshotMatches: Set<String> { model.ledger.screenshotMatches(cents: (try? total()) ?? 0, date: date) }
     var startWithSplit = false
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -2879,7 +2884,7 @@ struct ExpenseEditor: View {
                             Text(tr("原账目已更新，旧草稿不能覆盖新记录。", "This entry has changed; the old draft cannot overwrite it.", "Rekod telah berubah; draf lama tidak boleh menimpanya."))
                         }
                         Button(tr("放弃旧草稿", "Discard old draft", "Buang draf lama"), role: .destructive) {
-                            ExpenseDraftStorage.remove((pendingNotice.map { "notice-" + $0.id } ?? original?.id)); recoverable = nil
+                            ExpenseDraftStorage.remove(draftStorageID); recoverable = nil
                         }
                     }
                 }
@@ -2888,6 +2893,26 @@ struct ExpenseEditor: View {
                 chargeSection
                 payerSection
                 merchantSection
+                if screenshotImport {
+                    Section(tr("核对重复交易", "Review matching transactions", "Semak transaksi sepadan")) {
+                        ForEach(model.ledger.expenses.filter { screenshotMatches.contains("expense:" + $0.id) }) { entry in
+                            NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: {
+                                Text(entry.displayName + " · " + money(entry.cents))
+                            }
+                        }
+                        ForEach(model.ledger.tngNotices.filter { screenshotMatches.contains("notice:" + $0.id) }) { notice in
+                            NavigationLink { TNGNoticeView(id: notice.id) } label: {
+                                Text((notice.party ?? notice.provider) + " · " + money(notice.cents ?? 0))
+                            }
+                        }
+                        if !screenshotMatches.isEmpty {
+                            Toggle(tr("已核对：这是另一笔付款，仍要新增", "Checked: this is a separate payment to add", "Disemak: ini bayaran berasingan untuk ditambah"), isOn: Binding(get: {
+                                screenshotMatches.isSubset(of: screenshotAcknowledged)
+                            }, set: { screenshotAcknowledged = $0 ? screenshotMatches : [] }))
+                        }
+                        Text(tr("已有记录请返回查看，不要再次保存；同日同金额只提示可能重复。", "For an existing payment, go back without saving. Same-day amounts indicate possible duplicates only.", "Untuk bayaran sedia ada, kembali tanpa menyimpan. Amaun hari sama hanya menunjukkan kemungkinan pendua.")).font(.caption)
+                    }
+                }
                 if !model.ledger.trips.isEmpty {
                     Section(tr("旅行账本", "Travel book", "Buku perjalanan")) {
                         Picker(tr("预算归属", "Budget", "Bajet"), selection: $tripID) {
@@ -2902,7 +2927,7 @@ struct ExpenseEditor: View {
                     finishKeyboard(); editingPlace = true
                 }
                 ExpenseItemsFields(aiDisabled: saving || draftFinished || (original?.refunded ?? 0) > 0 || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false), items: $itemDrafts, totalCents: itemBase, defaultCategory: category, savedTransaction: original != nil, sharedFocus: $focusedField, friendNames: people.map(\.name), payer: friendPays ? payerName : nil, charges: chargesDraft, foreign: try? foreign())
-                currencySection
+                currencySection.disabled(screenshotImport)
                 friendSplitSection
                 reimbursementSection
                 if let original {
@@ -2946,6 +2971,7 @@ struct ExpenseEditor: View {
                 }
                 .onAppear { load() }
                 .onChange(of: snapshot) { _, _ in
+                    screenshotAcknowledged.removeAll()
                     draftSaveTask?.cancel()
                     draftSaveTask = Task { @MainActor in
                         do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
@@ -3021,14 +3047,14 @@ struct ExpenseEditor: View {
     }
     private func persistDraft() {
         guard initialized, !model.isPreview, !draftFinished, recoverable == nil else { return }
-        guard hasChanges else { ExpenseDraftStorage.remove((pendingNotice.map { "notice-" + $0.id } ?? original?.id)); return }
+        guard hasChanges else { ExpenseDraftStorage.remove(draftStorageID); return }
         ExpenseDraftStorage.write(SavedExpenseDraft(base: original, seed: draftSeed,
-            fields: snapshot, rateDate: rateDate, rateSource: rateSource), id: (pendingNotice.map { "notice-" + $0.id } ?? original?.id))
+            fields: snapshot, rateDate: rateDate, rateSource: rateSource), id: draftStorageID)
     }
     private func finishDraft() {
         draftSaveTask?.cancel()
         draftFinished = true
-        if !model.isPreview { ExpenseDraftStorage.remove((pendingNotice.map { "notice-" + $0.id } ?? original?.id)) }
+        if !model.isPreview { ExpenseDraftStorage.remove(draftStorageID) }
     }
     private func restoreDraft(_ draft: SavedExpenseDraft) {
         place = draft.fields.place
@@ -3086,7 +3112,7 @@ struct ExpenseEditor: View {
             Picker(tr("付款人", "Payer", "Pembayar"), selection: $friendPays) {
                 Text(tr("我付款", "Paid by me", "Dibayar oleh saya")).tag(false)
                 Text(tr("朋友付款", "Paid by a friend", "Dibayar oleh rakan")).tag(true)
-            }.disabled(pendingNotice != nil)
+            }.disabled(pendingNotice != nil || screenshotImport)
             if friendPays {
                 TextField(tr("付款朋友姓名", "Paying friend's name", "Nama rakan pembayar"), text: $payerName)
                 if !model.friends.isEmpty {
@@ -3205,7 +3231,7 @@ struct ExpenseEditor: View {
         guard !initialized else { return }; initialized = true
         defer { initialSnapshot = snapshot }
         draftSeed = initialDraft
-        if !model.isPreview { recoverable = ExpenseDraftStorage.read((pendingNotice.map { "notice-" + $0.id } ?? original?.id)) }
+        if !model.isPreview { recoverable = ExpenseDraftStorage.read(draftStorageID) }
         if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
@@ -3327,7 +3353,7 @@ struct ExpenseEditor: View {
                 entry.reimbursement = nil
             }
             try entry.validateReimbursement()
-            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty, notice: pendingNotice)
+            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty, notice: pendingNotice, screenshotAcknowledged: screenshotAcknowledged)
             await model.refresh(postRecurring: false)
             finishDraft()
             model.highlightSavedExpense(entry.id)

@@ -6,6 +6,41 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testScreenshotDraftOnlyPrefillsExplicitSingleMYRAmount() {
+        let draft = ScreenshotPaymentDraft.parse("Payment successful\nMerchant: Mall Parking\nRM 3.00\n2026-09-02")
+        XCTAssertEqual(draft.amount, "3.00")
+        XCTAssertEqual(draft.merchant, "Mall Parking")
+        XCTAssertTrue(draft.parking)
+        XCTAssertFalse(draft.blocked)
+        XCTAssertNotNil(draft.date)
+        XCTAssertEqual(ScreenshotPaymentDraft.parse("RM 3.00\nBalance RM 50.00").amount, "")
+        XCTAssertEqual(ScreenshotPaymentDraft.parse("SGD 3.00").amount, "")
+        XCTAssertEqual(ScreenshotPaymentDraft.parse("Transaction 123456\n3.00").amount, "")
+        XCTAssertEqual(ScreenshotPaymentDraft.parse("MYR 1,234.50").amount, "1234.50")
+        for text in ["Pending RM 3.00", "Failed RM 3.00", "Refund RM 3.00", "Transfer RM 3.00", "Received RM 3.00", "Reload RM 3.00"] {
+            XCTAssertTrue(ScreenshotPaymentDraft.parse(text).blocked, text)
+        }
+    }
+    func testScreenshotDuplicateReviewRechecksLedgerAndPreservesBalance() throws {
+        let now = Date()
+        let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: now.addingTimeInterval(-86400))
+        var ledger = Ledger()
+        ledger.bankAccounts = [account]
+        let entry = Expense(bankAccountID: account.id, id: "screenshot-example", merchant: "Parking", cents: 300, date: now, source: "交易截图")
+        try ledger.validateScreenshotImport(entry, acknowledged: [])
+        ledger.expenses.append(entry)
+        XCTAssertEqual(ledger.bankBalance(account), 9700)
+        XCTAssertThrowsError(try ledger.validateScreenshotImport(entry, acknowledged: ["expense:" + entry.id]))
+        var different = entry; different.id = "screenshot-cropped"
+        XCTAssertThrowsError(try ledger.validateScreenshotImport(different, acknowledged: []))
+        let checked = ledger.screenshotMatches(cents: 300, date: now)
+        try ledger.validateScreenshotImport(different, acknowledged: checked)
+        ledger.tngNotices.append(TNGNotice(body: "Payment RM 3.00", title: "TNG", date: now, usesReceivedDate: false, kind: "payment", status: "pending", cents: 300, party: "Parking"))
+        XCTAssertThrowsError(try ledger.validateScreenshotImport(different, acknowledged: checked))
+        XCTAssertEqual(ledger.bankBalance(account), 9700)
+        different.bankAccountID = nil
+        XCTAssertThrowsError(try ledger.validateScreenshotImport(different, acknowledged: ledger.screenshotMatches(cents: 300, date: now)))
+    }
     func testTravelBudgetUsesPersonalShareWithoutDoubleCountingOrRepaymentIncome() throws {
         let now = Date()
         let trip = TravelBook(name: "Penang", start: now, end: now, budget: 100000)

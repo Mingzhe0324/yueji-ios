@@ -2965,6 +2965,132 @@ struct ReceiptCamera: UIViewControllerRepresentable {
     }
 }
 
+import CryptoKit
+
+/// Only explicit MYR amounts and labelled merchant text are prefilled.
+/// A transaction-list screenshot or ambiguous total is left for manual review.
+struct ScreenshotPaymentDraft {
+    var merchant = ""
+    var amount = ""
+    var date: Date?
+    var parking = false
+    var blocked = false
+    static func parse(_ text: String) -> Self {
+        var value = Self()
+        value.date = ScannedReceipt.receiptDate(text)
+        value.parking = text.range(of: #"(?i)\bparking\b|停车|泊车"#, options: .regularExpression) != nil
+        value.blocked = text.range(of: #"(?i)\b(pending|failed|unsuccessful|cancelled|canceled|refund|refunded|reversed|cashback|received|top[ -]?up|reload|transfer)\b|失败|待处理|退款|转账|充值|收款"#, options: .regularExpression) != nil
+        let regex = try! NSRegularExpression(pattern: #"(?i)\b(?:RM|MYR)\s*([0-9]+(?:,[0-9]{3})*\.[0-9]{2})(?![0-9])"#)
+        let amounts = Set(regex.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { match -> String? in
+            guard let range = Range(match.range(at: 1), in: text) else { return nil }
+            let amount = String(text[range]).replacingOccurrences(of: ",", with: "")
+            guard let cents = try? toCents(amount), cents > 0 else { return nil }
+            return Currency.input(cents, "MYR")
+        })
+        if amounts.count == 1 { value.amount = amounts.first ?? "" }
+        let lines = text.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+        let labels = ["merchant", "merchant name", "paid to", "商户", "商家", "peniaga"]
+        for (index, line) in lines.enumerated() {
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false).map(String.init)
+            if labels.contains(parts[0].lowercased().trimmingCharacters(in: .whitespaces)) {
+                let name = parts.count > 1 ? parts[1].trimmingCharacters(in: .whitespaces) : (index + 1 < lines.count ? lines[index + 1] : "")
+                if name.count <= 200 { value.merchant = name }
+                break
+            }
+        }
+        return value
+    }
+}
+
+struct TransactionScreenshotView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var photo: PhotosPickerItem?
+    @State private var image: UIImage?
+    @State private var text = ""
+    @State private var merchant = ""
+    @State private var amount = ""
+    @State private var date = Date()
+    @State private var accountID: String?
+    @State private var dateConfirmed = false
+    @State private var completedPayment = false
+    @State private var parking = false
+    @State private var blocked = false
+    @State private var busy = false
+    @State private var digest = ""
+    @State private var error: String?
+    @State private var editor: Expense?
+    var body: some View {
+        Form {
+            Section {
+                Text(tr("导入单笔已完成的付款详情，例如 TNG 停车费。照片仅在本机识别，不上传，也不会自动扣余额。", "Import one completed payment detail, such as TNG parking. Recognition stays on this device; no upload or automatic balance change.", "Import butiran satu bayaran selesai, seperti parkir TNG. Pengecaman pada peranti sahaja; tiada muat naik atau perubahan baki automatik."))
+                    .font(.footnote)
+                PhotosPicker(selection: $photo, matching: .images) {
+                    Label(tr("选择交易截图", "Choose transaction screenshot", "Pilih tangkapan skrin transaksi"), systemImage: "photo")
+                }.disabled(busy).accessibilityIdentifier("screenshot.choose")
+                if busy { ProgressView() }
+            }
+            if let image {
+                Section {
+                    DisclosureGroup(tr("查看原图", "View original image", "Lihat imej asal")) { Image(uiImage: image).resizable().scaledToFit() }
+                    DisclosureGroup(tr("识别文字", "Recognized text", "Teks dikenal pasti")) { Text(text).textSelection(.enabled) }
+                }
+                if blocked {
+                    Text(tr("截图包含转账、收款、退款或未完成状态，请到对应功能核对，不能作为消费导入。", "This image mentions a transfer, receipt, refund or incomplete status. Review it in the appropriate feature, not as a purchase.", "Imej menyebut pindahan, penerimaan, pulangan atau status belum selesai. Semak dalam ciri berkaitan, bukan sebagai belian."))
+                        .foregroundStyle(.orange)
+                } else {
+                    Section(tr("核对付款", "Review payment", "Semak bayaran")) {
+                        TextField(tr("商户", "Merchant", "Peniaga"), text: $merchant)
+                        TextField("MYR", text: $amount).keyboardType(.decimalPad)
+                        Text(tr("金额留空表示未找到唯一的马币金额，请按原图填写。", "An empty amount means no unique MYR amount was found. Enter it from the image.", "Amaun kosong bermakna tiada amaun MYR unik ditemui. Isi berdasarkan imej.")) .font(.caption)
+                        DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, in: ...Date(), displayedComponents: .date)
+                        Toggle(tr("已核对原图日期", "Date checked against image", "Tarikh disemak dengan imej"), isOn: $dateConfirmed)
+                        BankAccountPicker(selection: $accountID)
+                        Toggle(tr("已核对：单笔已完成的马币消费，不是转账或收款", "Checked: one completed MYR purchase, not a transfer or receipt", "Disemak: satu belian MYR selesai, bukan pindahan atau penerimaan"), isOn: $completedPayment)
+                        Button(tr("继续编辑账目", "Continue to entry editor", "Teruskan ke editor rekod")) {
+                            do {
+                                let cents = try toCents(amount)
+                                guard cents > 0 else { throw CloudFailure.invalidResponse }
+                                var entry = Expense(bankAccountID: accountID, id: "screenshot-" + digest, merchant: merchant.trimmingCharacters(in: .whitespacesAndNewlines), cents: cents, date: date,
+                                                    category: guessCategory(merchant, description: parking ? "parking" : ""), source: "交易截图")
+                                entry.entryDescription = parking ? tr("停车费", "Parking fee", "Bayaran parkir") : nil
+                                editor = entry
+                            } catch { self.error = error.localizedDescription }
+                        }.disabled(busy || !dateConfirmed || !completedPayment || accountID == nil || merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount.isEmpty)
+                    }
+                }
+            }
+        }.yuejiListSurface()
+            .navigationTitle(tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"))
+            .navigationBarTitleDisplayMode(.inline)
+            .task(id: photo) {
+                guard let photo else { return }
+                let store = LocalStore.shared
+                busy = true; image = nil; text = ""; completedPayment = false; dateConfirmed = false
+                defer { busy = false }
+                do {
+                    guard let data = try await photo.loadTransferable(type: Data.self), data.count <= 25_000_000,
+                          let decoded = UIImage(data: data) else { throw CloudFailure.invalidResponse }
+                    let recognized = try await ReceiptOCR.read(data)
+                    try Task.checkCancellation()
+                    guard store.isActive else { return }
+                    guard !recognized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CloudFailure.invalidResponse }
+                    let parsed = ScreenshotPaymentDraft.parse(recognized)
+                    digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+                    image = decoded; text = String(recognized.prefix(16000)); merchant = parsed.merchant; amount = parsed.amount
+                    date = min(parsed.date ?? Date(), Date()); parking = parsed.parking; blocked = parsed.blocked
+                } catch is CancellationError { }
+                catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+            }
+            .sheet(item: $editor) { draft in
+                ExpenseEditor(original: nil, initialDraft: draft, onSaved: { image = nil; photo = nil; text = "" })
+                    .environmentObject(model)
+            }
+            .alert(tr("无法导入", "Unable to import", "Tidak dapat mengimport"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
+                Button("OK") { error = nil; photo = nil }
+            } message: { Text(error ?? "") }
+    }
+}
+
 /// Strictly typed cloud draft. Never saves or posts an expense.
 struct GeminiReceiptDraft: Decodable {
     var merchantAddress: String? = nil
@@ -4327,6 +4453,9 @@ struct AIFeaturesSettingsView: View {
                 }
                 NavigationLink { ReceiptScanView() } label: {
                     Label(tr("收据识别与分账", "Receipts and splitting", "Resit dan pembahagian"), systemImage: "doc.viewfinder")
+                }
+                NavigationLink { TransactionScreenshotView() } label: {
+                    Label(tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"), systemImage: "photo.badge.plus")
                 }
             }
         }.yuejiListSurface()
