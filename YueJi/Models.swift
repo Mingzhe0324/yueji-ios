@@ -375,6 +375,9 @@ struct Ledger: Codable {
         for goal in savingsGoals { try goal.validate() }
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for n in tngNotices {
+            if let rounding = n.repaymentRoundingCents {
+                guard (1...2).contains(rounding), n.kind == "incoming", n.status == "repayment", (n.cents ?? 0) > rounding else { throw LedgerError.invalid("Invalid repayment rounding") }
+            }
             guard n.place?.valid ?? true else { throw LedgerError.invalid("Invalid notification location") }
             guard n.verifiedIncomingBalance != true || n.kind == "incoming",
                   n.transferPeer == nil || exactFinancialProvider(n.transferPeer ?? "") != nil else { throw LedgerError.invalid("Invalid notification analysis") }
@@ -525,6 +528,8 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var recipient: String? = nil
     var resolvedFriend: String? = nil
     var repaymentIDs: [String]? = nil
+    /// Explicitly accepted excess receipt, in cents; never added to debt repayments.
+    var repaymentRoundingCents: Int? = nil
     var resolution: String? = nil
     var relatedRecordID: String? = nil
     var relatedRefundID: String? = nil
@@ -838,7 +843,28 @@ extension Ledger {
 }
 
 extension Ledger {
-    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil, incomeKind: IncomeKind? = nil) throws {
+    /// Atomically connect the full editor's entry to the notice that seeded it.
+    mutating func saveNoticeExpense(_ entry: Expense, notice: TNGNotice) throws {
+        guard let i = tngNotices.firstIndex(where: { $0.id == notice.id }), tngNotices[i] == notice,
+              notice.expenseID == nil, notice.kind != "incoming", ["pending", "transfer"].contains(notice.status),
+              !expenses.contains(where: { $0.id == entry.id }), entry.paidByFriend == nil else {
+            throw reviewError("通知已改变，请重新打开核对。", "Notification changed. Reopen and review it.", "Notifikasi berubah. Buka dan semak semula.")
+        }
+        try requireUnusedPaymentReference(notice)
+        var copy = self
+        var saved = entry
+        saved.source = notice.provider
+        saved.transactionReference = notice.bankReference
+        saved.note = notice.note
+        saved.timeSource = saved.date == notice.date ? (notice.usesReceivedDate ? "notification" : "supplied") : "edited"
+        copy.expenses.append(saved)
+        copy.tngNotices[i].expenseID = saved.id
+        copy.tngNotices[i].status = "recorded"
+        copy.tngNotices[i].bankAccountID = saved.bankAccountID
+        self = try copy.validated()
+    }
+    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil, incomeKind: IncomeKind? = nil, roundingCents: Int = 0) throws {
+        guard (0...2).contains(roundingCents), roundingCents == 0 || purpose == "repayment" else { throw LedgerError.invalid("Invalid repayment rounding") }
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].kind == "incoming",
               tngNotices[i].status == "pending", let cents = tngNotices[i].cents,
               ["repayment", "income", "ownTransfer", "ignored"].contains(purpose),
@@ -852,7 +878,12 @@ extension Ledger {
             let key = friendKey(friend)
             guard !key.isEmpty else { throw LedgerError.invalid("Select a friend") }
             let before = Set(copy.expenses.flatMap { $0.shares.flatMap { $0.repayments.map(\.id) } })
-            try copy.batchRepay(friend: key, cents: cents, date: date, selectedExpenseIDs: selectedExpenseIDs)
+            if roundingCents > 0 {
+                guard let selectedExpenseIDs,
+                      try copy.incomingRepaymentRounding(friend: key, cents: cents, date: date, selected: selectedExpenseIDs) == roundingCents else { throw LedgerError.invalid("Repayment rounding changed. Review again.") }
+            }
+            try copy.batchRepay(friend: key, cents: cents - roundingCents, date: date, selectedExpenseIDs: selectedExpenseIDs)
+            copy.tngNotices[i].repaymentRoundingCents = roundingCents > 0 ? roundingCents : nil
             copy.tngNotices[i].repaymentIDs = copy.expenses.flatMap { $0.shares.flatMap { $0.repayments.map(\.id) } }.filter { !before.contains($0) }
             copy.tngNotices[i].resolvedFriend = key
         }
@@ -878,6 +909,7 @@ extension Ledger {
         }
         copy.tngNotices[i].repaymentIDs = nil; copy.tngNotices[i].resolvedFriend = nil; copy.tngNotices[i].status = "pending"
         copy.tngNotices[i].incomeKind = nil
+        copy.tngNotices[i].repaymentRoundingCents = nil
         copy.budgetAllocations.removeAll { $0.source == IncomeSourceKey.notice(id) }
         self = try copy.validated()
     }

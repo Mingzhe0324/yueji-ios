@@ -842,6 +842,16 @@ struct IncomingRepaymentLine: Identifiable, Equatable {
 }
 
 extension Ledger {
+    func incomingRepaymentRounding(friend: String, cents: Int, date: Date, selected: Set<String>) throws -> Int {
+        let balance = expenses.filter { selected.contains($0.id) && $0.paidByFriend == nil }.reduce(0) { sum, entry in
+            sum + entry.shares.filter { friendKey($0.name) == friendKey(friend) }.reduce(0) { $0 + outstanding(expense: entry, share: $1) }
+        }
+        let excess = cents - balance
+        guard balance > 0, (1...2).contains(excess) else { throw LedgerError.invalid("Only 1–2 cents of excess repayment can be rounded.") }
+        var preview = self
+        try preview.batchRepay(friend: friend, cents: balance, date: date, selectedExpenseIDs: selected)
+        return excess
+    }
     func previewIncomingRepayment(friend: String, cents: Int, date: Date, selected: Set<String>) throws -> [IncomingRepaymentLine] {
         var preview = self
         try preview.batchRepay(friend: friend, cents: cents, date: date, selectedExpenseIDs: selected)

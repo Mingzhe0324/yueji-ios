@@ -3534,6 +3534,62 @@ final class TNGIncomingTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices.map(tngSignedAmount), ["+RM 0.01", "−RM 2.00"])
         XCTAssertTrue(ledger.expenses.isEmpty)
     }
+    func testIncomingRoundingRequiresConsentPreservesReceiptAndUndoes() throws {
+        let now = Date()
+        for extra in [1, 2] {
+            var ledger = Ledger()
+            let account = BankAccount(name: "Wallet", openingCents: 5000, openingDate: now.addingTimeInterval(-172800))
+            ledger.bankAccounts = [account]
+            ledger.expenses = [Expense(id: "debt", merchant: "Cafe", cents: 2000, date: now.addingTimeInterval(-86400), shares: [Share(name: "Amy", cents: 1000)])]
+            let notice = TNGNotice(bankAccountID: account.id, body: "Repayment", title: "TNG", date: now, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 1000 + extra, party: "Amy")
+            ledger.tngNotices = [notice]
+            XCTAssertEqual(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1000 + extra, date: now, selected: ["debt"]), extra)
+            XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: notice.id, purpose: "repayment", friend: "Amy", date: now, selectedExpenseIDs: ["debt"]))
+            XCTAssertEqual(ledger.tngNotices, [notice])
+            try ledger.resolveTNGIncoming(id: notice.id, purpose: "repayment", friend: "Amy", date: now, selectedExpenseIDs: ["debt"], roundingCents: extra)
+            XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 1000)
+            XCTAssertEqual(ledger.tngNotices[0].cents, 1000 + extra)
+            XCTAssertEqual(ledger.tngNotices[0].repaymentRoundingCents, extra)
+            XCTAssertEqual(ledger.bankBalance(account), 6000 + extra)
+            var restored = try LocalStore.decode(LocalStore.encode(ledger))
+            XCTAssertEqual(restored.tngNotices, ledger.tngNotices)
+            try restored.reopenTNGIncoming(id: notice.id)
+            XCTAssertNil(restored.tngNotices[0].repaymentRoundingCents)
+            XCTAssertEqual(restored.expenses[0].shares[0].repaid, 0)
+            XCTAssertEqual(restored.tngNotices[0].cents, 1000 + extra)
+            XCTAssertEqual(restored.bankBalance(account), 6000 + extra)
+        }
+    }
+    func testIncomingRoundingRejectsLargeExcessStaleSelectionAndFutureDebt() throws {
+        let now = Date()
+        var ledger = Ledger()
+        ledger.expenses = [Expense(id: "debt", merchant: "Cafe", cents: 2000, date: now.addingTimeInterval(-86400), shares: [Share(name: "Amy", cents: 1000)])]
+        XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1003, date: now, selected: ["debt"]))
+        XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1001, date: now, selected: ["debt", "missing"]))
+        XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Other", cents: 1001, date: now, selected: ["debt"]))
+        XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1001, date: now.addingTimeInterval(-172800), selected: ["debt"]))
+        let notice = TNGNotice(body: "Repayment", title: "TNG", date: now, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 1002, party: "Amy")
+        ledger.tngNotices = [notice]
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: notice.id, purpose: "repayment", friend: "Amy", date: now, selectedExpenseIDs: ["debt"], roundingCents: 1))
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 0)
+        XCTAssertEqual(ledger.tngNotices, [notice])
+    }
+    func testFullNoticeEditorPreservesDescriptionAndRejectsReplay() throws {
+        let now = Date()
+        var ledger = Ledger()
+        let notice = TNGNotice(body: "Payment", title: "TNG", date: now, usesReceivedDate: false, kind: "payment", status: "pending", cents: 1200, party: "Cafe")
+        ledger.tngNotices = [notice]
+        var entry = Expense(merchant: "Cafe", cents: 1200, date: now)
+        entry.entryDescription = "Lunch with Amy"
+        entry.shares = [Share(name: "Amy", cents: 600)]
+        try ledger.saveNoticeExpense(entry, notice: notice)
+        XCTAssertEqual(ledger.expenses[0].entryDescription, "Lunch with Amy")
+        XCTAssertEqual(ledger.expenses[0].shares, entry.shares)
+        XCTAssertEqual(ledger.expenses[0].source, "TNG")
+        XCTAssertEqual(ledger.tngNotices[0].expenseID, entry.id)
+        XCTAssertThrowsError(try ledger.saveNoticeExpense(entry, notice: notice))
+        XCTAssertEqual(ledger.expenses.count, 1)
+    }
     func testPendingPartialRepaymentRoundTripAndUndo() throws {
         let now = Date()
         var ledger = Ledger()

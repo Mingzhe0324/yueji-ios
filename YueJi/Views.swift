@@ -2782,6 +2782,7 @@ struct ExpenseEditor: View {
     let original: Expense?
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
+    var pendingNotice: TNGNotice? = nil
     var startWithSplit = false
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -2878,7 +2879,7 @@ struct ExpenseEditor: View {
                             Text(tr("原账目已更新，旧草稿不能覆盖新记录。", "This entry has changed; the old draft cannot overwrite it.", "Rekod telah berubah; draf lama tidak boleh menimpanya."))
                         }
                         Button(tr("放弃旧草稿", "Discard old draft", "Buang draf lama"), role: .destructive) {
-                            ExpenseDraftStorage.remove(original?.id); recoverable = nil
+                            ExpenseDraftStorage.remove((pendingNotice.map { "notice-" + $0.id } ?? original?.id)); recoverable = nil
                         }
                     }
                 }
@@ -3020,14 +3021,14 @@ struct ExpenseEditor: View {
     }
     private func persistDraft() {
         guard initialized, !model.isPreview, !draftFinished, recoverable == nil else { return }
-        guard hasChanges else { ExpenseDraftStorage.remove(original?.id); return }
+        guard hasChanges else { ExpenseDraftStorage.remove((pendingNotice.map { "notice-" + $0.id } ?? original?.id)); return }
         ExpenseDraftStorage.write(SavedExpenseDraft(base: original, seed: draftSeed,
-            fields: snapshot, rateDate: rateDate, rateSource: rateSource), id: original?.id)
+            fields: snapshot, rateDate: rateDate, rateSource: rateSource), id: (pendingNotice.map { "notice-" + $0.id } ?? original?.id))
     }
     private func finishDraft() {
         draftSaveTask?.cancel()
         draftFinished = true
-        if !model.isPreview { ExpenseDraftStorage.remove(original?.id) }
+        if !model.isPreview { ExpenseDraftStorage.remove((pendingNotice.map { "notice-" + $0.id } ?? original?.id)) }
     }
     private func restoreDraft(_ draft: SavedExpenseDraft) {
         place = draft.fields.place
@@ -3085,7 +3086,7 @@ struct ExpenseEditor: View {
             Picker(tr("付款人", "Payer", "Pembayar"), selection: $friendPays) {
                 Text(tr("我付款", "Paid by me", "Dibayar oleh saya")).tag(false)
                 Text(tr("朋友付款", "Paid by a friend", "Dibayar oleh rakan")).tag(true)
-            }
+            }.disabled(pendingNotice != nil)
             if friendPays {
                 TextField(tr("付款朋友姓名", "Paying friend's name", "Nama rakan pembayar"), text: $payerName)
                 if !model.friends.isEmpty {
@@ -3204,7 +3205,7 @@ struct ExpenseEditor: View {
         guard !initialized else { return }; initialized = true
         defer { initialSnapshot = snapshot }
         draftSeed = initialDraft
-        if !model.isPreview { recoverable = ExpenseDraftStorage.read(original?.id) }
+        if !model.isPreview { recoverable = ExpenseDraftStorage.read((pendingNotice.map { "notice-" + $0.id } ?? original?.id)) }
         if original == nil { date = initialDate; splitting = startWithSplit }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
@@ -3326,7 +3327,7 @@ struct ExpenseEditor: View {
                 entry.reimbursement = nil
             }
             try entry.validateReimbursement()
-            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty)
+            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty, notice: pendingNotice)
             await model.refresh(postRecurring: false)
             finishDraft()
             model.highlightSavedExpense(entry.id)
@@ -3541,6 +3542,9 @@ struct SettingsView: View {
             List {
                 Section {
                     AccountSettingsCard()
+                    NavigationLink { AccountSecurityView() } label: {
+                        Label(tr("账号安全", "Account security", "Keselamatan akaun"), systemImage: "lock.shield")
+                    }.accessibilityIdentifier("settings.accountSecurity")
                 }
                 Section {
                     NavigationLink { AIFeaturesSettingsView() } label: {
@@ -4880,7 +4884,7 @@ struct NotificationDestinationView: View {
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { dismiss() } } }
                 }
             } else if target.kind == "expense", let entry = model.expense(id: target.recordID) {
-                if target.action == "category" { ExpenseEditor(original: entry) }
+                if ["category", "edit"].contains(target.action) { ExpenseEditor(original: entry) }
                 else { ExpenseDetailView(id: entry.id) }
             } else {
                 NavigationStack {

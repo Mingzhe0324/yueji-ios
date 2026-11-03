@@ -279,10 +279,12 @@ actor LedgerRefreshWorker {
         try Task.checkCancellation()
         return try store.readSnapshot()
     }
-    func saveExpense(_ entry: Expense, replacing original: Expense?, rememberCategory: Bool) throws {
+    func saveExpense(_ entry: Expense, replacing original: Expense?, rememberCategory: Bool, notice: TNGNotice? = nil) throws {
         try Task.checkCancellation()
         try store.change { ledger in
-            if let original {
+            if let notice {
+                try ledger.saveNoticeExpense(entry, notice: notice)
+            } else if let original {
                 guard entry.id == original.id,
                       let i = ledger.expenses.firstIndex(where: { $0.id == original.id }), ledger.expenses[i] == original else {
                     throw reviewError("记录已改变，请重新打开。", "Record changed. Reopen it.", "Rekod berubah. Buka semula.")

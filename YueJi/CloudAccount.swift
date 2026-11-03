@@ -4,6 +4,8 @@ import AuthenticationServices
 import CryptoKit
 import Security
 import UserNotifications
+import PhotosUI
+import ImageIO
 
 @MainActor final class CloudAccount: ObservableObject {
     static let shared = CloudAccount()
@@ -771,13 +773,15 @@ private struct AccountSettingsSummary: View {
     let status: String
     let attention: Bool
     @AppStorage private var nickname: String
+    @AppStorage private var avatar: Data
     init(accountID: String, email: String, signedIn: Bool, status: String, attention: Bool) {
         self.email = email; self.signedIn = signedIn; self.status = status; self.attention = attention
         _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
+        _avatar = AppStorage(wrappedValue: Data(), "accountProfile.avatar." + accountID)
     }
     var body: some View {
         HStack(spacing: 16) {
-            ProfileMonogram(name: signedIn ? nickname : "")
+            ProfileAvatar(name: signedIn ? nickname : "", data: signedIn ? avatar : Data())
                 .frame(width: 64, height: 64)
             VStack(alignment: .leading, spacing: 6) {
                 Text(signedIn ? (nickname.isEmpty ? tr("月记用户", "YueJi member", "Pengguna YueJi") : nickname)
@@ -790,6 +794,19 @@ private struct AccountSettingsSummary: View {
                     .font(.caption).foregroundStyle(attention ? Color.orange : Color.secondary)
             }.frame(maxWidth: .infinity, alignment: .leading)
         }.padding(.vertical, 10)
+    }
+}
+
+private struct ProfileAvatar: View {
+    let name: String
+    let data: Data
+    var body: some View {
+        GeometryReader { size in
+            if let image = UIImage(data: data) {
+                Image(uiImage: image).resizable().scaledToFill()
+                    .frame(width: size.size.width, height: size.size.height).clipShape(Circle())
+            } else { ProfileMonogram(name: name) }
+        }.accessibilityHidden(true)
     }
 }
 
@@ -814,15 +831,34 @@ private struct ProfileMonogram: View {
 private struct AccountProfileHeader: View {
     let email: String
     @AppStorage private var nickname: String
+    @AppStorage private var avatar: Data
+    @State private var photo: PhotosPickerItem?
+    @State private var photoError = false
+    @State private var loadingPhoto = false
     @State private var editing = false
     @State private var draft = ""
     init(accountID: String, email: String) {
         self.email = email
         _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
+        _avatar = AppStorage(wrappedValue: Data(), "accountProfile.avatar." + accountID)
     }
     var body: some View {
         VStack(spacing: 10) {
-            ProfileMonogram(name: nickname).frame(width: 80, height: 80)
+            PhotosPicker(selection: $photo, matching: .images) {
+                ProfileAvatar(name: nickname, data: avatar).frame(width: 80, height: 80)
+                    .overlay(alignment: .bottomTrailing) {
+                        Image(systemName: "camera.fill").font(.caption).padding(6).background(.background, in: Circle())
+                    }
+            }.buttonStyle(.plain).disabled(loadingPhoto)
+                .accessibilityLabel(tr("选择个人头像", "Choose profile photo", "Pilih foto profil"))
+                .accessibilityIdentifier("account.avatar.choose")
+            if loadingPhoto { ProgressView() }
+            if !avatar.isEmpty {
+                Button(tr("移除头像", "Remove photo", "Buang foto"), role: .destructive) { photo = nil; avatar = Data() }
+                    .font(.caption).disabled(loadingPhoto)
+            }
+            Text(tr("头像仅保存在本机，按账号分别保存。", "Photos stay on this device, separately for each account.", "Foto disimpan pada peranti ini, berasingan bagi setiap akaun."))
+                .font(.caption).foregroundStyle(.secondary)
             Text(nickname.isEmpty ? tr("月记用户", "YueJi member", "Pengguna YueJi") : nickname)
                 .font(.title2.weight(.semibold)).multilineTextAlignment(.center)
             Text(email).font(.subheadline).foregroundStyle(.secondary).textSelection(.enabled)
@@ -830,6 +866,29 @@ private struct AccountProfileHeader: View {
                 draft = nickname; editing = true
             }.font(.subheadline).frame(minHeight: 44)
         }.frame(maxWidth: .infinity).padding(.vertical, 12)
+        .task(id: photo) {
+            guard let photo else { return }
+            loadingPhoto = true
+            defer { loadingPhoto = false }
+            do {
+                guard let bytes = try await photo.loadTransferable(type: Data.self), bytes.count <= 30_000_000 else { throw CocoaError(.fileReadTooLarge) }
+                try Task.checkCancellation()
+                guard let source = CGImageSourceCreateWithData(bytes as CFData, nil),
+                      let thumb = CGImageSourceCreateThumbnailAtIndex(source, 0, [
+                        kCGImageSourceCreateThumbnailFromImageAlways: true,
+                        kCGImageSourceCreateThumbnailWithTransform: true,
+                        kCGImageSourceThumbnailMaxPixelSize: 256
+                      ] as CFDictionary),
+                      let jpeg = UIImage(cgImage: thumb).jpegData(compressionQuality: 0.85), jpeg.count <= 200_000 else { throw CocoaError(.fileReadCorruptFile) }
+                try Task.checkCancellation()
+                avatar = jpeg
+            } catch { if !Task.isCancelled { photoError = true } }
+        }
+        .alert(tr("无法读取照片", "Unable to read photo", "Tidak dapat membaca foto"), isPresented: $photoError) {
+            Button(tr("好", "OK", "OK"), role: .cancel) { photo = nil }
+        } message: {
+            Text(tr("请重试或选择另一张照片。原头像已保留。", "Try again or choose another photo. Your previous photo is unchanged.", "Cuba lagi atau pilih foto lain. Foto lama dikekalkan."))
+        }
         .sheet(isPresented: $editing) {
             NavigationStack {
                 Form {
@@ -857,6 +916,28 @@ private struct AccountProfileHeader: View {
                 }
             }
         }
+    }
+}
+
+struct AccountSecurityView: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    var body: some View {
+        Form {
+            if cloud.signedIn {
+                Section(tr("设置 / 修改密码", "Set / change password", "Tetapkan / tukar kata laluan")) {
+                    CloudPasswordForm(creating: false, changingPassword: true)
+                        .id(cloud.link?.userID.uuidString ?? cloud.email)
+                }
+            } else {
+                Section {
+                    NavigationLink { CloudAccountView() } label: {
+                        Label(tr("先登录账号", "Sign in first", "Log masuk dahulu"), systemImage: "person.crop.circle")
+                    }
+                }
+            }
+        }.yuejiListSurface()
+            .navigationTitle(tr("账号安全", "Account security", "Keselamatan akaun"))
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 
@@ -897,9 +978,6 @@ struct CloudAccountView: View {
                     }
                     Button(tr("立即同步", "Sync now", "Segerakkan sekarang")) { Task { await cloud.sync() } }.disabled(cloud.busy)
                     Button(tr("退出登录", "Sign out", "Log keluar"), role: .destructive) { signingOut = true }.disabled(cloud.busy)
-                }
-                Section(tr("设置 / 修改密码", "Set / change password", "Tetapkan / tukar kata laluan")) {
-                    CloudPasswordForm(creating: false, changingPassword: true)
                 }
                 if let conflict = cloud.conflict {
                     Section(tr("选择保留的账本", "Choose the ledger to keep", "Pilih lejar untuk dikekalkan")) {
