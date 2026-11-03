@@ -91,7 +91,7 @@ import UserNotifications
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
             guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple else { throw CloudFailure.session }
-            try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+            try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
             session = refreshed
             data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant)
         }
@@ -113,7 +113,7 @@ import UserNotifications
             let refreshed = try await api.refresh()
             guard !YueJiAI.usesApple else { throw CancellationError() }
             guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
-            try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+            try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
             session = refreshed
             let data = try await api.recognizeReceipt(image: image)
             try Task.checkCancellation()
@@ -141,7 +141,7 @@ import UserNotifications
         } catch { await reloadLink(); report(error) }
     }
     private func accept(_ value: CloudSession, api: SupabaseCloudService) async throws {
-        let config = await api.configuration
+        let config = api.configuration
         changingAccount = true
         defer { changingAccount = false }
         let target = try LocalStore.accountStore(userID: value.user.id, server: config.server)
@@ -169,7 +169,7 @@ import UserNotifications
         do {
             let api = try connectedService()
             try await api.checkGoogleProvider()
-            let config = await api.configuration
+            let config = api.configuration
             let result = try await googleBrowser.authorize(server: config.server)
             let value = try await api.exchangeGoogleCode(result.code, verifier: result.verifier)
             try await accept(value, api: api)
@@ -221,7 +221,7 @@ import UserNotifications
                 try await accept(recoverySession, api: api)
             } else {
                 let refreshed = try await api.refresh()
-                try CloudCredentials.save(CloudCredential(server: (await api.configuration).server, session: refreshed))
+                try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
                 session = refreshed
                 try await api.updatePassword(password)
                 message = tr("密码已更新。下次可使用邮箱和密码登录。", "Password updated. Use email and password next time.", "Kata laluan dikemas kini. Gunakan e-mel dan kata laluan lain kali.")
@@ -244,7 +244,7 @@ import UserNotifications
         catch { await reloadLink(); report(error) }
     }
     private func synchronize(_ api: SupabaseCloudService, refresh: Bool, resolution: CloudResolution? = nil) async throws {
-        let config = await api.configuration
+        let config = api.configuration
         if refresh {
             let value = try await api.refresh()
             try CloudCredentials.save(CloudCredential(server: config.server, session: value))

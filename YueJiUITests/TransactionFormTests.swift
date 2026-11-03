@@ -549,7 +549,11 @@ final class TransactionFormTests: XCTestCase {
             return
         }
         field.typeText(text)
-        XCTAssertEqual(field.value as? String, text, "Typed text must reach the intended field", file: file, line: line)
+        // Wait for the accessibility value to catch up after key synthesis.
+        // Never retype missing characters or accept a partial value.
+        let complete = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", text), object: field)
+        XCTAssertEqual(XCTWaiter.wait(for: [complete], timeout: 5), .completed,
+                       "Typed text must reach the intended field. Expected: \(text); actual: \(String(describing: field.value))", file: file, line: line)
     }
 
     private func finishKeyboard(in app: XCUIApplication) {

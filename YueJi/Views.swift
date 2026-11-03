@@ -2805,6 +2805,7 @@ struct ExpenseEditor: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var foreignExpanded = false
     @FocusState private var focusedField: ExpenseInputField?
+    @State private var draftSaveTask: Task<Void, Never>?
     @State private var deleting: Expense?
     @State private var name = ""
     @State private var entryDescription = ""
@@ -2961,8 +2962,16 @@ struct ExpenseEditor: View {
                     }
                 }
                 .onAppear { load() }
-                .onChange(of: snapshot) { _, _ in persistDraft() }
-                .onChange(of: phase) { _, value in if value != .active { persistDraft() } }
+                .onChange(of: snapshot) { _, _ in
+                    draftSaveTask?.cancel()
+                    draftSaveTask = Task { @MainActor in
+                        do { try await Task.sleep(for: .milliseconds(350)) } catch { return }
+                        persistDraft()
+                    }
+                }
+                .onChange(of: phase) { _, value in
+                    if value != .active { draftSaveTask?.cancel(); persistDraft() }
+                }
                 .task(id: currency) {
                     guard !model.isPreview else { return }
                     let request = UUID(), code = currency, submittedRate = rate
@@ -2993,7 +3002,7 @@ struct ExpenseEditor: View {
                 startedLocation = true
                 if place == nil { placeLocator.start(automatic: true) }
             }
-            .onDisappear { placeLocator.cancel() }
+            .onDisappear { draftSaveTask?.cancel(); persistDraft(); placeLocator.cancel() }
             .onChange(of: place) { _, value in
                 if value != placeLocator.result { placeLocator.cancel() }
             }
@@ -3034,6 +3043,7 @@ struct ExpenseEditor: View {
             fields: snapshot, rateDate: rateDate, rateSource: rateSource), id: original?.id)
     }
     private func finishDraft() {
+        draftSaveTask?.cancel()
         draftFinished = true
         if !model.isPreview { ExpenseDraftStorage.remove(original?.id) }
     }
@@ -3112,6 +3122,7 @@ struct ExpenseEditor: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(tr("商户 · 选填", "Merchant · optional", "Peniaga · pilihan")).font(.caption).foregroundStyle(.secondary)
                 TextField(tr("商户（选填）", "Merchant (optional)", "Peniaga (pilihan)"), text: $name)
+                    .autocorrectionDisabled()
                     .accessibilityIdentifier("transaction.merchant")
                     .focused($focusedField, equals: .merchant).submitLabel(.done)
                     .onSubmit { finishKeyboard() }

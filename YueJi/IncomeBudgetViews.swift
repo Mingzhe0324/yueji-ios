@@ -1754,9 +1754,9 @@ private struct StatementImportView: View {
                 }
             }
             guard !Task.isCancelled, store.isActive, aiProvider == selectedProvider else { return }
-            let suggestions = categories, fallback = aiFailed
+            let suggestions = categories, fallback = aiFailed, storeFolder = store.folder
             model.perform(key: key, postRecurring: false, action: { ledger in
-                guard store.isActive else { throw CancellationError() }
+                guard LocalStore.shared.folder == storeFolder else { throw CancellationError() }
                 return try ledger.importStatement(statement, account: account, categories: suggestions)
             }, completion: { result in
                 importResult = result

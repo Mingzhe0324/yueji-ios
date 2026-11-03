@@ -324,7 +324,7 @@ final class ExpenseMerchantMatcher: ObservableObject {
 }
 
 @MainActor
-final class ExpensePlaceLocator: NSObject, ObservableObject, CLLocationManagerDelegate {
+final class ExpensePlaceLocator: NSObject, ObservableObject, @preconcurrency CLLocationManagerDelegate {
     @Published var result: ExpensePlace?
     @Published var busy = false
     @Published var message: String?
