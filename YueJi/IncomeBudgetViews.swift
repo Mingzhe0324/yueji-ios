@@ -594,7 +594,10 @@ private struct BankAccountEditor: View {
                         if new == "TNG Card" { automaticSource = ""; automaticSuffix = "" }
                     }
                 TextField(tr("例如 Maybank 储蓄账户", "e.g. Maybank savings", "cth. Simpanan Maybank"), text: $name)
+                    .accessibilityIdentifier("bankAccount.name")
+                    .autocorrectionDisabled()
                 TextField(tr("期初余额 MYR", "Opening balance MYR", "Baki awal MYR"), text: $amount).keyboardType(.numbersAndPunctuation)
+                    .accessibilityIdentifier("bankAccount.openingBalance")
                 DatePicker(tr("期初时间", "Opening date", "Tarikh awal"), selection: $openingDate, in: ...Date())
                 if institution == "TNG Card" {
                     Text(tr("TNG 实体卡与 eWallet 分开记录。填写卡内余额；充值请用账户转账，消费选择这张卡。不会读取 NFC 或自动同步卡内余额。", "Track your TNG physical card separately from eWallet. Enter its stored balance; record reloads as account transfers and select this card for spending. NFC and live card balance sync are not supported.", "Rekod kad fizikal TNG berasingan daripada eWallet. Isi baki kad; rekod tambah nilai sebagai pindahan akaun dan pilih kad ini untuk belanja. NFC dan penyegerakan baki kad tidak disokong."))

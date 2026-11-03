@@ -48,13 +48,25 @@ final class TransactionFormTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Accounts"].waitForExistence(timeout: 20))
         app.tabBars.buttons["Accounts"].tap()
-        app.buttons["bankAccount.add"].tap()
+        let addAccount = app.buttons["bankAccount.add"]
+        let accountsReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            app.tabBars.buttons["Accounts"].isSelected &&
+                app.navigationBars["Accounts"].exists &&
+                addAccount.exists && addAccount.isEnabled && addAccount.isHittable
+        }, object: app)
+        XCTAssertEqual(XCTWaiter.wait(for: [accountsReady], timeout: 10), .completed,
+                       "Accounts page did not become interactive; \(app.debugDescription)")
+        // One tap only: do not hide a failed first presentation with a retry.
+        addAccount.tap()
+        let accountEditor = app.navigationBars["Bank / wallet account"]
+        XCTAssertTrue(accountEditor.waitForExistence(timeout: 10),
+                      "One Add account tap did not present its editor; \(app.debugDescription)")
         let name = "Interest regression " + UUID().uuidString.prefix(8)
-        let field = app.textFields["e.g. Maybank savings"]
+        let field = app.textFields["bankAccount.name"]
         XCTAssertTrue(field.waitForExistence(timeout: 5))
-        field.tap(); field.typeText(name); finishKeyboard(in: app)
-        let opening = app.textFields["Opening balance MYR"]
-        opening.tap(); opening.typeText("0"); finishKeyboard(in: app)
+        enterText(name, into: field, in: app); finishKeyboard(in: app)
+        let opening = app.textFields["bankAccount.openingBalance"]
+        enterText("0", into: opening, in: app); finishKeyboard(in: app)
         app.navigationBars["Bank / wallet account"].buttons["Save"].tap()
         waitUntilGone(app.navigationBars["Bank / wallet account"])
         app.terminate(); app.launch()
