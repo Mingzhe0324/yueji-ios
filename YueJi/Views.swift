@@ -1740,6 +1740,12 @@ struct ExpenseRow: View {
                         .accessibilityIdentifier("transaction.items.preview")
                 }
                 Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                if let accountID = entry.bankAccountID,
+                   let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
+                    Label(account.name, systemImage: "creditcard")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
+                }
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
                 if !entry.shares.isEmpty {
@@ -4620,7 +4626,11 @@ private struct NotificationBannerCard: View {
     var action: (() -> Void)? = nil
     /// The app logo, like a system notification, with the status symbol as a small badge.
     @ViewBuilder private var badge: some View {
-        if typeSize.isAccessibilitySize {
+        if symbol == "checkmark" {
+            status(size: 18, color: color)
+                .frame(width: 38, height: 38)
+                .background(color.opacity(0.12), in: Circle())
+        } else if typeSize.isAccessibilitySize {
             status(size: 20, color: color, font: .title3.weight(.semibold))
                 .frame(width: 28, height: 32)
         } else {

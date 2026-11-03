@@ -3004,6 +3004,7 @@ struct ScreenshotPaymentDraft {
 
 struct TransactionScreenshotView: View {
     @EnvironmentObject private var model: LedgerModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var photo: PhotosPickerItem?
     @State private var image: UIImage?
     @State private var text = ""
@@ -3012,6 +3013,7 @@ struct TransactionScreenshotView: View {
     @State private var date = Date()
     @State private var accountID: String?
     @State private var dateConfirmed = false
+    @State private var dateRecognized = false
     @State private var completedPayment = false
     @State private var parking = false
     @State private var blocked = false
@@ -3027,22 +3029,42 @@ struct TransactionScreenshotView: View {
                 PhotosPicker(selection: $photo, matching: .images) {
                     Label(tr("选择交易截图", "Choose transaction screenshot", "Pilih tangkapan skrin transaksi"), systemImage: "photo")
                 }.disabled(busy).accessibilityIdentifier("screenshot.choose")
-                if busy { ProgressView() }
+                if busy {
+                    ProgressView(tr("正在识别截图…", "Reading screenshot…", "Membaca tangkapan skrin…"))
+                        .accessibilityIdentifier("screenshot.recognizing")
+                }
             }
             if let image {
                 Section {
+                    Image(uiImage: image).resizable().scaledToFit()
+                        .frame(maxWidth: .infinity, maxHeight: 180)
+                        .clipShape(RoundedRectangle(cornerRadius: 12))
+                        .accessibilityLabel(tr("交易截图预览", "Transaction screenshot preview", "Pratonton tangkapan skrin transaksi"))
                     DisclosureGroup(tr("查看原图", "View original image", "Lihat imej asal")) { Image(uiImage: image).resizable().scaledToFit() }
-                    DisclosureGroup(tr("识别文字", "Recognized text", "Teks dikenal pasti")) { Text(text).textSelection(.enabled) }
+                    if !text.isEmpty {
+                        DisclosureGroup(tr("识别文字", "Recognized text", "Teks dikenal pasti")) { Text(text).textSelection(.enabled) }
+                    }
                 }
-                if blocked {
+                if busy {
+                    Text(tr("正在读取商户、金额和日期", "Reading merchant, amount and date", "Membaca peniaga, amaun dan tarikh")).font(.footnote).foregroundStyle(.secondary)
+                } else if blocked {
                     Text(tr("截图包含转账、收款、退款或未完成状态，请到对应功能核对，不能作为消费导入。", "This image mentions a transfer, receipt, refund or incomplete status. Review it in the appropriate feature, not as a purchase.", "Imej menyebut pindahan, penerimaan, pulangan atau status belum selesai. Semak dalam ciri berkaitan, bukan sebagai belian."))
                         .foregroundStyle(.orange)
                 } else {
                     Section(tr("核对付款", "Review payment", "Semak bayaran")) {
                         TextField(tr("商户", "Merchant", "Peniaga"), text: $merchant)
+                        if merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                            Label(tr("商户待填写", "Merchant needed", "Peniaga diperlukan"), systemImage: "pencil.circle").font(.caption).foregroundStyle(.secondary)
+                        }
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
+                        if amount.isEmpty {
+                            Label(tr("金额待填写", "Amount needed", "Amaun diperlukan"), systemImage: "pencil.circle").font(.caption).foregroundStyle(.secondary)
+                        }
                         Text(tr("金额留空表示未找到唯一的马币金额，请按原图填写。", "An empty amount means no unique MYR amount was found. Enter it from the image.", "Amaun kosong bermakna tiada amaun MYR unik ditemui. Isi berdasarkan imej.")) .font(.caption)
                         DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, in: ...Date(), displayedComponents: .date)
+                        if !dateRecognized {
+                            Text(tr("未识别到有效日期，暂显示今天，请按原图修改。", "No valid date found. Today is shown temporarily; check the image.", "Tiada tarikh sah ditemui. Hari ini dipaparkan sementara; semak imej.")).font(.caption).foregroundStyle(.secondary)
+                        }
                         Toggle(tr("已核对原图日期", "Date checked against image", "Tarikh disemak dengan imej"), isOn: $dateConfirmed)
                         BankAccountPicker(selection: $accountID)
                         Toggle(tr("已核对：单笔已完成的马币消费，不是转账或收款", "Checked: one completed MYR purchase, not a transfer or receipt", "Disemak: satu belian MYR selesai, bukan pindahan atau penerimaan"), isOn: $completedPayment)
@@ -3056,10 +3078,11 @@ struct TransactionScreenshotView: View {
                                 editor = entry
                             } catch { self.error = error.localizedDescription }
                         }.disabled(busy || !dateConfirmed || !completedPayment || accountID == nil || merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || amount.isEmpty)
-                    }
+                    }.transition(.opacity)
                 }
             }
         }.yuejiListSurface()
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.24), value: busy)
             .navigationTitle(tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"))
             .navigationBarTitleDisplayMode(.inline)
             .task(id: photo) {
@@ -3070,16 +3093,22 @@ struct TransactionScreenshotView: View {
                 do {
                     guard let data = try await photo.loadTransferable(type: Data.self), data.count <= 25_000_000,
                           let decoded = UIImage(data: data) else { throw CloudFailure.invalidResponse }
+                    try Task.checkCancellation()
+                    image = decoded
                     let recognized = try await ReceiptOCR.read(data)
                     try Task.checkCancellation()
-                    guard store.isActive else { return }
+                    guard store.isActive else { image = nil; return }
                     guard !recognized.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw CloudFailure.invalidResponse }
                     let parsed = ScreenshotPaymentDraft.parse(recognized)
+                    dateRecognized = parsed.date.map { $0 <= Date() } ?? false
                     digest = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
                     image = decoded; text = String(recognized.prefix(16000)); merchant = parsed.merchant; amount = parsed.amount
                     date = min(parsed.date ?? Date(), Date()); parking = parsed.parking; blocked = parsed.blocked
-                } catch is CancellationError { }
-                catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                } catch is CancellationError { image = nil }
+                catch {
+                    image = nil
+                    if !Task.isCancelled { self.error = error.localizedDescription }
+                }
             }
             .sheet(item: $editor) { draft in
                 ExpenseEditor(original: nil, initialDraft: draft, onSaved: { image = nil; photo = nil; text = "" })
