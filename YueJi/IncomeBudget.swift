@@ -101,6 +101,23 @@ extension Ledger {
         return candidates[0].id
     }
 
+    func accountMatchExplanation(source: String, suffix: String?) -> String {
+        guard validFinancialSource(source), source != "银行 / TNG", source != "Apple Pay" else {
+            return tr("通知未提供明确的付款来源，请核对快捷指令传入的来源 App。", "The notice has no explicit payment source. Check the source app passed by the shortcut.", "Notifikasi tiada sumber bayaran jelas. Semak aplikasi sumber dalam pintasan.")
+        }
+        let key = (financialProvider(source) ?? source).lowercased()
+        let candidates = bankAccounts.filter {
+            $0.institution != "TNG Card" && $0.automaticSource.map { (financialProvider($0) ?? $0).lowercased() == key } == true
+        }
+        if candidates.isEmpty {
+            return source + " · " + tr("当前账本没有绑定此自动记账来源的账户。", "No account in this ledger is linked to this automatic source.", "Tiada akaun dalam lejar ini dipautkan kepada sumber automatik ini.")
+        }
+        if candidates.count > 1 {
+            return source + " · " + tr("多个账户绑定相同来源，通知资料无法唯一匹配。", "Multiple accounts use this source; the notice cannot identify one uniquely.", "Beberapa akaun menggunakan sumber ini; notifikasi tidak dapat menentukan satu akaun.")
+        }
+        return source + " · " + tr("账户尾号条件与通知不匹配。", "The account suffix rule does not match the notice.", "Peraturan digit akhir akaun tidak sepadan dengan notifikasi.")
+    }
+
     mutating func assignNoticeAccount(id: String, accountID: String?) throws {
         guard let index = tngNotices.firstIndex(where: { $0.id == id }),
               accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {

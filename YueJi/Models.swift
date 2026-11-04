@@ -758,13 +758,15 @@ extension Ledger {
         }
         var notice = TNGNotice(body: text, title: title, date: timestamp, usesReceivedDate: verified.transactionDate == nil && (verified.sourceBank != "TNG" || date == nil), kind: parsed?.kind ?? "unknown", status: "pending", cents: parsed?.cents, party: parsed?.party, possibleDuplicate: duplicate || crossSourceDuplicate, recipient: parsed?.recipient, sourceBank: verified.sourceBank == "TNG" ? nil : verified.sourceBank, accountSuffix: verified.accountSuffix, bankReference: suppliedReference)
         notice.bankAccountID = automaticBankAccount(source: verified.sourceBank, suffix: verified.accountSuffix)
+        if notice.bankAccountID == nil {
+            notice.reviewReason = accountMatchExplanation(source: verified.sourceBank, suffix: verified.accountSuffix)
+        }
         notice.transferPeer = verified.transferPeer
         if automaticBalances {
             notice.verifiedIncomingBalance = verified.kind == "incoming" && notice.bankAccountID != nil && !duplicate && !crossSourceDuplicate
             notice.aiSuggestion = proposed != nil
                 ? tr("Gemini：提取结果已通过原文与金额校验。", "Gemini extraction passed original-text and amount checks.", "Pengekstrakan Gemini lulus semakan teks asal dan amaun.")
                 : tr("本机规则已识别；Gemini 未提供可用结果。", "Recognised by local rules; Gemini did not provide a usable result.", "Dikenal pasti oleh peraturan setempat; Gemini tidak memberikan hasil yang boleh digunakan.")
-            if notice.bankAccountID == nil { notice.reviewReason = tr("未能唯一匹配资金账户，请选择账户后确认；尚未自动入账。", "No unique account match. Select an account and confirm; not automatically posted.", "Tiada padanan akaun unik. Pilih akaun dan sahkan; belum direkod automatik.") }
         }
         if let parsed, !duplicate, !crossSourceDuplicate {
             if parsed.kind == "payment", !automaticBalances || notice.bankAccountID != nil {
@@ -781,7 +783,10 @@ extension Ledger {
         if duplicate || crossSourceDuplicate { return tr("疑似重复，已保留待确认，未再次计入消费。", "Possible duplicate retained for review, not added to spending.", "Kemungkinan pendua disimpan untuk semakan, tidak ditambah kepada belanja.") }
         if notice.status == "recorded", let expenseID = notice.expenseID,
            let entry = expenses.first(where: { $0.id == expenseID }) {
-            return tr("已记消费\n", "Expense recorded\n", "Belanja direkod\n") + automaticExpenseDetail(entry)
+            let accountStatus = entry.bankAccountID == nil
+                ? "\n" + tr("账户未分配，尚未扣账户余额。", "Account unassigned; account balance has not been reduced.", "Akaun belum ditetapkan; baki akaun belum ditolak.") + "\n" + (notice.reviewReason ?? "")
+                : ""
+            return tr("已记消费\n", "Expense recorded\n", "Belanja direkod\n") + automaticExpenseDetail(entry) + accountStatus
         }
         if notice.status == "transfer" { return tr("转出已显示在账本，尚未计入消费。", "Outgoing transfer is in your ledger, excluded from spending.", "Pindahan disimpan, tidak dikira sebagai belanja.") }
         return tr("通知已保存到待确认，未计入消费。", "Notification saved for review, excluded from spending.", "Notifikasi disimpan untuk semakan, tidak dikira sebagai belanja.")

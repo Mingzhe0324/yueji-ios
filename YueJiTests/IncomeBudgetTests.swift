@@ -4,6 +4,24 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testPinduoduoOnlinePaymentAssociatesConfiguredTNGWallet() throws {
+        let date = Date()
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")
+        for automatic in [false, true] {
+            var ledger = Ledger(); ledger.bankAccounts = [wallet]
+            _ = try ledger.receiveTNG(body: "You have paid RM2.54 at PINDUODUO", title: "Payment", date: date, eventID: nil, sourceApp: "TNG", automaticBalances: automatic)
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.expenses.first?.bankAccountID, wallet.id)
+            XCTAssertEqual(ledger.expenses.first?.cents, 254)
+            XCTAssertEqual(ledger.tngNotices.first?.bankAccountID, wallet.id)
+            XCTAssertEqual(ledger.bankBalance(wallet), 9746)
+        }
+        var ledger = Ledger()
+        let message = try ledger.receiveTNG(body: "You have paid RM2.54 at PINDUODUO", title: "Payment", date: date, eventID: nil, sourceApp: "TNG")
+        XCTAssertNil(ledger.expenses.first?.bankAccountID)
+        XCTAssertNotNil(ledger.tngNotices.first?.reviewReason)
+        XCTAssertTrue(message.contains(try XCTUnwrap(ledger.tngNotices.first?.reviewReason)))
+    }
     func testLanguageResolutionAndProtectedInterpolation() {
         XCTAssertEqual(AppLanguage.resolve("zh-TW"), "zh-Hant")
         XCTAssertEqual(AppLanguage.resolve("zh-Hans-MY"), "zh")
