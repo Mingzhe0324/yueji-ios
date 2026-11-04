@@ -295,7 +295,7 @@ private struct StockResearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
-            Text(tr("点击后将股票代码发送给 Gemini，并使用 Google 搜索公司资料。仅供配置的个人账号使用；不上传账本。结果是网页研究，非实时行情或持续买卖提醒。", "Sends the stock symbol to Gemini with Google Search when tapped. Restricted to the configured personal account; no ledger is uploaded. Web research, not live quotes or ongoing trade alerts.", "Menghantar kod saham kepada Gemini dengan Google Search apabila diketuk. Untuk akaun peribadi yang ditetapkan; lejar tidak dihantar. Penyelidikan web, bukan harga langsung atau amaran dagangan berterusan."))
+            Text(tr("点击后自动获取公司资料，再由 Gemini 分析，不需要上传文件。官方财务资料模式首批支持 Maybank、99 Speed Mart；其他股票的数据接入尚未完成。仅供配置的个人账号使用，不上传账本。", "Automatically retrieves company evidence for Gemini analysis when tapped; no file upload. Official financial sources initially support Maybank and 99 Speed Mart; other stocks are not connected yet. Personal account only; no ledger upload.", "Mendapatkan maklumat syarikat secara automatik untuk analisis Gemini apabila diketuk; tiada muat naik fail. Sumber rasmi awal menyokong Maybank dan 99 Speed Mart; saham lain belum disambungkan. Akaun peribadi sahaja; lejar tidak dihantar."))
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button {
@@ -314,7 +314,7 @@ private struct StockResearchView: View {
                         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                     }
                 } label: {
-                    Label(tr("联网研究", "Research online", "Selidik dalam talian"), systemImage: "sparkle.magnifyingglass")
+                    Label(tr("自动获取并分析", "Fetch and analyze", "Dapatkan dan analisis"), systemImage: "sparkle.magnifyingglass")
                 }.buttonStyle(.borderedProminent).disabled(running)
                 if running {
                     ProgressView()
@@ -338,7 +338,7 @@ private struct StockResearchView: View {
                 ResearchWebView(html: report.html).id(report.generatedAt)
             } else {
                 Spacer()
-                Text(tr("研究内容包含机会、风险、证据日期及下一步观察条件。没有搜索依据时不会生成结果。", "Research covers opportunities, risks, evidence dates and conditions to watch. Results require search evidence.", "Penyelidikan merangkumi peluang, risiko, tarikh bukti dan syarat untuk diperhatikan. Hasil memerlukan bukti carian."))
+                Text(tr("分析会列出机会、风险、资料日期和下一步条件。评分是研究评价，不是上涨概率；缺少关键资料时不计算综合分。当前不是实时行情或后台持续监控。", "Analysis lists opportunities, risks, evidence dates and next steps. Ratings are research judgments, not winning probabilities; incomplete evidence means no overall score. This is not live pricing or background monitoring.", "Analisis menyenaraikan peluang, risiko, tarikh bukti dan langkah seterusnya. Penilaian bukan kebarangkalian untung; bukti tidak lengkap bermakna tiada skor keseluruhan. Bukan harga langsung atau pemantauan latar."))
                     .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
             }

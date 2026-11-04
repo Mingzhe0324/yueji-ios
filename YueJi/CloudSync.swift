@@ -326,7 +326,7 @@ actor SupabaseCloudService: CloudRemote {
         do { return try await request("/functions/v1/investment-research", body: ["symbols": symbols], authenticated: true) }
         catch CloudFailure.server(let status, _) {
             if status == 422 {
-                throw reviewError("未取得有来源的研究资料，请稍后重试。", "No sourced research was returned. Try again later.", "Tiada penyelidikan bersumber. Cuba lagi kemudian.")
+                throw reviewError("资料来源尚未接入、暂时无法读取，或分析缺少依据。官方资料模式目前支持 Maybank、99 Speed Mart。", "Source unsupported, unavailable, or analysis lacks evidence. Official sources currently support Maybank and 99 Speed Mart.", "Sumber belum disokong, tidak tersedia atau analisis tiada bukti. Sumber rasmi kini menyokong Maybank dan 99 Speed Mart.")
             }
             throw reviewError("公司研究尚未就绪，请检查 investment-research 部署及独立研究配置。", "Company research is unavailable. Check investment-research deployment and its separate configuration.", "Penyelidikan syarikat belum tersedia. Semak penggunaan investment-research dan konfigurasi berasingan.")
         }

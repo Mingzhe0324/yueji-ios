@@ -10,7 +10,7 @@ const json = (value, status = 200) => new Response(JSON.stringify(value), { stat
 const request = (body = { symbol: 'NASDAQ:AAPL' }) => new Request('https://test.invalid', { method: 'POST', headers: { Authorization: 'Bearer test', 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 function harness({ owner = 'owner', user = 'owner', anonymous = false, quota = true, result = candidate(), status = 200 } = {}) {
   const calls = [];
-  return { calls, env: key => ({ SUPABASE_URL: 'https://test.invalid', SUPABASE_ANON_KEY: 'public', INVESTMENT_RESEARCH_USER_ID: owner, GEMINI_RESEARCH_API_KEY: 'private', GEMINI_RESEARCH_MODEL: 'gemini-test' })[key], fetch: async (url, options) => {
+  return { calls, env: key => ({ INVESTMENT_RESEARCH_MODE: 'google_search', SUPABASE_URL: 'https://test.invalid', SUPABASE_ANON_KEY: 'public', INVESTMENT_RESEARCH_USER_ID: owner, GEMINI_RESEARCH_API_KEY: 'private', GEMINI_RESEARCH_MODEL: 'gemini-test' })[key], fetch: async (url, options) => {
     calls.push({ url, options });
     if (url.endsWith('/auth/v1/user')) return json({ id: user, is_anonymous: anonymous });
     if (url.endsWith('/claim_investment_research')) return json(quota);
