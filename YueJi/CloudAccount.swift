@@ -101,17 +101,21 @@ import ImageIO
         guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple(for: .category) else { throw CloudFailure.session }
         return data
     }
-    func researchStock(symbol: String) async throws -> Data {
+    var researchHistoryScope: String? {
+        guard signedIn, !changingAccount, let session, let config = CloudConfiguration.bundled else { return nil }
+        return config.server + ":" + String(describing: session.user.id)
+    }
+    func researchStock(symbols: [String]) async throws -> Data {
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
         let data: Data
-        do { data = try await api.researchStock(symbol: symbol) }
+        do { data = try await api.researchStock(symbols: symbols) }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
             guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
             try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
             session = refreshed
-            data = try await api.researchStock(symbol: symbol)
+            data = try await api.researchStock(symbols: symbols)
         }
         try Task.checkCancellation()
         guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }

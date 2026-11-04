@@ -320,9 +320,10 @@ actor SupabaseCloudService: CloudRemote {
             throw reviewError("AI 服务尚未就绪，请检查 assistant-gemini、GEMINI_ASSISTANT_MODEL 和额度 SQL。", "AI service is not ready. Check assistant-gemini, GEMINI_ASSISTANT_MODEL and quota SQL.", "Perkhidmatan AI belum tersedia. Semak assistant-gemini, GEMINI_ASSISTANT_MODEL dan SQL kuota.")
         }
     }
-    func researchStock(symbol: String) async throws -> Data {
-        guard ObservedStock.normalized(symbol) == symbol else { throw CloudFailure.invalidResponse }
-        do { return try await request("/functions/v1/investment-research", body: ["symbol": symbol], authenticated: true) }
+    func researchStock(symbols: [String]) async throws -> Data {
+        guard (1...3).contains(symbols.count), Set(symbols).count == symbols.count,
+              symbols.allSatisfy({ ObservedStock.normalized($0) == $0 }) else { throw CloudFailure.invalidResponse }
+        do { return try await request("/functions/v1/investment-research", body: ["symbols": symbols], authenticated: true) }
         catch CloudFailure.server(let status, _) {
             if status == 422 {
                 throw reviewError("未取得有来源的研究资料，请稍后重试。", "No sourced research was returned. Try again later.", "Tiada penyelidikan bersumber. Cuba lagi kemudian.")

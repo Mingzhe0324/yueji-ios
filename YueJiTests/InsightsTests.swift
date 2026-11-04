@@ -57,6 +57,19 @@ final class GeminiReceiptDraftTests: XCTestCase {
 }
 
 final class AppleOnDeviceAITests: XCTestCase {
+    func testResearchHistoryExpiryCapacityAndAccountScope() {
+        let now = Date(timeIntervalSince1970: 1800000000)
+        func entry(_ age: TimeInterval, text: String = "Research") -> ResearchHistoryEntry {
+            .init(id: UUID(), symbols: ["NASDAQ:AAPL"], text: text, generatedAt: "2026-11-04T00:00:00Z", savedAt: now.addingTimeInterval(-age))
+        }
+        let newest = entry(0), oldest = entry(29 * 86400)
+        let values = ResearchHistory.retained([entry(30 * 86400), oldest, entry(-1), newest, entry(0, text: String(repeating: "x", count: 100001))], now: now)
+        XCTAssertEqual(values.map(\.id), [newest.id, oldest.id])
+        XCTAssertEqual(ResearchHistory.retained((0..<25).map { entry(Double($0)) }, now: now).count, 20)
+        XCTAssertNotEqual(ResearchHistory.fileName(scope: "project:a"), ResearchHistory.fileName(scope: "project:b"))
+        XCTAssertNotEqual(ResearchHistory.fileName(scope: "project:a"), ResearchHistory.fileName(scope: "other:a"))
+        XCTAssertFalse(ResearchHistory.fileName(scope: "../../user").contains("/"))
+    }
     func testStockSymbolsRequireExchangeAndRejectMarkup() {
         XCTAssertEqual(ObservedStock.normalized(" nasdaq:nvda "), "NASDAQ:NVDA")
         XCTAssertEqual(ObservedStock.normalized("NYSE:BRK.B"), "NYSE:BRK.B")

@@ -58,3 +58,23 @@ test('upstream failures and network failures return stable codes only', async ()
   const response = await handleResearch(request(), deps);
   assert.equal(response.status, 502); assert.deepEqual(await response.json(), {error:'research_unavailable'});
 });
+test('comparison allows two or three unique stocks, strips private fields and spends one quota claim', async () => {
+  for (const symbols of [['NASDAQ:AAPL','NASDAQ:MSFT'], ['NASDAQ:AAPL','NASDAQ:MSFT','HKEX:700']]) {
+    const deps = harness();
+    const response = await handleResearch(request({symbols, ledger:'private', previousReport:'do not send'}), deps);
+    assert.equal(response.status, 200);
+    const result = await response.json();
+    assert.deepEqual(result.symbols, symbols); assert.equal(result.text, candidate().content.parts[0].text);
+    const sent = JSON.parse(JSON.parse(deps.calls[2].options.body).contents[0].parts[0].text);
+    assert.deepEqual(sent.symbols, symbols); assert.match(sent.task, /same 6-12 month/);
+    assert.ok(!Object.hasOwn(sent, 'ledger')); assert.ok(!Object.hasOwn(sent, 'previousReport'));
+    assert.equal(deps.calls.filter(c => c.url.endsWith('/claim_investment_research')).length, 1);
+  }
+});
+test('ambiguous, duplicate, too many and malformed comparison inputs do not consume quota', async () => {
+  for (const body of [{symbols:[]}, {symbols:['NASDAQ:AAPL','NASDAQ:AAPL']}, {symbol:'NASDAQ:AAPL',symbols:['NASDAQ:MSFT']}, {symbols:['NASDAQ:AAPL','NASDAQ:MSFT','HKEX:700','NYSE:TSM']}, {symbols:'NASDAQ:AAPL'}, {symbols:['NASDAQ:AAPL',null]}]) {
+    const deps = harness();
+    assert.equal((await handleResearch(request(body), deps)).status, 400);
+    assert.equal(deps.calls.length, 1);
+  }
+});

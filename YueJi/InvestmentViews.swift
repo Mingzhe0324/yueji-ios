@@ -1,5 +1,6 @@
 import SwiftUI
 import WebKit
+import CryptoKit
 
 struct ObservedStock: Identifiable, Hashable {
     let symbol: String
@@ -131,6 +132,14 @@ struct InvestmentWatchView: View {
                 }.padding(.vertical, 8)
                 Text(tr("行情由 TradingView 提供；部分市场延迟或不可用，以图表标示为准。示例清单不是实时热门榜或买入建议。自选仅保存在此设备。", "Charts are provided by TradingView. Some markets are delayed or unavailable; check the chart labels. This curated list is not a live popularity ranking or a buy recommendation. Watchlists stay on this device.", "Carta disediakan oleh TradingView. Sesetengah pasaran tertunda atau tidak tersedia; semak label carta. Senarai ini bukan kedudukan populariti langsung atau cadangan beli. Senarai pantau disimpan pada peranti ini."))
                     .font(.caption).foregroundStyle(.secondary)
+            }
+            Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
+                NavigationLink { StockComparisonPicker() } label: {
+                    Label(tr("对比 2–3 只股票", "Compare 2–3 stocks", "Bandingkan 2–3 saham"), systemImage: "square.split.2x2")
+                }
+                NavigationLink { ResearchHistoryView() } label: {
+                    Label(tr("研究历史", "Research history", "Sejarah penyelidikan"), systemImage: "clock.arrow.circlepath")
+                }
             }
             Section(tr("我的自选", "Watchlist", "Senarai pantau")) {
                 if saved.isEmpty {
@@ -266,33 +275,40 @@ private struct StockChartView: View {
 
 private struct StockResearchReport: Decodable {
     let symbol: String
+    let symbols: [String]?
     let generatedAt: String
     let html: String
+    let text: String?
 }
 
 private struct StockResearchView: View {
-    let stock: ObservedStock
+    let symbols: [String]
+    init(stock: ObservedStock) { symbols = [stock.symbol] }
+    init(symbols: [String]) { self.symbols = symbols }
+    @ObservedObject private var account = CloudAccount.shared
     @Environment(\.scenePhase) private var phase
     @State private var report: StockResearchReport?
     @State private var error = ""
     @State private var running = false
     @State private var task: Task<Void, Never>?
+    @State private var saveMessage = ""
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(stock.name).font(.headline)
-            Text(stock.symbol).font(.caption.monospaced()).foregroundStyle(.secondary)
+            Text(symbols.joined(separator: " / ")).font(.headline)
             Text(tr("点击后将股票代码发送给 Gemini，并使用 Google 搜索公司资料。仅供配置的个人账号使用；不上传账本。结果是网页研究，非实时行情或持续买卖提醒。", "Sends the stock symbol to Gemini with Google Search when tapped. Restricted to the configured personal account; no ledger is uploaded. Web research, not live quotes or ongoing trade alerts.", "Menghantar kod saham kepada Gemini dengan Google Search apabila diketuk. Untuk akaun peribadi yang ditetapkan; lejar tidak dihantar. Penyelidikan web, bukan harga langsung atau amaran dagangan berterusan."))
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button {
-                    report = nil; error = ""; running = true
+                    report = nil; error = ""; saveMessage = ""; running = true
                     task = Task { @MainActor in
                         defer { running = false }
                         do {
-                            let data = try await CloudAccount.shared.researchStock(symbol: stock.symbol)
+                            let scope = account.researchHistoryScope
+                            let data = try await account.researchStock(symbols: symbols)
                             try Task.checkCancellation()
                             let value = try JSONDecoder().decode(StockResearchReport.self, from: data)
-                            guard value.symbol == stock.symbol, value.html.utf8.count <= 300000 else { throw CloudFailure.invalidResponse }
+                            guard (value.symbols ?? [value.symbol]) == symbols, value.html.utf8.count <= 300000,
+                                  scope != nil, scope == account.researchHistoryScope else { throw CloudFailure.invalidResponse }
                             report = value
                         } catch is CancellationError { }
                         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
@@ -309,6 +325,16 @@ private struct StockResearchView: View {
             if let report {
                 Text(tr("生成时间（不是行情时间）：", "Generated at (not quote time): ", "Dijana pada (bukan masa harga): ") + report.generatedAt)
                     .font(.caption).foregroundStyle(.secondary)
+                if let text = report.text, !text.isEmpty {
+                    Button(tr("保存到研究历史", "Save to research history", "Simpan ke sejarah")) {
+                        do {
+                            guard let scope = account.researchHistoryScope else { throw CloudFailure.session }
+                            try ResearchHistory.save(symbols: symbols, text: text, generatedAt: report.generatedAt, scope: scope)
+                            saveMessage = tr("已保存原文，保留 30 天", "Original text saved for 30 days", "Teks asal disimpan selama 30 hari")
+                        } catch { self.error = error.localizedDescription }
+                    }.disabled(!saveMessage.isEmpty)
+                }
+                if !saveMessage.isEmpty { Text(saveMessage).font(.caption).foregroundStyle(.secondary) }
                 ResearchWebView(html: report.html).id(report.generatedAt)
             } else {
                 Spacer()
@@ -319,9 +345,159 @@ private struct StockResearchView: View {
         }.padding().navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
             .navigationBarTitleDisplayMode(.inline)
             .onDisappear { task?.cancel(); report = nil }
+            .onChange(of: account.researchHistoryScope) { _, _ in task?.cancel(); report = nil; error = ""; saveMessage = "" }
             .onChange(of: phase) { _, value in
                 if value != .active { task?.cancel(); report = nil }
             }
+    }
+}
+
+struct ResearchHistoryEntry: Codable, Identifiable {
+    let id: UUID
+    let symbols: [String]
+    let text: String
+    let generatedAt: String
+    let savedAt: Date
+}
+
+enum ResearchHistory {
+    static func retained(_ values: [ResearchHistoryEntry], now: Date = Date()) -> [ResearchHistoryEntry] {
+        Array(values.filter { entry in
+            let age = now.timeIntervalSince(entry.savedAt)
+            return age >= 0 && age < 30 * 86400 && entry.text.utf8.count <= 100000 &&
+                (1...3).contains(entry.symbols.count) && entry.symbols.allSatisfy { ObservedStock.normalized($0) == $0 }
+        }.sorted { $0.savedAt > $1.savedAt }.prefix(20))
+    }
+    static func fileName(scope: String) -> String {
+        SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined() + ".json"
+    }
+    private static func location(scope: String) throws -> URL {
+        let root = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("CompanyResearchHistory", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        var directory = root
+        var options = URLResourceValues(); options.isExcludedFromBackup = true
+        try directory.setResourceValues(options)
+        return root.appendingPathComponent(fileName(scope: scope))
+    }
+    static func load(scope: String) throws -> [ResearchHistoryEntry] {
+        let url = try location(scope: scope)
+        guard FileManager.default.fileExists(atPath: url.path) else { return [] }
+        let data = try Data(contentsOf: url)
+        guard data.count <= 3000000 else { throw CloudFailure.invalidResponse }
+        let original = try JSONDecoder().decode([ResearchHistoryEntry].self, from: data)
+        let values = retained(original)
+        if values.count != original.count { try write(values, scope: scope) }
+        return values
+    }
+    static func write(_ values: [ResearchHistoryEntry], scope: String) throws {
+        try JSONEncoder().encode(retained(values)).write(to: location(scope: scope), options: [.atomic, .completeFileProtection])
+    }
+    static func save(symbols: [String], text: String, generatedAt: String, scope: String) throws {
+        var values = try load(scope: scope)
+        values.removeAll { $0.symbols == symbols && $0.generatedAt == generatedAt }
+        values.insert(.init(id: UUID(), symbols: symbols, text: text, generatedAt: generatedAt, savedAt: Date()), at: 0)
+        try write(values, scope: scope)
+    }
+}
+
+private struct ResearchHistoryView: View {
+    @ObservedObject private var account = CloudAccount.shared
+    @State private var entries: [ResearchHistoryEntry] = []
+    @State private var error = ""
+    var body: some View {
+        List {
+            Text(tr("仅保存你主动保存的研究原文，供当前账号回看。此设备最多保留 20 条、30 天；不自动重新分析，不代表最新建议。", "Only research text you choose to save, for this account to reread. Up to 20 entries for 30 days on this device; no automatic reanalysis or current advice.", "Hanya teks yang anda pilih untuk simpan, bagi akaun ini. Sehingga 20 rekod selama 30 hari pada peranti ini; bukan analisis semula automatik atau nasihat terkini."))
+                .font(.caption).foregroundStyle(.secondary)
+            if entries.isEmpty { Text(tr("暂无研究记录", "No saved research", "Tiada penyelidikan disimpan")) }
+            if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            ForEach(entries) { entry in
+                NavigationLink {
+                    ResearchHistoryDetail(entry: entry, scope: account.researchHistoryScope)
+                } label: {
+                    VStack(alignment: .leading) {
+                        Text(entry.symbols.joined(separator: " / "))
+                        Text(entry.generatedAt).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }.onDelete { offsets in
+                do {
+                    guard let scope = account.researchHistoryScope else { throw CloudFailure.session }
+                    var next = entries; next.remove(atOffsets: offsets)
+                    try ResearchHistory.write(next, scope: scope); entries = next
+                } catch { self.error = error.localizedDescription }
+            }
+        }.navigationTitle(tr("研究历史", "Research history", "Sejarah penyelidikan"))
+            .id(account.researchHistoryScope ?? "signed-out")
+            .onAppear(perform: reload)
+            .onChange(of: account.researchHistoryScope) { _, _ in reload() }
+    }
+    private func reload() {
+        entries = []; error = ""
+        guard let scope = account.researchHistoryScope else { return }
+        do { entries = try ResearchHistory.load(scope: scope) } catch { self.error = error.localizedDescription }
+    }
+}
+
+private struct ResearchHistoryDetail: View {
+    let entry: ResearchHistoryEntry
+    let scope: String?
+    @ObservedObject private var account = CloudAccount.shared
+    var body: some View {
+        ScrollView {
+            if let scope, scope == account.researchHistoryScope, !ResearchHistory.retained([entry]).isEmpty {
+                VStack(alignment: .leading, spacing: 16) {
+                    Text(tr("历史原文 · 非最新建议", "Historical text · Not current advice", "Teks sejarah · Bukan nasihat terkini")).font(.headline)
+                    Text(entry.symbols.joined(separator: " / "))
+                    Text(entry.generatedAt).font(.caption)
+                    Text(entry.text).textSelection(.enabled)
+                }.padding()
+            } else {
+                Text(tr("记录已过期或账号已切换", "Record expired or account changed", "Rekod tamat tempoh atau akaun berubah")).padding()
+            }
+        }
+    }
+}
+
+private struct StockComparisonPicker: View {
+    @AppStorage("investment.watchlist.v1") private var watchlist = ""
+    @State private var selected: [String] = []
+    @State private var search = ""
+    private var stocks: [ObservedStock] {
+        var seen = Set<String>()
+        var values = ObservedStock.saved(watchlist) + ObservedStock.examples
+        if let custom = ObservedStock.normalized(search) { values.insert(.init(symbol: custom, name: custom), at: 0) }
+        let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
+        return values.filter { seen.insert($0.symbol).inserted && (query.isEmpty || $0.name.localizedCaseInsensitiveContains(query) || $0.symbol.localizedCaseInsensitiveContains(query)) }
+    }
+    var body: some View {
+        List {
+            Section {
+                Text(tr("选择 2–3 只股票，按相同的 6–12 个月周期比较机会、财务、估值和风险。缺少数据时明确留空。", "Select 2–3 stocks to compare opportunities, finances, valuation and risks over the same 6–12 months. Missing data stays unavailable.", "Pilih 2–3 saham untuk membandingkan peluang, kewangan, penilaian dan risiko sepanjang 6–12 bulan. Data tiada kekal tidak tersedia."))
+                    .font(.caption).foregroundStyle(.secondary)
+                ForEach(selected, id: \.self) { symbol in
+                    Button { selected.removeAll { $0 == symbol } } label: {
+                        Label(symbol, systemImage: "minus.circle")
+                    }
+                }
+                NavigationLink { StockResearchView(symbols: selected) } label: {
+                    Label(tr("开始对比研究", "Compare online", "Banding dalam talian"), systemImage: "sparkles")
+                }.disabled(selected.count < 2)
+            }
+            ForEach(stocks) { stock in
+                Button {
+                    if selected.contains(stock.symbol) { selected.removeAll { $0 == stock.symbol } }
+                    else if selected.count < 3 { selected.append(stock.symbol) }
+                } label: {
+                    HStack {
+                        VStack(alignment: .leading) { Text(stock.name); Text(stock.symbol).font(.caption).foregroundStyle(.secondary) }
+                        Spacer()
+                        Image(systemName: selected.contains(stock.symbol) ? "checkmark.circle.fill" : "circle")
+                    }
+                }.disabled(selected.count == 3 && !selected.contains(stock.symbol))
+            }
+        }.navigationTitle(tr("股票对比", "Compare stocks", "Banding saham"))
+            .searchable(text: $search, prompt: tr("公司或交易所:代码", "Company or EXCHANGE:SYMBOL", "Syarikat atau BURSA:KOD"))
     }
 }
 
