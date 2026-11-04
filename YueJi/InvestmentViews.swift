@@ -167,6 +167,8 @@ struct ObservedStock: Identifiable, Hashable {
 }
 
 struct InvestmentWatchView: View {
+    @ObservedObject private var account = CloudAccount.shared
+    @State private var recentResearch: [ResearchHistoryEntry] = []
     @AppStorage("investment.watchlist.v1") private var watchlist = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var search = ""
@@ -181,6 +183,50 @@ struct InvestmentWatchView: View {
     }
     var body: some View {
         List {
+            Section {
+                VStack(alignment: .leading, spacing: 16) {
+                    Label(tr("投资观察 · AI 研究", "Investing · AI research", "Pelaburan · Penyelidikan AI"), systemImage: "sparkles")
+                        .font(.title2.bold())
+                    Text(tr("关注公司，理解价值", "Follow companies. Understand value.", "Ikuti syarikat. Fahami nilai."))
+                        .foregroundStyle(.white.opacity(0.8))
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 12) {
+                            ForEach(saved.isEmpty ? Array(ObservedStock.examples.prefix(3)) : saved) { stock in
+                                NavigationLink { StockChartView(stock: stock).yuejiZoom(id: "hero" + stock.id, namespace: cards) } label: {
+                                    VStack(alignment: .leading, spacing: 10) {
+                                        StockCompanyLogo(stock: stock)
+                                        Text(stock.name).font(.headline).lineLimit(2)
+                                        Text(stock.symbol).font(.caption.monospaced())
+                                        Text(stock.hasOfficialImporter ? tr("自动研究", "Auto research", "Penyelidikan automatik") : tr("需导入资料", "Import required", "Import diperlukan"))
+                                            .font(.caption).foregroundStyle(.white.opacity(0.8))
+                                    }.frame(width: 170, alignment: .leading).padding(14)
+                                        .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
+                                        .yuejiZoomSource(id: "hero" + stock.id, namespace: cards)
+                                }.buttonStyle(.plain)
+                            }
+                        }
+                    }
+                    if saved.isEmpty {
+                        Text(tr("示例公司 · 收藏后显示你的自选", "Examples · Follow stocks to personalize", "Contoh · Ikuti saham untuk peribadikan"))
+                            .font(.caption).foregroundStyle(.white.opacity(0.8))
+                    }
+                }.padding(18).foregroundStyle(.white)
+                    .background(LinearGradient(colors: [Color(red: 0.07, green: 0.15, blue: 0.27), Color(red: 0.03, green: 0.07, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 26))
+                    .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)).listRowBackground(Color.clear)
+            }
+            if !recentResearch.isEmpty {
+                Section(tr("最近研究", "Recent research", "Penyelidikan terkini")) {
+                    ForEach(recentResearch.prefix(3)) { entry in
+                        NavigationLink { ResearchHistoryDetail(entry: entry, scope: account.researchHistoryScope) } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Label(entry.symbols.joined(separator: " / "), systemImage: "doc.text.magnifyingglass").font(.headline)
+                                Text(entry.generatedAt).font(.caption).foregroundStyle(.secondary)
+                                Text(tr("已保存报告 · 非实时", "Saved report · Not live", "Laporan tersimpan · Bukan langsung")).font(.caption).foregroundStyle(.orange)
+                            }.padding(.vertical, 6)
+                        }
+                    }
+                }
+            }
             Section {
                 VStack(alignment: .leading, spacing: 12) {
                     Label(tr("投资观察", "Market watch", "Pantau pasaran"), systemImage: "chart.line.uptrend.xyaxis")
@@ -203,10 +249,15 @@ struct InvestmentWatchView: View {
                 }
             }
             Section(tr("自动 AI 研究", "Automatic AI research", "Penyelidikan AI automatik")) {
+                DisclosureGroup(tr("选择公司开始研究", "Choose a company to research", "Pilih syarikat untuk dikaji")) {
                 ForEach(ObservedStock.examples.filter { $0.hasOfficialImporter } + [ObservedStock(symbol: "MYX:IJM", name: "IJM · 怡保工程"), ObservedStock(symbol: "MYX:SUNWAY", name: "Sunway · 双威")]) { stock in
                     NavigationLink { StockResearchView(symbols: [stock.symbol]) } label: {
-                        Label(stock.name, systemImage: "sparkles")
+                        HStack(spacing: 12) {
+                            StockCompanyLogo(stock: stock)
+                            Text(stock.name).font(.subheadline.weight(.semibold))
+                        }.padding(.vertical, 6)
                     }
+                }
                 }
                 Text(tr("读取官方财务网页后分析。公告可能不是最新一期，报告会列出来源与资料范围。", "Analyzes official financial pages. Filings may not be the latest; reports list sources and scope.", "Menganalisis halaman kewangan rasmi. Pemfailan mungkin bukan yang terkini; laporan menyenaraikan sumber dan skop."))
                     .font(.caption).foregroundStyle(.secondary)
@@ -265,6 +316,13 @@ struct InvestmentWatchView: View {
             .navigationTitle(tr("投资观察", "Market watch", "Pantau pasaran"))
             .searchable(text: $search, prompt: tr("公司或交易所:代码", "Company or EXCHANGE:SYMBOL", "Syarikat atau BURSA:KOD"))
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: market)
+            .onAppear(perform: loadRecentResearch)
+            .onChange(of: account.researchHistoryScope) { _, _ in loadRecentResearch() }
+    }
+    private func loadRecentResearch() {
+        recentResearch = []
+        guard let scope = account.researchHistoryScope else { return }
+        recentResearch = (try? ResearchHistory.load(scope: scope)) ?? []
     }
     private func stockLink(_ stock: ObservedStock, source: String) -> some View {
         NavigationLink {
@@ -291,6 +349,7 @@ struct InvestmentWatchView: View {
 }
 
 private struct StockChartView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let stock: ObservedStock
     @AppStorage("investment.watchlist.v1") private var watchlist = ""
     @Environment(\.colorScheme) private var scheme
@@ -398,7 +457,9 @@ private struct StockChartView: View {
                         if following { symbols.removeAll { $0 == stock.symbol } }
                         else { symbols.append(stock.symbol) }
                         watchlist = symbols.joined(separator: "\n")
+                        FeedbackHaptics.selection()
                     } label: { Image(systemName: following ? "star.fill" : "star") }
+                        .symbolEffect(.bounce, options: .nonRepeating, value: !reduceMotion && ElegantMotion.enabled && following)
                         .accessibilityLabel(following ? tr("取消关注", "Unfollow", "Nyahikuti") : tr("加入自选", "Follow stock", "Ikuti saham"))
                 }
             }
@@ -427,6 +488,168 @@ private struct StockResearchReport: Decodable {
     let html: String
     let text: String?
     let cached: Bool?
+    let assessments: [ResearchAssessment]?
+    let sources: [ResearchSource]?
+}
+
+private struct ResearchAssessment: Decodable, Identifiable {
+    let symbol: String
+    let summary: String
+    let period: String
+    let action: String
+    let conditions: String
+    let missing: String
+    let overall: Int?
+    let dimensions: [ResearchDimension]
+    var id: String { symbol }
+}
+private struct ResearchDimension: Decodable, Identifiable {
+    let key: String
+    let score: Int?
+    let reason: String
+    let evidence: [ResearchCitation]
+    var id: String { key }
+    var label: String {
+        switch key {
+        case "growth": return tr("成长", "Growth", "Pertumbuhan")
+        case "profitability": return tr("盈利能力", "Profitability", "Keuntungan")
+        case "balanceSheet": return tr("财务稳健", "Financial health", "Kesihatan kewangan")
+        case "valuation": return tr("估值", "Valuation", "Penilaian")
+        default: return tr("风险控制", "Risk resilience", "Ketahanan risiko")
+        }
+    }
+}
+private struct ResearchCitation: Decodable { let sourceId: String; let quote: String }
+private struct ResearchSource: Decodable, Identifiable {
+    let id: String
+    let company: String
+    let url: String
+    let scope: String?
+    let fetchedAt: String
+}
+
+private struct ResearchReportCards: View {
+    let report: StockResearchReport
+    @State private var browserPage: StockBrowserPage?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            ForEach(report.assessments ?? []) { company in
+                ResearchCompanyCards(company: company)
+            }
+            DisclosureGroup(tr("资料来源", "Sources", "Sumber")) {
+                ForEach(report.sources ?? []) { source in
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("[\(source.id)] \(source.company)").font(.headline)
+                        if let scope = source.scope { Text(scope).font(.caption) }
+                        Text(source.fetchedAt).font(.caption.monospaced()).foregroundStyle(.secondary)
+                        if let url = URL(string: source.url), url.scheme == "https", url.user == nil, url.password == nil {
+                            Button(tr("查看原文", "Read source", "Baca sumber")) { browserPage = StockBrowserPage(url: url) }
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+                }
+            }.padding(16).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
+            if let text = report.text {
+                DisclosureGroup(tr("完整报告与引用", "Full report and citations", "Laporan penuh dan petikan")) {
+                    Text(text).font(.subheadline).textSelection(.enabled).padding(.top, 10)
+                }.padding(16).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
+            }
+        }.sheet(item: $browserPage) { StockInAppBrowser(url: $0.url).ignoresSafeArea() }
+    }
+}
+
+private struct ResearchCompanyCards: View {
+    let company: ResearchAssessment
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var revealed = false
+    private var complete: Bool {
+        company.dimensions.count == 5 && Set(company.dimensions.map(\.key)) == Set(["growth", "profitability", "balanceSheet", "valuation", "risk"]) && company.dimensions.allSatisfy { (0...20).contains($0.score ?? -1) }
+    }
+    private var total: Int? {
+        guard complete, let overall = company.overall, overall == company.dimensions.reduce(0, { $0 + ($1.score ?? 0) }) else { return nil }
+        return overall
+    }
+    private var conclusion: String {
+        guard total != nil else { return tr("观察 · 关键资料待补齐", "Watch · Key evidence missing", "Pantau · Bukti utama belum lengkap") }
+        switch company.action {
+        case "consider": return tr("可进一步考虑", "Consider further research", "Pertimbangkan kajian lanjut")
+        case "avoid": return tr("暂不考虑", "Avoid for now", "Elakkan buat masa ini")
+        default: return tr("观察，等待条件确认", "Watch for confirmation", "Pantau untuk pengesahan")
+        }
+    }
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(company.symbol).font(.title3.bold())
+                Label(conclusion, systemImage: total == nil ? "clock" : "doc.text.magnifyingglass")
+                    .font(.headline).foregroundStyle(company.action == "avoid" && total != nil ? Color.red : Color.orange)
+                Text(company.summary).textSelection(.enabled)
+                Text(company.period).font(.caption).foregroundStyle(.secondary)
+                if total == nil {
+                    Text(company.missing).font(.subheadline).foregroundStyle(.orange)
+                }
+                if let total {
+                    Text("\(total)/100").font(.system(.largeTitle, design: .rounded).bold()).foregroundStyle(.blue)
+                } else {
+                    Text(tr("综合分：资料不足", "Overall: insufficient evidence", "Keseluruhan: bukti tidak mencukupi")).foregroundStyle(.secondary)
+                }
+                Text(tr("研究评价，不是上涨概率", "Research rating, not a winning probability", "Penilaian kajian, bukan kebarangkalian untung")).font(.caption).foregroundStyle(.secondary)
+            }.researchCard()
+            VStack(alignment: .leading, spacing: 16) {
+                Label(tr("财务表现与风险", "Financials and risks", "Kewangan dan risiko"), systemImage: "chart.bar.xaxis").font(.headline)
+                ForEach(company.dimensions) { dimension in
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            Text(dimension.label).font(.subheadline.bold())
+                            Spacer()
+                            if let score = dimension.score, (0...20).contains(score) {
+                                Text("\(score)/20").monospacedDigit().foregroundStyle(.blue)
+                            } else {
+                                Text(tr("资料不足", "Insufficient data", "Data tidak mencukupi")).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                        if let score = dimension.score, (0...20).contains(score) {
+                            ProgressView(value: revealed ? Double(score) : 0, total: 20).tint(.blue)
+                                .accessibilityLabel(dimension.label).accessibilityValue("\(score)/20")
+                        } else {
+                            RoundedRectangle(cornerRadius: 4).fill(Color.secondary.opacity(0.18)).frame(height: 4).accessibilityHidden(true)
+                        }
+                        Text(dimension.reason).font(.subheadline).foregroundStyle(dimension.key == "risk" ? Color.orange : Color.secondary)
+                        if !dimension.evidence.isEmpty {
+                            DisclosureGroup(tr("引用依据", "Evidence", "Bukti")) {
+                                ForEach(Array(dimension.evidence.enumerated()), id: \.offset) { _, citation in
+                                    Text("[\(citation.sourceId)] \(citation.quote)").font(.caption).textSelection(.enabled).padding(.vertical, 4)
+                                }
+                            }.font(.caption)
+                        }
+                    }
+                }
+            }.researchCard().opacity(revealed ? 1 : 0)
+                .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.08), value: revealed)
+            VStack(alignment: .leading, spacing: 10) {
+                Label(tr("买卖条件与判断失效", "Entry, exit and invalidation", "Syarat masuk, keluar dan pembatalan"), systemImage: "checklist").font(.headline)
+                Text(company.conditions).textSelection(.enabled)
+            }.researchCard().opacity(revealed ? 1 : 0)
+                .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.16), value: revealed)
+            VStack(alignment: .leading, spacing: 10) {
+                Label(tr("仍需核实", "Still to verify", "Masih perlu disahkan"), systemImage: "exclamationmark.circle").font(.headline).foregroundStyle(.orange)
+                Text(company.missing).textSelection(.enabled)
+            }.researchCard().opacity(revealed ? 1 : 0)
+                .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.24), value: revealed)
+        }
+        .task {
+            guard !revealed else { return }
+            if reduceMotion || !ElegantMotion.enabled { revealed = true }
+            else { withAnimation(.easeOut(duration: 0.35)) { revealed = true } }
+        }
+    }
+}
+
+private extension View {
+    func researchCard() -> some View {
+        self.frame(maxWidth: .infinity, alignment: .leading).padding(18)
+            .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 22))
+            .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.secondary.opacity(0.12), lineWidth: 1))
+    }
 }
 
 struct StockResearchImport {
@@ -506,6 +729,7 @@ private struct StockResearchView: View {
     @State private var imported: StockResearchImport?
     @State private var showingImport = false
     var body: some View {
+        ScrollView {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
             Text(tr("自动读取已适配公司的官方网页或 PDF 文本，再由 Gemini 分析。部分来源为固定期间公告，不保证最新；报告列出来源、日期和资料范围。新增来源需部署新版后使用。仅供配置的个人账号使用，不上传账本。", "Fetches supported companies' official pages or PDF text for Gemini analysis. Some sources are fixed-period releases, not guaranteed latest; reports list sources, dates and scope. New sources require the updated deployment. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi atau teks PDF syarikat yang disokong untuk analisis Gemini. Sesetengah sumber ialah laporan tempoh tetap, bukan semestinya terkini; laporan menyenaraikan sumber, tarikh dan skop. Sumber baharu memerlukan versi baharu. Akaun peribadi sahaja; lejar tidak dihantar."))
@@ -538,6 +762,13 @@ private struct StockResearchView: View {
                     Button(tr("取消", "Cancel", "Batal")) { task?.cancel() }
                 }
             }
+            if running {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(tr("正在准备研究报告", "Preparing research report", "Menyediakan laporan penyelidikan"), systemImage: "doc.text.magnifyingglass").font(.headline)
+                    Text(tr("服务正在读取资料、分析并核对引用。完成后会显示报告，你也可以随时取消。", "The service reads sources, analyzes them and checks citations. Your report will appear when ready; you can cancel at any time.", "Perkhidmatan membaca sumber, menganalisis dan menyemak petikan. Laporan dipaparkan apabila siap; anda boleh membatalkan bila-bila masa."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }.researchCard().accessibilityElement(children: .combine)
+            }
             if symbols.count == 1 {
                 HStack {
                     Button(tr("导入行情与财报文本", "Import prices and financial text", "Import harga dan teks kewangan")) { showingImport = true }
@@ -568,14 +799,19 @@ private struct StockResearchView: View {
                     }.disabled(!saveMessage.isEmpty)
                 }
                 if !saveMessage.isEmpty { Text(saveMessage).font(.caption).foregroundStyle(.secondary) }
-                ResearchWebView(html: report.html).id(report.generatedAt)
+                if let assessments = report.assessments, !assessments.isEmpty {
+                    ResearchReportCards(report: report).id(report.generatedAt)
+                } else {
+                    ResearchWebView(html: report.html).frame(minHeight: 600).id(report.generatedAt)
+                }
             } else {
                 Spacer()
                 Text(tr("分析会列出机会、风险、资料日期和下一步条件。评分是研究评价，不是上涨概率；缺少关键资料时不计算综合分。当前不是实时行情或后台持续监控。", "Analysis lists opportunities, risks, evidence dates and next steps. Ratings are research judgments, not winning probabilities; incomplete evidence means no overall score. This is not live pricing or background monitoring.", "Analisis menyenaraikan peluang, risiko, tarikh bukti dan langkah seterusnya. Penilaian bukan kebarangkalian untung; bukti tidak lengkap bermakna tiada skor keseluruhan. Bukan harga langsung atau pemantauan latar."))
                     .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
             }
-        }.padding().navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
+        }.padding()
+        }.navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
             .sheet(isPresented: $showingImport) {
                 StockImportForm(symbol: symbols[0]) { value in
                     imported = value; report = nil; error = ""; saveMessage = ""
