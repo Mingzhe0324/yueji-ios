@@ -1,5 +1,6 @@
 import { officialSources, collectOfficialEvidence, evidencePrompt, evidenceReport } from './official.mjs';
 import { reportKey, validCachedReport } from './cache.mjs';
+import { importedEvidence, importedPrompt } from './imported.mjs';
 const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 async function read(stream, max) {
   if (!stream) throw new Error("empty");
@@ -63,9 +64,28 @@ export async function handleResearch(request, deps) {
     if (!user.id || user.is_anonymous === true) return reply(401, { error: "sign_in_required" });
     if (user.id !== owner) return reply(403, { error: "personal_only" });
     if (!request.headers.get("Content-Type")?.includes("application/json")) return reply(415, { error: "json_required" });
-    let input; try { input = await read(request.body, 2000); } catch { return reply(400, { error: "invalid_input" }); }
+    let input; try { input = await read(request.body, 300000); } catch { return reply(400, { error: "invalid_input" }); }
     if (!validInput(input)) return reply(400, { error: "invalid_input" });
     const symbols = input.symbols ?? [input.symbol];
+    if (input.imported !== undefined) {
+      let imported;
+      try {
+        if (symbols.length !== 1) throw new Error('invalid_import');
+        imported = importedEvidence(input.imported, symbols[0]);
+      } catch { return reply(400, {error:'invalid_import'}); }
+      const quota = await get(url + '/rest/v1/rpc/claim_investment_research', {method:'POST',headers,body:'{}'});
+      if (!quota.ok) return reply(503, {error:'quota_unavailable'});
+      if (await read(quota.body,100) !== true) return reply(429,{error:'daily_limit'});
+      const response = await get(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':key},
+        body:JSON.stringify({systemInstruction:{parts:[{text:importedPrompt + '\nA non-null valuation score must cite BOTH the price/date from U1 and matching fundamentals from U2. Every other financial score must cite U2.'}]},contents:[{role:'user',parts:[{text:JSON.stringify({symbols,evidence:imported.evidence,analysisDate:new Date().toISOString()})}]}],generationConfig:{maxOutputTokens:8192,responseMimeType:'application/json'}})
+      });
+      if (!response.ok) return reply(response.status === 429 ? 429 : 502,{error:'research_unavailable'});
+      const result = await read(response.body,300000);
+      const report = evidenceReport(result.candidates?.[0],symbols,imported.evidence,{imported:true,allowFullScore:imported.recent && imported.hasFinancials});
+      if (!report) return reply(422,{error:'no_grounded_research'});
+      return reply(200,{symbol:symbols[0],symbols,generatedAt:new Date().toISOString(),...report,metrics:imported.metrics,cached:false});
+    }
     if (mode === "official" && symbols.some(s => !Object.hasOwn(officialSources, s))) return reply(422, { error: "unsupported_source" });
     let evidence, cacheKey;
     const cacheEnabled = mode === "official" && deps.env("INVESTMENT_RESEARCH_CACHE") === "true";

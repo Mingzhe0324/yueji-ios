@@ -320,11 +320,16 @@ actor SupabaseCloudService: CloudRemote {
             throw reviewError("AI 服务尚未就绪，请检查 assistant-gemini、GEMINI_ASSISTANT_MODEL 和额度 SQL。", "AI service is not ready. Check assistant-gemini, GEMINI_ASSISTANT_MODEL and quota SQL.", "Perkhidmatan AI belum tersedia. Semak assistant-gemini, GEMINI_ASSISTANT_MODEL dan SQL kuota.")
         }
     }
-    func researchStock(symbols: [String]) async throws -> Data {
+    func researchStock(symbols: [String], imported: StockResearchImport? = nil) async throws -> Data {
         guard (1...3).contains(symbols.count), Set(symbols).count == symbols.count,
               symbols.allSatisfy({ ObservedStock.normalized($0) == $0 }) else { throw CloudFailure.invalidResponse }
-        do { return try await request("/functions/v1/investment-research", body: ["symbols": symbols], authenticated: true) }
+        var body: [String: Any] = ["symbols": symbols]
+        if let imported { body["imported"] = ["csv": imported.csv, "source": imported.source, "notes": imported.notes] }
+        do { return try await request("/functions/v1/investment-research", body: body, authenticated: true) }
         catch CloudFailure.server(let status, _) {
+            if status == 400, imported != nil {
+                throw reviewError("导入资料校验失败：请检查日期顺序、重复或未来日期、币种、开高低收价格和成交量。", "Imported materials failed validation. Check date order, duplicate or future dates, currency, OHLC prices and volume.", "Bahan import gagal disahkan. Semak susunan tarikh, tarikh berulang atau masa depan, mata wang, harga OHLC dan volum.")
+            }
             if status == 422 {
                 throw reviewError("这只股票的资料来源尚未接入、暂时无法读取，或分析缺少依据。请查看股票详情的资料范围，并稍后重试。", "This stock's source is not connected, temporarily unavailable, or the analysis lacks evidence. Check its source coverage in stock details and retry later.", "Sumber saham ini belum disambungkan, tidak tersedia atau analisis tiada bukti. Semak liputan sumber dalam butiran saham dan cuba lagi kemudian.")
             }

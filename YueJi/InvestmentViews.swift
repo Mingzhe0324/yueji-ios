@@ -3,6 +3,7 @@ import WebKit
 import CryptoKit
 import UIKit
 import SafariServices
+import UniformTypeIdentifiers
 
 struct StockCompanyProfile: Decodable {
     let symbol: String
@@ -415,6 +416,69 @@ private struct StockResearchReport: Decodable {
     let cached: Bool?
 }
 
+struct StockResearchImport {
+    let csv: String
+    let source: String
+    let notes: String
+}
+
+private struct StockImportForm: View {
+    let symbol: String
+    let onConfirm: (StockResearchImport) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var csv = ""
+    @State private var source = ""
+    @State private var notes = ""
+    @State private var choosingFile = false
+    @State private var error = ""
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(symbol) {
+                    Text(tr("导入 UTF-8 CSV，20–1000 个交易日，日期从旧到新。每行股票代码必须与当前股票一致。", "Import UTF-8 CSV with 20–1000 daily bars, oldest first. Every row must match this stock symbol.", "Import CSV UTF-8 dengan 20–1000 bar harian, paling lama dahulu. Setiap baris mesti sepadan dengan kod saham ini."))
+                    Text("symbol,currency,date,open,high,low,close,volume").font(.caption.monospaced()).textSelection(.enabled)
+                    Button(tr("选择行情 CSV", "Choose price CSV", "Pilih CSV harga")) { choosingFile = true }
+                    if !csv.isEmpty {
+                        Text(String(csv.prefix(1500))).font(.caption.monospaced()).textSelection(.enabled)
+                    }
+                    TextField(tr("资料来源及复权方式", "Source and price adjustment method", "Sumber dan kaedah pelarasan harga"), text: $source)
+                }
+                Section(tr("财报文本（可选）", "Financial statement text (optional)", "Teks penyata kewangan (pilihan)")) {
+                    Text(tr("粘贴公司名称、报告期间、发布日期、币种和单位，以及盈利、现金流、负债、每股数据和风险说明。缺少资料时不计算综合分。", "Paste company identity, reporting period, publication date, currency and units, earnings, cash flow, debt, per-share data and risk disclosures. Missing evidence means no overall score.", "Tampal identiti syarikat, tempoh laporan, tarikh terbit, mata wang dan unit, pendapatan, aliran tunai, hutang, data sesaham dan risiko. Bukti tidak lengkap bermakna tiada skor keseluruhan."))
+                    TextEditor(text: $notes).frame(minHeight: 180)
+                }
+                Section {
+                    Text(tr("确认后仅在本页准备资料；点击分析才会发送所选行情和财报文本到 Gemini。资料未独立核实，不会保存到云端报告缓存。仅导入你有权使用的资料，不含账户或个人信息。", "Confirm prepares the data on this screen. Analyze sends the selected prices and financial text to Gemini. Materials are not independently verified or stored in the cloud report cache. Import only data you may use, without account or personal details.", "Sahkan menyediakan data di halaman ini. Analisis menghantar harga dan teks kewangan terpilih ke Gemini. Bahan tidak disahkan secara bebas atau disimpan dalam cache laporan awan. Import data yang dibenarkan sahaja, tanpa butiran akaun atau peribadi."))
+                    if !error.isEmpty { Text(error).foregroundStyle(.red) }
+                    Button(tr("确认导入", "Confirm import", "Sahkan import")) {
+                        onConfirm(StockResearchImport(csv: csv, source: source, notes: notes)); dismiss()
+                    }.disabled(csv.isEmpty || source.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || source.count > 300 || notes.count > 30000)
+                }
+            }.navigationTitle(tr("导入研究资料", "Import research materials", "Import bahan penyelidikan"))
+                .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+                .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.commaSeparatedText, .plainText]) { result in
+                    do {
+                        let url = try result.get()
+                        let access = url.startAccessingSecurityScopedResource()
+                        defer { if access { url.stopAccessingSecurityScopedResource() } }
+                        let handle = try FileHandle(forReadingFrom: url)
+                        defer { try? handle.close() }
+                        let data = try handle.read(upToCount: 180001) ?? Data()
+                        guard data.count <= 180000, let text = String(data: data, encoding: .utf8) else { throw CloudFailure.invalidResponse }
+                        let cleaned = text.replacingOccurrences(of: "\u{FEFF}", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
+                        let lines = cleaned.components(separatedBy: .newlines).filter { !$0.isEmpty }
+                        guard (21...1001).contains(lines.count), lines.first == "symbol,currency,date,open,high,low,close,volume",
+                              lines.dropFirst().allSatisfy({ $0.components(separatedBy: ",").first?.trimmingCharacters(in: .whitespaces) == symbol }) else { throw CloudFailure.invalidResponse }
+                        csv = cleaned; error = ""
+                    } catch {
+                        csv = ""
+                        self.error = tr("文件不符合格式：请检查 UTF-8、表头、股票代码、20–1000 行及 180 KB 大小限制。", "Invalid file: check UTF-8, header, stock symbol, 20–1000 rows and 180 KB limit.", "Fail tidak sah: semak UTF-8, pengepala, kod saham, 20–1000 baris dan had 180 KB.")
+                    }
+                }
+        }
+    }
+}
+
 private struct StockResearchView: View {
     let symbols: [String]
     init(stock: ObservedStock) { symbols = [stock.symbol] }
@@ -426,6 +490,8 @@ private struct StockResearchView: View {
     @State private var running = false
     @State private var task: Task<Void, Never>?
     @State private var saveMessage = ""
+    @State private var imported: StockResearchImport?
+    @State private var showingImport = false
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
@@ -438,7 +504,7 @@ private struct StockResearchView: View {
                         defer { running = false }
                         do {
                             let scope = account.researchHistoryScope
-                            let data = try await account.researchStock(symbols: symbols)
+                            let data = try await account.researchStock(symbols: symbols, imported: imported)
                             try Task.checkCancellation()
                             let value = try JSONDecoder().decode(StockResearchReport.self, from: data)
                             guard (value.symbols ?? [value.symbol]) == symbols, value.html.utf8.count <= 300000,
@@ -448,11 +514,23 @@ private struct StockResearchView: View {
                         catch { if !Task.isCancelled { self.error = error.localizedDescription } }
                     }
                 } label: {
-                    Label(tr("自动获取并分析", "Fetch and analyze", "Dapatkan dan analisis"), systemImage: "sparkle.magnifyingglass")
+                    Label(imported == nil ? tr("自动获取并分析", "Fetch and analyze", "Dapatkan dan analisis") : tr("分析导入资料", "Analyze imported materials", "Analisis bahan diimport"), systemImage: "sparkle.magnifyingglass")
                 }.buttonStyle(.borderedProminent).disabled(running)
                 if running {
                     ProgressView()
                     Button(tr("取消", "Cancel", "Batal")) { task?.cancel() }
+                }
+            }
+            if symbols.count == 1 {
+                HStack {
+                    Button(tr("导入行情与财报文本", "Import prices and financial text", "Import harga dan teks kewangan")) { showingImport = true }
+                    if imported != nil {
+                        Button(tr("清除导入", "Clear import", "Kosongkan import")) { imported = nil; report = nil; error = ""; saveMessage = "" }
+                    }
+                }.disabled(running)
+                if imported != nil {
+                    Text(tr("本次仅分析用户导入资料，不自动获取网页；资料未独立核实。", "This analysis uses only user imports, without fetching websites. Materials are not independently verified.", "Analisis ini hanya menggunakan import pengguna tanpa mendapatkan laman web. Bahan tidak disahkan secara bebas."))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
             }
             if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
@@ -481,9 +559,14 @@ private struct StockResearchView: View {
                 Spacer()
             }
         }.padding().navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
+            .sheet(isPresented: $showingImport) {
+                StockImportForm(symbol: symbols[0]) { value in
+                    imported = value; report = nil; error = ""; saveMessage = ""
+                }
+            }
             .navigationBarTitleDisplayMode(.inline)
             .onDisappear { task?.cancel(); report = nil }
-            .onChange(of: account.researchHistoryScope) { _, _ in task?.cancel(); report = nil; error = ""; saveMessage = "" }
+            .onChange(of: account.researchHistoryScope) { _, _ in task?.cancel(); report = nil; imported = nil; showingImport = false; error = ""; saveMessage = "" }
             .onChange(of: phase) { _, value in
                 if value != .active { task?.cancel(); report = nil }
             }
