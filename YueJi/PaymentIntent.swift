@@ -81,16 +81,16 @@ extension Ledger {
 
 enum AutomationCategoryAI {
     static func refine(expenseID: String, store: LocalStore) async -> String? {
-        if YueJiAI.usesApple {
+        if YueJiAI.usesApple(for: .category) {
             guard !Task.isCancelled, UserDefaults.standard.bool(forKey: "aiAutomaticCategories"), store.isActive,
                   let ledger = try? store.read(), let entry = ledger.automaticCategoryCandidate(id: expenseID) else { return nil }
             let description = entry.entryDescription ?? ledger.tngNotices.first(where: { $0.expenseID == expenseID }).map { $0.title + " " + $0.body } ?? ""
             guard let data = try? await YueJiAI.classify(text: String(description.prefix(1000)), merchant: entry.merchant, categories: ledger.categoryNames),
                   let answer = try? JSONDecoder().decode(AssistantResult.self, from: data),
-                  !Task.isCancelled, store.isActive, YueJiAI.usesApple,
+                  !Task.isCancelled, store.isActive, YueJiAI.usesApple(for: .category),
                   UserDefaults.standard.bool(forKey: "aiAutomaticCategories") else { return nil }
             let saved = try? store.change { ledger in
-                guard store.isActive, YueJiAI.usesApple, UserDefaults.standard.bool(forKey: "aiAutomaticCategories") else { return false }
+                guard store.isActive, YueJiAI.usesApple(for: .category), UserDefaults.standard.bool(forKey: "aiAutomaticCategories") else { return false }
                 return ledger.applyAutomaticCategory(answer.category, expected: entry)
             }
             return saved == true ? answer.category : nil
@@ -109,11 +109,11 @@ enum AutomationCategoryAI {
         let api = SupabaseCloudService(configuration: configuration, session: credential.session)
         guard let data = try? await api.assistant(mode: "classify", text: text, categories: ledger.categoryNames, merchant: entry.merchant),
               let answer = try? JSONDecoder().decode(AssistantResult.self, from: data),
-              !Task.isCancelled, store.isActive, !YueJiAI.usesApple, UserDefaults.standard.bool(forKey: "aiAutomaticCategories"),
+              !Task.isCancelled, store.isActive, !YueJiAI.usesApple(for: .category), UserDefaults.standard.bool(forKey: "aiAutomaticCategories"),
               let current = try? CloudCredentials.read(), current.server == credential.server,
               current.session.user.id == credential.session.user.id else { return nil }
         let saved = try? store.change { ledger in
-            guard store.isActive, !YueJiAI.usesApple, UserDefaults.standard.bool(forKey: "aiAutomaticCategories") else { return false }
+            guard store.isActive, !YueJiAI.usesApple(for: .category), UserDefaults.standard.bool(forKey: "aiAutomaticCategories") else { return false }
             return ledger.applyAutomaticCategory(answer.category, expected: entry)
         }
         return saved == true ? answer.category : nil
@@ -124,7 +124,7 @@ enum BankNotificationAI {
     static func key(for store: LocalStore) -> String { "bankNotificationGemini.v1." + store.folder.path }
     static func enabled(for store: LocalStore) -> Bool { UserDefaults.standard.bool(forKey: key(for: store)) }
     static func checkConnection(store: LocalStore) async throws {
-        if YueJiAI.usesApple {
+        if YueJiAI.usesApple(for: .bank) {
             let body = "You made an online payment of RM1.00 to TEST SHOP."
             let data = try await YueJiAI.bank(body: body, title: "Money Paid", source: "Public Bank")
             let result = try JSONDecoder().decode(BankNotificationAnalysis.self, from: data)
@@ -140,11 +140,11 @@ enum BankNotificationAI {
         guard result.checked(body: "You made an online payment of RM1.00 to TEST SHOP.", title: "Money Paid", source: "Public Bank") != nil else { throw CloudFailure.invalidResponse }
     }
     static func analyse(_ delivery: AutomationDelivery, store: LocalStore) async -> BankNotificationAnalysis? {
-        if YueJiAI.usesApple {
+        if YueJiAI.usesApple(for: .bank) {
             guard enabled(for: store), store.isActive, delivery.kind == "notification",
                   shouldReviewFinancialNotification(delivery.body, title: delivery.title),
                   let data = try? await YueJiAI.bank(body: delivery.body, title: delivery.title, source: delivery.source),
-                  !Task.isCancelled, store.isActive, enabled(for: store), YueJiAI.usesApple else { return nil }
+                  !Task.isCancelled, store.isActive, enabled(for: store), YueJiAI.usesApple(for: .bank) else { return nil }
             let result = try? JSONDecoder().decode(BankNotificationAnalysis.self, from: data)
             guard result?.checked(body: delivery.body, title: delivery.title, source: delivery.source) != nil else { return nil }
             return result
@@ -158,7 +158,7 @@ enum BankNotificationAI {
         // No ledger lock is held while awaiting the network. An expired session
         // falls back locally; normal account synchronization refreshes credentials.
         guard let data = try? await api.analyseBankNotification(body: delivery.body, title: delivery.title, source: delivery.source),
-              !Task.isCancelled, store.isActive, enabled(for: store), !YueJiAI.usesApple,
+              !Task.isCancelled, store.isActive, enabled(for: store), !YueJiAI.usesApple(for: .bank),
               let current = try? CloudCredentials.read(), current.session.user.id == credential.session.user.id,
               current.server == credential.server else { return nil }
         return try? JSONDecoder().decode(BankNotificationAnalysis.self, from: data)
@@ -173,7 +173,16 @@ import FoundationModels
 enum YueJiAI {
     static let providerKey = "yuejiAIProvider.v1"
     static func usesApple(_ stored: String?) -> Bool { stored != "gemini" }
-    static var usesApple: Bool { usesApple(UserDefaults.standard.string(forKey: providerKey)) }
+    enum Feature: String, CaseIterable {
+        case category, bank, receipt
+        var key: String { "yuejiAIProvider." + rawValue + ".v1" }
+    }
+    // Preserve the previous explicit choice until each feature is customized.
+    static func provider(for feature: Feature, defaults: UserDefaults = .standard) -> String {
+        let stored = defaults.string(forKey: feature.key) ?? defaults.string(forKey: providerKey)
+        return usesApple(stored) ? "apple" : "gemini"
+    }
+    static func usesApple(for feature: Feature) -> Bool { provider(for: feature) == "apple" }
     static var unavailable: Error {
         reviewError("Apple 本机 AI 不可用。请检查 Apple Intelligence 是否开启、模型是否下载完成及系统语言；可继续手动处理，不会上传到云端。", "Apple on-device AI is unavailable. Check Apple Intelligence, model download and language. Continue manually; nothing is uploaded.", "AI Apple setempat tidak tersedia. Semak Apple Intelligence, muat turun model dan bahasa. Teruskan secara manual; tiada muat naik.")
     }

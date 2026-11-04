@@ -72,6 +72,26 @@ final class AppleOnDeviceAITests: XCTestCase {
         XCTAssertTrue(YueJiAI.usesApple("true"), "Old boolean cloud flags cannot authorize cloud routing")
         XCTAssertFalse(YueJiAI.usesApple("gemini"))
     }
+    func testMixedProvidersPreserveLegacyChoiceAndStayIndependent() throws {
+        let suite = "ai-provider-test-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        for feature in YueJiAI.Feature.allCases {
+            XCTAssertEqual(YueJiAI.provider(for: feature, defaults: defaults), "apple")
+        }
+        defaults.set("gemini", forKey: YueJiAI.providerKey)
+        for feature in YueJiAI.Feature.allCases {
+            XCTAssertEqual(YueJiAI.provider(for: feature, defaults: defaults), "gemini")
+        }
+        defaults.set("apple", forKey: YueJiAI.Feature.bank.key)
+        defaults.set("apple", forKey: YueJiAI.Feature.category.key)
+        XCTAssertEqual(YueJiAI.provider(for: .receipt, defaults: defaults), "gemini")
+        XCTAssertEqual(YueJiAI.provider(for: .bank, defaults: defaults), "apple")
+        XCTAssertEqual(YueJiAI.provider(for: .category, defaults: defaults), "apple")
+        defaults.set("unknown", forKey: YueJiAI.Feature.receipt.key)
+        XCTAssertEqual(YueJiAI.provider(for: .receipt, defaults: defaults), "apple")
+        XCTAssertEqual(defaults.string(forKey: YueJiAI.providerKey), "gemini")
+    }
     func testCategoryOutputCannotInventCategories() throws {
         let data = try YueJiAI.validatedCategory("餐饮", categories: ["餐饮", "交通"])
         XCTAssertEqual(try JSONDecoder().decode(AssistantResult.self, from: data).category, "餐饮")

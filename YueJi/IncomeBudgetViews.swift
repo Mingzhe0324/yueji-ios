@@ -1534,7 +1534,7 @@ private struct StatementImportView: View {
     @State private var busy = false
     @State private var confirmed = false
     @State private var useAI = false
-    @AppStorage(YueJiAI.providerKey) private var aiProvider = "apple"
+    @AppStorage(YueJiAI.Feature.category.key) private var aiProvider = YueJiAI.provider(for: .category)
     @State private var message = ""
     @State private var error: String?
     @State private var undoBatch: String?

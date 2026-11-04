@@ -78,12 +78,12 @@ import ImageIO
         return value
     }
     func assistant(mode: String, text: String, categories: [String], merchant: String = "") async throws -> Data {
-        if YueJiAI.usesApple {
+        if YueJiAI.usesApple(for: .category) {
             let store = LocalStore.shared
             guard mode == "classify", !changingAccount, store.isActive else { throw CloudFailure.invalidResponse }
             let data = try await YueJiAI.classify(text: text, merchant: merchant, categories: categories)
             try Task.checkCancellation()
-            guard YueJiAI.usesApple, !changingAccount, store.isActive else { throw CancellationError() }
+            guard YueJiAI.usesApple(for: .category), !changingAccount, store.isActive else { throw CancellationError() }
             return data
         }
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
@@ -92,35 +92,35 @@ import ImageIO
         do { data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant) }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
-            guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple else { throw CloudFailure.session }
+            guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple(for: .category) else { throw CloudFailure.session }
             try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
             session = refreshed
             data = try await api.assistant(mode: mode, text: text, categories: categories, merchant: merchant)
         }
         try Task.checkCancellation()
-        guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple else { throw CloudFailure.session }
+        guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple(for: .category) else { throw CloudFailure.session }
         return data
     }
     func recognizeReceipt(image: Data, transaction: Bool = false) async throws -> Data {
         // Transaction mode is explicitly requested by the Gemini screenshot button.
-        guard transaction || !YueJiAI.usesApple else { throw CancellationError() }
+        guard transaction || !YueJiAI.usesApple(for: .receipt) else { throw CancellationError() }
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
         do {
             let data = try await api.recognizeReceipt(image: image, transaction: transaction)
             try Task.checkCancellation()
-            guard transaction || !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            guard transaction || !YueJiAI.usesApple(for: .receipt), session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
             return data
         }
         catch CloudFailure.session {
             let refreshed = try await api.refresh()
-            guard transaction || !YueJiAI.usesApple else { throw CancellationError() }
+            guard transaction || !YueJiAI.usesApple(for: .receipt) else { throw CancellationError() }
             guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CloudFailure.session }
             try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
             session = refreshed
             let data = try await api.recognizeReceipt(image: image, transaction: transaction)
             try Task.checkCancellation()
-            guard transaction || !YueJiAI.usesApple, session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            guard transaction || !YueJiAI.usesApple(for: .receipt), session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
             return data
         }
     }

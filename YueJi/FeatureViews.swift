@@ -2411,7 +2411,7 @@ struct TNGSetupView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("银行通知 AI", "Bank notification AI", "AI notifikasi bank")) {
-                AIProviderPicker()
+                AIProviderPicker(feature: .bank)
                 Toggle(tr("AI 自动分析与账户记账", "AI analysis and account recording", "Analisis AI dan rekod akaun"), isOn: $bankAI)
                     .accessibilityIdentifier("bank.gemini.enabled")
                 Text(tr("通知由所选 AI 分析，原文金额、交易状态、账户及重复检查通过后才自动处理；无法确认的留待核对。AI 不会操作银行实际转账。", "The selected AI analyzes notifications. Original amounts, status, accounts and duplicates must pass local checks; uncertain entries await review. AI cannot move money at your bank.", "AI pilihan menganalisis notifikasi. Amaun asal, status, akaun dan pendua mesti lulus semakan setempat; rekod tidak pasti menunggu semakan. AI tidak memindahkan wang bank.")).font(.caption).foregroundStyle(.secondary)
@@ -3030,6 +3030,7 @@ struct TransactionScreenshotBatchView: View {
     @State private var loadedPhotos: [PhotosPickerItem] = []
     @State private var rows: [ScreenshotQueueItem] = []
     @State private var processing = false
+    @State private var activeScreenshot: UUID?
     @Namespace private var cards
     var body: some View {
         List {
@@ -3045,6 +3046,15 @@ struct TransactionScreenshotBatchView: View {
                         Text(tr("已保存", "Saved", "Disimpan") + " \(rows.filter(\.saved).count)")
                     }.font(.subheadline.weight(.semibold))
                     ProgressView(value: Double(rows.filter { !$0.loading }.count), total: Double(rows.count))
+                    if let activeScreenshot, let index = rows.firstIndex(where: { $0.id == activeScreenshot }) {
+                        Text(tr("正在处理", "Processing", "Memproses") + " \(index + 1)/\(rows.count)")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    let failures = rows.filter(\.failed).count
+                    if failures > 0 {
+                        Label(tr("需重试", "Retry needed", "Perlu cuba lagi") + " \(failures)", systemImage: "exclamationmark.circle")
+                            .font(.caption).foregroundStyle(.orange)
+                    }
                 }
             }
             ForEach(rows) { row in
@@ -3061,7 +3071,13 @@ struct TransactionScreenshotBatchView: View {
                         }
                         VStack(alignment: .leading, spacing: 6) {
                             Text(row.merchant.isEmpty ? tr("交易截图", "Transaction screenshot", "Tangkapan skrin transaksi") : row.merchant).font(.headline).lineLimit(2)
-                            if row.loading { ProgressView() }
+                            if row.loading {
+                                if row.id == activeScreenshot {
+                                    ProgressView(tr("本机识别中", "Reading on device", "Membaca setempat"))
+                                } else {
+                                    Label(tr("等待处理", "Queued", "Dalam giliran"), systemImage: "clock").font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
                             else {
                                 Label(row.saved ? tr("已保存", "Saved", "Disimpan") : (row.failed ? tr("识别失败，点击重试", "Reading failed; tap to retry", "Gagal membaca; ketik untuk cuba lagi") : tr("待核对", "Review needed", "Perlu semakan")), systemImage: row.saved ? "checkmark.circle.fill" : "doc.text.magnifyingglass")
                                     .font(.caption).foregroundStyle(row.saved ? IncomeStyle.tint : .secondary)
@@ -3079,8 +3095,9 @@ struct TransactionScreenshotBatchView: View {
                 guard photos != loadedPhotos else { return }
                 rows = photos.map { ScreenshotQueueItem(photo: $0) }
                 processing = true
-                defer { processing = false }
+                defer { processing = false; activeScreenshot = nil }
                 for index in rows.indices {
+                    activeScreenshot = rows[index].id
                     do {
                         guard let data = try await rows[index].photo.loadTransferable(type: Data.self), data.count <= 25_000_000,
                               let image = UIImage(data: data) else { throw CloudFailure.invalidResponse }
@@ -3179,13 +3196,26 @@ struct TransactionScreenshotView: View {
                         .foregroundStyle(.orange)
                 } else {
                     Section(tr("核对付款", "Review payment", "Semak bayaran")) {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(tr("保存前请核对", "Review before saving", "Semak sebelum simpan"), systemImage: "checklist")
+                                .font(.subheadline.weight(.semibold))
+                            if !dateConfirmed {
+                                Label(tr("日期待确认", "Confirm the date", "Sahkan tarikh"), systemImage: "calendar")
+                            }
+                            if accountID == nil {
+                                Label(tr("付款账户待选择", "Choose the payment account", "Pilih akaun bayaran"), systemImage: "creditcard")
+                            }
+                            if !completedPayment {
+                                Label(tr("付款状态待确认", "Confirm payment status", "Sahkan status bayaran"), systemImage: "doc.text.magnifyingglass")
+                            }
+                        }.font(.caption).foregroundStyle(.secondary)
                         TextField(tr("商户", "Merchant", "Peniaga"), text: $merchant)
                         if merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                            Label(tr("商户待填写", "Merchant needed", "Peniaga diperlukan"), systemImage: "pencil.circle").font(.caption).foregroundStyle(.secondary)
+                            Label(tr("商户待填写", "Merchant needed", "Peniaga diperlukan"), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
                         }
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
-                        if amount.isEmpty {
-                            Label(tr("金额待填写", "Amount needed", "Amaun diperlukan"), systemImage: "pencil.circle").font(.caption).foregroundStyle(.secondary)
+                        if (try? toCents(amount)).map({ $0 > 0 }) != true {
+                            Label(tr("请核对并填写有效金额", "Enter a valid amount from the image", "Isi amaun sah daripada imej"), systemImage: "exclamationmark.circle").font(.caption).foregroundStyle(.orange)
                         }
                         Text(tr("金额留空表示未找到唯一的马币金额，请按原图填写。", "An empty amount means no unique MYR amount was found. Enter it from the image.", "Amaun kosong bermakna tiada amaun MYR unik ditemui. Isi berdasarkan imej.")) .font(.caption)
                         DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, in: ...Date(), displayedComponents: .date)
@@ -3351,7 +3381,7 @@ struct ReceiptScanView: View {
     @State private var hasReceipt = false
     @State private var receiptImage: UIImage?
     @State private var comparingItem: ScannedReceipt.Item?
-    @AppStorage(YueJiAI.providerKey) private var aiProvider = "apple"
+    @AppStorage(YueJiAI.Feature.receipt.key) private var aiProvider = YueJiAI.provider(for: .receipt)
     @AppStorage("receiptUseAppleAI.v1") private var receiptAI = true
     private var useGemini: Bool { aiProvider == "gemini" && receiptAI }
     @State private var category = "其他"
@@ -3417,7 +3447,7 @@ struct ReceiptScanView: View {
     }
     private var captureSection: some View {
         Section {
-            AIProviderPicker().disabled(busy)
+            AIProviderPicker(feature: .receipt).disabled(busy)
             Toggle(tr("使用 AI 整理收据", "Organize receipt with AI", "Susun resit dengan AI"), isOn: $receiptAI).disabled(busy)
             if useGemini {
                 Text(tr("扫描时会将收据照片发送至 Google Gemini。需要登录及联网；识别后仍需核对。关闭可使用本机识别。", "Scanning sends the receipt photo to Google Gemini. Sign-in and internet are required; review before saving. Turn off for on-device recognition.", "Imbasan menghantar foto resit ke Google Gemini. Log masuk dan internet diperlukan; semak sebelum menyimpan. Matikan untuk pengecaman setempat.")).font(.caption).foregroundStyle(.secondary)
@@ -4668,7 +4698,7 @@ struct AIClassificationRow: View {
     var manuallySelected: Bool = false
     var classifyInitial = false
     @AppStorage("aiAutomaticCategories") private var enabled = false
-    @AppStorage(YueJiAI.providerKey) private var aiProvider = "apple"
+    @AppStorage(YueJiAI.Feature.category.key) private var aiProvider = YueJiAI.provider(for: .category)
     @State private var baseline: String?
     @State private var status = ""
     @State private var loading = false
@@ -4724,7 +4754,10 @@ struct AIClassificationRow: View {
 }
 
 struct AIProviderPicker: View {
-    @AppStorage(YueJiAI.providerKey) private var provider = "apple"
+    @AppStorage private var provider: String
+    init(feature: YueJiAI.Feature = .category) {
+        _provider = AppStorage(wrappedValue: YueJiAI.provider(for: feature), feature.key)
+    }
     @Environment(\.scenePhase) private var phase
     @State private var availability = ""
     var body: some View {
@@ -4735,9 +4768,17 @@ struct AIProviderPicker: View {
             .task { availability = YueJiAI.availabilityText }
             .onChange(of: phase) { _, value in if value == .active { availability = YueJiAI.availabilityText } }
             .onChange(of: provider) { _, _ in availability = YueJiAI.availabilityText }
+        Label(YueJiAI.usesApple(provider)
+              ? tr("本机处理", "On device", "Setempat")
+              : tr("云端处理", "Cloud", "Awan"),
+              systemImage: YueJiAI.usesApple(provider) ? "iphone" : "cloud")
+            .font(.caption.weight(.semibold))
+            .padding(.horizontal, 10).padding(.vertical, 5)
+            .background(.quaternary, in: Capsule())
+            .accessibilityIdentifier("ai.processing.location")
         Text(YueJiAI.usesApple(provider)
-             ? tr("分类、银行通知与收据在本机处理，不自动上传至 Gemini。模型不可用时使用本机规则或手动核对；原有账本同步设置不变。", "Categories, bank notifications and receipts are processed on device, never automatically sent to Gemini. Unavailable models use local rules or manual review. Existing ledger sync settings still apply.", "Kategori, notifikasi bank dan resit diproses setempat, tanpa muat naik automatik ke Gemini. Jika model tidak tersedia, guna peraturan setempat atau semakan manual. Tetapan penyegerakan lejar kekal.")
-             : tr("你已选择 Gemini：商户、描述、通知内容或收据照片会发送至 Google Gemini，需要登录和联网，受服务额度及费用限制。分类、银行通知与收据共用此选择。", "Gemini selected: merchant, descriptions, notification content or receipt photos are sent to Google Gemini. Sign-in and internet required; service quotas and charges apply. Categories, bank notifications and receipts share this choice.", "Gemini dipilih: peniaga, penerangan, notifikasi atau foto resit dihantar ke Google Gemini. Perlu log masuk dan internet; kuota dan caj terpakai. Kategori, notifikasi bank dan resit berkongsi pilihan ini."))
+             ? tr("仅此功能使用 Apple 本机处理，不会自动转用 Gemini；其他功能的 AI 选择不变。", "Only this feature uses Apple on-device processing. No automatic Gemini fallback; other AI choices stay unchanged.", "Hanya fungsi ini menggunakan Apple setempat. Tiada sandaran Gemini automatik; pilihan AI lain kekal.")
+             : tr("仅此功能的输入会发送至 Google Gemini，需要登录和联网，受额度及费用限制；其他功能的 AI 选择不变。", "Only this feature sends its input to Google Gemini. Sign-in and internet required; quotas and charges apply. Other AI choices stay unchanged.", "Hanya fungsi ini menghantar input ke Google Gemini. Perlu log masuk dan internet; kuota dan caj terpakai. Pilihan AI lain kekal."))
             .font(.caption).foregroundStyle(.secondary)
         if YueJiAI.usesApple(provider) {
             Text(availability).font(.caption).foregroundStyle(.secondary).accessibilityIdentifier("ai.availability")
