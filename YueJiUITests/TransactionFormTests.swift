@@ -58,14 +58,19 @@ final class TransactionFormTests: XCTestCase {
         app.launch()
         XCTAssertTrue(app.tabBars.buttons["Accounts"].waitForExistence(timeout: 20))
         app.tabBars.buttons["Accounts"].tap()
-        let addAccount = app.buttons["bankAccount.add"]
-        let accountsReady = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-            app.tabBars.buttons["Accounts"].isSelected &&
-                app.navigationBars["Accounts"].exists &&
-                addAccount.exists && addAccount.isEnabled && addAccount.isHittable
-        }, object: app)
-        XCTAssertEqual(XCTWaiter.wait(for: [accountsReady], timeout: 10), .completed,
-                       "Accounts page did not become interactive; \(app.debugDescription)")
+        let accountsNavigation = app.navigationBars["Accounts"]
+        XCTAssertTrue(accountsNavigation.waitForExistence(timeout: 10))
+        XCTAssertTrue(app.tabBars.buttons["Accounts"].isSelected)
+        // iOS 26 exposes both a toolbar wrapper and its Button with this identifier.
+        // Scope to the navigation bar and resolve the first Button. Do not poll
+        // several application-wide queries in one predicate: on a busy runner
+        // one evaluation can exhaust the entire timeout before checking hitability.
+        let addAccount = accountsNavigation.buttons.matching(identifier: "bankAccount.add").firstMatch
+        XCTAssertTrue(addAccount.waitForExistence(timeout: 10))
+        let addReady = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "enabled == true AND hittable == true"), object: addAccount)
+        XCTAssertEqual(XCTWaiter.wait(for: [addReady], timeout: 10), .completed,
+                       "Add account button did not become interactive; \(app.debugDescription)")
         // One tap only: do not hide a failed first presentation with a retry.
         addAccount.tap()
         let accountEditor = app.navigationBars["Bank / wallet account"]
