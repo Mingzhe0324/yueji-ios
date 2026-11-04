@@ -7,6 +7,23 @@ struct ObservedStock: Identifiable, Hashable {
     let name: String
     var id: String { symbol }
     var market: String { String(symbol.split(separator: ":").first ?? "") }
+    // Mirrors the default official importer; availability still depends on deployment and source health.
+    var hasOfficialImporter: Bool { ["MYX:MAYBANK", "MYX:99SMART", "MYX:GAMUDA", "MYX:HLBANK"].contains(symbol) }
+    var officialSourceURL: URL? {
+        let sources = [
+            "MYX:MAYBANK": "https://maybank.listedcompany.com/newsroom.html/cat/7648",
+            "MYX:99SMART": "https://99speedmart.com.my/financial-information/",
+            "MYX:GAMUDA": "https://gamuda.listedcompany.com/financial_information.html",
+            "MYX:HLBANK": "https://www.hlb.com.my/en/personal-banking/news-updates/hlb-announces-fy2026-results.html",
+            "MYX:PBBANK": "https://www.publicbankgroup.com/investor-relations/five-year-financial-highlights/group-financial-highlights/",
+            "MYX:CIMB": "https://www.cimb.com/en/investor-relations/financial-information/cimb-group.html",
+            "MYX:TENAGA": "https://www.tnb.com.my/suppliers-investors-media-relations/financial-info/",
+            "MYX:IHH": "https://www.ihhhealthcare.com/investors/financial-information/quarterly-results",
+            "MYX:MRDIY": "https://corporate.mrdiy.com/highlights.html",
+            "MYX:INARI": "https://www.inari-amertron.com/financial-results/"
+        ]
+        return sources[symbol].flatMap { URL(string: $0) }
+    }
 
     static func normalized(_ value: String) -> String? {
         let value = value.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
@@ -228,6 +245,15 @@ private struct StockChartView: View {
             VStack(alignment: .leading, spacing: 18) {
                 Text(stock.name).font(.title2.bold())
                 Text(stock.symbol).font(.subheadline.monospaced()).foregroundStyle(.secondary)
+                if let source = stock.officialSourceURL {
+                    Link(destination: source) {
+                        Label(tr("公司官方财务资料 ↗", "Official financial sources ↗", "Sumber kewangan rasmi ↗"), systemImage: "doc.text.magnifyingglass")
+                    }
+                }
+                Text(stock.hasOfficialImporter
+                     ? tr("已提供自动读取适配；需恢复云端部署后使用。资料范围为官方网页摘要，仍可能加载失败。", "Automatic importer available; requires cloud deployment. Covers official page summaries and may fail to load.", "Pengimport automatik tersedia; memerlukan penggunaan awan. Meliputi ringkasan halaman rasmi dan mungkin gagal dimuatkan.")
+                     : tr("这只股票尚未接入自动财务分析；图表可用不代表 AI 已有资料。", "Automatic financial analysis is not connected for this stock. A chart does not mean AI has its data.", "Analisis kewangan automatik belum disambungkan untuk saham ini. Carta tidak bermakna AI mempunyai datanya."))
+                    .font(.caption).foregroundStyle(.secondary)
                 if phase == .active {
                     TradingStockChart(symbol: stock.symbol, dark: scheme == .dark, failed: $failed)
                         .id(stock.symbol + (scheme == .dark ? "dark" : "light") + reload.uuidString)
@@ -295,7 +321,7 @@ private struct StockResearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
-            Text(tr("点击后自动获取公司资料，再由 Gemini 分析，不需要上传文件。官方财务资料模式首批支持 Maybank、99 Speed Mart；其他股票的数据接入尚未完成。仅供配置的个人账号使用，不上传账本。", "Automatically retrieves company evidence for Gemini analysis when tapped; no file upload. Official financial sources initially support Maybank and 99 Speed Mart; other stocks are not connected yet. Personal account only; no ledger upload.", "Mendapatkan maklumat syarikat secara automatik untuk analisis Gemini apabila diketuk; tiada muat naik fail. Sumber rasmi awal menyokong Maybank dan 99 Speed Mart; saham lain belum disambungkan. Akaun peribadi sahaja; lejar tidak dihantar."))
+            Text(tr("点击后自动获取官方网页，再由 Gemini 分析，不需要上传文件。当前适配 Maybank、99 Speed Mart、Gamuda 和 Hong Leong Bank，需部署新版后生效；丰隆银行为固定 FY2026 年度公告。其他股票逐步接入。仅供配置的个人账号使用，不上传账本。", "Fetches official pages for Gemini analysis; no upload. Importers cover Maybank, 99 Speed Mart, Gamuda and Hong Leong Bank after deploying this version. HLB uses a fixed FY2026 annual announcement. Other stocks are being added. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi untuk analisis Gemini; tiada muat naik. Pengimport meliputi Maybank, 99 Speed Mart, Gamuda dan Hong Leong Bank selepas versi ini digunakan. HLB menggunakan pengumuman tahunan FY2026 tetap. Saham lain ditambah berperingkat. Akaun peribadi sahaja; lejar tidak dihantar."))
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button {

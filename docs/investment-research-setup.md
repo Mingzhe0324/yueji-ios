@@ -1,5 +1,7 @@
 # AI 公司研究：个人试用
 
+恢复已删除服务请先阅读 [恢复步骤与最新覆盖范围](investment-research-restore.md)。新增 Gamuda 和 Hong Leong Bank 自动读取，下方最初的两家公司说明仅为初版记录。
+
 ## 2026-11-04：默认改为自动获取官方财务网页
 
 以下新模式取代下面旧 Google Search 模式作为默认部署路径：

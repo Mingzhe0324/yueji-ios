@@ -1,7 +1,9 @@
 // Explicit company mappings: never fetch a URL supplied by the client or model.
 export const officialSources = {
-  'MYX:MAYBANK': { name: 'Malayan Banking Berhad', url: 'https://maybank.listedcompany.com/newsroom.html/cat/7648', listing: true },
-  'MYX:99SMART': { name: '99 Speed Mart Retail Holdings Berhad', url: 'https://99speedmart.com.my/financial-information/' },
+  'MYX:MAYBANK': { name: 'Malayan Banking Berhad', url: 'https://maybank.listedcompany.com/newsroom.html/cat/7648', listing: true, identity: /MAYBANK|MALAYAN BANKING/i },
+  'MYX:99SMART': { name: '99 Speed Mart Retail Holdings Berhad', url: 'https://99speedmart.com.my/financial-information/', identity: /99\s*Speed\s*Mart/i },
+  'MYX:GAMUDA': { name: 'Gamuda Berhad', url: 'https://gamuda.listedcompany.com/financial_information.html', identity: /Gamuda Berhad/i, sections: true },
+  'MYX:HLBANK': { name: 'Hong Leong Bank Berhad', url: 'https://www.hlb.com.my/en/personal-banking/news-updates/hlb-announces-fy2026-results.html', identity: /Hong Leong Bank/i, annual: true, note: '固定 FY2026 年度业绩公告，不代表最新季度资料；须核对正文报告期间。' },
 };
 const escape = s => s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 export function pageText(html) {
@@ -47,12 +49,20 @@ export async function collectOfficialEvidence(symbols, fetcher) {
     const urls = source.listing ? reportLinks(index, source.url) : [source.url];
     if (!urls.length) throw new Error('source_unavailable');
     for (const url of urls) {
-      const text = pageText(source.listing ? await htmlPage(url, fetcher) : index);
+      let text = pageText(source.listing ? await htmlPage(url, fetcher) : index);
+      if (source.sections) {
+        // Keep complete publisher-ordered sections, never cut a table mid-row.
+        const headings = [...text.matchAll(/\b[1-4](?:st|nd|rd|th) Quarter Results For The Financial Period Ended\b/gi)];
+        if (headings.length < 2) throw new Error('source_unavailable');
+        text = text.slice(headings[0].index, headings[2]?.index ?? text.length).trim();
+      }
       // Fail closed on changed templates / challenge pages; never send blank evidence.
       if (text.length < 500 || text.length > 30000 || !/\b20\d{2}\b/.test(text) ||
-          !/Revenue/i.test(text) || !/profit/i.test(text) || !/quarter/i.test(text) ||
-          !(symbol === 'MYX:MAYBANK' ? /MAYBANK|MALAYAN BANKING/i : /99\s*Speed\s*Mart/i).test(text)) throw new Error('source_unavailable');
-      evidence.push({ id: `S${evidence.length + 1}`, symbol, company: source.name, url, fetchedAt: new Date().toISOString(), text });
+          !(source.annual ? /loans|financing/i : /Revenue/i).test(text) || !/profit/i.test(text) ||
+          !(source.annual ? /financial year ended/i : /quarter/i).test(text) ||
+          !source.identity.test(text)) throw new Error('source_unavailable');
+      evidence.push({ id: `S${evidence.length + 1}`, symbol, company: source.name, url, fetchedAt: new Date().toISOString(),
+        scope: source.note ?? (source.sections ? '网页排列的前两个完整季度摘要，不是完整财报或最新公告保证。' : '官方财务网页摘要，不是完整财报或最新公告保证。'), text });
     }
   }
   return evidence;
@@ -100,7 +110,7 @@ export function evidenceReport(candidate, symbols, evidence) {
   const sections = reports.map(c => `${c.symbol}\n${c.summary}\n报告期间：${c.period}\n综合分：${c.overall === null ? '资料不足，暂不评分' : `${c.overall}/100`}\n已支持维度：${c.coverage}/5\n结论：${({consider:'可进一步考虑',watch:'观察，等待条件确认',avoid:'暂不考虑',insufficient:'资料不足，暂不能判断是否值得买入'})[c.action]}\n` +
     c.dimensions.map((d, i) => `${labels[i]}：${d.score === null ? '资料不足' : `${d.score}/20`}\n${d.reason}\n${d.evidence.map(e => `[${e.sourceId}] ${e.quote}`).join('\n')}`).join('\n') +
     `\n下一步及判断失效条件：${c.conditions}\n缺失资料：${c.missing}`);
-  const sourceText = evidence.map(s => `[${s.id}] ${s.company}\n${s.url}\n获取时间：${s.fetchedAt}`).join('\n');
+  const sourceText = evidence.map(s => `[${s.id}] ${s.company}\n${s.url}\n获取时间：${s.fetchedAt}\n资料范围：${s.scope ?? '官方财务网页摘要'}`).join('\n');
   const text = `基于自动获取的官方财务网页；未读取完整 PDF，未接入实时股价或全面新闻。\n评分是主观研究评价，不是上涨概率；资料不足不计算综合分。\n\n${sections.join('\n\n')}\n\n来源\n${sourceText}`;
   const html = `<pre>${escape(text)}</pre><h2>官方资料</h2><ul>${evidence.map(s => `<li><a href="${escape(s.url)}">[${s.id}] ${escape(s.company)}</a></li>`).join('')}</ul>`;
   return { text, html, assessments: reports, sources: evidence.map(({ text, ...metadata }) => metadata) };

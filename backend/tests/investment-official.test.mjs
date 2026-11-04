@@ -32,6 +32,23 @@ test('overall stays absent without valuation and risk data; model cannot force a
   assert.match(report.text,/不是上涨概率/); assert.match(report.text,/https:\/\/99speedmart/);
   assert.ok(!Object.hasOwn(report.sources[0],'text'));
 });
+
+test('new importers keep company identity, complete quarterly sections and annual scope', async () => {
+  const section = (n) => `<h2>${n} Quarter Results For The Financial Period Ended 31 July 2026</h2><p>Gamuda Berhad Revenue RM 100 profit RM 10 ${'Financial results. '.repeat(40)}</p>`;
+  const gamuda = `<h1>Navigation</h1>${section('4th')}${section('3rd')}${section('2nd')}<p>${'old archive '.repeat(4000)}</p>`;
+  const fetchHTML = body => async () => new Response(body, {headers:{'Content-Type':'text/html'}});
+  const g = await collectOfficialEvidence(['MYX:GAMUDA'], fetchHTML(gamuda));
+  assert.match(g[0].text, /4th Quarter/);
+  assert.match(g[0].text, /3rd Quarter/);
+  assert.ok(!g[0].text.includes('2nd Quarter'));
+  assert.ok(!g[0].text.includes('old archive'));
+  assert.match(g[0].scope, /前两个/);
+  const annual = `<h1>Hong Leong Bank</h1><p>Financial year ended 30 June 2026. Loans and financing profit. ${'Annual results. '.repeat(45)}</p>`;
+  const h = await collectOfficialEvidence(['MYX:HLBANK'], fetchHTML(annual));
+  assert.match(h[0].scope, /固定 FY2026/);
+  await assert.rejects(collectOfficialEvidence(['MYX:HLBANK'], fetchHTML(annual.replace('Hong Leong Bank', 'Apple'))), /source_unavailable/);
+  await assert.rejects(collectOfficialEvidence(['MYX:GAMUDA'], fetchHTML(section('4th'))), /source_unavailable/);
+});
 test('rejects invented, cross-company and missing citations, duplicate dimensions and unfinished model output', () => {
   for (const change of [c=>c.dimensions[0].evidence[0].quote='fabricated evidence',c=>c.dimensions[0].evidence=[],c=>c.dimensions[0].evidence[0].sourceId='S9',c=>c.dimensions[0].score=21,c=>c.dimensions[0].key='risk',c=>c.symbol='MYX:MAYBANK']) {
     const c=company();change(c);assert.equal(evidenceReport(candidate(c),[symbol],[source]),null);
