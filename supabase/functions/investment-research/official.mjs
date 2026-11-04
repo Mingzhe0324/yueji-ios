@@ -111,7 +111,12 @@ export function evidenceReport(candidate, symbols, evidence) {
     c.dimensions.map((d, i) => `${labels[i]}：${d.score === null ? '资料不足' : `${d.score}/20`}\n${d.reason}\n${d.evidence.map(e => `[${e.sourceId}] ${e.quote}`).join('\n')}`).join('\n') +
     `\n下一步及判断失效条件：${c.conditions}\n缺失资料：${c.missing}`);
   const sourceText = evidence.map(s => `[${s.id}] ${s.company}\n${s.url}\n获取时间：${s.fetchedAt}\n资料范围：${s.scope ?? '官方财务网页摘要'}`).join('\n');
-  const text = `基于自动获取的官方财务网页；未读取完整 PDF，未接入实时股价或全面新闻。\n评分是主观研究评价，不是上涨概率；资料不足不计算综合分。\n\n${sections.join('\n\n')}\n\n来源\n${sourceText}`;
+  const horizons = [
+    {period:'short',status:'insufficient',reason:'短线（几天至几周）：缺少经核实的历史价格、成交量及行情时间，不能判断入场或退出信号。'},
+    {period:'medium',status:'insufficient',reason:'中线（几周至几个月）：现有网页仅能辅助了解业绩，仍缺估值、历史趋势和完整公告，不能确认当前买卖条件。'},
+    {period:'long',status:'insufficient',reason:'长线（一年以上）：仍需多年财报、现金流、负债及估值核验；下方财务摘要不能单独构成买入建议。'}
+  ];
+  const text = `基于自动获取的官方财务网页；未读取完整 PDF，未接入实时股价或全面新闻。\n评分是主观研究评价，不是上涨概率；资料不足不计算综合分。\n\n各周期资料状态\n${horizons.map(h=>h.reason).join('\n')}\n\n${sections.join('\n\n')}\n\n来源\n${sourceText}`;
   const html = `<pre>${escape(text)}</pre><h2>官方资料</h2><ul>${evidence.map(s => `<li><a href="${escape(s.url)}">[${s.id}] ${escape(s.company)}</a></li>`).join('')}</ul>`;
-  return { text, html, assessments: reports, sources: evidence.map(({ text, ...metadata }) => metadata) };
+  return { text, html, horizons, assessments: reports, sources: evidence.map(({ text, ...metadata }) => metadata) };
 }

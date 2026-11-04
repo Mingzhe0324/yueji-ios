@@ -374,6 +374,7 @@ private struct StockResearchReport: Decodable {
     let generatedAt: String
     let html: String
     let text: String?
+    let cached: Bool?
 }
 
 private struct StockResearchView: View {
@@ -418,6 +419,10 @@ private struct StockResearchView: View {
             }
             if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
             if let report {
+                if report.cached == true {
+                    Text(tr("复用 24 小时内的报告；已重新核对来源内容。", "Reused a report from the last 24 hours; source content was checked again.", "Laporan dalam 24 jam digunakan semula; kandungan sumber disemak semula."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Text(tr("生成时间（不是行情时间）：", "Generated at (not quote time): ", "Dijana pada (bukan masa harga): ") + report.generatedAt)
                     .font(.caption).foregroundStyle(.secondary)
                 if let text = report.text, !text.isEmpty {

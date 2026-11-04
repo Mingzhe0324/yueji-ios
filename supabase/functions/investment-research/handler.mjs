@@ -1,4 +1,5 @@
 import { officialSources, collectOfficialEvidence, evidencePrompt, evidenceReport } from './official.mjs';
+import { reportKey, validCachedReport } from './cache.mjs';
 const reply = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", "Cache-Control": "no-store" } });
 async function read(stream, max) {
   if (!stream) throw new Error("empty");
@@ -66,13 +67,29 @@ export async function handleResearch(request, deps) {
     if (!validInput(input)) return reply(400, { error: "invalid_input" });
     const symbols = input.symbols ?? [input.symbol];
     if (mode === "official" && symbols.some(s => !Object.hasOwn(officialSources, s))) return reply(422, { error: "unsupported_source" });
+    let evidence, cacheKey;
+    const cacheEnabled = mode === "official" && deps.env("INVESTMENT_RESEARCH_CACHE") === "true";
+    if (mode === "official") {
+      try { evidence = await collectOfficialEvidence(symbols, get); }
+      catch { return reply(422, { error: "source_unavailable" }); }
+      if (cacheEnabled) {
+        cacheKey = await reportKey(symbols, evidence, model);
+        try {
+          const cached = await get(url + '/rest/v1/rpc/read_investment_report', {method:'POST',headers,body:JSON.stringify({report_key:cacheKey})});
+          if (cached.ok) {
+            const value = await read(cached.body, 300000);
+            if (validCachedReport(value, symbols)) {
+              const restored = evidenceReport(value.candidate, symbols, evidence);
+              if (restored) return reply(200, {symbol:symbols[0],symbols,generatedAt:value.generatedAt,...restored,cached:true});
+            }
+          }
+        } catch { /* Cache failures do not fabricate a report. Normal quota still applies. */ }
+      }
+    }
     const quota = await get(url + "/rest/v1/rpc/claim_investment_research", { method: "POST", headers, body: "{}" });
     if (!quota.ok) return reply(503, { error: "quota_unavailable" });
     if (await read(quota.body, 100) !== true) return reply(429, { error: "daily_limit" });
     if (mode === "official") {
-      let evidence;
-      try { evidence = await collectOfficialEvidence(symbols, get); }
-      catch { return reply(422, { error: "source_unavailable" }); }
       const response = await get(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
         body: JSON.stringify({ systemInstruction: { parts: [{ text: evidencePrompt }] },
@@ -83,7 +100,12 @@ export async function handleResearch(request, deps) {
       const result = await read(response.body, 300000);
       const report = evidenceReport(result.candidates?.[0], symbols, evidence);
       if (!report) return reply(422, { error: "no_grounded_research" });
-      return reply(200, { symbol: symbols[0], symbols, generatedAt: new Date().toISOString(), ...report });
+      const value = { symbol: symbols[0], symbols, generatedAt: new Date().toISOString(), ...report };
+      if (cacheEnabled) {
+        try { await get(url + '/rest/v1/rpc/save_investment_report', {method:'POST',headers,body:JSON.stringify({report_key:cacheKey,report_value:{symbol:symbols[0],symbols,generatedAt:value.generatedAt,candidate:result.candidates[0]}})}); }
+        catch { /* A valid completed report can be returned even if cache storage fails. */ }
+      }
+      return reply(200, {...value,cached:false});
     }
     const response = await get(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
       method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },

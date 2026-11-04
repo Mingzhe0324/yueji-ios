@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { collectOfficialEvidence, reportLinks, pageText, evidenceReport, dimensions } from '../../supabase/functions/investment-research/official.mjs';
 import { handleResearch } from '../../supabase/functions/investment-research/handler.mjs';
+import { reportKey, validCachedReport } from '../../supabase/functions/investment-research/cache.mjs';
 const symbol = 'MYX:99SMART';
 const quote = 'Revenue 2026 quarter profit 99 Speed Mart';
 const html = `<html><h1>99 Speed Mart</h1><p>${quote}</p><table><tr><th>2026</th><th>2025</th></tr><tr><td>Revenue</td><td>100</td></tr></table><p>${'Financial information. '.repeat(35)}</p></html>`;
@@ -9,6 +10,42 @@ const source = { id:'S1',symbol,company:'99 Speed Mart',url:'https://99speedmart
 const company = () => ({symbol,summary:'示例分析',period:'2026',action:'consider',conditions:'先核实估值，盈利恶化时重新评估',missing:'现价与风险资料',dimensions:dimensions.map(key=>({key,score:15,reason:'测试依据',evidence:[{sourceId:'S1',quote}]}))});
 const candidate = c => ({finishReason:'STOP',content:{parts:[{text:JSON.stringify({companies:[c]})}]}});
 const json = value => new Response(JSON.stringify(value));
+
+test('cache key changes with evidence/model/order but not retrieval time; expires after 24h', async () => {
+  const key=await reportKey([symbol],[source],'gemini-test');
+  assert.equal(key,await reportKey([symbol],[{...source,fetchedAt:'later'}],'gemini-test'));
+  assert.notEqual(key,await reportKey([symbol],[{...source,text:source.text+'new filing'}],'gemini-test'));
+  assert.notEqual(key,await reportKey([symbol],[source],'gemini-other'));
+  const now=Date.now(),value={symbol,symbols:[symbol],generatedAt:new Date(now).toISOString(),candidate:candidate(company())};
+  assert.ok(validCachedReport(value,[symbol],now));
+  assert.ok(!validCachedReport(value,[symbol],now+86400000));
+  assert.ok(!validCachedReport(value,[symbol],now-1));
+  assert.ok(!validCachedReport(value,['MYX:MAYBANK'],now));
+});
+
+test('cache hit revalidates citations, avoids quota/model and never trusts cached HTML', async () => {
+  let forged=false;
+  const calls=[];
+  const deps={env:k=>({SUPABASE_URL:'https://test.invalid',SUPABASE_ANON_KEY:'anon',INVESTMENT_RESEARCH_USER_ID:'owner',GEMINI_RESEARCH_API_KEY:'key',GEMINI_RESEARCH_MODEL:'gemini-test',INVESTMENT_RESEARCH_CACHE:'true'})[k],fetch:async(u,o)=>{
+    calls.push(u);
+    if(u.endsWith('/auth/v1/user'))return json({id:'owner'});
+    if(u.startsWith('https://99speedmart.com.my/'))return new Response(html,{headers:{'Content-Type':'text/html'}});
+    if(u.endsWith('/read_investment_report')){
+      const c=company();if(forged)c.dimensions[0].evidence[0].quote='not in this company source';
+      return json({symbol,symbols:[symbol],generatedAt:new Date().toISOString(),candidate:candidate(c),html:'<script>evil</script>'});
+    }
+    if(u.endsWith('/claim_investment_research'))return json(false);
+    throw new Error('unexpected request');
+  }};
+  const request=()=>new Request('https://test.invalid',{method:'POST',headers:{Authorization:'Bearer user','Content-Type':'application/json'},body:JSON.stringify({symbols:[symbol]})});
+  const result=await handleResearch(request(),deps);assert.equal(result.status,200);
+  const value=await result.json();assert.equal(value.cached,true);assert.ok(!value.html.includes('<script>'));
+  assert.equal(value.horizons.length,3);assert.ok(value.horizons.every(h=>h.status==='insufficient'));
+  assert.ok(!calls.some(u=>u.includes('claim_')||u.includes('googleapis')));
+  forged=true;calls.length=0;
+  assert.equal((await handleResearch(request(),deps)).status,429);
+  assert.ok(calls.some(u=>u.includes('claim_')));
+});
 test('HTML preserves table boundaries, strips executable content and rejects off-origin links', () => {
   assert.match(pageText(html), /Revenue \| 100 \|/);
   assert.equal(pageText('<script>bad</script><!--bad--><p>safe &amp; sound</p>'), 'safe & sound');

@@ -2,6 +2,21 @@
 
 本地源码还在。恢复云端不会自动更新已安装的 IPA；新增来源提示需要新版 App。
 
+## 简化部署包（推荐）
+
+在项目目录执行 `node scripts/bundle_investment_research.mjs`。
+会在项目旁的 `builds/investment-research-deploy` 生成：
+
+- `database.sql`：包含每日额度和可选缓存。到 Supabase SQL Editor 运行。
+- `index.ts`：自包含函数。新建 `investment-research`，用这一个文件替换编辑器的入口后 Deploy。
+
+仍需下面列出的四项 Secrets；执行缓存 SQL 后额外设置 `INVESTMENT_RESEARCH_CACHE=true`。
+缓存按账号隔离、最多 20 条，每条最长复用 24 小时；点击分析仍重新获取来源，内容改变即失效。
+缓存命中不扣 Gemini 每日分析额度；缓存不可用则按普通流程分析。
+来源读取失败发生在扣分析额度之前。Google 调用失败仍可能扣额度。
+客户端显示原报告生成时间，并标明缓存。保存的数据是模型输出，返回前重新验证引用并转义 HTML。
+本地测试使用模拟服务验证，不等于已验证远程 SQL、RLS 或 Gemini。
+
 ## 1. Gemini 密钥
 
 打开 https://aistudio.google.com/apikey ，在自己的 Google 项目创建 API key。免费优先时不要启用付费结算。将新 key 直接保存在 Supabase Secrets，不要发送到聊天或提交进 Git。
@@ -27,11 +42,12 @@ SQL Editor → New query，粘贴并运行仓库 `backend/investment-research.sq
 
 ## 4. Edge Function
 
-新建名为 `investment-research` 的函数，上传或在编辑器分别添加以下三个同目录文件，保持文件名及完整内容：
+如果不用简化部署包，新建名为 `investment-research` 的函数，上传或在编辑器分别添加以下四个同目录文件，保持文件名及完整内容：
 
 - `supabase/functions/investment-research/index.ts`
 - `supabase/functions/investment-research/handler.mjs`
 - `supabase/functions/investment-research/official.mjs`
+- `supabase/functions/investment-research/cache.mjs`
 
 然后 Deploy。只保存文件不等于部署。也可在已登录且连接正确项目的 Supabase CLI 执行 `supabase functions deploy investment-research`。
 
@@ -39,7 +55,7 @@ SQL Editor → New query，粘贴并运行仓库 `backend/investment-research.sq
 
 在 App 用第 2 步对应的账号登录，打开 Maybank 或 Gamuda → AI 公司研究 → 自动获取并分析。核对报告股票代码、来源链接、报告期间和获取时间。不要把模型生成时间当作股价时间。
 
-目前没有远程部署、真实 Gemini 调用或原生 iOS 构建的验证结果。额度每天 10 次，失败也可能扣额度。若失败，记录错误文字即可，不发送 API key。
+目前没有远程部署、真实 Gemini 调用或原生 iOS 构建的验证结果。额度每天 10 次，Google 调用失败也可能扣额度。若失败，记录错误文字即可，不发送 API key。
 
 ## 免费来源覆盖（2026-11-04）
 
