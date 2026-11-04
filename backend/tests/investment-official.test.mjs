@@ -11,6 +11,20 @@ const company = () => ({symbol,summary:'示例分析',period:'2026',action:'cons
 const candidate = c => ({finishReason:'STOP',content:{parts:[{text:JSON.stringify({companies:[c]})}]}});
 const json = value => new Response(JSON.stringify(value));
 
+test('CIMB income and TNB annual summary use source-specific period checks', async () => {
+  for (const [ticker, body, required] of [
+    ['MYX:CIMB', 'CIMB Group Holdings Berhad Total income profit second quarter ended 30 June 2026', 'second quarter ended 30 June 2026'],
+    ['MYX:TENAGA', 'Tenaga Nasional Berhad Five-Year Group Financial Summary Revenue profit 2025', 'Five-Year Group Financial Summary']
+  ]) {
+    const fetcher = text => async () => new Response(`<p>${text}</p><p>${'Financial information. '.repeat(35)}</p>`, {headers:{'Content-Type':'text/html'}});
+    const evidence = await collectOfficialEvidence([ticker], fetcher(body));
+    assert.equal(evidence[0].symbol, ticker);
+    assert.ok(evidence[0].scope.length > 20);
+    await assert.rejects(collectOfficialEvidence([ticker], fetcher(body.replace(required, 'unrelated period'))), /source_unavailable/);
+    await assert.rejects(collectOfficialEvidence([ticker], fetcher(body.replace(/CIMB Group Holdings Berhad|Tenaga Nasional Berhad/, 'Other Company'))), /source_unavailable/);
+  }
+});
+
 test('cache key changes with evidence/model/order but not retrieval time; expires after 24h', async () => {
   const key=await reportKey([symbol],[source],'gemini-test');
   assert.equal(key,await reportKey([symbol],[{...source,fetchedAt:'later'}],'gemini-test'));

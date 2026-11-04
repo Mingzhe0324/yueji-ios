@@ -49,7 +49,7 @@ struct ObservedStock: Identifiable, Hashable {
     var market: String { String(symbol.split(separator: ":").first ?? "") }
     var profile: StockCompanyProfile? { StockCompanyProfile.directory[symbol] }
     // Mirrors the default official importer; availability still depends on deployment and source health.
-    var hasOfficialImporter: Bool { ["MYX:MAYBANK", "MYX:99SMART", "MYX:GAMUDA", "MYX:HLBANK"].contains(symbol) }
+    var hasOfficialImporter: Bool { ["MYX:MAYBANK", "MYX:99SMART", "MYX:GAMUDA", "MYX:HLBANK", "MYX:CIMB", "MYX:TENAGA"].contains(symbol) }
     var officialSourceURL: URL? {
         let sources = [
             "MYX:MAYBANK": "https://maybank.listedcompany.com/newsroom.html/cat/7648",
@@ -201,6 +201,15 @@ struct InvestmentWatchView: View {
                 NavigationLink { ResearchHistoryView() } label: {
                     Label(tr("研究历史", "Research history", "Sejarah penyelidikan"), systemImage: "clock.arrow.circlepath")
                 }
+            }
+            Section(tr("自动 AI 研究", "Automatic AI research", "Penyelidikan AI automatik")) {
+                ForEach(ObservedStock.examples.filter { $0.hasOfficialImporter }) { stock in
+                    NavigationLink { StockResearchView(symbols: [stock.symbol]) } label: {
+                        Label(stock.name, systemImage: "sparkles")
+                    }
+                }
+                Text(tr("读取官方财务网页后分析。公告可能不是最新一期，报告会列出来源与资料范围。", "Analyzes official financial pages. Filings may not be the latest; reports list sources and scope.", "Menganalisis halaman kewangan rasmi. Pemfailan mungkin bukan yang terkini; laporan menyenaraikan sumber dan skop."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section(tr("我的自选", "Watchlist", "Senarai pantau")) {
                 if saved.isEmpty {
@@ -495,7 +504,7 @@ private struct StockResearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
-            Text(tr("点击后自动获取官方网页，再由 Gemini 分析，不需要上传文件。当前适配 Maybank、99 Speed Mart、Gamuda 和 Hong Leong Bank，需部署新版后生效；丰隆银行为固定 FY2026 年度公告。其他股票逐步接入。仅供配置的个人账号使用，不上传账本。", "Fetches official pages for Gemini analysis; no upload. Importers cover Maybank, 99 Speed Mart, Gamuda and Hong Leong Bank after deploying this version. HLB uses a fixed FY2026 annual announcement. Other stocks are being added. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi untuk analisis Gemini; tiada muat naik. Pengimport meliputi Maybank, 99 Speed Mart, Gamuda dan Hong Leong Bank selepas versi ini digunakan. HLB menggunakan pengumuman tahunan FY2026 tetap. Saham lain ditambah berperingkat. Akaun peribadi sahaja; lejar tidak dihantar."))
+            Text(tr("自动读取官方网页，再由 Gemini 分析。支持 Maybank、99 Speed Mart、Gamuda、Hong Leong Bank、CIMB 和 TNB。HLB 为固定 FY2026 年度公告，CIMB 为固定 2026 第二季度公告，TNB 为五年年度摘要；不保证最新。新增来源需部署新版后使用。仅供配置的个人账号使用，不上传账本。", "Fetches official pages for Gemini analysis. Supports Maybank, 99 Speed Mart, Gamuda, Hong Leong Bank, CIMB and TNB. HLB uses a fixed FY2026 release, CIMB a fixed 2Q2026 release, and TNB a five-year annual summary; latest filings are not guaranteed. New sources require the updated deployment. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi untuk analisis Gemini. Menyokong Maybank, 99 Speed Mart, Gamuda, Hong Leong Bank, CIMB dan TNB. HLB menggunakan laporan FY2026 tetap, CIMB laporan 2Q2026 tetap, dan TNB ringkasan tahunan lima tahun; laporan terkini tidak dijamin. Sumber baharu memerlukan pelaksanaan versi baharu. Akaun peribadi sahaja; lejar tidak dihantar."))
                 .font(.caption).foregroundStyle(.secondary)
             HStack {
                 Button {

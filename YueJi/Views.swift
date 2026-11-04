@@ -817,6 +817,24 @@ struct DashboardView: View {
                 // follow, each card under a bold heading with "View all" where there is
                 // more, as in the kit's Mobile Banking. Pending notices stay reachable from
                 // the automation settings.
+                Section {
+                    NavigationLink { InvestmentWatchView() } label: {
+                        HStack(spacing: 14) {
+                            Image(systemName: "chart.line.uptrend.xyaxis")
+                                .font(.title2.bold())
+                                .foregroundStyle(IslandPalette.sky)
+                                .frame(width: 52, height: 52)
+                                .background(IslandPalette.sky.opacity(0.15), in: RoundedRectangle(cornerRadius: 16))
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(tr("投资观察 · AI 研究", "Investing · AI research", "Pelaburan · Penyelidikan AI"))
+                                    .font(.headline)
+                                Text(tr("自选股票、公司资料与官方财务研究", "Watchlists, company profiles and financial research", "Senarai pantau, profil syarikat dan penyelidikan kewangan"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }.padding(.vertical, 8)
+                    }
+                    .accessibilityIdentifier("overview.investment")
+                }
                 budgetSection
                 Section {
                     NavigationLink {

@@ -1,5 +1,7 @@
 // Explicit company mappings: never fetch a URL supplied by the client or model.
 export const officialSources = {
+  'MYX:CIMB': { name: 'CIMB Group Holdings Berhad', url: 'https://www.cimb.com/en/newsroom/2026/cimb-records-resilient-2q26-with-rm1-94-billion-net-profit-and-11-2-percent-roe.html', identity: /CIMB Group Holdings Berhad/i, revenue: /Total income/i, period: /second quarter ended 30 June 2026/i, note: '固定 2026 年第二季度业绩公告，发布于 2026-08-28；不保证为最新公告，不是完整财报。' },
+  'MYX:TENAGA': { name: 'Tenaga Nasional Berhad', url: 'https://www.tnb.com.my/suppliers-investors-media-relations/financial-info/', identity: /Tenaga Nasional Berhad/i, period: /Five-Year Group Financial Summary/i, note: '官方五年年度财务摘要；须按表头年份及重述标记解读。网页中的季度 PDF 链接未被读取，报告期末股价不是当前价格。' },
   'MYX:MAYBANK': { name: 'Malayan Banking Berhad', url: 'https://maybank.listedcompany.com/newsroom.html/cat/7648', listing: true, identity: /MAYBANK|MALAYAN BANKING/i },
   'MYX:99SMART': { name: '99 Speed Mart Retail Holdings Berhad', url: 'https://99speedmart.com.my/financial-information/', identity: /99\s*Speed\s*Mart/i },
   'MYX:GAMUDA': { name: 'Gamuda Berhad', url: 'https://gamuda.listedcompany.com/financial_information.html', identity: /Gamuda Berhad/i, sections: true },
@@ -58,8 +60,8 @@ export async function collectOfficialEvidence(symbols, fetcher) {
       }
       // Fail closed on changed templates / challenge pages; never send blank evidence.
       if (text.length < 500 || text.length > 30000 || !/\b20\d{2}\b/.test(text) ||
-          !(source.annual ? /loans|financing/i : /Revenue/i).test(text) || !/profit/i.test(text) ||
-          !(source.annual ? /financial year ended/i : /quarter/i).test(text) ||
+          !(source.revenue ?? (source.annual ? /loans|financing/i : /Revenue/i)).test(text) || !/profit/i.test(text) ||
+          !(source.period ?? (source.annual ? /financial year ended/i : /quarter/i)).test(text) ||
           !source.identity.test(text)) throw new Error('source_unavailable');
       evidence.push({ id: `S${evidence.length + 1}`, symbol, company: source.name, url, fetchedAt: new Date().toISOString(),
         scope: source.note ?? (source.sections ? '网页排列的前两个完整季度摘要，不是完整财报或最新公告保证。' : '官方财务网页摘要，不是完整财报或最新公告保证。'), text });
