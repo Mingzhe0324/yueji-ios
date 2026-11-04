@@ -1562,7 +1562,7 @@ struct OverviewToolsView: View {
         let _ = uiLocale.identifier
         List {
             Section(tr("日常工具", "Everyday tools", "Alat harian")) {
-                NavigationLink { TransactionScreenshotView() } label: { IslandRowLabel(title: tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"), symbol: "photo.badge.plus", color: IslandPalette.lagoon) }
+                NavigationLink { TransactionScreenshotBatchView() } label: { IslandRowLabel(title: tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"), symbol: "photo.badge.plus", color: IslandPalette.lagoon) }
                 NavigationLink { ReimbursementsView() } label: { IslandRowLabel(title: tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), symbol: "doc.text.fill", color: IslandPalette.lavender) }
                 NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")
@@ -1956,6 +1956,8 @@ struct ExpensesView: View {
                     .modifier(MonthSummaryMotion(month: loadedQuery?.month))
                     .listRowSeparator(.hidden)
                     LedgerActiveFilters(filter: $filter, provider: $providerFilter)
+                    LedgerCategoryTabs(selection: $filter.category, categories: model.ledger.categoryNames)
+                        .listRowSeparator(.hidden)
                         .id("ledger-top")
                         .animation(reduceMotion ? nil : YueJiMotion.rows, value: filter)
                         .animation(reduceMotion ? nil : YueJiMotion.rows, value: providerFilter)

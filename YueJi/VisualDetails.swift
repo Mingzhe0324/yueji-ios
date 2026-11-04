@@ -118,7 +118,13 @@ struct MonthBudgetDial<Center: View>: View {
                 appeared = true
                 do { try await Task.sleep(for: .milliseconds(16)) } catch { return }
             }
-            withAnimation(YueJiMotion.meter) { shownUsed = used; shownThread = thread }
+            withAnimation(.smooth(duration: 0.5)) { shownUsed = used; shownThread = thread }
+        }
+        .onChange(of: reduceMotion) { _, reduced in
+            if reduced {
+                var transaction = Transaction(); transaction.disablesAnimations = true
+                withTransaction(transaction) { shownUsed = pace.used; shownThread = pace.thread }
+            }
         }
     }
 
@@ -140,6 +146,37 @@ struct MonthBudgetDial<Center: View>: View {
         }
         .frame(width: size, height: size)
         .accessibilityHidden(true)
+    }
+}
+
+struct LedgerCategoryTabs: View {
+    @Binding var selection: String
+    let categories: [String]
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Namespace private var indicator
+    var body: some View {
+        ScrollView(.horizontal) {
+            HStack(spacing: 6) {
+                ForEach([""] + categories.filter { !$0.isEmpty }, id: \.self) { category in
+                    Button {
+                        FeedbackHaptics.selection()
+                        withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.24)) { selection = category }
+                    } label: {
+                        Text(category.isEmpty ? tr("全部", "All", "Semua") : categoryLabel(category))
+                            .font(.subheadline.weight(selection == category ? .semibold : .regular))
+                            .foregroundStyle(selection == category ? Color.primary : Color.secondary)
+                            .padding(.horizontal, 14).frame(minHeight: 44)
+                            .background {
+                                if selection == category {
+                                    Capsule().fill(Color.accentColor.opacity(0.16))
+                                        .matchedGeometryEffect(id: "selection", in: indicator)
+                                }
+                            }
+                    }.buttonStyle(.plain)
+                        .accessibilityAddTraits(selection == category ? .isSelected : [])
+                }
+            }
+        }.scrollIndicators(.hidden)
     }
 }
 

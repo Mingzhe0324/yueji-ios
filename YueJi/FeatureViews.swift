@@ -3013,7 +3013,102 @@ struct ScreenshotAIDraft: Decodable {
     var eligible: Bool { completed && kind == "payment" && currency == "MYR" && (try? toCents(amount)).map { $0 > 0 } == true }
 }
 
+private struct ScreenshotQueueItem: Identifiable {
+    let id = UUID()
+    let photo: PhotosPickerItem
+    var merchant = ""
+    var amount = ""
+    var thumbnail: UIImage?
+    var loading = true
+    var failed = false
+    var saved = false
+}
+
+struct TransactionScreenshotBatchView: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var photos: [PhotosPickerItem] = []
+    @State private var loadedPhotos: [PhotosPickerItem] = []
+    @State private var rows: [ScreenshotQueueItem] = []
+    @State private var processing = false
+    @Namespace private var cards
+    var body: some View {
+        List {
+            Section {
+                PhotosPicker(selection: $photos, maxSelectionCount: 10, selectionBehavior: .ordered, matching: .images) {
+                    Label(tr("选择交易截图（最多 10 张）", "Choose screenshots (up to 10)", "Pilih tangkapan skrin (hingga 10)"), systemImage: "photo.stack")
+                }.disabled(processing)
+                Text(tr("按顺序识别，逐笔核对并保存。Gemini 识别可在每张截图的详情中选择。重新选择照片会替换当前清单，已保存账目不受影响。", "Read in order, then review and save each payment. Gemini is optional in each screenshot's details. Selecting photos again replaces this list; saved entries remain.", "Baca mengikut urutan, semak dan simpan setiap bayaran. Gemini tersedia dalam butiran setiap imej. Pemilihan semula menggantikan senarai; rekod disimpan kekal.")).font(.footnote).foregroundStyle(.secondary)
+                if !rows.isEmpty {
+                    HStack {
+                        Text(tr("已识别", "Read", "Dibaca") + " \(rows.filter { !$0.loading && !$0.failed }.count)/\(rows.count)")
+                        Spacer()
+                        Text(tr("已保存", "Saved", "Disimpan") + " \(rows.filter(\.saved).count)")
+                    }.font(.subheadline.weight(.semibold))
+                    ProgressView(value: Double(rows.filter { !$0.loading }.count), total: Double(rows.count))
+                }
+            }
+            ForEach(rows) { row in
+                NavigationLink {
+                    TransactionScreenshotView(initialPhoto: row.photo, onImported: {
+                        if let index = rows.firstIndex(where: { $0.id == row.id }) { rows[index].saved = true }
+                    }).yuejiZoom(id: row.id.uuidString, namespace: cards)
+                } label: {
+                    HStack(spacing: 14) {
+                        if let image = row.thumbnail {
+                            Image(uiImage: image).resizable().scaledToFit().frame(width: 58, height: 76).clipShape(RoundedRectangle(cornerRadius: 9))
+                        } else {
+                            Image(systemName: "doc.text.image").frame(width: 58, height: 76).foregroundStyle(.secondary)
+                        }
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(row.merchant.isEmpty ? tr("交易截图", "Transaction screenshot", "Tangkapan skrin transaksi") : row.merchant).font(.headline).lineLimit(2)
+                            if row.loading { ProgressView() }
+                            else {
+                                Label(row.saved ? tr("已保存", "Saved", "Disimpan") : (row.failed ? tr("识别失败，点击重试", "Reading failed; tap to retry", "Gagal membaca; ketik untuk cuba lagi") : tr("待核对", "Review needed", "Perlu semakan")), systemImage: row.saved ? "checkmark.circle.fill" : "doc.text.magnifyingglass")
+                                    .font(.caption).foregroundStyle(row.saved ? IncomeStyle.tint : .secondary)
+                            }
+                            if let cents = try? toCents(row.amount), cents > 0 {
+                                TransactionAmount(cents: cents, direction: .outgoing).font(.headline)
+                            }
+                        }.frame(maxWidth: .infinity, alignment: .leading)
+                    }.padding(.vertical, 8).yuejiZoomSource(id: row.id.uuidString, namespace: cards)
+                }.disabled(processing || row.saved)
+            }
+        }.yuejiListSurface()
+            .navigationTitle(tr("导入交易截图", "Import transaction screenshots", "Import tangkapan skrin transaksi"))
+            .task(id: photos) {
+                guard photos != loadedPhotos else { return }
+                rows = photos.map { ScreenshotQueueItem(photo: $0) }
+                processing = true
+                defer { processing = false }
+                for index in rows.indices {
+                    do {
+                        guard let data = try await rows[index].photo.loadTransferable(type: Data.self), data.count <= 25_000_000,
+                              let image = UIImage(data: data) else { throw CloudFailure.invalidResponse }
+                        let thumbnail = image.preparingThumbnail(of: CGSize(width: 116, height: 152))
+                        let text = try await ReceiptOCR.read(data)
+                        try Task.checkCancellation()
+                        let draft = ScreenshotPaymentDraft.parse(text)
+                        withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.25)) {
+                            rows[index].thumbnail = thumbnail; rows[index].merchant = draft.merchant
+                            rows[index].amount = draft.blocked ? "" : draft.amount; rows[index].loading = false
+                        }
+                    } catch is CancellationError { return }
+                    catch {
+                        guard !Task.isCancelled else { return }
+                        rows[index].loading = false; rows[index].failed = true
+                    }
+                }
+                loadedPhotos = photos
+            }
+    }
+}
+
 struct TransactionScreenshotView: View {
+    var onImported: (() -> Void)? = nil
+    init(initialPhoto: PhotosPickerItem? = nil, onImported: (() -> Void)? = nil) {
+        _photo = State(initialValue: initialPhoto)
+        self.onImported = onImported
+    }
     @EnvironmentObject private var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var photo: PhotosPickerItem?
@@ -3050,10 +3145,21 @@ struct TransactionScreenshotView: View {
             }
             if let image {
                 Section {
-                    Image(uiImage: image).resizable().scaledToFit()
-                        .frame(maxWidth: .infinity, maxHeight: 180)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                        .accessibilityLabel(tr("交易截图预览", "Transaction screenshot preview", "Pratonton tangkapan skrin transaksi"))
+                    HStack(spacing: 16) {
+                        Image(uiImage: image).resizable().scaledToFit()
+                            .frame(maxWidth: busy ? .infinity : 64, maxHeight: busy ? 180 : 88)
+                            .clipShape(RoundedRectangle(cornerRadius: 12))
+                            .accessibilityLabel(tr("交易截图预览", "Transaction screenshot preview", "Pratonton tangkapan skrin transaksi"))
+                        if !busy {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text(merchant.isEmpty ? tr("待核对", "Review needed", "Perlu semakan") : merchant).font(.headline)
+                                if !blocked, let cents = try? toCents(amount), cents > 0 {
+                                    TransactionAmount(cents: cents, direction: .outgoing).font(.title2.bold())
+                                }
+                                if dateRecognized { Text(dateLabel(date)).font(.caption).foregroundStyle(.secondary) }
+                            }.frame(maxWidth: .infinity, alignment: .leading).transition(.opacity)
+                        }
+                    }
                     DisclosureGroup(tr("查看原图", "View original image", "Lihat imej asal")) { Image(uiImage: image).resizable().scaledToFit() }
                     if !text.isEmpty {
                         DisclosureGroup(tr("识别文字", "Recognized text", "Teks dikenal pasti")) { Text(text).textSelection(.enabled) }
@@ -3166,7 +3272,7 @@ struct TransactionScreenshotView: View {
                 }
             }
             .sheet(item: $editor) { draft in
-                ExpenseEditor(original: nil, initialDraft: draft, onSaved: { image = nil; photo = nil; text = "" })
+                ExpenseEditor(original: nil, initialDraft: draft, onSaved: { image = nil; photo = nil; text = ""; onImported?() })
                     .environmentObject(model)
             }
             .alert(tr("无法导入", "Unable to import", "Tidak dapat mengimport"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
@@ -4538,7 +4644,7 @@ struct AIFeaturesSettingsView: View {
                 NavigationLink { ReceiptScanView() } label: {
                     Label(tr("收据识别与分账", "Receipts and splitting", "Resit dan pembahagian"), systemImage: "doc.viewfinder")
                 }
-                NavigationLink { TransactionScreenshotView() } label: {
+                NavigationLink { TransactionScreenshotBatchView() } label: {
                     Label(tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"), systemImage: "photo.badge.plus")
                 }
             }
