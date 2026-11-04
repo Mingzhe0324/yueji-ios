@@ -2,13 +2,15 @@
 
 本地源码还在。恢复云端不会自动更新已安装的 IPA；新增来源提示需要新版 App。
 
+最新覆盖及 PDF 部署说明见 [investment-pdf-coverage.md](investment-pdf-coverage.md)：当前 11 家自动来源。PDF 路径需要部署平台加载固定依赖 `npm:unpdf@2.1.0`；普通 HTML 路径不加载解析器。
+
 ## 简化部署包（推荐）
 
 在项目目录执行 `node scripts/bundle_investment_research.mjs`。
 会在项目旁的 `builds/investment-research-deploy` 生成：
 
 - `database.sql`：包含每日额度和可选缓存。到 Supabase SQL Editor 运行。
-- `index.ts`：自包含函数。新建 `investment-research`，用这一个文件替换编辑器的入口后 Deploy。
+- `index.ts`：合并后的函数入口（PDF 路径含固定 npm 依赖）。新建 `investment-research`，用这一个文件替换编辑器的入口后 Deploy。
 
 仍需下面列出的四项 Secrets；执行缓存 SQL 后额外设置 `INVESTMENT_RESEARCH_CACHE=true`。
 缓存按账号隔离、最多 20 条，每条最长复用 24 小时；点击分析仍重新获取来源，内容改变即失效。

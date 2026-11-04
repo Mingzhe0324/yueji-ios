@@ -49,7 +49,7 @@ struct ObservedStock: Identifiable, Hashable {
     var market: String { String(symbol.split(separator: ":").first ?? "") }
     var profile: StockCompanyProfile? { StockCompanyProfile.directory[symbol] }
     // Mirrors the default official importer; availability still depends on deployment and source health.
-    var hasOfficialImporter: Bool { ["MYX:MAYBANK", "MYX:99SMART", "MYX:GAMUDA", "MYX:HLBANK", "MYX:CIMB", "MYX:TENAGA"].contains(symbol) }
+    var hasOfficialImporter: Bool { ["MYX:MAYBANK", "MYX:99SMART", "MYX:GAMUDA", "MYX:HLBANK", "MYX:CIMB", "MYX:TENAGA", "MYX:IJM", "MYX:SUNWAY", "NASDAQ:AAPL", "NASDAQ:MSFT", "NASDAQ:NVDA"].contains(symbol) }
     var officialSourceURL: URL? {
         let sources = [
             "MYX:MAYBANK": "https://maybank.listedcompany.com/newsroom.html/cat/7648",
@@ -203,7 +203,7 @@ struct InvestmentWatchView: View {
                 }
             }
             Section(tr("自动 AI 研究", "Automatic AI research", "Penyelidikan AI automatik")) {
-                ForEach(ObservedStock.examples.filter { $0.hasOfficialImporter }) { stock in
+                ForEach(ObservedStock.examples.filter { $0.hasOfficialImporter } + [ObservedStock(symbol: "MYX:IJM", name: "IJM · 怡保工程"), ObservedStock(symbol: "MYX:SUNWAY", name: "Sunway · 双威")]) { stock in
                     NavigationLink { StockResearchView(symbols: [stock.symbol]) } label: {
                         Label(stock.name, systemImage: "sparkles")
                     }
@@ -275,6 +275,10 @@ struct InvestmentWatchView: View {
                 VStack(alignment: .leading, spacing: 5) {
                     Text(stock.name).font(.headline)
                     Text(stock.symbol).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    Text(stock.hasOfficialImporter
+                         ? tr("支持自动研究", "Automatic research supported", "Penyelidikan automatik disokong")
+                         : tr("研究需导入资料", "Import materials for research", "Import bahan untuk penyelidikan"))
+                        .font(.caption2).foregroundStyle(stock.hasOfficialImporter ? Color.accentColor : Color.secondary)
                     if let profile = stock.profile {
                         Text(profile.industry).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
                     }
@@ -504,8 +508,12 @@ private struct StockResearchView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
-            Text(tr("自动读取官方网页，再由 Gemini 分析。支持 Maybank、99 Speed Mart、Gamuda、Hong Leong Bank、CIMB 和 TNB。HLB 为固定 FY2026 年度公告，CIMB 为固定 2026 第二季度公告，TNB 为五年年度摘要；不保证最新。新增来源需部署新版后使用。仅供配置的个人账号使用，不上传账本。", "Fetches official pages for Gemini analysis. Supports Maybank, 99 Speed Mart, Gamuda, Hong Leong Bank, CIMB and TNB. HLB uses a fixed FY2026 release, CIMB a fixed 2Q2026 release, and TNB a five-year annual summary; latest filings are not guaranteed. New sources require the updated deployment. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi untuk analisis Gemini. Menyokong Maybank, 99 Speed Mart, Gamuda, Hong Leong Bank, CIMB dan TNB. HLB menggunakan laporan FY2026 tetap, CIMB laporan 2Q2026 tetap, dan TNB ringkasan tahunan lima tahun; laporan terkini tidak dijamin. Sumber baharu memerlukan pelaksanaan versi baharu. Akaun peribadi sahaja; lejar tidak dihantar."))
+            Text(tr("自动读取已适配公司的官方网页或 PDF 文本，再由 Gemini 分析。部分来源为固定期间公告，不保证最新；报告列出来源、日期和资料范围。新增来源需部署新版后使用。仅供配置的个人账号使用，不上传账本。", "Fetches supported companies' official pages or PDF text for Gemini analysis. Some sources are fixed-period releases, not guaranteed latest; reports list sources, dates and scope. New sources require the updated deployment. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi atau teks PDF syarikat yang disokong untuk analisis Gemini. Sesetengah sumber ialah laporan tempoh tetap, bukan semestinya terkini; laporan menyenaraikan sumber, tarikh dan skop. Sumber baharu memerlukan versi baharu. Akaun peribadi sahaja; lejar tidak dihantar."))
                 .font(.caption).foregroundStyle(.secondary)
+            if symbols.contains(where: { !ObservedStock(symbol: $0, name: $0).hasOfficialImporter }) && imported == nil {
+                Text(tr("所选股票含尚未适配的自动来源。可打开单只股票导入行情与财报文本。", "Some stocks have no automatic source yet. Open a single stock to import prices and financial text.", "Sesetengah saham belum mempunyai sumber automatik. Buka satu saham untuk mengimport harga dan teks kewangan."))
+                    .font(.caption).foregroundStyle(.orange)
+            }
             HStack {
                 Button {
                     report = nil; error = ""; saveMessage = ""; running = true
