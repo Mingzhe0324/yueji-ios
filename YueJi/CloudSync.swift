@@ -280,6 +280,9 @@ actor SupabaseCloudService: CloudRemote {
         guard (200..<300).contains(response.statusCode) else {
             let object = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
             // Keep 401 as a session error so CloudAccount can refresh and retry.
+            if path == "/functions/v1/investment-research", response.statusCode == 403 {
+                throw reviewError("公司研究仅限服务端配置的个人账号使用。", "Company research is restricted to the configured personal account.", "Penyelidikan syarikat terhad kepada akaun peribadi yang ditetapkan.")
+            }
             if path == "/functions/v1/receipt-gemini", response.statusCode != 401,
                let receiptCode = object?["error"] as? String,
                let failure = ReceiptRecognitionFailure(rawValue: receiptCode) { throw failure }
@@ -315,6 +318,17 @@ actor SupabaseCloudService: CloudRemote {
                 throw reviewError("AI 未能明确理解，请缩短描述并重试。", "AI could not interpret this clearly. Try a shorter description.", "AI tidak dapat mentafsir dengan jelas. Cuba penerangan lebih ringkas.")
             }
             throw reviewError("AI 服务尚未就绪，请检查 assistant-gemini、GEMINI_ASSISTANT_MODEL 和额度 SQL。", "AI service is not ready. Check assistant-gemini, GEMINI_ASSISTANT_MODEL and quota SQL.", "Perkhidmatan AI belum tersedia. Semak assistant-gemini, GEMINI_ASSISTANT_MODEL dan SQL kuota.")
+        }
+    }
+    func researchStock(symbols: [String]) async throws -> Data {
+        guard (1...3).contains(symbols.count), Set(symbols).count == symbols.count,
+              symbols.allSatisfy({ ObservedStock.normalized($0) == $0 }) else { throw CloudFailure.invalidResponse }
+        do { return try await request("/functions/v1/investment-research", body: ["symbols": symbols], authenticated: true) }
+        catch CloudFailure.server(let status, _) {
+            if status == 422 {
+                throw reviewError("资料来源尚未接入、暂时无法读取，或分析缺少依据。官方资料模式目前支持 Maybank、99 Speed Mart。", "Source unsupported, unavailable, or analysis lacks evidence. Official sources currently support Maybank and 99 Speed Mart.", "Sumber belum disokong, tidak tersedia atau analisis tiada bukti. Sumber rasmi kini menyokong Maybank dan 99 Speed Mart.")
+            }
+            throw reviewError("公司研究尚未就绪，请检查 investment-research 部署及独立研究配置。", "Company research is unavailable. Check investment-research deployment and its separate configuration.", "Penyelidikan syarikat belum tersedia. Semak penggunaan investment-research dan konfigurasi berasingan.")
         }
     }
     func recognizeReceipt(image: Data, transaction: Bool = false) async throws -> Data {
