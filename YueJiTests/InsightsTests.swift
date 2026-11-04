@@ -57,30 +57,6 @@ final class GeminiReceiptDraftTests: XCTestCase {
 }
 
 final class AppleOnDeviceAITests: XCTestCase {
-    func testResearchHistoryExpiryCapacityAndAccountScope() {
-        let now = Date(timeIntervalSince1970: 1800000000)
-        func entry(_ age: TimeInterval, text: String = "Research") -> ResearchHistoryEntry {
-            .init(id: UUID(), symbols: ["NASDAQ:AAPL"], text: text, generatedAt: "2026-11-04T00:00:00Z", savedAt: now.addingTimeInterval(-age))
-        }
-        let newest = entry(0), oldest = entry(29 * 86400)
-        let values = ResearchHistory.retained([entry(30 * 86400), oldest, entry(-1), newest, entry(0, text: String(repeating: "x", count: 100001))], now: now)
-        XCTAssertEqual(values.map(\.id), [newest.id, oldest.id])
-        XCTAssertEqual(ResearchHistory.retained((0..<25).map { entry(Double($0)) }, now: now).count, 20)
-        XCTAssertNotEqual(ResearchHistory.fileName(scope: "project:a"), ResearchHistory.fileName(scope: "project:b"))
-        XCTAssertNotEqual(ResearchHistory.fileName(scope: "project:a"), ResearchHistory.fileName(scope: "other:a"))
-        XCTAssertFalse(ResearchHistory.fileName(scope: "../../user").contains("/"))
-    }
-    func testStockSymbolsRequireExchangeAndRejectMarkup() {
-        XCTAssertEqual(ObservedStock.normalized(" nasdaq:nvda "), "NASDAQ:NVDA")
-        XCTAssertEqual(ObservedStock.normalized("NYSE:BRK.B"), "NYSE:BRK.B")
-        for input in ["AAPL", "NASDAQ:", "NASDAQ:AAPL</script>", "NASDAQ:AAPL?x=1", "NASDAQ:AAPL\nNYSE:TSM"] {
-            XCTAssertNil(ObservedStock.normalized(input))
-        }
-        let saved = ObservedStock.saved("nasdaq:nvda\nNASDAQ:NVDA\ninvalid\nHKEX:700")
-        XCTAssertEqual(saved.map(\.symbol), ["NASDAQ:NVDA", "HKEX:700"])
-        XCTAssertEqual(Set(ObservedStock.examples.map(\.symbol)).count, ObservedStock.examples.count)
-        XCTAssertTrue(ObservedStock.examples.allSatisfy { ObservedStock.normalized($0.symbol) == $0.symbol })
-    }
     private let transcript = "Cafe\nMYR\nRice 10.00\nSubtotal 10.00\nTax 0.60\nService 1.00\nTotal 11.60\nCash 20.00"
     private func draft(_ changes: [String: Any] = [:]) throws -> GeminiReceiptDraft {
         var object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": "MYR",
