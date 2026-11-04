@@ -49,7 +49,58 @@ struct ObservedStock: Identifiable, Hashable {
         .init(symbol: "SZSE:002594", name: "BYD A · 比亚迪 A 股"),
         .init(symbol: "TWSE:2330", name: "TSMC · 台积电"),
         .init(symbol: "TSE:7203", name: "Toyota · 丰田"),
-        .init(symbol: "SGX:D05", name: "DBS · 星展")
+        .init(symbol: "SGX:D05", name: "DBS · 星展"),
+        .init(symbol: "NASDAQ:NFLX", name: "Netflix · 奈飞"),
+        .init(symbol: "NASDAQ:COST", name: "Costco · 好市多"),
+        .init(symbol: "NASDAQ:INTC", name: "Intel · 英特尔"),
+        .init(symbol: "NASDAQ:QCOM", name: "Qualcomm · 高通"),
+        .init(symbol: "NASDAQ:PDD", name: "PDD Holdings · 拼多多"),
+        .init(symbol: "NASDAQ:COIN", name: "Coinbase"),
+        .init(symbol: "NYSE:JPM", name: "JPMorgan Chase · 摩根大通"),
+        .init(symbol: "NYSE:V", name: "Visa"),
+        .init(symbol: "NYSE:WMT", name: "Walmart · 沃尔玛"),
+        .init(symbol: "NYSE:KO", name: "Coca-Cola · 可口可乐"),
+        .init(symbol: "NYSE:LLY", name: "Eli Lilly · 礼来"),
+        .init(symbol: "NYSE:SE", name: "Sea · 冬海"),
+        .init(symbol: "MYX:HLBANK", name: "Hong Leong Bank · 丰隆银行"),
+        .init(symbol: "MYX:PETGAS", name: "Petronas Gas · 国油气体"),
+        .init(symbol: "MYX:MRDIY", name: "MR D.I.Y."),
+        .init(symbol: "MYX:INARI", name: "Inari Amertron · 益纳利"),
+        .init(symbol: "MYX:GAMUDA", name: "Gamuda · 金务大"),
+        .init(symbol: "HKEX:9618", name: "JD.com · 京东"),
+        .init(symbol: "HKEX:9999", name: "NetEase · 网易"),
+        .init(symbol: "HKEX:5", name: "HSBC · 汇丰"),
+        .init(symbol: "HKEX:388", name: "HKEX · 香港交易所"),
+        .init(symbol: "SSE:601318", name: "Ping An · 中国平安"),
+        .init(symbol: "SSE:600036", name: "China Merchants Bank · 招商银行"),
+        .init(symbol: "SZSE:000333", name: "Midea · 美的集团"),
+        .init(symbol: "TWSE:2317", name: "Hon Hai · 鸿海"),
+        .init(symbol: "TWSE:2454", name: "MediaTek · 联发科"),
+        .init(symbol: "TSE:6758", name: "Sony · 索尼"),
+        .init(symbol: "TSE:9984", name: "SoftBank Group · 软银集团"),
+        .init(symbol: "TSE:7974", name: "Nintendo · 任天堂"),
+        .init(symbol: "SGX:O39", name: "OCBC · 华侨银行"),
+        .init(symbol: "SGX:U11", name: "UOB · 大华银行"),
+        .init(symbol: "SGX:Z74", name: "Singtel · 新加坡电信"),
+        .init(symbol: "LSE:AZN", name: "AstraZeneca · 阿斯利康"),
+        .init(symbol: "LSE:SHEL", name: "Shell · 壳牌"),
+        .init(symbol: "LSE:HSBA", name: "HSBC · 汇丰（伦敦）"),
+        .init(symbol: "XETR:SAP", name: "SAP · 思爱普"),
+        .init(symbol: "XETR:SIE", name: "Siemens · 西门子"),
+        .init(symbol: "XETR:ALV", name: "Allianz · 安联"),
+        .init(symbol: "EURONEXT:MC", name: "LVMH · 路威酩轩"),
+        .init(symbol: "EURONEXT:OR", name: "L’Oréal · 欧莱雅"),
+        .init(symbol: "EURONEXT:ASML", name: "ASML · 阿斯麦"),
+        .init(symbol: "SIX:NESN", name: "Nestlé · 雀巢"),
+        .init(symbol: "SIX:ROG", name: "Roche · 罗氏"),
+        .init(symbol: "TSX:SHOP", name: "Shopify"),
+        .init(symbol: "TSX:RY", name: "Royal Bank of Canada · 加拿大皇家银行"),
+        .init(symbol: "ASX:BHP", name: "BHP · 必和必拓"),
+        .init(symbol: "ASX:CBA", name: "Commonwealth Bank · 澳洲联邦银行"),
+        .init(symbol: "NSE:RELIANCE", name: "Reliance Industries · 信实工业"),
+        .init(symbol: "NSE:TCS", name: "Tata Consultancy Services · 塔塔咨询"),
+        .init(symbol: "KRX:005930", name: "Samsung Electronics · 三星电子"),
+        .init(symbol: "KRX:000660", name: "SK Hynix · SK 海力士")
     ]
 }
 
@@ -104,6 +155,14 @@ struct InvestmentWatchView: View {
                     Text(tr("台湾", "Taiwan", "Taiwan")).tag("TWSE")
                     Text(tr("日本", "Japan", "Jepun")).tag("TSE")
                     Text(tr("新加坡", "Singapore", "Singapura")).tag("SGX")
+                    Text(tr("英国", "United Kingdom", "United Kingdom")).tag("LSE")
+                    Text(tr("德国", "Germany", "Jerman")).tag("XETR")
+                    Text(tr("泛欧交易所", "Euronext", "Euronext")).tag("EURONEXT")
+                    Text(tr("瑞士", "Switzerland", "Switzerland")).tag("SIX")
+                    Text(tr("加拿大", "Canada", "Kanada")).tag("TSX")
+                    Text(tr("澳大利亚", "Australia", "Australia")).tag("ASX")
+                    Text(tr("印度", "India", "India")).tag("NSE")
+                    Text(tr("韩国", "South Korea", "Korea Selatan")).tag("KRX")
                 }
                 ForEach(examples) { stock in stockLink(stock, source: "example") }
                 if examples.isEmpty {
@@ -111,7 +170,12 @@ struct InvestmentWatchView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Section {
+            Section(tr("查找更多股票", "Find more stocks", "Cari lebih banyak saham")) {
+                Link(destination: URL(string: "https://www.tradingview.com/screener/")!) {
+                    Label(tr("在 TradingView 查找全球股票 ↗", "Find global stocks on TradingView ↗", "Cari saham global di TradingView ↗"), systemImage: "globe")
+                }
+                Text(tr("将在浏览器打开股票筛选器。找到交易所和代码后，回到这里输入并收藏。上方搜索只筛选内置清单；外部能找到的股票也可能无法显示嵌入图表。", "Opens the stock screener in your browser. Return with the exchange and symbol to open and follow a stock here. Search above filters the built-in list only; stocks found externally may still lack an embedded chart.", "Membuka penyaring saham dalam pelayar. Kembali dengan bursa dan kod untuk membuka dan mengikuti saham di sini. Carian di atas hanya menapis senarai terbina dalam; saham yang ditemui di luar mungkin tiada carta terbenam."))
+                    .font(.caption).foregroundStyle(.secondary)
                 if let symbol = ObservedStock.normalized(search) {
                     stockLink(ObservedStock(symbol: symbol, name: symbol), source: "custom")
                 }
