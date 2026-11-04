@@ -2,6 +2,7 @@ import SwiftUI
 import WebKit
 import CryptoKit
 import UIKit
+import SafariServices
 
 struct StockCompanyProfile: Decodable {
     let symbol: String
@@ -282,6 +283,9 @@ private struct StockChartView: View {
     @Environment(\.scenePhase) private var phase
     @State private var reload = UUID()
     @State private var failed = false
+    @State private var browserPage: StockBrowserPage?
+    // Prefer the full website for Malaysian listings after the MYX widget restriction.
+    private var prefersFullPage: Bool { stock.market == "MYX" }
     private var following: Bool { ObservedStock.saved(watchlist).contains { $0.symbol == stock.symbol } }
     var body: some View {
         ScrollView {
@@ -323,7 +327,12 @@ private struct StockChartView: View {
                      ? tr("已提供自动读取适配；需恢复云端部署后使用。资料范围为官方网页摘要，仍可能加载失败。", "Automatic importer available; requires cloud deployment. Covers official page summaries and may fail to load.", "Pengimport automatik tersedia; memerlukan penggunaan awan. Meliputi ringkasan halaman rasmi dan mungkin gagal dimuatkan.")
                      : tr("这只股票尚未接入自动财务分析；图表可用不代表 AI 已有资料。", "Automatic financial analysis is not connected for this stock. A chart does not mean AI has its data.", "Analisis kewangan automatik belum disambungkan untuk saham ini. Carta tidak bermakna AI mempunyai datanya."))
                     .font(.caption).foregroundStyle(.secondary)
-                if phase == .active {
+                if prefersFullPage {
+                    Label(tr("在 App 内查看完整行情", "View full chart in the app", "Lihat carta penuh dalam aplikasi"), systemImage: "chart.xyaxis.line")
+                        .font(.headline)
+                    Text(tr("此市场优先使用 TradingView 完整网页。点击下方按钮查看，关闭网页即可返回股票详情。", "This market opens the full TradingView website. Use the button below, then close the page to return to stock details.", "Pasaran ini membuka laman penuh TradingView. Gunakan butang di bawah, kemudian tutup halaman untuk kembali ke butiran saham."))
+                        .font(.caption).foregroundStyle(.secondary)
+                } else if phase == .active {
                     TradingStockChart(symbol: stock.symbol, dark: scheme == .dark, failed: $failed)
                         .id(stock.symbol + (scheme == .dark ? "dark" : "light") + reload.uuidString)
                         .frame(height: 520)
@@ -338,11 +347,17 @@ private struct StockChartView: View {
                 Text(tr("价格、更新时间及延迟状态请查看图表。网页加载完成不代表行情是实时的；不可用时不会补造价格。", "Read prices, timestamps and delay status in the chart. A loaded page does not imply real-time data. Missing prices are never fabricated.", "Lihat harga, masa dan status kelewatan pada carta. Halaman dimuatkan tidak bermakna data masa nyata. Harga yang tiada tidak direka."))
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button { failed = false; reload = UUID() } label: {
+                    if !prefersFullPage {
+                      Button { failed = false; reload = UUID() } label: {
                         Label(tr("重新加载", "Reload", "Muat semula"), systemImage: "arrow.clockwise")
+                      }
                     }
                     Spacer()
-                    Link("TradingView ↗", destination: TradingStockChart.sourceURL(stock.symbol))
+                    Button {
+                        browserPage = StockBrowserPage(url: TradingStockChart.sourceURL(stock.symbol))
+                    } label: {
+                        Label(tr("在 App 内查看行情", "View chart in app", "Lihat carta dalam aplikasi"), systemImage: "globe")
+                    }
                 }.buttonStyle(.bordered)
                 NavigationLink {
                     StockResearchView(stock: stock)
@@ -353,6 +368,14 @@ private struct StockChartView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(20)
         }.navigationTitle(tr("股票详情", "Stock details", "Butiran saham"))
+            .environment(\.openURL, OpenURLAction { url in
+                guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return .systemAction }
+                browserPage = StockBrowserPage(url: url)
+                return .handled
+            })
+            .sheet(item: $browserPage) { page in
+                StockInAppBrowser(url: page.url).ignoresSafeArea()
+            }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -366,6 +389,21 @@ private struct StockChartView: View {
                 }
             }
     }
+}
+
+private struct StockBrowserPage: Identifiable {
+    let url: URL
+    var id: String { url.absoluteString }
+}
+
+private struct StockInAppBrowser: UIViewControllerRepresentable {
+    let url: URL
+    func makeUIViewController(context: Context) -> SFSafariViewController {
+        let controller = SFSafariViewController(url: url)
+        controller.dismissButtonStyle = .close
+        return controller
+    }
+    func updateUIViewController(_ controller: SFSafariViewController, context: Context) {}
 }
 
 private struct StockResearchReport: Decodable {
