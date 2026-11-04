@@ -57,6 +57,17 @@ final class GeminiReceiptDraftTests: XCTestCase {
 }
 
 final class AppleOnDeviceAITests: XCTestCase {
+    func testStockSymbolsRequireExchangeAndRejectMarkup() {
+        XCTAssertEqual(ObservedStock.normalized(" nasdaq:nvda "), "NASDAQ:NVDA")
+        XCTAssertEqual(ObservedStock.normalized("NYSE:BRK.B"), "NYSE:BRK.B")
+        for input in ["AAPL", "NASDAQ:", "NASDAQ:AAPL</script>", "NASDAQ:AAPL?x=1", "NASDAQ:AAPL\nNYSE:TSM"] {
+            XCTAssertNil(ObservedStock.normalized(input))
+        }
+        let saved = ObservedStock.saved("nasdaq:nvda\nNASDAQ:NVDA\ninvalid\nHKEX:700")
+        XCTAssertEqual(saved.map(\.symbol), ["NASDAQ:NVDA", "HKEX:700"])
+        XCTAssertEqual(Set(ObservedStock.examples.map(\.symbol)).count, ObservedStock.examples.count)
+        XCTAssertTrue(ObservedStock.examples.allSatisfy { ObservedStock.normalized($0.symbol) == $0.symbol })
+    }
     private let transcript = "Cafe\nMYR\nRice 10.00\nSubtotal 10.00\nTax 0.60\nService 1.00\nTotal 11.60\nCash 20.00"
     private func draft(_ changes: [String: Any] = [:]) throws -> GeminiReceiptDraft {
         var object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": "MYR",

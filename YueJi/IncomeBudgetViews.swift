@@ -294,6 +294,9 @@ struct BankAccountsView: View {
                     }.moveDisabled(model.isWorking("account-order"))
                 }
                 Section {
+                    NavigationLink { InvestmentWatchView() } label: {
+                        Label(tr("投资观察", "Market watch", "Pantau pasaran"), systemImage: "chart.line.uptrend.xyaxis")
+                    }.accessibilityIdentifier("bankAccount.marketWatch")
                     NavigationLink { BankTransfersView() } label: {
                         Label(tr("转账／TNG 充值", "Transfers / TNG top-ups", "Pindahan / tambah nilai TNG"), systemImage: "arrow.left.arrow.right")
                     }.accessibilityIdentifier("bankAccount.transfers")
