@@ -240,8 +240,11 @@ private struct StockChartView: View {
                     Spacer()
                     Link("TradingView ↗", destination: TradingStockChart.sourceURL(stock.symbol))
                 }.buttonStyle(.bordered)
-                Label(tr("本版未启用 AI 投资建议", "AI investment advice is not enabled", "Nasihat pelaburan AI belum diaktifkan"), systemImage: "info.circle")
-                    .font(.footnote).foregroundStyle(.secondary)
+                NavigationLink {
+                    StockResearchView(stock: stock)
+                } label: {
+                    Label(tr("AI 公司研究 · 个人试用", "AI company research · Personal preview", "Penyelidikan syarikat AI · Pratonton peribadi"), systemImage: "sparkles")
+                }.buttonStyle(.bordered)
                 Text(tr("打开图表会连接 TradingView，其服务和隐私政策适用。不会发送月记账本内容。", "Charts connect to TradingView and are subject to its service and privacy policies. Your ledger contents are not sent.", "Carta bersambung ke TradingView dan tertakluk pada dasar perkhidmatan dan privasinya. Kandungan lejar tidak dihantar."))
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(20)
@@ -258,6 +261,90 @@ private struct StockChartView: View {
                         .accessibilityLabel(following ? tr("取消关注", "Unfollow", "Nyahikuti") : tr("加入自选", "Follow stock", "Ikuti saham"))
                 }
             }
+    }
+}
+
+private struct StockResearchReport: Decodable {
+    let symbol: String
+    let generatedAt: String
+    let html: String
+}
+
+private struct StockResearchView: View {
+    let stock: ObservedStock
+    @Environment(\.scenePhase) private var phase
+    @State private var report: StockResearchReport?
+    @State private var error = ""
+    @State private var running = false
+    @State private var task: Task<Void, Never>?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(stock.name).font(.headline)
+            Text(stock.symbol).font(.caption.monospaced()).foregroundStyle(.secondary)
+            Text(tr("点击后将股票代码发送给 Gemini，并使用 Google 搜索公司资料。仅供配置的个人账号使用；不上传账本。结果是网页研究，非实时行情或持续买卖提醒。", "Sends the stock symbol to Gemini with Google Search when tapped. Restricted to the configured personal account; no ledger is uploaded. Web research, not live quotes or ongoing trade alerts.", "Menghantar kod saham kepada Gemini dengan Google Search apabila diketuk. Untuk akaun peribadi yang ditetapkan; lejar tidak dihantar. Penyelidikan web, bukan harga langsung atau amaran dagangan berterusan."))
+                .font(.caption).foregroundStyle(.secondary)
+            HStack {
+                Button {
+                    report = nil; error = ""; running = true
+                    task = Task { @MainActor in
+                        defer { running = false }
+                        do {
+                            let data = try await CloudAccount.shared.researchStock(symbol: stock.symbol)
+                            try Task.checkCancellation()
+                            let value = try JSONDecoder().decode(StockResearchReport.self, from: data)
+                            guard value.symbol == stock.symbol, value.html.utf8.count <= 300000 else { throw CloudFailure.invalidResponse }
+                            report = value
+                        } catch is CancellationError { }
+                        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+                    }
+                } label: {
+                    Label(tr("联网研究", "Research online", "Selidik dalam talian"), systemImage: "sparkle.magnifyingglass")
+                }.buttonStyle(.borderedProminent).disabled(running)
+                if running {
+                    ProgressView()
+                    Button(tr("取消", "Cancel", "Batal")) { task?.cancel() }
+                }
+            }
+            if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
+            if let report {
+                Text(tr("生成时间（不是行情时间）：", "Generated at (not quote time): ", "Dijana pada (bukan masa harga): ") + report.generatedAt)
+                    .font(.caption).foregroundStyle(.secondary)
+                ResearchWebView(html: report.html).id(report.generatedAt)
+            } else {
+                Spacer()
+                Text(tr("研究内容包含机会、风险、证据日期及下一步观察条件。没有搜索依据时不会生成结果。", "Research covers opportunities, risks, evidence dates and conditions to watch. Results require search evidence.", "Penyelidikan merangkumi peluang, risiko, tarikh bukti dan syarat untuk diperhatikan. Hasil memerlukan bukti carian."))
+                    .font(.subheadline).foregroundStyle(.secondary)
+                Spacer()
+            }
+        }.padding().navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
+            .navigationBarTitleDisplayMode(.inline)
+            .onDisappear { task?.cancel(); report = nil }
+            .onChange(of: phase) { _, value in
+                if value != .active { task?.cancel(); report = nil }
+            }
+    }
+}
+
+private struct ResearchWebView: UIViewRepresentable {
+    let html: String
+    func makeCoordinator() -> TradingStockChart.Coordinator { .init(failed: .constant(false)) }
+    func makeUIView(context: Context) -> WKWebView {
+        let config = WKWebViewConfiguration()
+        config.websiteDataStore = .nonPersistent()
+        config.defaultWebpagePreferences.allowsContentJavaScript = false
+        let view = WKWebView(frame: .zero, configuration: config)
+        view.navigationDelegate = context.coordinator; view.uiDelegate = context.coordinator
+        view.loadHTMLString("""
+        <!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1">
+        <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src https: data:; base-uri 'none'; form-action 'none'">
+        <style>:root{color-scheme:light dark}body{font:17px -apple-system;padding:12px;line-height:1.6;overflow-wrap:anywhere}pre{font:inherit;white-space:pre-wrap}a{color:#3688ff}li{margin-bottom:18px}h2{font-size:18px}</style></head><body>\(html)</body></html>
+        """, baseURL: nil)
+        return view
+    }
+    func updateUIView(_ view: WKWebView, context: Context) {}
+    static func dismantleUIView(_ view: WKWebView, coordinator: TradingStockChart.Coordinator) {
+        view.stopLoading(); view.navigationDelegate = nil; view.uiDelegate = nil
+        view.loadHTMLString("", baseURL: nil)
     }
 }
 

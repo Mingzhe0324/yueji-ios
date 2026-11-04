@@ -101,6 +101,22 @@ import ImageIO
         guard session?.user.id == current.user.id, signedIn, !changingAccount, !YueJiAI.usesApple(for: .category) else { throw CloudFailure.session }
         return data
     }
+    func researchStock(symbol: String) async throws -> Data {
+        guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
+        let api = try connectedService()
+        let data: Data
+        do { data = try await api.researchStock(symbol: symbol) }
+        catch CloudFailure.session {
+            let refreshed = try await api.refresh()
+            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
+            session = refreshed
+            data = try await api.researchStock(symbol: symbol)
+        }
+        try Task.checkCancellation()
+        guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+        return data
+    }
     func recognizeReceipt(image: Data, transaction: Bool = false) async throws -> Data {
         // Transaction mode is explicitly requested by the Gemini screenshot button.
         guard transaction || !YueJiAI.usesApple(for: .receipt) else { throw CancellationError() }
