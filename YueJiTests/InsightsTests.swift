@@ -81,6 +81,17 @@ final class AppleOnDeviceAITests: XCTestCase {
         XCTAssertEqual(Set(ObservedStock.examples.map(\.symbol)).count, ObservedStock.examples.count)
         XCTAssertTrue(ObservedStock.examples.allSatisfy { ObservedStock.normalized($0.symbol) == $0.symbol })
     }
+    func testStockDirectoryCoverageAndWatchlistMigration() {
+        for stock in ObservedStock.examples {
+            XCTAssertNotNil(stock.profile, stock.symbol)
+            XCTAssertEqual(stock.profile?.symbol, stock.symbol)
+            XCTAssertFalse(stock.profile?.industry.isEmpty ?? true)
+        }
+        let saved = ObservedStock.saved("NYSE:WMT\nNASDAQ:WMT\nSIX:ROG\nSIX:ROP")
+        XCTAssertEqual(saved.map(\.symbol), ["NASDAQ:WMT", "SIX:ROP"])
+        XCTAssertEqual(ObservedStock.normalized("SIX:ROG"), "SIX:ROG", "Do not discard historical reports after ticker changes")
+        XCTAssertNil(ObservedStock(symbol: "MYX:UNKNOWN", name: "Unknown").profile)
+    }
     private let transcript = "Cafe\nMYR\nRice 10.00\nSubtotal 10.00\nTax 0.60\nService 1.00\nTotal 11.60\nCash 20.00"
     private func draft(_ changes: [String: Any] = [:]) throws -> GeminiReceiptDraft {
         var object: [String: Any] = ["merchant": "Cafe", "date": "", "currency": "MYR",

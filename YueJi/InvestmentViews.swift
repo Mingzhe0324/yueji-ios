@@ -1,12 +1,51 @@
 import SwiftUI
 import WebKit
 import CryptoKit
+import UIKit
+
+struct StockCompanyProfile: Decodable {
+    let symbol: String
+    let logoAsset: String
+    let profileURL: URL
+    let website: URL?
+    let sector: String
+    let industry: String
+    let checkedAt: String
+
+    static let directory: [String: StockCompanyProfile] = {
+        guard let data = NSDataAsset(name: "StockDirectory")?.data,
+              let values = try? JSONDecoder().decode([String: StockCompanyProfile].self, from: data) else { return [:] }
+        return values.filter { key, value in
+            key == value.symbol && value.profileURL.scheme == "https" && value.profileURL.host == "www.tradingview.com"
+        }
+    }()
+}
+
+private struct StockCompanyLogo: View {
+    let stock: ObservedStock
+    var size: CGFloat = 48
+    var body: some View {
+        Group {
+            if let profile = stock.profile, let logo = UIImage(named: profile.logoAsset) {
+                Image(uiImage: logo).resizable().scaledToFit().padding(5)
+                    .frame(width: size, height: size).background(Color.white)
+            } else {
+                // Unknown manual symbols never borrow an unrelated company's logo.
+                Text(String(stock.symbol.split(separator: ":").last ?? "").prefix(4))
+                    .font(.caption.bold()).frame(width: size, height: size).background(.quaternary)
+            }
+        }.clipShape(RoundedRectangle(cornerRadius: 12))
+            .overlay(RoundedRectangle(cornerRadius: 12).stroke(.primary.opacity(0.08), lineWidth: 1))
+            .accessibilityHidden(true)
+    }
+}
 
 struct ObservedStock: Identifiable, Hashable {
     let symbol: String
     let name: String
     var id: String { symbol }
     var market: String { String(symbol.split(separator: ":").first ?? "") }
+    var profile: StockCompanyProfile? { StockCompanyProfile.directory[symbol] }
     // Mirrors the default official importer; availability still depends on deployment and source health.
     var hasOfficialImporter: Bool { ["MYX:MAYBANK", "MYX:99SMART", "MYX:GAMUDA", "MYX:HLBANK"].contains(symbol) }
     var officialSourceURL: URL? {
@@ -33,7 +72,10 @@ struct ObservedStock: Identifiable, Hashable {
     static func saved(_ value: String) -> [ObservedStock] {
         var seen = Set<String>()
         return value.split(separator: "\n").compactMap { line in
-            guard let symbol = normalized(String(line)), seen.insert(symbol).inserted else { return nil }
+            guard let original = normalized(String(line)) else { return nil }
+            // Migrate watchlists only; historical reports retain their original identifiers.
+            let symbol = ["NYSE:WMT": "NASDAQ:WMT", "SIX:ROG": "SIX:ROP"][original] ?? original
+            guard seen.insert(symbol).inserted else { return nil }
             return examples.first { $0.symbol == symbol } ?? ObservedStock(symbol: symbol, name: symbol)
         }
     }
@@ -76,7 +118,7 @@ struct ObservedStock: Identifiable, Hashable {
         .init(symbol: "NASDAQ:COIN", name: "Coinbase"),
         .init(symbol: "NYSE:JPM", name: "JPMorgan Chase · 摩根大通"),
         .init(symbol: "NYSE:V", name: "Visa"),
-        .init(symbol: "NYSE:WMT", name: "Walmart · 沃尔玛"),
+        .init(symbol: "NASDAQ:WMT", name: "Walmart · 沃尔玛"),
         .init(symbol: "NYSE:KO", name: "Coca-Cola · 可口可乐"),
         .init(symbol: "NYSE:LLY", name: "Eli Lilly · 礼来"),
         .init(symbol: "NYSE:SE", name: "Sea · 冬海"),
@@ -110,7 +152,7 @@ struct ObservedStock: Identifiable, Hashable {
         .init(symbol: "EURONEXT:OR", name: "L’Oréal · 欧莱雅"),
         .init(symbol: "EURONEXT:ASML", name: "ASML · 阿斯麦"),
         .init(symbol: "SIX:NESN", name: "Nestlé · 雀巢"),
-        .init(symbol: "SIX:ROG", name: "Roche · 罗氏"),
+        .init(symbol: "SIX:ROP", name: "Roche · 罗氏"),
         .init(symbol: "TSX:SHOP", name: "Shopify"),
         .init(symbol: "TSX:RY", name: "Royal Bank of Canada · 加拿大皇家银行"),
         .init(symbol: "ASX:BHP", name: "BHP · 必和必拓"),
@@ -218,12 +260,13 @@ struct InvestmentWatchView: View {
             StockChartView(stock: stock).yuejiZoom(id: source + stock.id, namespace: cards)
         } label: {
             HStack(spacing: 12) {
-                Text(String(stock.symbol.split(separator: ":").last ?? "").prefix(4))
-                    .font(.caption.bold()).frame(width: 48, height: 48)
-                    .background(.quaternary, in: RoundedRectangle(cornerRadius: 14))
+                StockCompanyLogo(stock: stock)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(stock.name).font(.headline)
                     Text(stock.symbol).font(.caption.monospaced()).foregroundStyle(.secondary)
+                    if let profile = stock.profile {
+                        Text(profile.industry).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                    }
                 }
                 Spacer(minLength: 0)
                 if saved.contains(where: { $0.symbol == stock.symbol }) { Image(systemName: "star.fill").foregroundStyle(.yellow).accessibilityLabel(tr("已关注", "Following", "Diikuti")) }
@@ -243,8 +286,34 @@ private struct StockChartView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
-                Text(stock.name).font(.title2.bold())
-                Text(stock.symbol).font(.subheadline.monospaced()).foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    StockCompanyLogo(stock: stock, size: 56)
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(stock.name).font(.title2.bold())
+                        Text(stock.symbol).font(.subheadline.monospaced()).foregroundStyle(.secondary)
+                    }
+                }
+                if let profile = stock.profile {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(tr("公司资料", "Company profile", "Profil syarikat")).font(.headline)
+                        LabeledContent(tr("交易所", "Exchange", "Bursa"), value: stock.market)
+                        LabeledContent(tr("板块", "Sector", "Sektor"), value: profile.sector)
+                        LabeledContent(tr("行业", "Industry", "Industri"), value: profile.industry)
+                        if let website = profile.website {
+                            Link(tr("公司官网 ↗", "Company website ↗", "Laman web syarikat ↗"), destination: website)
+                        }
+                        Link(tr("完整公司资料 · TradingView ↗", "Full profile · TradingView ↗", "Profil penuh · TradingView ↗"), destination: profile.profileURL)
+                        Link(tr("财务数据 ↗", "Financials ↗", "Kewangan ↗"), destination: profile.profileURL.appendingPathComponent("financials-overview"))
+                        Link(tr("公司新闻 ↗", "Company news ↗", "Berita syarikat ↗"), destination: profile.profileURL.appendingPathComponent("news"))
+                        Text(tr("公司分类与图标来源：TradingView。核对日期：", "Company classifications and logos: TradingView. Checked: ", "Klasifikasi syarikat dan logo: TradingView. Disemak: ") + profile.checkedAt)
+                            .font(.caption2).foregroundStyle(.secondary)
+                        Text(tr("外部页面可能延迟或缺少资料；这些链接不代表 AI 已读取其内容。", "External pages may be delayed or incomplete. These links do not mean AI has read their contents.", "Halaman luar mungkin tertunda atau tidak lengkap. Pautan ini tidak bermakna AI telah membaca kandungannya."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding().background(.quaternary, in: RoundedRectangle(cornerRadius: 16))
+                } else {
+                    Text(tr("这只股票尚未收录公司资料和图标；请核对交易所及代码。", "Company details and logo are not in the directory yet. Check the exchange and symbol.", "Butiran syarikat dan logo belum ada dalam direktori. Semak bursa dan kod."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if let source = stock.officialSourceURL {
                     Link(destination: source) {
                         Label(tr("公司官方财务资料 ↗", "Official financial sources ↗", "Sumber kewangan rasmi ↗"), systemImage: "doc.text.magnifyingglass")
@@ -516,6 +585,7 @@ private struct StockComparisonPicker: View {
                     else if selected.count < 3 { selected.append(stock.symbol) }
                 } label: {
                     HStack {
+                        StockCompanyLogo(stock: stock, size: 40)
                         VStack(alignment: .leading) { Text(stock.name); Text(stock.symbol).font(.caption).foregroundStyle(.secondary) }
                         Spacer()
                         Image(systemName: selected.contains(stock.symbol) ? "checkmark.circle.fill" : "circle")

@@ -1,0 +1,802 @@
+{
+  "ASX:BHP": {
+    "symbol": "ASX:BHP",
+    "logoAsset": "StockLogo_ASX-BHP",
+    "profileURL": "https://www.tradingview.com/symbols/ASX-BHP/",
+    "website": "http://www.bhp.com/",
+    "sector": "Non-Energy Minerals",
+    "industry": "Steel",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/bhp--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "ASX:CBA": {
+    "symbol": "ASX:CBA",
+    "logoAsset": "StockLogo_ASX-CBA",
+    "profileURL": "https://www.tradingview.com/symbols/ASX-CBA/",
+    "website": "http://www.commbank.com.au/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/commonwealth-bank--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "EURONEXT:ASML": {
+    "symbol": "EURONEXT:ASML",
+    "logoAsset": "StockLogo_EURONEXT-ASML",
+    "profileURL": "https://www.tradingview.com/symbols/EURONEXT-ASML/",
+    "website": "http://www.asml.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/asml--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "EURONEXT:MC": {
+    "symbol": "EURONEXT:MC",
+    "logoAsset": "StockLogo_EURONEXT-MC",
+    "profileURL": "https://www.tradingview.com/symbols/EURONEXT-MC/",
+    "website": "http://www.lvmh.com/",
+    "sector": "Consumer Non-Durables",
+    "industry": "Apparel/Footwear",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/lvmh--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "EURONEXT:OR": {
+    "symbol": "EURONEXT:OR",
+    "logoAsset": "StockLogo_EURONEXT-OR",
+    "profileURL": "https://www.tradingview.com/symbols/EURONEXT-OR/",
+    "website": "http://www.loreal.com/",
+    "sector": "Consumer Non-Durables",
+    "industry": "Household/Personal Care",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/l-oreal--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:1211": {
+    "symbol": "HKEX:1211",
+    "logoAsset": "StockLogo_HKEX-1211",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-1211/",
+    "website": "http://www.bydglobal.com/",
+    "sector": "Producer Manufacturing",
+    "industry": "Electrical Products",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/byd-electronic--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:1810": {
+    "symbol": "HKEX:1810",
+    "logoAsset": "StockLogo_HKEX-1810",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-1810/",
+    "website": "http://www.mi.com/",
+    "sector": "Electronic Technology",
+    "industry": "Telecommunications Equipment",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/xiaomi--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:3690": {
+    "symbol": "HKEX:3690",
+    "logoAsset": "StockLogo_HKEX-3690",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-3690/",
+    "website": "http://www.meituan.com/",
+    "sector": "Technology Services",
+    "industry": "Packaged Software",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/meituan--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:388": {
+    "symbol": "HKEX:388",
+    "logoAsset": "StockLogo_HKEX-388",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-388/",
+    "website": "http://www.hkex.com.hk/",
+    "sector": "Finance",
+    "industry": "Investment Banks/Brokers",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/hkex--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:5": {
+    "symbol": "HKEX:5",
+    "logoAsset": "StockLogo_HKEX-5",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-5/",
+    "website": "http://www.hsbc.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/hsbc--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:700": {
+    "symbol": "HKEX:700",
+    "logoAsset": "StockLogo_HKEX-700",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-700/",
+    "website": "http://www.tencent.com/",
+    "sector": "Technology Services",
+    "industry": "Packaged Software",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/tencent--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:9618": {
+    "symbol": "HKEX:9618",
+    "logoAsset": "StockLogo_HKEX-9618",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-9618/",
+    "website": "http://www.jd.com/",
+    "sector": "Retail Trade",
+    "industry": "Internet Retail",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/jd-com--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:9988": {
+    "symbol": "HKEX:9988",
+    "logoAsset": "StockLogo_HKEX-9988",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-9988/",
+    "website": "http://www.alibabagroup.com/",
+    "sector": "Retail Trade",
+    "industry": "Internet Retail",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/alibaba--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "HKEX:9999": {
+    "symbol": "HKEX:9999",
+    "logoAsset": "StockLogo_HKEX-9999",
+    "profileURL": "https://www.tradingview.com/symbols/HKEX-9999/",
+    "website": "http://ir.netease.com/",
+    "sector": "Technology Services",
+    "industry": "Packaged Software",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/netease--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "KRX:000660": {
+    "symbol": "KRX:000660",
+    "logoAsset": "StockLogo_KRX-000660",
+    "profileURL": "https://www.tradingview.com/symbols/KRX-000660/",
+    "website": "http://www.skhynix.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/sk-telecom--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "KRX:005930": {
+    "symbol": "KRX:005930",
+    "logoAsset": "StockLogo_KRX-005930",
+    "profileURL": "https://www.tradingview.com/symbols/KRX-005930/",
+    "website": "http://www.samsung.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/samsung--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "LSE:AZN": {
+    "symbol": "LSE:AZN",
+    "logoAsset": "StockLogo_LSE-AZN",
+    "profileURL": "https://www.tradingview.com/symbols/LSE-AZN/",
+    "website": "http://www.astrazeneca.com/",
+    "sector": "Health Technology",
+    "industry": "Pharmaceuticals: Major",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/astrazeneca--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "LSE:HSBA": {
+    "symbol": "LSE:HSBA",
+    "logoAsset": "StockLogo_LSE-HSBA",
+    "profileURL": "https://www.tradingview.com/symbols/LSE-HSBA/",
+    "website": "http://www.hsbc.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/hsbc--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "LSE:SHEL": {
+    "symbol": "LSE:SHEL",
+    "logoAsset": "StockLogo_LSE-SHEL",
+    "profileURL": "https://www.tradingview.com/symbols/LSE-SHEL/",
+    "website": "http://www.shell.com/",
+    "sector": "Energy Minerals",
+    "industry": "Integrated Oil",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/shell--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:99SMART": {
+    "symbol": "MYX:99SMART",
+    "logoAsset": "StockLogo_MYX-99SMART",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-99SMART/",
+    "website": "http://www.99speedmart.com.my/",
+    "sector": "Retail Trade",
+    "industry": "Food Retail",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/99-speed-mart-retail-berhad--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:CIMB": {
+    "symbol": "MYX:CIMB",
+    "logoAsset": "StockLogo_MYX-CIMB",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-CIMB/",
+    "website": "http://www.cimb.com/",
+    "sector": "Finance",
+    "industry": "Regional Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/cimb-group-holdings-berhad--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:GAMUDA": {
+    "symbol": "MYX:GAMUDA",
+    "logoAsset": "StockLogo_MYX-GAMUDA",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-GAMUDA/",
+    "website": "http://www.gamuda.com.my/",
+    "sector": "Industrial Services",
+    "industry": "Engineering & Construction",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/gamuda-bhd--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:HLBANK": {
+    "symbol": "MYX:HLBANK",
+    "logoAsset": "StockLogo_MYX-HLBANK",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-HLBANK/",
+    "website": "http://www.hlb.com.my/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/hong-leong-bank-bhd--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:IHH": {
+    "symbol": "MYX:IHH",
+    "logoAsset": "StockLogo_MYX-IHH",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-IHH/",
+    "website": "http://www.ihhhealthcare.com/",
+    "sector": "Health Services",
+    "industry": "Hospital/Nursing Management",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/ihh--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:INARI": {
+    "symbol": "MYX:INARI",
+    "logoAsset": "StockLogo_MYX-INARI",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-INARI/",
+    "website": "http://www.inari-amertron.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/inari-amertron-berhad--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:MAYBANK": {
+    "symbol": "MYX:MAYBANK",
+    "logoAsset": "StockLogo_MYX-MAYBANK",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-MAYBANK/",
+    "website": "http://www.maybank.com/",
+    "sector": "Finance",
+    "industry": "Regional Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/malayan-banking--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:MRDIY": {
+    "symbol": "MYX:MRDIY",
+    "logoAsset": "StockLogo_MYX-MRDIY",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-MRDIY/",
+    "website": "http://www.mrdiy.com/",
+    "sector": "Distribution Services",
+    "industry": "Wholesale Distributors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/mr-d-i-y-group-m-berhad--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:PBBANK": {
+    "symbol": "MYX:PBBANK",
+    "logoAsset": "StockLogo_MYX-PBBANK",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-PBBANK/",
+    "website": "http://www.publicbankgroup.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/public-bank--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:PETGAS": {
+    "symbol": "MYX:PETGAS",
+    "logoAsset": "StockLogo_MYX-PETGAS",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-PETGAS/",
+    "website": "http://www.petronas.com/pgb",
+    "sector": "Utilities",
+    "industry": "Gas Distributors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/petronas-gas-bhd--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "MYX:TENAGA": {
+    "symbol": "MYX:TENAGA",
+    "logoAsset": "StockLogo_MYX-TENAGA",
+    "profileURL": "https://www.tradingview.com/symbols/MYX-TENAGA/",
+    "website": "http://www.tnb.com.my/",
+    "sector": "Utilities",
+    "industry": "Electric Utilities",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/tenaga-nasional--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:AAPL": {
+    "symbol": "NASDAQ:AAPL",
+    "logoAsset": "StockLogo_NASDAQ-AAPL",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-AAPL/",
+    "website": "http://www.apple.com/",
+    "sector": "Electronic Technology",
+    "industry": "Telecommunications Equipment",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/apple--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:AMD": {
+    "symbol": "NASDAQ:AMD",
+    "logoAsset": "StockLogo_NASDAQ-AMD",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-AMD/",
+    "website": "http://www.amd.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/advanced-micro-devices--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:AMZN": {
+    "symbol": "NASDAQ:AMZN",
+    "logoAsset": "StockLogo_NASDAQ-AMZN",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-AMZN/",
+    "website": "http://www.aboutamazon.com/",
+    "sector": "Retail Trade",
+    "industry": "Internet Retail",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/amazon--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:AVGO": {
+    "symbol": "NASDAQ:AVGO",
+    "logoAsset": "StockLogo_NASDAQ-AVGO",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-AVGO/",
+    "website": "http://www.broadcom.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/broadcom--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:COIN": {
+    "symbol": "NASDAQ:COIN",
+    "logoAsset": "StockLogo_NASDAQ-COIN",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-COIN/",
+    "website": "http://www.coinbase.com/",
+    "sector": "Finance",
+    "industry": "Investment Banks/Brokers",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/coinbase--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:COST": {
+    "symbol": "NASDAQ:COST",
+    "logoAsset": "StockLogo_NASDAQ-COST",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-COST/",
+    "website": "http://www.costco.com/",
+    "sector": "Retail Trade",
+    "industry": "Specialty Stores",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/costco-wholesale--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:GOOGL": {
+    "symbol": "NASDAQ:GOOGL",
+    "logoAsset": "StockLogo_NASDAQ-GOOGL",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-GOOGL/",
+    "website": "http://www.abc.xyz/",
+    "sector": "Technology Services",
+    "industry": "Internet Software/Services",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/alphabet--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:INTC": {
+    "symbol": "NASDAQ:INTC",
+    "logoAsset": "StockLogo_NASDAQ-INTC",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-INTC/",
+    "website": "http://www.intel.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/intel--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:META": {
+    "symbol": "NASDAQ:META",
+    "logoAsset": "StockLogo_NASDAQ-META",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-META/",
+    "website": "http://www.meta.com/",
+    "sector": "Technology Services",
+    "industry": "Internet Software/Services",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/meta-platforms--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:MSFT": {
+    "symbol": "NASDAQ:MSFT",
+    "logoAsset": "StockLogo_NASDAQ-MSFT",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-MSFT/",
+    "website": "http://www.microsoft.com/",
+    "sector": "Technology Services",
+    "industry": "Packaged Software",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/microsoft--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:NFLX": {
+    "symbol": "NASDAQ:NFLX",
+    "logoAsset": "StockLogo_NASDAQ-NFLX",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-NFLX/",
+    "website": "http://www.netflix.com/",
+    "sector": "Technology Services",
+    "industry": "Internet Software/Services",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/netflix--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:NVDA": {
+    "symbol": "NASDAQ:NVDA",
+    "logoAsset": "StockLogo_NASDAQ-NVDA",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-NVDA/",
+    "website": "http://www.nvidia.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/nvidia--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:PDD": {
+    "symbol": "NASDAQ:PDD",
+    "logoAsset": "StockLogo_NASDAQ-PDD",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-PDD/",
+    "website": "http://pddholdings.com/",
+    "sector": "Retail Trade",
+    "industry": "Department Stores",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/pinduoduo--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:PLTR": {
+    "symbol": "NASDAQ:PLTR",
+    "logoAsset": "StockLogo_NASDAQ-PLTR",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-PLTR/",
+    "website": "http://www.palantir.com/",
+    "sector": "Technology Services",
+    "industry": "Packaged Software",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/palantir--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:QCOM": {
+    "symbol": "NASDAQ:QCOM",
+    "logoAsset": "StockLogo_NASDAQ-QCOM",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-QCOM/",
+    "website": "http://www.qualcomm.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/qualcomm--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:TSLA": {
+    "symbol": "NASDAQ:TSLA",
+    "logoAsset": "StockLogo_NASDAQ-TSLA",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-TSLA/",
+    "website": "http://www.tesla.com/",
+    "sector": "Consumer Durables",
+    "industry": "Motor Vehicles",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/tesla--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NASDAQ:WMT": {
+    "symbol": "NASDAQ:WMT",
+    "logoAsset": "StockLogo_NASDAQ-WMT",
+    "profileURL": "https://www.tradingview.com/symbols/NASDAQ-WMT/",
+    "website": "http://corporate.walmart.com/",
+    "sector": "Retail Trade",
+    "industry": "Specialty Stores",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/walmart--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NSE:RELIANCE": {
+    "symbol": "NSE:RELIANCE",
+    "logoAsset": "StockLogo_NSE-RELIANCE",
+    "profileURL": "https://www.tradingview.com/symbols/NSE-RELIANCE/",
+    "website": "http://www.ril.com/",
+    "sector": "Energy Minerals",
+    "industry": "Oil Refining/Marketing",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/reliance-industrial-infrastructure--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NSE:TCS": {
+    "symbol": "NSE:TCS",
+    "logoAsset": "StockLogo_NSE-TCS",
+    "profileURL": "https://www.tradingview.com/symbols/NSE-TCS/",
+    "website": "http://www.tcs.com/",
+    "sector": "Technology Services",
+    "industry": "Information Technology Services",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/tata--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:BRK.B": {
+    "symbol": "NYSE:BRK.B",
+    "logoAsset": "StockLogo_NYSE-BRK.B",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-BRK.B/",
+    "website": "http://www.berkshirehathaway.com/",
+    "sector": "Finance",
+    "industry": "Property/Casualty Insurance",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/berkshire-hathaway--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:JPM": {
+    "symbol": "NYSE:JPM",
+    "logoAsset": "StockLogo_NYSE-JPM",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-JPM/",
+    "website": "http://www.jpmorganchase.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/jpmorgan-chase--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:KO": {
+    "symbol": "NYSE:KO",
+    "logoAsset": "StockLogo_NYSE-KO",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-KO/",
+    "website": "http://www.coca-colacompany.com/",
+    "sector": "Consumer Non-Durables",
+    "industry": "Beverages: Non-Alcoholic",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/coca-cola--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:LLY": {
+    "symbol": "NYSE:LLY",
+    "logoAsset": "StockLogo_NYSE-LLY",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-LLY/",
+    "website": "http://www.lilly.com/",
+    "sector": "Health Technology",
+    "industry": "Pharmaceuticals: Major",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/eli-lilly--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:SE": {
+    "symbol": "NYSE:SE",
+    "logoAsset": "StockLogo_NYSE-SE",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-SE/",
+    "website": "http://www.sea.com/",
+    "sector": "Retail Trade",
+    "industry": "Internet Retail",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/sea-limited--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:TSM": {
+    "symbol": "NYSE:TSM",
+    "logoAsset": "StockLogo_NYSE-TSM",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-TSM/",
+    "website": "http://www.tsmc.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/taiwan-semiconductor--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "NYSE:V": {
+    "symbol": "NYSE:V",
+    "logoAsset": "StockLogo_NYSE-V",
+    "profileURL": "https://www.tradingview.com/symbols/NYSE-V/",
+    "website": "http://usa.visa.com/",
+    "sector": "Finance",
+    "industry": "Finance/Rental/Leasing",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/visa--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SGX:D05": {
+    "symbol": "SGX:D05",
+    "logoAsset": "StockLogo_SGX-D05",
+    "profileURL": "https://www.tradingview.com/symbols/SGX-D05/",
+    "website": "http://www.dbs.com.sg/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/dbs--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SGX:O39": {
+    "symbol": "SGX:O39",
+    "logoAsset": "StockLogo_SGX-O39",
+    "profileURL": "https://www.tradingview.com/symbols/SGX-O39/",
+    "website": "http://www.ocbc.com/group/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/ocbc--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SGX:U11": {
+    "symbol": "SGX:U11",
+    "logoAsset": "StockLogo_SGX-U11",
+    "profileURL": "https://www.tradingview.com/symbols/SGX-U11/",
+    "website": "http://www.uobgroup.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/uob--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SGX:Z74": {
+    "symbol": "SGX:Z74",
+    "logoAsset": "StockLogo_SGX-Z74",
+    "profileURL": "https://www.tradingview.com/symbols/SGX-Z74/",
+    "website": "http://www.singtel.com/",
+    "sector": "Communications",
+    "industry": "Major Telecommunications",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/singtel--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SIX:NESN": {
+    "symbol": "SIX:NESN",
+    "logoAsset": "StockLogo_SIX-NESN",
+    "profileURL": "https://www.tradingview.com/symbols/SIX-NESN/",
+    "website": "http://www.nestle.com/",
+    "sector": "Consumer Non-Durables",
+    "industry": "Food: Major Diversified",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/nestle--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SIX:ROP": {
+    "symbol": "SIX:ROP",
+    "logoAsset": "StockLogo_SIX-ROP",
+    "profileURL": "https://www.tradingview.com/symbols/SIX-ROP/",
+    "website": "http://www.roche.com/",
+    "sector": "Health Technology",
+    "industry": "Pharmaceuticals: Major",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/roche--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SSE:600036": {
+    "symbol": "SSE:600036",
+    "logoAsset": "StockLogo_SSE-600036",
+    "profileURL": "https://www.tradingview.com/symbols/SSE-600036/",
+    "website": "http://www.cmbchina.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/china-merchants-bank--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SSE:600519": {
+    "symbol": "SSE:600519",
+    "logoAsset": "StockLogo_SSE-600519",
+    "profileURL": "https://www.tradingview.com/symbols/SSE-600519/",
+    "website": "http://www.moutaichina.com/",
+    "sector": "Consumer Non-Durables",
+    "industry": "Beverages: Alcoholic",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/moutai--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SSE:601318": {
+    "symbol": "SSE:601318",
+    "logoAsset": "StockLogo_SSE-601318",
+    "profileURL": "https://www.tradingview.com/symbols/SSE-601318/",
+    "website": "http://www.pingan.cn/",
+    "sector": "Finance",
+    "industry": "Multi-Line Insurance",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/ping-an--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SZSE:000333": {
+    "symbol": "SZSE:000333",
+    "logoAsset": "StockLogo_SZSE-000333",
+    "profileURL": "https://www.tradingview.com/symbols/SZSE-000333/",
+    "website": "http://www.midea-group.com/",
+    "sector": "Consumer Durables",
+    "industry": "Electronics/Appliances",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/midea--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SZSE:002594": {
+    "symbol": "SZSE:002594",
+    "logoAsset": "StockLogo_SZSE-002594",
+    "profileURL": "https://www.tradingview.com/symbols/SZSE-002594/",
+    "website": "http://www.bydglobal.com/",
+    "sector": "Producer Manufacturing",
+    "industry": "Electrical Products",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/byd-electronic--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "SZSE:300750": {
+    "symbol": "SZSE:300750",
+    "logoAsset": "StockLogo_SZSE-300750",
+    "profileURL": "https://www.tradingview.com/symbols/SZSE-300750/",
+    "website": "http://www.catlbattery.com/",
+    "sector": "Producer Manufacturing",
+    "industry": "Electrical Products",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/contemporary-amper--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TSE:6758": {
+    "symbol": "TSE:6758",
+    "logoAsset": "StockLogo_TSE-6758",
+    "profileURL": "https://www.tradingview.com/symbols/TSE-6758/",
+    "website": "http://www.sony.com/ja/",
+    "sector": "Electronic Technology",
+    "industry": "Computer Processing Hardware",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/sony--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TSE:7203": {
+    "symbol": "TSE:7203",
+    "logoAsset": "StockLogo_TSE-7203",
+    "profileURL": "https://www.tradingview.com/symbols/TSE-7203/",
+    "website": "http://global.toyota/en/",
+    "sector": "Consumer Durables",
+    "industry": "Motor Vehicles",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/toyota--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TSE:7974": {
+    "symbol": "TSE:7974",
+    "logoAsset": "StockLogo_TSE-7974",
+    "profileURL": "https://www.tradingview.com/symbols/TSE-7974/",
+    "website": "http://www.nintendo.co.jp/corporate/index.html",
+    "sector": "Consumer Durables",
+    "industry": "Recreational Products",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/nintendo--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TSE:9984": {
+    "symbol": "TSE:9984",
+    "logoAsset": "StockLogo_TSE-9984",
+    "profileURL": "https://www.tradingview.com/symbols/TSE-9984/",
+    "website": "http://group.softbank/",
+    "sector": "Communications",
+    "industry": "Specialty Telecommunications",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/softbank--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TSX:RY": {
+    "symbol": "TSX:RY",
+    "logoAsset": "StockLogo_TSX-RY",
+    "profileURL": "https://www.tradingview.com/symbols/TSX-RY/",
+    "website": "http://www.rbc.com/",
+    "sector": "Finance",
+    "industry": "Major Banks",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/royal-bank-of-canada--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TSX:SHOP": {
+    "symbol": "TSX:SHOP",
+    "logoAsset": "StockLogo_TSX-SHOP",
+    "profileURL": "https://www.tradingview.com/symbols/TSX-SHOP/",
+    "website": "http://www.shopify.com/",
+    "sector": "Commercial Services",
+    "industry": "Miscellaneous Commercial Services",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/shopify--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TWSE:2317": {
+    "symbol": "TWSE:2317",
+    "logoAsset": "StockLogo_TWSE-2317",
+    "profileURL": "https://www.tradingview.com/symbols/TWSE-2317/",
+    "website": "http://www.honhai.com.tw/",
+    "sector": "Electronic Technology",
+    "industry": "Computer Peripherals",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/hon-hai--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TWSE:2330": {
+    "symbol": "TWSE:2330",
+    "logoAsset": "StockLogo_TWSE-2330",
+    "profileURL": "https://www.tradingview.com/symbols/TWSE-2330/",
+    "website": "http://www.tsmc.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/taiwan-semiconductor--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "TWSE:2454": {
+    "symbol": "TWSE:2454",
+    "logoAsset": "StockLogo_TWSE-2454",
+    "profileURL": "https://www.tradingview.com/symbols/TWSE-2454/",
+    "website": "http://www.mediatek.com/",
+    "sector": "Electronic Technology",
+    "industry": "Semiconductors",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/mediatek--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "XETR:ALV": {
+    "symbol": "XETR:ALV",
+    "logoAsset": "StockLogo_XETR-ALV",
+    "profileURL": "https://www.tradingview.com/symbols/XETR-ALV/",
+    "website": "http://www.allianz.com/",
+    "sector": "Finance",
+    "industry": "Multi-Line Insurance",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/allianz--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "XETR:SAP": {
+    "symbol": "XETR:SAP",
+    "logoAsset": "StockLogo_XETR-SAP",
+    "profileURL": "https://www.tradingview.com/symbols/XETR-SAP/",
+    "website": "http://www.sap.com/",
+    "sector": "Technology Services",
+    "industry": "Packaged Software",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/sap--600.png",
+    "checkedAt": "2026-11-04"
+  },
+  "XETR:SIE": {
+    "symbol": "XETR:SIE",
+    "logoAsset": "StockLogo_XETR-SIE",
+    "profileURL": "https://www.tradingview.com/symbols/XETR-SIE/",
+    "website": "http://www.siemens.de/",
+    "sector": "Producer Manufacturing",
+    "industry": "Industrial Machinery",
+    "logoSource": "https://s3-symbol-logo.tradingview.com/siemens--600.png",
+    "checkedAt": "2026-11-04"
+  }
+}
