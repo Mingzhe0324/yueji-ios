@@ -294,9 +294,6 @@ struct BankAccountsView: View {
                     }.moveDisabled(model.isWorking("account-order"))
                 }
                 Section {
-                    NavigationLink { InvestmentWatchView() } label: {
-                        Label(tr("投资观察", "Market watch", "Pantau pasaran"), systemImage: "chart.line.uptrend.xyaxis")
-                    }.accessibilityIdentifier("bankAccount.marketWatch")
                     NavigationLink { BankTransfersView() } label: {
                         Label(tr("转账／TNG 充值", "Transfers / TNG top-ups", "Pindahan / tambah nilai TNG"), systemImage: "arrow.left.arrow.right")
                     }.accessibilityIdentifier("bankAccount.transfers")
@@ -309,6 +306,13 @@ struct BankAccountsView: View {
             .animation(reduceMotion ? nil : .spring(response: 0.35, dampingFraction: 0.85), value: model.ledger.bankAccounts.map(\.id))
             .navigationTitle(tr("账户", "Accounts", "Akaun"))
             .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    NavigationLink { InvestmentWatchView() } label: {
+                        Image(systemName: "chart.line.uptrend.xyaxis")
+                    }
+                    .accessibilityLabel(tr("投资观察", "Market watch", "Pantau pasaran"))
+                    .accessibilityIdentifier("bankAccount.marketWatch")
+                }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus.circle.fill") }
                         .accessibilityLabel(tr("添加账户", "Add account", "Tambah akaun"))
