@@ -12,6 +12,8 @@ private struct BankWalletCard: View {
     private var isWise: Bool { bank.caseInsensitiveCompare("Wise") == .orderedSame }
     private var brandColor: Color {
         if isWise { return Color(red: 0.48, green: 0.72, blue: 0.18) }
+        if bank == "GrabPay" { return Color(red: 0.02, green: 0.55, blue: 0.28) }
+        if bank == "ShopeePay" { return Color(red: 0.93, green: 0.29, blue: 0.15) }
         switch logo {
         case "BankMaybank": return Color(red: 1, green: 0.76, blue: 0.08)
         case "BankPublic", "BankCIMB", "BankHSBC", "BankOCBC", "BankBoost", "BankBankIslam":
@@ -63,6 +65,8 @@ private struct BankWalletCard: View {
                         .accessibilityHidden(true)
                 } else if isWise {
                     Text("Wise").font(.title3.bold()).accessibilityHidden(true)
+                } else if MalaysianBanks.walletsAndPayments.contains(bank) {
+                    Image(systemName: "wallet.pass.fill").font(.title3).accessibilityHidden(true)
                 } else {
                     Image(systemName: "building.columns.fill").font(.title3).accessibilityHidden(true)
                 }
@@ -589,10 +593,13 @@ private struct BankAccountEditor: View {
                     Section(tr("数字银行", "Digital banks", "Bank digital")) {
                         ForEach(MalaysianBanks.digital, id: \.self) { Text($0).tag($0) }
                     }
+                    Section(tr("其他银行与金融机构", "Other banks and financial institutions", "Bank dan institusi kewangan lain")) {
+                        ForEach(MalaysianBanks.otherBanks, id: \.self) { Text($0).tag($0) }
+                    }
                     Section(tr("钱包与支付账户", "Wallets and payment accounts", "Dompet dan akaun pembayaran")) {
                         ForEach(MalaysianBanks.walletsAndPayments, id: \.self) { Text($0).tag($0) }
                     }
-                    if !institution.isEmpty && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital + MalaysianBanks.walletsAndPayments).contains(institution) {
+                    if !institution.isEmpty && !(MalaysianBanks.conventional + MalaysianBanks.islamic + MalaysianBanks.digital + MalaysianBanks.otherBanks + MalaysianBanks.walletsAndPayments).contains(institution) {
                         Text(institution).tag(institution)
                     }
                 }.pickerStyle(.navigationLink)
@@ -619,6 +626,7 @@ private struct BankAccountEditor: View {
                         }
                     }.pickerStyle(.navigationLink).disabled(institution == "TNG Card")
                     if !automaticSource.isEmpty {
+                        Text(tr("根据你导入的交易通知识别，不会直接连接银行或钱包。付款须明确完成；充值、退款及不明格式需要核对。Grab 和 Shopee 的订单通知不等于钱包付款。", "Uses transaction notices you import, without connecting to a bank or wallet. Payments must be explicitly completed; reloads, refunds and unfamiliar formats need review. Grab and Shopee order notices are not wallet payments.", "Menggunakan notis transaksi yang diimport, tanpa sambungan bank atau dompet. Bayaran mesti selesai; tambah nilai, bayaran balik dan format asing perlu disemak. Notis pesanan Grab dan Shopee bukan bayaran dompet.")).font(.footnote).foregroundStyle(.secondary)
                         TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
                             .keyboardType(.numberPad)
                         Text(tr("填写尾号后，通知必须包含相同尾号才能自动匹配。如果同一来源只有一个账户，而通知没有尾号，请留空。", "If entered, notices must contain the same last four digits to match. Leave blank when this source has only one account and its notices contain no suffix.", "Jika diisi, notifikasi mesti mengandungi empat digit yang sama. Biarkan kosong jika sumber ini hanya mempunyai satu akaun dan notifikasi tiada digit akhir."))

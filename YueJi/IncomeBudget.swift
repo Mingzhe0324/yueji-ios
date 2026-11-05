@@ -15,7 +15,8 @@ enum MalaysianBanks {
     static let conventional = ["Maybank", "CIMB Bank", "Public Bank", "RHB Bank", "Hong Leong Bank", "AmBank", "Affin Bank", "Alliance Bank", "HSBC Malaysia", "OCBC Malaysia", "UOB Malaysia", "Standard Chartered Malaysia", "Bank of China Malaysia", "ICBC Malaysia"]
     static let islamic = ["Maybank Islamic", "CIMB Islamic", "Bank Islam", "Bank Muamalat", "MBSB Bank", "Affin Islamic", "Alliance Islamic", "AmBank Islamic", "Hong Leong Islamic", "HSBC Amanah", "OCBC Al-Amin", "Public Islamic", "RHB Islamic", "Standard Chartered Saadiq", "Al Rajhi Malaysia"]
     static let digital = ["GXBank", "Boost Bank", "AEON Bank", "Ryt Bank", "KAF Digital Bank"]
-    static let walletsAndPayments = ["TNG eWallet", "TNG Card", "Wise"]
+    static let otherBanks = ["BSN", "Bank Rakyat", "Agrobank", "Bank Pertama"]
+    static let walletsAndPayments = ["TNG eWallet", "TNG Card", "GrabPay", "ShopeePay", "Wise"]
 }
 
 /// A manually maintained MYR account. No bank credentials or bank connection.

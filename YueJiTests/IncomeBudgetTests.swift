@@ -4,6 +4,32 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testAdditionalWalletPaymentsLinkOnlyTheirConfiguredAccount() throws {
+        // Synthetic shared-grammar fixtures, not claimed provider notification samples.
+        let date = Date()
+        let providers = ["GrabPay", "ShopeePay", "AEON Bank"]
+        let accounts = providers.map { BankAccount(name: $0, openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: $0, automaticSource: $0) }
+        for (index, provider) in providers.enumerated() {
+            var ledger = Ledger(); ledger.bankAccounts = accounts
+            _ = try ledger.receiveTNG(body: "You have paid RM12.50 at CAFE", title: "Payment", date: date, eventID: nil, sourceApp: provider)
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.expenses.first?.bankAccountID, accounts[index].id)
+            for (other, account) in accounts.enumerated() {
+                XCTAssertEqual(ledger.bankBalance(account), other == index ? 8750 : 10000)
+            }
+            for body in ["Your order of RM12.50 is ready", "Top up of RM12.50 successful", "Refund of RM12.50 received", "Payment of RM12.50 at CAFE is pending"] {
+                XCTAssertNil(parseFinancialNotification(body, sourceApp: provider))
+            }
+        }
+        XCTAssertEqual(exactFinancialProvider("grab pay"), "GrabPay")
+        XCTAssertEqual(exactFinancialProvider("shopee pay"), "ShopeePay")
+        XCTAssertNil(exactFinancialProvider("Grab"))
+        XCTAssertNil(exactFinancialProvider("Shopee"))
+        XCTAssertNil(parseFinancialNotification("ShopeePay: You have paid RM12.50 at CAFE", sourceApp: "GrabPay"))
+        XCTAssertTrue(MalaysianBanks.walletsAndPayments.contains("GrabPay"))
+        XCTAssertTrue(MalaysianBanks.walletsAndPayments.contains("ShopeePay"))
+        XCTAssertTrue(MalaysianBanks.digital.contains("AEON Bank"))
+    }
     func testPinduoduoOnlinePaymentAssociatesConfiguredTNGWallet() throws {
         let date = Date()
         let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")
