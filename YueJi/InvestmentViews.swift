@@ -236,10 +236,7 @@ struct InvestmentWatchView: View {
                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)).listRowBackground(Color.clear)
             }
             Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 12) { assistantEntrances }
-                    VStack(spacing: 12) { assistantEntrances }
-                }
+                beginnerEntrance
                 NavigationLink { StockComparisonPicker() } label: {
                     Label(tr("对比 2–3 只股票", "Compare 2–3 stocks", "Bandingkan 2–3 saham"), systemImage: "square.split.2x2")
                 }
@@ -338,15 +335,11 @@ struct InvestmentWatchView: View {
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: compactWatchlist)
             .onAppear(perform: loadRecentResearch)
             .onChange(of: account.researchHistoryScope) { _, _ in loadRecentResearch() }
+            .investmentAssistantOrb()
     }
-    @ViewBuilder private var assistantEntrances: some View {
+    private var beginnerEntrance: some View {
         NavigationLink { BeginnerInvestmentView() } label: {
             Label(tr("新手起步", "Get started", "Mula belajar"), systemImage: "leaf")
-                .frame(maxWidth: .infinity).padding(12)
-                .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
-        }.buttonStyle(InvestmentPressStyle())
-        NavigationLink { StockChatView() } label: {
-            Label(tr("问 AI 股票问题", "Ask stock AI", "Tanya AI saham"), systemImage: "bubble.left.and.bubble.right")
                 .frame(maxWidth: .infinity).padding(12)
                 .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
         }.buttonStyle(InvestmentPressStyle())
@@ -481,6 +474,7 @@ private struct StockChartView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(20)
         }.navigationTitle(tr("股票详情", "Stock details", "Butiran saham"))
+            .investmentAssistantOrb()
             .environment(\.openURL, OpenURLAction { url in
                 guard ["https", "http"].contains(url.scheme?.lowercased() ?? "") else { return .systemAction }
                 browserPage = StockBrowserPage(url: url)
@@ -761,10 +755,94 @@ private struct ResearchCompanyCards: View {
 }
 
 private extension View {
+    func investmentAssistantOrb() -> some View { modifier(InvestmentAssistantOrb()) }
     func researchCard() -> some View {
         self.frame(maxWidth: .infinity, alignment: .leading).padding(18)
             .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 22))
             .overlay(RoundedRectangle(cornerRadius: 22).stroke(Color.secondary.opacity(0.12), lineWidth: 1))
+    }
+}
+
+/// Original vector mark: a crescent conversation bubble and a small four-point star.
+/// Drawn at any size without a bitmap or a third-party logo dependency.
+private struct StockAssistantMark: View {
+    var body: some View {
+        GeometryReader { geometry in
+            let w = geometry.size.width
+            let h = geometry.size.height
+            ZStack {
+                Path { p in
+                    p.move(to: CGPoint(x: w * 0.72, y: h * 0.29))
+                    p.addCurve(to: CGPoint(x: w * 0.22, y: h * 0.69), control1: CGPoint(x: w * 0.23, y: h * 0.02), control2: CGPoint(x: w * 0.02, y: h * 0.48))
+                    p.addLine(to: CGPoint(x: w * 0.18, y: h * 0.86))
+                    p.addLine(to: CGPoint(x: w * 0.39, y: h * 0.79))
+                    p.addCurve(to: CGPoint(x: w * 0.80, y: h * 0.46), control1: CGPoint(x: w * 0.67, y: h * 0.87), control2: CGPoint(x: w * 0.86, y: h * 0.65))
+                    p.addCurve(to: CGPoint(x: w * 0.72, y: h * 0.29), control1: CGPoint(x: w * 0.47, y: h * 0.64), control2: CGPoint(x: w * 0.42, y: h * 0.27))
+                }.stroke(.white, style: StrokeStyle(lineWidth: w * 0.065, lineCap: .round, lineJoin: .round))
+                Path { p in
+                    p.move(to: CGPoint(x: w * 0.82, y: h * 0.06))
+                    p.addQuadCurve(to: CGPoint(x: w * 0.96, y: h * 0.22), control: CGPoint(x: w * 0.83, y: h * 0.20))
+                    p.addQuadCurve(to: CGPoint(x: w * 0.82, y: h * 0.38), control: CGPoint(x: w * 0.83, y: h * 0.24))
+                    p.addQuadCurve(to: CGPoint(x: w * 0.68, y: h * 0.22), control: CGPoint(x: w * 0.81, y: h * 0.24))
+                    p.addQuadCurve(to: CGPoint(x: w * 0.82, y: h * 0.06), control: CGPoint(x: w * 0.81, y: h * 0.20))
+                }.fill(Color(red: 0.65, green: 0.96, blue: 1))
+            }
+        }.accessibilityHidden(true)
+    }
+}
+
+private struct InvestmentAssistantOrb: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("investment.assistantOrb.right") private var onRight = true
+    @AppStorage("investment.assistantOrb.height") private var heightFraction = 0.9
+    @GestureState private var translation = CGSize.zero
+    @State private var showingChat = false
+    private let diameter: CGFloat = 64
+    private func position(in size: CGSize, offset: CGSize = .zero) -> CGPoint {
+        let margin = diameter / 2 + 12
+        let maxX = max(margin, size.width - margin)
+        let maxY = max(margin, size.height - margin)
+        let fraction = heightFraction.isFinite ? min(1, max(0, heightFraction)) : 0.9
+        return CGPoint(x: min(maxX, max(margin, (onRight ? maxX : margin) + offset.width)),
+                       y: min(maxY, max(margin, margin + (maxY - margin) * CGFloat(fraction) + offset.height)))
+    }
+    func body(content: Content) -> some View {
+        content
+            .safeAreaInset(edge: .bottom, spacing: 0) { Color.clear.frame(height: 80).allowsHitTesting(false) }
+            .overlay {
+                GeometryReader { geometry in
+                    Button { showingChat = true } label: {
+                        ZStack {
+                            Circle().fill(LinearGradient(colors: [Color(red: 0.18, green: 0.62, blue: 0.98), Color(red: 0.16, green: 0.22, blue: 0.68)], startPoint: .topLeading, endPoint: .bottomTrailing))
+                            Circle().stroke(.white.opacity(0.65), lineWidth: 1)
+                            StockAssistantMark().frame(width: 42, height: 42)
+                        }.frame(width: diameter, height: diameter)
+                            .shadow(color: .blue.opacity(0.25), radius: 10, y: 4)
+                            .contentShape(Circle())
+                    }
+                    .buttonStyle(InvestmentPressStyle())
+                    .accessibilityLabel(tr("股票 AI 助手", "Stock AI assistant", "Pembantu AI saham"))
+                    .accessibilityHint(tr("点击提问；可拖到屏幕两侧", "Tap to ask; drag to either side", "Tekan untuk bertanya; seret ke mana-mana sisi"))
+                    .accessibilityAction(named: Text(tr("移到另一侧", "Move to other side", "Alih ke sisi lain"))) { onRight.toggle() }
+                    .highPriorityGesture(DragGesture(minimumDistance: 10)
+                        .updating($translation) { value, state, _ in state = value.translation }
+                        .onEnded { value in
+                            let point = position(in: geometry.size, offset: value.translation)
+                            let margin = diameter / 2 + 12
+                            withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.2)) {
+                                onRight = point.x >= geometry.size.width / 2
+                                heightFraction = Double(min(1, max(0, (point.y - margin) / max(1, geometry.size.height - 2 * margin))))
+                            }
+                        })
+                    .position(position(in: geometry.size, offset: translation))
+                }
+            }
+            .sheet(isPresented: $showingChat) {
+                NavigationStack {
+                    StockChatView()
+                        .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup")) { showingChat = false } } }
+                }
+            }
     }
 }
 
@@ -1080,6 +1158,7 @@ private struct StockResearchView: View {
         .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: report?.generatedAt)
         .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: error)
         .navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
+            .investmentAssistantOrb()
             .sheet(isPresented: $showingImport) {
                 StockImportForm(symbol: symbols[0]) { value in
                     imported = value; report = nil; error = ""; saveMessage = ""
