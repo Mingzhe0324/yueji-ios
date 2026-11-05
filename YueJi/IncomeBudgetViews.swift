@@ -1,5 +1,225 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PhotosUI
+import UserNotifications
+
+struct SamanHomeView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var addingVehicle = false
+    @State private var addingRecord = false
+    @State private var editing: SamanRecord?
+    @State private var plate = ""
+    @State private var reminderStatus = ""
+    var body: some View {
+        List {
+            Section {
+                Text(tr("管理你保存的罚单，不会按车牌自动查询，也不能证明车辆没有罚单。请在官方平台登录核实。", "Manage saved summons. No automatic plate lookup or proof of no summons. Sign in to official services to verify.", "Urus saman tersimpan. Tiada semakan plat automatik atau bukti tiada saman. Log masuk saluran rasmi untuk pengesahan."))
+                Link("MyJPJ · JPJ", destination: URL(string: "https://myjpj.jpj.gov.my/")!)
+                Link("MyBayar · PDRM", destination: URL(string: "https://mybayar.rmp.gov.my/")!)
+                Text(tr("地方政府罚单请向开单机构查询。金额、期限及能否线上缴付均以官方记录为准。", "For local council summons, check the issuing authority. Official records determine amount, deadlines and online payment eligibility.", "Untuk saman pihak berkuasa tempatan, semak dengan pengeluar. Amaun, tarikh akhir dan kelayakan bayaran dalam talian mengikut rekod rasmi.")).font(.caption).foregroundStyle(.secondary)
+            }
+            Section(tr("车辆", "Vehicles", "Kenderaan")) {
+                ForEach(model.ledger.vehicles) { vehicle in
+                    VStack(alignment: .leading) {
+                        Text(vehicle.plate).font(.headline)
+                        Toggle(tr("每月 1 日早上 9 点提醒查询（马来西亚时间）", "Check reminder: 1st monthly, 9 AM Malaysia", "Peringatan: 1 haribulan, 9 pagi Malaysia"), isOn: Binding(get: { vehicle.monthlyCheck }, set: { enabled in
+                            model.perform(key: "saman-vehicle-" + vehicle.id, action: { ledger in
+                                guard let index = ledger.vehicles.firstIndex(where: { $0.id == vehicle.id }) else { throw LedgerError.invalid("Vehicle changed") }
+                                ledger.vehicles[index].monthlyCheck = enabled
+                            })
+                        }))
+                    }.swipeActions {
+                        if !model.ledger.summons.contains(where: { $0.vehicleID == vehicle.id }) {
+                            Button(role: .destructive) {
+                                model.perform(key: "saman-delete-vehicle", action: { ledger in
+                                    guard !ledger.summons.contains(where: { $0.vehicleID == vehicle.id }) else { throw LedgerError.invalid("Vehicle has summons") }
+                                    ledger.vehicles.removeAll { $0.id == vehicle.id }
+                                })
+                            } label: { Label(tr("删除", "Delete", "Padam"), systemImage: "trash") }
+                        }
+                    }
+                }
+                Button(tr("添加车辆", "Add vehicle", "Tambah kenderaan")) { plate = ""; addingVehicle = true }.disabled(model.ledger.vehicles.count >= 10)
+            }
+            Section(tr("已保存罚单", "Saved summons", "Saman tersimpan")) {
+                if model.ledger.summons.isEmpty { Text(tr("尚未保存罚单，不代表没有罚单。", "No saved summons; this does not mean none exist.", "Tiada saman tersimpan; bukan bermakna tiada saman.")) }
+                ForEach(model.ledger.summons) { item in
+                    Button { editing = item } label: {
+                        VStack(alignment: .leading, spacing: 5) {
+                            Text((model.ledger.vehicles.first { $0.id == item.vehicleID }?.plate ?? "") + " · " + item.authority).font(.headline)
+                            Text(item.reference)
+                            Text(item.cents.map { money($0) } ?? tr("金额未确认", "Amount unconfirmed", "Amaun belum disahkan"))
+                            Text(item.paid ? tr("已标记缴付 · 非官方确认", "Marked paid · Not officially verified", "Ditanda dibayar · Bukan pengesahan rasmi") : tr("待处理", "To review", "Perlu semakan")).foregroundStyle(item.paid ? Color.secondary : Color.orange)
+                            if let due = item.dueDate { Text(tr("所录期限：", "Recorded deadline: ", "Tarikh akhir direkod: ") + dateLabel(due)) }
+                            if !item.paid, let reminder = item.remindAt { Text(tr("提醒：", "Reminder: ", "Peringatan: ") + dateLabel(reminder, time: true)).font(.caption) }
+                        }.foregroundStyle(.primary)
+                    }
+                }
+                Button(tr("添加／识别罚单", "Add / scan summons", "Tambah / imbas saman")) { addingRecord = true }.disabled(model.ledger.vehicles.isEmpty || model.ledger.summons.count >= 200)
+            }
+            Section(tr("本机提醒", "Device reminders", "Peringatan peranti")) {
+                Button(tr("允许提醒并检查排程", "Allow reminders & check schedule", "Benarkan peringatan & semak jadual")) {
+                    Task {
+                        do { _ = try await UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) }
+                        catch { reminderStatus = tr("通知授权失败，请检查系统设置。", "Notification permission failed; check Settings.", "Kebenaran gagal; semak Tetapan."); return }
+                        await updateReminders()
+                    }
+                }
+                Text(reminderStatus).font(.caption)
+                Text(tr("提醒最多排程 20 项，受系统和其他提醒额度影响；超出后需再次打开 App 补排。未授权、已过提醒时间或系统关闭通知时不会提醒。", "Up to 20 reminders, subject to system and other reminder capacity. Reopen the app to replenish. Permission is required; past reminders are not sent.", "Sehingga 20 peringatan tertakluk kepada kapasiti sistem. Buka semula aplikasi untuk menambah jadual. Kebenaran diperlukan; peringatan lalu tidak dihantar.")).font(.caption).foregroundStyle(.secondary)
+            }
+        }.navigationTitle(tr("车辆与 Saman", "Vehicles & Saman", "Kenderaan & Saman"))
+            .alert(tr("添加车辆", "Add vehicle", "Tambah kenderaan"), isPresented: $addingVehicle) {
+                TextField(tr("车牌", "Plate", "Plat"), text: $plate).textInputAutocapitalization(.characters)
+                Button(tr("保存", "Save", "Simpan")) {
+                    let value = SamanVehicle(plate: SamanVehicle.normalized(plate))
+                    model.perform(key: "saman-add-vehicle", action: { ledger in ledger.vehicles.append(value); try ledger.validateSaman() })
+                }
+                Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+            }
+            .sheet(isPresented: $addingRecord) { SamanEditor(original: nil, vehicleID: model.ledger.vehicles.first?.id ?? "") }
+            .sheet(item: $editing) { SamanEditor(original: $0, vehicleID: $0.vehicleID) }
+            .task(id: model.ledgerRevision) { await updateReminders() }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await updateReminders() } } }
+    }
+    private func updateReminders() async {
+        await SamanReminders.sync(model.ledger)
+        let center = UNUserNotificationCenter.current()
+        let status = await center.notificationSettings().authorizationStatus
+        guard !Task.isCancelled else { return }
+        if ![.authorized, .provisional, .ephemeral].contains(status) {
+            reminderStatus = tr("通知未获允许。请启用通知后再检查排程。", "Notifications not allowed. Enable them and check again.", "Notifikasi tidak dibenarkan. Aktifkan dan semak semula."); return
+        }
+        let count = await center.pendingNotificationRequests().filter { $0.identifier.hasPrefix(SamanReminders.prefix) }.count
+        reminderStatus = tr("已排程数量：", "Scheduled reminders: ", "Peringatan dijadualkan: ") + String(count)
+    }
+}
+
+private struct SamanEditor: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @ObservedObject private var account = CloudAccount.shared
+    let original: SamanRecord?
+    @State private var draft: SamanRecord
+    @State private var amount = ""
+    @State private var hasDue = false
+    @State private var due = Date()
+    @State private var remind = false
+    @State private var reminder = Date().addingTimeInterval(86400)
+    @State private var photo: PhotosPickerItem?
+    @State private var receiptPhoto = false
+    @State private var scanText = ""
+    @State private var scanMessage = ""
+    @State private var scanning = false
+    @State private var confirmed = false
+    @State private var error = ""
+    @State private var deleting = false
+    init(original: SamanRecord?, vehicleID: String) {
+        self.original = original
+        let value = original ?? SamanRecord(vehicleID: vehicleID)
+        _draft = State(initialValue: value)
+        _amount = State(initialValue: value.cents.map { Currency.input($0, "MYR") } ?? "")
+        _hasDue = State(initialValue: value.dueDate != nil); _due = State(initialValue: value.dueDate ?? Date())
+        _remind = State(initialValue: value.remindAt != nil); _reminder = State(initialValue: value.remindAt ?? Date().addingTimeInterval(86400))
+    }
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(tr("截图识别", "Screenshot recognition", "Pengecaman tangkapan skrin")) {
+                    Toggle(tr("本次识别为缴费收据", "Scan as payment receipt", "Imbas sebagai resit bayaran"), isOn: $receiptPhoto)
+                    PhotosPicker(selection: $photo, matching: .images) { Label(tr("选择截图", "Choose screenshot", "Pilih tangkapan skrin"), systemImage: "doc.viewfinder") }
+                    if scanning { ProgressView() }
+                    Text(tr("本机识别；原图不保存、不上传。收据仅保存识别文字，请自行保留原件。识别不能证明罚单真实或已经缴付。", "On-device OCR; images are not saved or uploaded. Receipts retain text only; keep the original. Recognition does not verify authenticity or payment.", "OCR pada peranti; imej tidak disimpan atau dimuat naik. Resit menyimpan teks sahaja; simpan asal. Pengecaman tidak mengesahkan kesahihan atau bayaran.")).font(.caption)
+                    if !scanMessage.isEmpty { Text(scanMessage).foregroundStyle(.orange) }
+                    if !scanText.isEmpty { DisclosureGroup(tr("识别原文", "Recognized text", "Teks dikenal pasti")) { Text(scanText).textSelection(.enabled) } }
+                }
+                Section {
+                    Picker(tr("车辆", "Vehicle", "Kenderaan"), selection: $draft.vehicleID) { ForEach(model.ledger.vehicles) { Text($0.plate).tag($0.id) } }
+                    Picker(tr("开单机构", "Issuing authority", "Pihak pengeluar"), selection: $draft.authority) { ForEach(["JPJ", "PDRM", "Other"], id: \.self) { Text($0).tag($0) } }
+                    TextField(tr("罚单编号", "Summons number", "Nombor saman"), text: $draft.reference)
+                    TextField(tr("金额 MYR（未知可留空）", "MYR amount (blank if unknown)", "Amaun MYR (kosong jika tidak diketahui)"), text: $amount).keyboardType(.decimalPad)
+                    Toggle(tr("已核对缴付期限", "Verified payment deadline", "Tarikh akhir bayaran disemak"), isOn: $hasDue)
+                    if hasDue { DatePicker(tr("缴付期限", "Payment deadline", "Tarikh akhir bayaran"), selection: $due, displayedComponents: .date) }
+                    Toggle(tr("标记已缴付", "Mark paid", "Tandakan dibayar"), isOn: $draft.paid)
+                    if !draft.paid {
+                        Toggle(tr("提醒我处理", "Remind me to review", "Ingatkan untuk semak"), isOn: $remind)
+                        if remind { DatePicker(tr("提醒时间", "Reminder time", "Masa peringatan"), selection: $reminder) }
+                    }
+                }
+                Section(tr("缴费收据文字／备注", "Receipt text / notes", "Teks resit / nota")) {
+                    Text(tr("文字与车辆、罚单一起随账本保存；开启云同步或导出备份时也会包含这些记录。", "Text, vehicles and summons are saved with your ledger and included in enabled cloud sync and backups.", "Teks, kenderaan dan saman disimpan bersama lejar serta termasuk dalam penyegerakan awan dan sandaran yang diaktifkan.")).font(.caption).foregroundStyle(.secondary)
+                    TextEditor(text: $draft.receipt).frame(minHeight: 100)
+                    Picker(tr("关联已有消费（不新增记账）", "Link existing expense (no new entry)", "Paut belanja sedia ada (tiada rekod baharu)"), selection: Binding(get: { draft.expenseID ?? "" }, set: { draft.expenseID = $0.isEmpty ? nil : $0 })) {
+                        Text(tr("不关联", "None", "Tiada")).tag("")
+                        ForEach(model.ledger.expenses.sorted { $0.date > $1.date }.prefix(100)) { expense in Text(expense.displayName + " · " + money(expense.cents)).tag(expense.id) }
+                        if let id = draft.expenseID, !model.ledger.expenses.sorted(by: { $0.date > $1.date }).prefix(100).contains(where: { $0.id == id }) { Text(tr("原关联记录（未在最近 100 条中）", "Previous linked record (outside recent 100)", "Rekod terpaut terdahulu (di luar 100 terkini)")).tag(id) }
+                    }
+                }
+                Section {
+                    Toggle(tr("我已核对车牌、编号、金额和日期", "I checked plate, reference, amount and dates", "Saya menyemak plat, nombor, amaun dan tarikh"), isOn: $confirmed)
+                    if !error.isEmpty { Text(error).foregroundStyle(.red) }
+                    if original != nil { Button(tr("删除此记录", "Delete record", "Padam rekod"), role: .destructive) { deleting = true } }
+                }
+            }.navigationTitle(tr("Saman 记录", "Saman record", "Rekod saman"))
+                .disabled(model.isWorking("saman-save") || scanning)
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                    ToolbarItem(placement: .confirmationAction) { Button(tr("保存", "Save", "Simpan")) { save() }.disabled(!confirmed || scanning || model.isWorking("saman-save")) }
+                }
+                .confirmationDialog(tr("删除记录并取消提醒？", "Delete record and cancel reminders?", "Padam rekod dan batalkan peringatan?"), isPresented: $deleting) {
+                    Button(tr("删除", "Delete", "Padam"), role: .destructive) {
+                        let old = original
+                        model.perform(key: "saman-save", action: { ledger in
+                            guard let old, ledger.summons.contains(old) else { throw LedgerError.invalid("Record changed") }
+                            ledger.summons.removeAll { $0.id == old.id }
+                        }, completion: { dismiss() })
+                    }
+                }
+                .task(id: photo) {
+                    guard let photo else { return }
+                    scanning = true; confirmed = false
+                    defer { scanning = false }
+                    do {
+                        guard let data = try await photo.loadTransferable(type: Data.self), data.count <= 10_000_000 else { throw LedgerError.invalid("Image too large") }
+                        let text = try await ReceiptOCR.read(data)
+                        guard !Task.isCancelled else { return }
+                        guard text.count <= 4000 else { throw LedgerError.invalid("Text too long") }
+                        scanText = text
+                        if receiptPhoto { draft.receipt = text }
+                        else {
+                            if let reference = SamanOCR.reference(text) { draft.reference = reference }
+                            if let cents = SamanOCR.amount(text) { amount = Currency.input(cents, "MYR") }
+                            if let date = SamanOCR.dueDate(text) { hasDue = true; due = date }
+                            if let plate = SamanOCR.plate(text), let vehicle = model.ledger.vehicles.first(where: { $0.plate == plate }) { draft.vehicleID = vehicle.id }
+                            if text.localizedCaseInsensitiveContains("PDRM") && !text.localizedCaseInsensitiveContains("JPJ") { draft.authority = "PDRM" }
+                            if text.localizedCaseInsensitiveContains("JPJ") && !text.localizedCaseInsensitiveContains("PDRM") { draft.authority = "JPJ" }
+                        }
+                        scanMessage = tr("识别仅为建议，请对照截图逐项核对；未识别字段会保留原值。期限仅识别明确标注的日/月/年，不从违例日期推算。", "Suggestions only: check every field against the image. Unrecognized fields keep their previous values. Only explicitly labelled day/month/year deadlines are recognized.", "Cadangan sahaja: semak setiap medan dengan imej. Medan tidak dikenal mengekalkan nilai lama. Hanya tarikh akhir berlabel hari/bulan/tahun dikenal pasti.")
+                    } catch { if !Task.isCancelled { error = tr("无法识别，请换一张清晰截图或手动填写。", "Cannot recognize; use a clearer image or fill manually.", "Tidak dapat dikenal pasti; gunakan imej lebih jelas atau isi manual.") } }
+                }
+                .onChange(of: account.researchHistoryScope) { _, _ in dismiss() }
+        }
+    }
+    private func save() {
+        do {
+            var value = draft
+            value.reference = value.reference.trimmingCharacters(in: .whitespacesAndNewlines)
+            value.cents = amount.trimmingCharacters(in: .whitespaces).isEmpty ? nil : try toCents(amount)
+            value.dueDate = hasDue ? due : nil
+            value.remindAt = remind && !value.paid ? reminder : nil
+            if let date = value.remindAt, date <= Date() { throw LedgerError.invalid(tr("提醒时间必须在未来。", "Reminder must be in the future.", "Peringatan mesti pada masa hadapan.")) }
+            let saved = value; let old = original
+            model.perform(key: "saman-save", action: { ledger in
+                if let old {
+                    guard let index = ledger.summons.firstIndex(of: old) else { throw LedgerError.invalid("Record changed") }
+                    ledger.summons[index] = saved
+                } else { ledger.summons.append(saved) }
+                try ledger.validateSaman()
+            }, completion: { dismiss() }, failure: { error = $0.localizedDescription })
+        } catch { self.error = error.localizedDescription }
+    }
+}
 
 private struct BankWalletCard: View {
     let account: BankAccount
@@ -301,6 +521,9 @@ struct BankAccountsView: View {
                     NavigationLink { BankTransfersView() } label: {
                         Label(tr("转账／TNG 充值", "Transfers / TNG top-ups", "Pindahan / tambah nilai TNG"), systemImage: "arrow.left.arrow.right")
                     }.accessibilityIdentifier("bankAccount.transfers")
+                    NavigationLink { SamanHomeView() } label: {
+                        Label(tr("车辆与 Saman", "Vehicles & Saman", "Kenderaan & Saman"), systemImage: "car.fill")
+                    }
                     NavigationLink { AutomaticAccountLinksView() } label: {
                         Label(tr("核对自动记录的账户", "Review automatic entry accounts", "Semak akaun rekod automatik"), systemImage: "arrow.triangle.branch")
                     }

@@ -1,6 +1,143 @@
 import Foundation
 import CryptoKit
 import PDFKit
+import UserNotifications
+
+struct SamanVehicle: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var plate: String
+    var monthlyCheck = false
+    static func normalized(_ plate: String) -> String { plate.uppercased().filter { !$0.isWhitespace } }
+}
+struct SamanRecord: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    var vehicleID: String
+    var authority = "Other"
+    var reference = ""
+    var cents: Int? = nil
+    var dueDate: Date? = nil
+    var remindAt: Date? = nil
+    var paid = false
+    var receipt = ""
+    var expenseID: String? = nil
+    func needsReminder(now: Date) -> Bool { !paid && (remindAt ?? .distantPast) > now }
+}
+extension Ledger {
+    func validateSaman() throws {
+        func validDate(_ date: Date?) -> Bool {
+            guard let date else { return true }
+            return date.timeIntervalSince1970.isFinite && (0..<4_102_444_800).contains(date.timeIntervalSince1970)
+        }
+        guard vehicles.count <= 10, summons.count <= 200,
+              Set(vehicles.map(\.id)).count == vehicles.count,
+              Set(vehicles.map(\.plate)).count == vehicles.count,
+              Set(summons.map(\.id)).count == summons.count else { throw LedgerError.invalid("Invalid vehicle / saman records") }
+        for vehicle in vehicles {
+            guard !vehicle.id.isEmpty, vehicle.id.count <= 100,
+                  vehicle.plate.range(of: #"^[A-Z0-9]{2,15}$"#, options: .regularExpression) != nil else { throw LedgerError.invalid("Invalid vehicle plate") }
+        }
+        var references = Set<String>()
+        for item in summons {
+            let identity = item.vehicleID + ":" + item.authority + ":" + item.reference.uppercased()
+            guard !item.id.isEmpty, item.id.count <= 100, vehicles.contains(where: { $0.id == item.vehicleID }),
+                  ["JPJ", "PDRM", "Other"].contains(item.authority),
+                  !item.reference.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, item.reference.count <= 100,
+                  item.cents == nil || (1...10_000_000).contains(item.cents!),
+                  validDate(item.dueDate), validDate(item.remindAt), item.receipt.count <= 4000,
+                  (item.expenseID?.count ?? 0) <= 100, references.insert(identity).inserted else { throw LedgerError.invalid("Invalid or duplicate saman record") }
+        }
+    }
+}
+
+/// Suggestions from explicit labels only. Never derive a deadline from an offence date.
+enum SamanOCR {
+    static func field(_ text: String, pattern: String) -> String? {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive, .anchorsMatchLines]) else { return nil }
+        let results = regex.matches(in: text, range: NSRange(text.startIndex..., in: text))
+        guard results.count == 1, let range = Range(results[0].range(at: 1), in: text) else { return nil }
+        return String(text[range]).trimmingCharacters(in: .whitespaces)
+    }
+    static func reference(_ text: String) -> String? {
+        field(text, pattern: #"^\s*(?:No\.?\s*Saman|Summons\s*(?:No\.?|Number))\s*[:：]\s*([A-Z0-9/-]{3,100})\s*$"#)
+    }
+    static func amount(_ text: String) -> Int? {
+        guard let raw = field(text, pattern: #"^\s*(?:Amaun|Jumlah Kompaun|Amount)\s*[:：]\s*(?:RM|MYR)\s*([0-9]+\.[0-9]{2})\s*$"#),
+              let cents = try? toCents(raw), (1...10_000_000).contains(cents) else { return nil }
+        return cents
+    }
+    static func plate(_ text: String) -> String? {
+        field(text, pattern: #"^\s*(?:No\.?\s*Kenderaan|Vehicle\s*(?:No\.?|Number)|Registration Number)\s*[:：]\s*([A-Z0-9 ]{2,20})\s*$"#).map(SamanVehicle.normalized)
+    }
+    static func dueDate(_ text: String) -> Date? {
+        guard let raw = field(text, pattern: #"^\s*(?:Tarikh Akhir Bayaran|Payment Due Date|Pay By)\s*[:：]\s*([0-9]{2}/[0-9]{2}/[0-9]{4})\s*$"#) else { return nil }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")
+        formatter.dateFormat = "dd/MM/yyyy"; formatter.isLenient = false
+        guard let date = formatter.date(from: raw), formatter.string(from: date) == raw else { return nil }
+        return date
+    }
+}
+
+@MainActor enum SamanReminders {
+    private static var generation = 0
+    private static var pendingSync: Task<Void, Never>?
+    static let prefix = "yueji.saman."
+    static func sync(_ ledger: Ledger) async {
+        generation += 1
+        let revision = generation
+        let scope = CloudAccount.shared.researchHistoryScope
+        let folder = LocalStore.shared.folder
+        let previous = pendingSync
+        let task = Task { @MainActor in
+            await previous?.value
+            guard revision == generation, scope == CloudAccount.shared.researchHistoryScope,
+                  folder == LocalStore.shared.folder, !CloudAccount.shared.changingAccount else { return }
+            await apply(ledger, revision: revision, scope: scope, folder: folder)
+        }
+        pendingSync = task
+        await task.value
+        if revision == generation { pendingSync = nil }
+    }
+    private static func apply(_ ledger: Ledger, revision: Int, scope: String?, folder: URL) async {
+        func current() -> Bool { revision == generation && !CloudAccount.shared.changingAccount && scope == CloudAccount.shared.researchHistoryScope && LocalStore.shared.folder == folder }
+        let center = UNUserNotificationCenter.current()
+        let pending = await center.pendingNotificationRequests()
+        guard current() else { return }
+        let old = pending.filter { $0.identifier.hasPrefix(prefix) }.map(\.identifier)
+        center.removePendingNotificationRequests(withIdentifiers: old)
+        let delivered = await center.deliveredNotifications()
+        guard current() else { return }
+        center.removeDeliveredNotifications(withIdentifiers: delivered.map(\.request.identifier).filter { $0.hasPrefix(prefix) })
+        let settings = await center.notificationSettings()
+        guard current(), [.authorized, .provisional, .ephemeral].contains(settings.authorizationStatus) else { return }
+        var requests: [UNNotificationRequest] = []
+        for item in ledger.summons.filter({ $0.needsReminder(now: Date()) }).sorted(by: { $0.remindAt! < $1.remindAt! }) {
+            let content = UNMutableNotificationContent()
+            content.title = tr("Saman 处理提醒", "Saman reminder", "Peringatan saman")
+            content.body = tr("打开悦记核对已保存的罚单及官方缴付状态。这不是新罚单通知。", "Open YueJi to review your saved summons and official payment status. This is not a new-summons alert.", "Buka YueJi untuk semak saman tersimpan dan status bayaran rasmi. Ini bukan amaran saman baharu.")
+            content.sound = .default
+            let delay = max(1, item.remindAt!.timeIntervalSinceNow)
+            requests.append(UNNotificationRequest(identifier: prefix + item.id, content: content, trigger: UNTimeIntervalNotificationTrigger(timeInterval: delay, repeats: false)))
+        }
+        for vehicle in ledger.vehicles where vehicle.monthlyCheck {
+            let content = UNMutableNotificationContent()
+            content.title = tr("每月 Saman 查询提醒", "Monthly saman check", "Semakan saman bulanan")
+            content.body = tr("请打开悦记，到官方渠道检查车辆罚单。悦记没有自动查询新罚单。", "Open YueJi and check official channels. YueJi has not automatically checked for new summons.", "Buka YueJi dan semak saluran rasmi. YueJi tidak menyemak saman baharu secara automatik.")
+            content.sound = .default
+            var components = DateComponents(); components.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")
+            components.day = 1; components.hour = 9; components.minute = 0
+            requests.append(UNNotificationRequest(identifier: prefix + "vehicle." + vehicle.id, content: content, trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: true)))
+        }
+        let slots = max(0, 60 - pending.filter { !$0.identifier.hasPrefix(prefix) }.count)
+        for request in requests.prefix(min(20, slots)) {
+            guard current() else { return }
+            try? await center.add(request)
+            if !current() { center.removePendingNotificationRequests(withIdentifiers: [request.identifier]); return }
+        }
+    }
+}
 
 /// Match a complete name phrase, never a substring inside another word.
 func transferNameMatches(_ noticeName: String, owner: String) -> Bool {

@@ -292,6 +292,11 @@ struct RestoredLedgerFeedback {
         Task { await SubscriptionChangeNotifier.shared.check() }
         // Edits, matched payments and restores move expected payments; reminders follow.
         Task { await RenewalReminders.sync(fresh) }
+        let samanStore = LocalStore.shared.folder
+        Task {
+            guard LocalStore.shared.folder == samanStore else { return }
+            await SamanReminders.sync(fresh)
+        }
     }
     func dismissNewTNG() {
         newTNGToken = UUID()
