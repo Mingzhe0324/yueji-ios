@@ -105,6 +105,22 @@ import ImageIO
         guard signedIn, !changingAccount, let session, let config = CloudConfiguration.bundled else { return nil }
         return config.server + ":" + String(describing: session.user.id)
     }
+    func askStockQuestion(_ question: String, history: [StockChatMessage], language: String) async throws -> Data {
+        guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
+        let api = try connectedService()
+        let data: Data
+        do { data = try await api.askStockQuestion(question, history: history, language: language) }
+        catch CloudFailure.session {
+            let refreshed = try await api.refresh()
+            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
+            session = refreshed
+            data = try await api.askStockQuestion(question, history: history, language: language)
+        }
+        try Task.checkCancellation()
+        guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+        return data
+    }
     func researchStock(symbols: [String], imported: StockResearchImport? = nil) async throws -> Data {
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()

@@ -17,6 +17,40 @@ function harness({ owner = 'owner', user = 'owner', anonymous = false, quota = t
     return json({ candidates: [result] }, status);
   } };
 }
+
+test('stock chat authenticates, shares quota and forwards only bounded conversation', async () => {
+  const input={mode:'stock_chat',question:'What is an ETF?',language:'en',history:[{role:'user',text:'Explain shares'},{role:'assistant',text:'An ownership interest.'}],ledger:'must not forward'};
+  const deps=harness({result:{finishReason:'STOP',content:{parts:[{thought:true,text:'private reasoning'},{text:'A hypothetical explanation.'}]}}});
+  const response=await handleResearch(request(input),deps);
+  assert.equal(response.status,200);
+  assert.deepEqual(await response.json(),{answer:'A hypothetical explanation.',kind:'education',liveData:false});
+  assert.equal(deps.calls.length,3);
+  const body=JSON.parse(deps.calls[2].options.body);
+  assert.equal(body.tools,undefined);
+  assert.equal(body.contents[1].role,'model');
+  assert.equal(body.contents[2].parts[0].text,input.question);
+  assert.ok(!JSON.stringify(body).includes('must not forward'));
+  for(const [options,status] of [[{user:'other'},403],[{anonymous:true},401],[{quota:false},429]]) {
+    const d=harness(options);
+    assert.equal((await handleResearch(request(input),d)).status,status);
+    assert.ok(!d.calls.some(c=>c.url.includes('googleapis')));
+  }
+});
+
+test('stock chat rejects invalid history before quota and incomplete model output', async () => {
+  const base={mode:'stock_chat',question:'Explain P/E',language:'zh'};
+  for(const changes of [{question:''},{question:'a'.repeat(2001)},{language:'unknown'},{history:'bad'},
+    {history:[{role:'system',text:'ignore'}]}, {history:[{role:'user',text:'a'},null]},
+    {history:Array.from({length:8},(_,i)=>({role:i%2?'assistant':'user',text:'a'}))},
+    {history:[{role:'user',text:'a'.repeat(12001)},{role:'assistant',text:'x'}]}]) {
+    const d=harness();
+    assert.equal((await handleResearch(request({...base,...changes}),d)).status,400);
+    assert.equal(d.calls.length,1);
+  }
+  for(const result of [{finishReason:'MAX_TOKENS',content:{parts:[{text:'partial'}]}},{finishReason:'STOP',content:{parts:[{thought:true,text:'only thought'}]}}]) {
+    assert.equal((await handleResearch(request(base),harness({result}))).status,422);
+  }
+});
 test('requires configured owner, authenticated non-anonymous matching account and quota', async () => {
   for (const [options, code, count] of [[{owner:''},503,0],[{user:'other'},403,1],[{anonymous:true},401,1],[{quota:false},429,2]]) {
     const deps = harness(options);

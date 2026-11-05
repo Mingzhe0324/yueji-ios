@@ -243,6 +243,20 @@ private final class CloudHTTPStub: URLProtocol {
 }
 
 final class CloudHTTPTests: XCTestCase {
+    func testStockChatUsesResearchEndpointAndKeepsSessionRefresh() async throws {
+        let (api, host) = try service(replies: [(200, #"{"answer":"Example","kind":"education","liveData":false}"#)], signedIn: true)
+        _ = try await api.askStockQuestion("What is an ETF?", history: [], language: "en")
+        let request = try XCTUnwrap(CloudHTTPStub.requests(host: host).first)
+        XCTAssertEqual(request.url?.path, "/functions/v1/investment-research")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "Authorization"), "Bearer access-fixture")
+        let (expired, _) = try service(replies: [(401, #"{"error":"sign_in_required"}"#)], signedIn: true)
+        do { _ = try await expired.askStockQuestion("ETF?", history: [], language: "en"); XCTFail("Expected session refresh") }
+        catch CloudFailure.session {}
+        let (invalid, invalidHost) = try service(replies: [], signedIn: true)
+        do { _ = try await invalid.askStockQuestion(" ", history: [], language: "en"); XCTFail("Expected validation failure") }
+        catch CloudFailure.invalidResponse {}
+        XCTAssertTrue(CloudHTTPStub.requests(host: invalidHost).isEmpty)
+    }
     func testResearchFailuresStayDistinctAndPreserveSessionRefresh() async throws {
         var messages = Set<String>()
         for code in ["unsupported_source", "source_unavailable", "no_grounded_research"] {

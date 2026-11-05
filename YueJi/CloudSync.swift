@@ -335,6 +335,15 @@ actor SupabaseCloudService: CloudRemote {
             throw reviewError("AI 服务尚未就绪，请检查 assistant-gemini、GEMINI_ASSISTANT_MODEL 和额度 SQL。", "AI service is not ready. Check assistant-gemini, GEMINI_ASSISTANT_MODEL and quota SQL.", "Perkhidmatan AI belum tersedia. Semak assistant-gemini, GEMINI_ASSISTANT_MODEL dan SQL kuota.")
         }
     }
+    func askStockQuestion(_ question: String, history: [StockChatMessage], language: String) async throws -> Data {
+        guard !question.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, question.utf16.count <= 2000 else { throw CloudFailure.invalidResponse }
+        do {
+            return try await request("/functions/v1/investment-research", body: ["mode": "stock_chat", "question": question, "language": language,
+                "history": history.map { ["role": $0.role, "text": $0.text] }], authenticated: true)
+        } catch CloudFailure.server(_, _) {
+            throw reviewError("股票问答暂时不可用，请稍后重试；若持续出现，需要更新研究服务。", "Stock Q&A is unavailable. Retry later; if it persists, the research service may need updating.", "Soal jawab saham tidak tersedia. Cuba kemudian; jika berterusan, perkhidmatan kajian mungkin perlu dikemas kini.")
+        }
+    }
     func researchStock(symbols: [String], imported: StockResearchImport? = nil) async throws -> Data {
         guard (1...3).contains(symbols.count), Set(symbols).count == symbols.count,
               symbols.allSatisfy({ ObservedStock.normalized($0) == $0 }) else { throw CloudFailure.invalidResponse }

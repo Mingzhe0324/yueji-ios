@@ -236,6 +236,10 @@ struct InvestmentWatchView: View {
                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)).listRowBackground(Color.clear)
             }
             Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { assistantEntrances }
+                    VStack(spacing: 12) { assistantEntrances }
+                }
                 NavigationLink { StockComparisonPicker() } label: {
                     Label(tr("对比 2–3 只股票", "Compare 2–3 stocks", "Bandingkan 2–3 saham"), systemImage: "square.split.2x2")
                 }
@@ -334,6 +338,18 @@ struct InvestmentWatchView: View {
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: compactWatchlist)
             .onAppear(perform: loadRecentResearch)
             .onChange(of: account.researchHistoryScope) { _, _ in loadRecentResearch() }
+    }
+    @ViewBuilder private var assistantEntrances: some View {
+        NavigationLink { BeginnerInvestmentView() } label: {
+            Label(tr("新手起步", "Get started", "Mula belajar"), systemImage: "leaf")
+                .frame(maxWidth: .infinity).padding(12)
+                .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        }.buttonStyle(InvestmentPressStyle())
+        NavigationLink { StockChatView() } label: {
+            Label(tr("问 AI 股票问题", "Ask stock AI", "Tanya AI saham"), systemImage: "bubble.left.and.bubble.right")
+                .frame(maxWidth: .infinity).padding(12)
+                .background(Color.blue.opacity(0.1), in: RoundedRectangle(cornerRadius: 16))
+        }.buttonStyle(InvestmentPressStyle())
     }
     private func loadRecentResearch() {
         recentResearch = []
@@ -818,6 +834,124 @@ private struct StockImportForm: View {
                     }
                 }
         }
+    }
+}
+
+struct StockChatMessage: Identifiable {
+    let id = UUID()
+    let role: String
+    let text: String
+}
+
+private struct BeginnerInvestmentView: View {
+    @ObservedObject private var account = CloudAccount.shared
+    @State private var horizon = 0
+    @State private var reserve = 0
+    @State private var debt = 0
+    @State private var loss = 0
+    private var horizons: [String] { [tr("还不确定", "Not sure", "Belum pasti"), tr("一年内要用", "Needed within a year", "Perlu dalam setahun"), tr("一至五年", "One to five years", "Satu hingga lima tahun"), tr("五年以上", "Over five years", "Lebih lima tahun")] }
+    private var reserves: [String] { [tr("还不确定", "Not sure", "Belum pasti"), tr("已有独立应急钱", "Separate emergency savings ready", "Simpanan kecemasan berasingan tersedia"), tr("还没有准备好", "Not ready yet", "Belum tersedia")] }
+    private var debts: [String] { [tr("还不确定", "Not sure", "Belum pasti"), tr("有高息债务", "Have high-interest debt", "Ada hutang faedah tinggi"), tr("没有高息债务", "No high-interest debt", "Tiada hutang faedah tinggi")] }
+    private var losses: [String] { [tr("还不确定", "Not sure", "Belum pasti"), tr("本金亏损会影响生活", "Losses would affect daily needs", "Kerugian menjejaskan keperluan harian"), tr("可承受部分亏损，但不能全部损失", "Can bear some loss, not total loss", "Boleh menanggung sedikit kerugian, bukan semuanya")] }
+    private var question: String {
+        tr("我是投资新手。请先给我学习路线，不要直接推荐股票代码或买卖价格。", "I am a beginner. Give me a learning path first, not stock tickers or trading prices.", "Saya pemula. Berikan laluan pembelajaran dahulu, bukan kod saham atau harga dagangan.") + "\n" +
+        tr("资金多久要用：", "When I need the money: ", "Bila wang diperlukan: ") + horizons[horizon] + "\n" +
+        tr("应急储蓄：", "Emergency savings: ", "Simpanan kecemasan: ") + reserves[reserve] + "\n" +
+        tr("高息债务：", "High-interest debt: ", "Hutang faedah tinggi: ") + debts[debt] + "\n" +
+        tr("亏损承受情况：", "Ability to bear losses: ", "Keupayaan menanggung kerugian: ") + losses[loss] + "\n" +
+        tr("请解释我还需要确认什么，以及存款、分散投资的基金／ETF和个股有什么区别。不要把这些回答当成完整的投资适合性评估。", "Explain what else I need to clarify and how deposits, diversified funds/ETFs and individual stocks differ. These answers are not a complete suitability assessment.", "Terangkan perkara yang perlu dijelaskan serta perbezaan deposit, dana/ETF terpelbagai dan saham individu. Jawapan ini bukan penilaian kesesuaian lengkap.")
+    }
+    var body: some View {
+        Form {
+            Section {
+                Text(tr("先了解怎样开始，再考虑买什么。这里准备的是学习问题，不会自动选股或下单。", "Learn how to start before choosing investments. This prepares a learning question; it does not pick stocks or place orders.", "Belajar cara bermula sebelum memilih pelaburan. Ini menyediakan soalan pembelajaran, bukan memilih saham atau membuat pesanan."))
+                Text(tr("选择暂留在本页；下一步可以检查问题，点击发送才会交给 Gemini。无需填写金额、银行资料或上传账单。", "Selections stay on this screen. Review the question next; only Send shares it with Gemini. No amounts, bank details or statements needed.", "Pilihan kekal di halaman ini. Semak soalan seterusnya; hanya Hantar berkongsi dengan Gemini. Tidak perlu amaun, butiran bank atau penyata.")) .font(.caption).foregroundStyle(.secondary)
+            }
+            Section(tr("了解你的准备情况", "Your starting point", "Persediaan anda")) {
+                Picker(tr("资金多久要用", "When money is needed", "Bila wang diperlukan"), selection: $horizon) { ForEach(horizons.indices, id: \.self) { Text(horizons[$0]).tag($0) } }
+                Picker(tr("应急储蓄", "Emergency savings", "Simpanan kecemasan"), selection: $reserve) { ForEach(reserves.indices, id: \.self) { Text(reserves[$0]).tag($0) } }
+                Picker(tr("高息债务", "High-interest debt", "Hutang faedah tinggi"), selection: $debt) { ForEach(debts.indices, id: \.self) { Text(debts[$0]).tag($0) } }
+                Picker(tr("亏损承受情况", "Ability to bear losses", "Keupayaan menanggung kerugian"), selection: $loss) { ForEach(losses.indices, id: \.self) { Text(losses[$0]).tag($0) } }
+            }
+            Section {
+                NavigationLink { StockChatView(initialQuestion: question) } label: {
+                    Label(tr("检查问题，再问 AI", "Review question, then ask AI", "Semak soalan, kemudian tanya AI"), systemImage: "bubble.left")
+                }
+            }
+        }.navigationTitle(tr("新手起步", "Get started", "Mula belajar"))
+            .onChange(of: account.researchHistoryScope) { _, _ in horizon = 0; reserve = 0; debt = 0; loss = 0 }
+    }
+}
+
+private struct StockChatView: View {
+    @ObservedObject private var account = CloudAccount.shared
+    @Environment(\.scenePhase) private var phase
+    @State private var draft: String
+    @State private var messages: [StockChatMessage] = []
+    @State private var running = false
+    @State private var error = ""
+    @State private var task: Task<Void, Never>?
+    init(initialQuestion: String = "") { _draft = State(initialValue: initialQuestion) }
+    private struct Answer: Decodable { let answer: String; let kind: String; let liveData: Bool }
+    private var suggestions: [String] { [tr("股票和 ETF 有什么区别？", "How do stocks and ETFs differ?", "Apakah beza saham dan ETF?"), tr("市盈率是什么意思？请举简单例子。", "What does P/E mean? Give a simple example.", "Apakah nisbah P/E? Beri contoh mudah."), tr("怎么判断一家公司的风险？", "How can I assess a company's risks?", "Bagaimana menilai risiko syarikat?")] }
+    private func send() {
+        let question = draft.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !running, !question.isEmpty, question.utf16.count <= 2000 else { return }
+        var history = Array(messages.suffix(6))
+        while history.reduce(0, { $0 + $1.text.utf16.count }) > 24000 { history.removeFirst(2) }
+        running = true; error = ""
+        let scope = account.researchHistoryScope
+        task = Task { @MainActor in
+            defer { running = false }
+            do {
+                let data = try await account.askStockQuestion(question, history: history, language: tr("zh", "en", "ms"))
+                try Task.checkCancellation()
+                let answer = try JSONDecoder().decode(Answer.self, from: data)
+                guard scope != nil, scope == account.researchHistoryScope, answer.kind == "education", !answer.liveData,
+                      !answer.answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, answer.answer.utf16.count <= 12000 else { throw CloudFailure.invalidResponse }
+                messages.append(StockChatMessage(role: "user", text: question))
+                messages.append(StockChatMessage(role: "assistant", text: answer.answer))
+                messages = Array(messages.suffix(20))
+                draft = ""
+            } catch is CancellationError { }
+            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        }
+    }
+    private func clear() { task?.cancel(); messages = []; draft = ""; error = "" }
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 16) {
+                Text(tr("可以问术语、财报、ETF、风险和投资入门。这里解释知识，没有接入实时行情；不能核实今天该买什么。", "Ask about terms, reports, ETFs, risks and getting started. This explains concepts without live market data; it cannot verify what to buy today.", "Tanya istilah, laporan, ETF, risiko dan asas pelaburan. Ini menerangkan konsep tanpa data pasaran langsung; tidak dapat mengesahkan apa yang patut dibeli hari ini.")).font(.subheadline)
+                Text(tr("发送时，问题和最近最多三轮对话会交给 Gemini，使用研究额度。失败也可能消耗额度。对话只在本页暂存，离开或切换账号后清除；不要输入账户密码等敏感资料。", "Send shares your question and up to three recent exchanges with Gemini, using research allowance. Failed requests may also use allowance. Chats stay on this screen and clear on leaving or switching accounts. Do not enter passwords or sensitive details.", "Hantar berkongsi soalan dan sehingga tiga pertukaran terkini dengan Gemini menggunakan kuota kajian. Permintaan gagal mungkin menggunakan kuota. Perbualan dipadam apabila keluar atau bertukar akaun. Jangan masukkan kata laluan atau maklumat sensitif.")).font(.caption).foregroundStyle(.secondary)
+                if messages.isEmpty {
+                    ForEach(suggestions, id: \.self) { suggestion in
+                        Button(suggestion) { draft = suggestion }.buttonStyle(.bordered).disabled(running)
+                    }
+                }
+                ForEach(messages) { message in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(message.role == "user" ? tr("你", "You", "Anda") : tr("AI · 知识解答", "AI · Explanation", "AI · Penjelasan"), systemImage: message.role == "user" ? "person" : "sparkles").font(.caption.bold()).foregroundStyle(.secondary)
+                        Text(message.text).textSelection(.enabled)
+                    }.researchCard()
+                }
+                TextField(tr("输入股票问题，可继续追问", "Ask a stock question or follow up", "Tanya soalan saham atau soalan susulan"), text: $draft, axis: .vertical)
+                    .lineLimit(3...8).textFieldStyle(.roundedBorder).disabled(running)
+                Text("\(draft.utf16.count)/2000").font(.caption).foregroundStyle(draft.utf16.count > 2000 ? Color.red : Color.secondary)
+                HStack {
+                    Button(action: send) { Label(tr("发送", "Send", "Hantar"), systemImage: "arrow.up.circle.fill") }.buttonStyle(.borderedProminent)
+                        .disabled(running || draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || draft.utf16.count > 2000)
+                    if running {
+                        ProgressView()
+                        Button(tr("取消", "Cancel", "Batal")) { task?.cancel() }
+                    }
+                }
+                if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            }.padding()
+        }.navigationTitle(tr("股票问答", "Stock Q&A", "Soal jawab saham"))
+            .toolbar { Button(tr("清空", "Clear", "Kosongkan"), action: clear) }
+            .onDisappear(perform: clear)
+            .onChange(of: account.researchHistoryScope) { _, _ in clear() }
+            .onChange(of: phase) { _, value in if value != .active { task?.cancel() } }
     }
 }
 
