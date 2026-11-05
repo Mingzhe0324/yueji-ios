@@ -1,5 +1,6 @@
 // Local, resumable free-plan ingestion. Never run inside the 25-second Edge Function.
-import {mkdir,readFile,writeFile,rename,open,unlink} from 'node:fs/promises';
+import {mkdir,readFile,open,unlink} from 'node:fs/promises';
+import {saveCheckpoint} from './lib/scan-checkpoint.mjs';
 import path from 'node:path';
 import {markets,directory,observePrices,providerJSON,buildReport} from './lib/free-market-scan.mjs';
 const root=path.resolve(import.meta.dirname,'../build-market-scan');
@@ -8,7 +9,7 @@ if (!key || key==='demo') { console.error('Set EODHD_API_KEY locally to your own
 await mkdir(root,{recursive:true});
 let lock;
 try {lock=await open(path.join(root,'run.lock'),'wx');} catch {console.error('Another scan may be running. No requests made.');process.exit(2);}
-const atomic=async(name,value)=>{const dest=path.join(root,name);await writeFile(dest+'.tmp',JSON.stringify(value,null,2));await rename(dest+'.tmp',dest);};
+const atomic=(name,value)=>saveCheckpoint(path.join(root,name),value);
 try {
   let state;
   try {state=JSON.parse(await readFile(path.join(root,'state.json'),'utf8'));}
@@ -29,7 +30,7 @@ try {
     if(prior && Date.now()-Date.parse(prior.at)<7*86400000)continue;
     if(stop || (state.usage[utcDay]??0)>=20)break;
     try {const rows=directory(await get(`exchange-symbol-list/${market}`),market);state.directories[market]={at:new Date().toISOString(),rows};delete state.directoryErrors[market];}
-    catch(e){state.directoryErrors[market]=['local_daily_limit','provider_401','provider_403','provider_429','invalid_directory','duplicate_symbol'].includes(e.message)?e.message:'directory_unavailable';}
+    catch(e){if(e.message==='checkpoint_write_failed')throw e;state.directoryErrors[market]=['local_daily_limit','provider_401','provider_403','provider_429','invalid_directory','duplicate_symbol'].includes(e.message)?e.message:'directory_unavailable';}
     await atomic('state.json',state);
   }
   // Oldest attempts first within each market, round-robin across markets.
@@ -43,11 +44,14 @@ try {
       const stock=queue.shift();if(!stock)continue;
       let result;
       try{result=observePrices(await get(`eod/${stock.symbol}`));}
-      catch(e){result={status:'unavailable',reason:['provider_401','provider_403','provider_429','invalid_prices'].includes(e.message)?e.message:'prices_unavailable'};}
+      catch(e){if(e.message==='checkpoint_write_failed')throw e;result={status:'unavailable',reason:['provider_401','provider_403','provider_429','invalid_prices'].includes(e.message)?e.message:'prices_unavailable'};}
       state.observations[stock.symbol]={attemptedAt:new Date().toISOString(),result};await atomic('state.json',state);
     }
   }
   await atomic('report.json',buildReport(state));
   console.log(`Saved build-market-scan/report.json. Requests this run: ${usedThisRun}; locally recorded today: ${state.usage[utcDay]??0}/20. No buy/sell recommendation.`);
-}catch{console.error('Scan stopped safely. Check local state and permissions. No API key or upstream response is logged.');process.exitCode=1;}
+}catch(e){
+  const messages={checkpoint_write_failed:'Could not save the local checkpoint. Close programs holding build-market-scan files or pause OneDrive syncing, then retry. Keep state.json and state.json.tmp; no further requests were sent.',invalid_state:'Local state could not be read. Keep state.json for recovery; do not reset usage.',invalid_usage:'Local usage counter is invalid. Keep state.json for recovery.'};
+  console.error(messages[e.message]??'Scan stopped safely. No API key or upstream response is logged.');process.exitCode=1;
+}
 finally{await lock.close();await unlink(path.join(root,'run.lock'));}
