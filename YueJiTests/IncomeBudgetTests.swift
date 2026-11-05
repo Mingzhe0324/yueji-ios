@@ -4,6 +4,36 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testGrabVisaChargeRequiresCardBindingAndDeduplicatesBooking() throws {
+        let date = Date()
+        let body = "Your Visa 1234 has been charged MYR 38.74 for booking TEST001-ABC123."
+        let parsed = try XCTUnwrap(parseFinancialNotification(body, title: "Grab", sourceApp: "Grab"))
+        XCTAssertEqual(parsed.sourceBank, "Grab Card")
+        XCTAssertEqual(parsed.accountSuffix, "1234")
+        XCTAssertEqual(parsed.reference, "TEST001-ABC123")
+        XCTAssertEqual(parsed.cents, 3874)
+        XCTAssertNil(parseFinancialNotification(body, title: "Grab", sourceApp: "GrabPay"))
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: body, title: "Grab", date: date, eventID: nil, sourceApp: "Grab")
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertEqual(ledger.tngNotices.first?.status, "pending")
+        let card = BankAccount(name: "Visa", openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: "Maybank", automaticSource: "Grab Card", automaticSuffix: "1234")
+        let wallet = BankAccount(name: "GrabPay", openingCents: 5000, openingDate: date.addingTimeInterval(-3600), institution: "GrabPay", automaticSource: "Grab Card", automaticSuffix: "1234")
+        ledger = Ledger(); ledger.bankAccounts = [card, wallet]
+        for _ in 0..<2 {
+            _ = try ledger.receiveTNG(body: body, title: "Grab", date: date, eventID: nil, sourceApp: "Grab")
+        }
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.bankBalance(card), 6126)
+        XCTAssertEqual(ledger.bankBalance(wallet), 5000)
+        XCTAssertNil(ledger.automaticBankAccount(source: "Grab Card", suffix: "9999"))
+        var second = card; second.id = UUID().uuidString; ledger.bankAccounts.append(second)
+        XCTAssertNil(ledger.automaticBankAccount(source: "Grab Card", suffix: "1234"))
+        let hold = "You'll only be charged the final amount once the service is complete. Any unused amount will be returned to your payment method."
+        XCTAssertNil(parseFinancialNotification(hold, title: "RM38.74 is currently on hold", sourceApp: "Grab"))
+        XCTAssertFalse(shouldReviewFinancialNotification(hold, title: "RM38.74 is currently on hold"))
+        XCTAssertNil(parseFinancialNotification(body + " Payment failed.", title: "Grab", sourceApp: "Grab"))
+    }
     func testAdditionalWalletPaymentsLinkOnlyTheirConfiguredAccount() throws {
         // Synthetic shared-grammar fixtures, not claimed provider notification samples.
         let date = Date()

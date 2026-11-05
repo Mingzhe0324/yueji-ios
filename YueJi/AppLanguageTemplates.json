@@ -763,6 +763,7 @@
   "Goal name",
   "Goal reached!",
   "Google sign-in is not enabled. Complete the Supabase Google provider and callback setup.",
+  "Grab card charges: enter the linked Visa card's last four digits. A unique source and suffix match is required. Do not link to the GrabPay wallet. These are card digits.",
   "Green",
   "Grouped by name, ignoring case and extra spaces. Use distinct names for different people. Batch receipts settle oldest debts first and do not offset money you owe back.",
   "Growth",

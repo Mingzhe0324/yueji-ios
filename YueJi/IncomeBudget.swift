@@ -87,6 +87,14 @@ extension Ledger {
     func automaticBankAccount(source: String, suffix: String?) -> String? {
         guard validFinancialSource(source), source != "银行 / TNG", source != "Apple Pay" else { return nil }
         let key = (financialProvider(source) ?? source).lowercased()
+        if key == "grab card" {
+            guard let suffix, suffix.count == 4 else { return nil }
+            let cards = bankAccounts.filter {
+                $0.automaticSource == "Grab Card" && $0.automaticSuffix == suffix &&
+                !MalaysianBanks.walletsAndPayments.contains($0.institution ?? "")
+            }
+            return cards.count == 1 ? cards[0].id : nil
+        }
         let candidates = bankAccounts.filter {
             guard $0.institution != "TNG Card" else { return false }
             guard let configured = $0.automaticSource else { return false }

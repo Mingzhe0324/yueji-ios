@@ -769,7 +769,7 @@ extension Ledger {
                 : tr("本机规则已识别；Gemini 未提供可用结果。", "Recognised by local rules; Gemini did not provide a usable result.", "Dikenal pasti oleh peraturan setempat; Gemini tidak memberikan hasil yang boleh digunakan.")
         }
         if let parsed, !duplicate, !crossSourceDuplicate {
-            if parsed.kind == "payment", !automaticBalances || notice.bankAccountID != nil {
+            if parsed.kind == "payment", (!automaticBalances && parsed.sourceBank != "Grab Card") || notice.bankAccountID != nil {
                 let entry = Expense(bankAccountID: notice.bankAccountID, merchant: parsed.party, cents: parsed.cents, date: timestamp, category: merchantCategories[friendKey(parsed.party)] ?? guessCategory(parsed.party, description: title + " " + text), source: parsed.sourceBank, transactionReference: suppliedReference, timeSource: verified.transactionDate == nil ? "notification" : "supplied")
                 expenses.append(entry); notice.expenseID = entry.id; notice.status = "recorded"
             } else if parsed.kind == "transfer" { notice.status = "transfer" }
@@ -1510,6 +1510,7 @@ let financialProviderAliases: [(String, [String])] = [
     ("Wise", ["wise", "transferwise"]),
     // Payment wallets only: Grab/Shopee shopping notifications are not wallet identities.
     ("GrabPay", ["grabpay", "grab pay"]),
+    ("Grab Card", ["grab card"]),
     ("ShopeePay", ["shopeepay", "shopee pay"]),
     ("TNG", ["tng ewallet", "touch 'n go", "touch n go", "tng"]),
     ("Maybank", ["maybank", "maybank2u", "mae"]),
@@ -1589,6 +1590,7 @@ func notificationMatches(_ text: String, _ pattern: String) -> Bool {
 }
 func isNonTransactionNotification(_ body: String, title: String) -> Bool {
     let text = notificationText(title + " " + body)
+    if notificationMatches(text, #"\b(?:currently on hold|pre[- ]authori[sz](?:ation|ed)|only be charged the final amount once)\b"#) { return true }
     // Points receipts also say "received" and "transaction", but are not money.
     // Keep notices with currency amounts eligible for payment/cashback review.
     let pointsReceipt = notificationMatches(text, #"\b[0-9][0-9,]*(?:\.[0-9]+)?\s+(?:reward\s+)?points\b"#)
@@ -1631,6 +1633,7 @@ func parseFinancialNotification(_ body: String, title: String = "", sourceApp: S
         }
     }
     if let sourceApp, !sourceApp.isEmpty, !validFinancialSource(sourceApp) { return nil }
+    if let grab = parseGrabCardCharge(body, title: title, sourceApp: sourceApp) { return grab }
     let provider = notificationProvider(sourceApp: sourceApp, title: title, body: body)
     if notificationChannel(notificationText(body)) != nil {
         return parseGenericBankNotification(body, title: title, provider: provider)
@@ -1652,6 +1655,25 @@ func parseFinancialNotification(_ body: String, title: String = "", sourceApp: S
         return parsed
     }
     return parseGenericBankNotification(body, title: title, provider: provider)
+}
+
+// Observed Grab Visa charge template; never a GrabPay wallet debit.
+func parseGrabCardCharge(_ body: String, title: String, sourceApp: String?) -> TNGParsed? {
+    let source = notificationTitleKey(sourceApp ?? "")
+    let heading = notificationTitleKey(title)
+    guard ["", "grab", "grab card"].contains(source),
+          ["", "grab", "grab card"].contains(heading),
+          !source.isEmpty || heading == "grab" else { return nil }
+    let text = notificationText(body)
+    let pattern = #"\AYour Visa ([0-9]{4}) has been charged MYR ([0-9]+\.[0-9]{2}) for booking ([A-Za-z0-9]{1,40}-\s*[A-Za-z0-9]{1,40})\.\z"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let suffixRange = Range(match.range(at: 1), in: text),
+          let amountRange = Range(match.range(at: 2), in: text),
+          let referenceRange = Range(match.range(at: 3), in: text),
+          let cents = try? toCents(String(text[amountRange])), cents > 0, cents <= 10_000_000_000 else { return nil }
+    let reference = text[referenceRange].filter { !$0.isWhitespace }
+    return TNGParsed(kind: "payment", cents: cents, party: "Grab", sourceBank: "Grab Card", accountSuffix: String(text[suffixRange]), reference: reference)
 }
 
 /// These are generic grammars, not claimed samples from individual banks.

@@ -626,6 +626,9 @@ private struct BankAccountEditor: View {
                         }
                     }.pickerStyle(.navigationLink).disabled(institution == "TNG Card")
                     if !automaticSource.isEmpty {
+                        if automaticSource == "Grab Card" {
+                            Text(tr("Grab 扣卡：填写绑定 Visa 卡的尾号。只有来源和尾号唯一匹配才自动入账；不要绑定到 GrabPay 钱包。这里的尾号是卡号尾号。", "Grab card charges: enter the linked Visa card's last four digits. A unique source and suffix match is required. Do not link to the GrabPay wallet. These are card digits.", "Caj kad Grab: isi empat digit akhir kad Visa terpaut. Sumber dan digit mesti sepadan secara unik. Jangan pautkan ke dompet GrabPay. Ini digit kad.")).font(.footnote).foregroundStyle(.secondary)
+                        }
                         Text(tr("根据你导入的交易通知识别，不会直接连接银行或钱包。付款须明确完成；充值、退款及不明格式需要核对。Grab 和 Shopee 的订单通知不等于钱包付款。", "Uses transaction notices you import, without connecting to a bank or wallet. Payments must be explicitly completed; reloads, refunds and unfamiliar formats need review. Grab and Shopee order notices are not wallet payments.", "Menggunakan notis transaksi yang diimport, tanpa sambungan bank atau dompet. Bayaran mesti selesai; tambah nilai, bayaran balik dan format asing perlu disemak. Notis pesanan Grab dan Shopee bukan bayaran dompet.")).font(.footnote).foregroundStyle(.secondary)
                         TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
                             .keyboardType(.numberPad)
