@@ -304,8 +304,6 @@ extension Ledger {
 }
 
 struct Ledger: Codable {
-    var vehicles: [SamanVehicle] = []
-    var summons: [SamanRecord] = []
     var bankAccounts: [BankAccount] = []
     var bankTransfers: [BankTransfer] = []
     var coolingPurchases: [CoolingPurchase] = []
@@ -336,11 +334,9 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers, vehicles, summons }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
-        vehicles = try c.decodeIfPresent([SamanVehicle].self, forKey: .vehicles) ?? []
-        summons = try c.decodeIfPresent([SamanRecord].self, forKey: .summons) ?? []
         bankAccounts = try c.decodeIfPresent([BankAccount].self, forKey: .bankAccounts) ?? []
         bankTransfers = try c.decodeIfPresent([BankTransfer].self, forKey: .bankTransfers) ?? []
         coolingPurchases = try c.decodeIfPresent([CoolingPurchase].self, forKey: .coolingPurchases) ?? []
@@ -370,7 +366,6 @@ struct Ledger: Codable {
         self = reconcilingBudgetAllocations()
     }
     func validated() throws -> Ledger {
-        try validateSaman()
         try validateBankAccounts()
         guard coolingPurchases.count <= 500, Set(coolingPurchases.map(\.id)).count == coolingPurchases.count else { throw LedgerError.invalid("Invalid cooling list") }
         for purchase in coolingPurchases { try purchase.validate() }

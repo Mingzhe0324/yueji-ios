@@ -4,48 +4,6 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
-    func testSamanBackupCompatibilityAndValidation() throws {
-        var ledger = Ledger()
-        let car = SamanVehicle(plate: "ABC1234")
-        ledger.vehicles = [car]
-        var record = SamanRecord(vehicleID: car.id, reference: "TEST-001", cents: 5000)
-        ledger.summons = [record]
-        try ledger.validateSaman()
-        let bytes = try JSONEncoder().encode(ledger)
-        let restored = try JSONDecoder().decode(Ledger.self, from: bytes)
-        XCTAssertEqual(restored.summons, ledger.summons)
-        XCTAssertEqual(restored.vehicles, ledger.vehicles)
-        var legacy = try XCTUnwrap(JSONSerialization.jsonObject(with: bytes) as? [String: Any])
-        legacy.removeValue(forKey: "vehicles"); legacy.removeValue(forKey: "summons")
-        let old = try JSONDecoder().decode(Ledger.self, from: JSONSerialization.data(withJSONObject: legacy))
-        XCTAssertTrue(old.vehicles.isEmpty); XCTAssertTrue(old.summons.isEmpty)
-        record.id = UUID().uuidString; ledger.summons.append(record)
-        XCTAssertThrowsError(try ledger.validateSaman())
-        ledger.summons = [record]; ledger.vehicles = []
-        XCTAssertThrowsError(try ledger.validateSaman())
-        ledger.vehicles = [car]; ledger.summons[0].cents = -1
-        XCTAssertThrowsError(try ledger.validateSaman())
-    }
-    func testSamanOCRDoesNotInventDeadlinesOrPickMultipleAmounts() {
-        let text = "No. Saman: TEST-001\nNo. Kenderaan: ABC 1234\nAmount: MYR 50.00\nPayment Due Date: 20/11/2026"
-        XCTAssertEqual(SamanOCR.reference(text), "TEST-001")
-        XCTAssertEqual(SamanOCR.plate(text), "ABC1234")
-        XCTAssertEqual(SamanOCR.amount(text), 5000)
-        XCTAssertNotNil(SamanOCR.dueDate(text))
-        XCTAssertNil(SamanOCR.dueDate("Offence date: 20/11/2026"))
-        XCTAssertNil(SamanOCR.dueDate("Payment Due Date: 31/02/2026"))
-        XCTAssertNil(SamanOCR.amount(text + "\nAmount: MYR 100.00"))
-        XCTAssertNil(SamanOCR.amount("Amount: SGD 50.00"))
-        let now = Date()
-        var record = SamanRecord(vehicleID: "car", reference: "TEST")
-        XCTAssertFalse(record.needsReminder(now: now))
-        record.remindAt = now.addingTimeInterval(60)
-        XCTAssertTrue(record.needsReminder(now: now))
-        record.paid = true
-        XCTAssertFalse(record.needsReminder(now: now))
-        record.paid = false; record.remindAt = now.addingTimeInterval(-1)
-        XCTAssertFalse(record.needsReminder(now: now))
-    }
     func testGrabVisaChargeRequiresCardBindingAndDeduplicatesBooking() throws {
         let date = Date()
         let body = "Your Visa 1234 has been charged MYR 38.74 for booking TEST001-ABC123."
