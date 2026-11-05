@@ -65,6 +65,28 @@ export async function handleResearch(request, deps) {
     if (user.id !== owner) return reply(403, { error: "personal_only" });
     if (!request.headers.get("Content-Type")?.includes("application/json")) return reply(415, { error: "json_required" });
     let input; try { input = await read(request.body, 300000); } catch { return reply(400, { error: "invalid_input" }); }
+    if (input?.mode === 'coverage_check') {
+      // Check server-owned sources only. Never accept a client universe or URLs.
+      const markets = ['MYX','US','HKEX'];
+      const rows = [];
+      const entries = Object.entries(officialSources);
+      // Bound concurrency and give each source its own deadline within the request budget.
+      for (let i = 0; i < entries.length; i += 4) {
+        rows.push(...await Promise.all(entries.slice(i,i+4).map(async ([symbol,source]) => {
+          const market = symbol.startsWith('MYX:') ? 'MYX' : symbol.startsWith('HKEX:') ? 'HKEX' : 'US';
+          // PDF parsing has separate runtime costs; this lightweight check reports it as unchecked.
+          if (source.pdf) return {symbol,company:source.name,market,status:'not_checked',sources:[]};
+          try {
+            const timeout = AbortSignal.timeout(6000);
+            const evidence = await collectOfficialEvidence([symbol], (u,o) => deps.fetch(u,{...o,signal:AbortSignal.any([signal,timeout])}));
+            return {symbol,company:source.name,market,status:'readable',sources:evidence.map(s=>({url:s.url,scope:s.scope,fetchedAt:s.fetchedAt}))};
+          } catch { return {symbol,company:source.name,market,status:'unavailable',sources:[]}; }
+        })));
+      }
+      return reply(200,{kind:'coverage',checkedAt:new Date().toISOString(),recommendation:'insufficient',universeComplete:false,
+        markets:markets.map(market=>({market,totalListed:null,configured:rows.filter(r=>r.market===market).length,
+          readable:rows.filter(r=>r.market===market&&r.status==='readable').length})),rows});
+    }
     if (input?.mode === 'stock_chat') {
       const history = input.history ?? [];
       if (typeof input.question !== 'string' || !input.question.trim() || input.question.length > 2000 ||

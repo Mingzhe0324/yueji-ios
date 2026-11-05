@@ -344,6 +344,12 @@ actor SupabaseCloudService: CloudRemote {
             throw reviewError("股票问答暂时不可用，请稍后重试；若持续出现，需要更新研究服务。", "Stock Q&A is unavailable. Retry later; if it persists, the research service may need updating.", "Soal jawab saham tidak tersedia. Cuba kemudian; jika berterusan, perkhidmatan kajian mungkin perlu dikemas kini.")
         }
     }
+    func checkInvestmentCoverage() async throws -> Data {
+        do { return try await request("/functions/v1/investment-research", body: ["mode": "coverage_check"], authenticated: true) }
+        catch CloudFailure.server(_, _) {
+            throw reviewError("资料检查暂不可用，请稍后重试；旧版研究服务需要更新。", "Coverage check is unavailable. Retry later; older research services need updating.", "Semakan liputan tidak tersedia. Cuba kemudian; perkhidmatan lama perlu dikemas kini.")
+        }
+    }
     func researchStock(symbols: [String], imported: StockResearchImport? = nil) async throws -> Data {
         guard (1...3).contains(symbols.count), Set(symbols).count == symbols.count,
               symbols.allSatisfy({ ObservedStock.normalized($0) == $0 }) else { throw CloudFailure.invalidResponse }

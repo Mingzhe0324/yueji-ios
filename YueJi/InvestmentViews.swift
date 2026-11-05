@@ -237,6 +237,9 @@ struct InvestmentWatchView: View {
             }
             Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
                 beginnerEntrance
+                NavigationLink { InvestmentCoverageView() } label: {
+                    Label(tr("选股前 · 检查资料覆盖", "Before screening · Check coverage", "Sebelum saringan · Semak liputan"), systemImage: "checklist")
+                }
                 NavigationLink { StockComparisonPicker() } label: {
                     Label(tr("对比 2–3 只股票", "Compare 2–3 stocks", "Bandingkan 2–3 saham"), systemImage: "square.split.2x2")
                 }
@@ -919,6 +922,89 @@ struct StockChatMessage: Identifiable {
     let id = UUID()
     let role: String
     let text: String
+}
+
+private struct InvestmentCoverageView: View {
+    private struct Coverage: Decodable {
+        struct Market: Decodable, Identifiable {
+            let market: String
+            let configured: Int
+            let readable: Int
+            var id: String { market }
+        }
+        struct Row: Decodable, Identifiable {
+            let symbol: String
+            let company: String
+            let status: String
+            var id: String { symbol }
+        }
+        let kind: String
+        let checkedAt: String
+        let recommendation: String
+        let universeComplete: Bool
+        let markets: [Market]
+        let rows: [Row]
+    }
+    @ObservedObject private var account = CloudAccount.shared
+    @Environment(\.scenePhase) private var phase
+    @State private var result: Coverage?
+    @State private var running = false
+    @State private var error = ""
+    @State private var task: Task<Void, Never>?
+    private func check() {
+        guard !running else { return }
+        running = true; error = ""; result = nil
+        task = Task { @MainActor in
+            defer { running = false }
+            do {
+                let data = try await account.checkInvestmentCoverage()
+                try Task.checkCancellation()
+                let value = try JSONDecoder().decode(Coverage.self, from: data)
+                guard value.kind == "coverage", value.recommendation == "insufficient", !value.universeComplete,
+                      Set(value.markets.map(\.market)) == Set(["MYX", "US", "HKEX"]), value.rows.count <= 100 else { throw CloudFailure.invalidResponse }
+                result = value
+            } catch is CancellationError { }
+            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        }
+    }
+    var body: some View {
+        List {
+            Section {
+                Text(tr("免费优先：马股、美股、港股", "Free first: Malaysia, US, Hong Kong", "Percuma dahulu: Malaysia, AS, Hong Kong")).font(.headline)
+                Text(tr("这一步检查已接入的官方财务来源，不是全市场选股。不会调用 AI 或使用研究分析额度，也不会开通收费数据。", "This checks connected official financial sources, not the whole market. It does not call AI, use research analysis allowance or activate paid data.", "Ini menyemak sumber kewangan rasmi yang disambungkan, bukan seluruh pasaran. Tiada panggilan AI, penggunaan kuota analisis atau pengaktifan data berbayar."))
+                Button(action: check) { Label(tr("检查现有资料", "Check available sources", "Semak sumber tersedia"), systemImage: "arrow.clockwise") }.disabled(running)
+                if running { ProgressView(); Button(tr("取消", "Cancel", "Batal")) { task?.cancel() } }
+                if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            }
+            Section(tr("当前结论", "Current conclusion", "Kesimpulan semasa")) {
+                Label(tr("暂不推荐买入或卖出时机", "No entry or exit recommendation yet", "Belum ada cadangan masa beli atau jual"), systemImage: "clock").foregroundStyle(.orange)
+                Text(tr("仍缺三个市场的完整股票目录、近期股价、可比估值及完整风险资料。财报能读取不代表今天值得买；没有资料也不等于公司不好。", "Complete stock directories, recent prices, comparable valuations and full risk evidence are still missing. Readable reports do not establish a good entry today; missing evidence does not mean a bad company.", "Senarai saham lengkap, harga terkini, penilaian setanding dan bukti risiko lengkap masih tiada. Laporan boleh dibaca tidak bermakna sesuai dibeli hari ini; kekurangan bukti bukan syarikat buruk."))
+            }
+            if let result {
+                Section(tr("实际检查范围", "Actual check coverage", "Liputan semakan sebenar")) {
+                    Text(result.checkedAt).font(.caption).foregroundStyle(.secondary)
+                    Text(tr("以下数量仅指已配置来源。全市场股票总数未知，未计算全市场覆盖率。", "Counts refer only to configured sources. Total market stock counts are unknown; no whole-market coverage rate is calculated.", "Bilangan hanya merujuk sumber dikonfigurasi. Jumlah saham seluruh pasaran tidak diketahui; kadar liputan tidak dikira."))
+                    ForEach(result.markets) { market in
+                        LabeledContent(market.market, value: "\(market.readable) / \(market.configured)")
+                    }
+                    Text(tr("可读取来源数／已配置来源数；读取成功不代表资料最新或完整。", "Readable / configured sources; success does not establish freshness or completeness.", "Sumber boleh dibaca / dikonfigurasi; kejayaan tidak membuktikan data terkini atau lengkap.")).font(.caption)
+                }
+                Section(tr("逐项结果 · 不是推荐排名", "Per-source results · Not a ranking", "Keputusan sumber · Bukan kedudukan")) {
+                    ForEach(result.rows) { row in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(row.company).font(.headline)
+                            Text(row.symbol).font(.caption.monospaced())
+                            Text(row.status == "readable" ? tr("财务摘要可读取，仍缺买卖判断资料", "Financial summary readable; trading evidence still missing", "Ringkasan kewangan boleh dibaca; bukti dagangan masih tiada") : row.status == "not_checked" ? tr("本次未检查 PDF 来源", "PDF source not checked in this run", "Sumber PDF tidak disemak kali ini") : tr("本次读取失败，不作判断", "Read failed; no assessment", "Bacaan gagal; tiada penilaian")).font(.caption).foregroundStyle(.secondary)
+                            NavigationLink(tr("查看公司研究", "Open company research", "Buka kajian syarikat")) { StockResearchView(symbols: [row.symbol]) }
+                        }
+                    }
+                }
+            }
+        }.navigationTitle(tr("资料覆盖", "Data coverage", "Liputan data"))
+            .onDisappear { task?.cancel(); result = nil }
+            .onChange(of: account.researchHistoryScope) { _, _ in task?.cancel(); result = nil; error = "" }
+            .onChange(of: phase) { _, value in if value != .active { task?.cancel() } }
+    }
 }
 
 private struct BeginnerInvestmentView: View {

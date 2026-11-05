@@ -18,6 +18,37 @@ function harness({ owner = 'owner', user = 'owner', anonymous = false, quota = t
   } };
 }
 
+test('coverage checks configured sources without AI/quota and never claims a complete universe', async () => {
+  const deps=harness();
+  const original=deps.fetch;
+  const sourceCalls=[];
+  deps.fetch=async (url,options)=>{
+    if(url.endsWith('/auth/v1/user'))return original(url,options);
+    sourceCalls.push(url);
+    assert.equal(options.redirect,'error');
+    assert.ok(options.signal);
+    if(url.includes('99speedmart.com.my'))return new Response('<p>99 Speed Mart Revenue profit quarter 2026 '+ 'Financial information. '.repeat(35)+'</p>',{headers:{'Content-Type':'text/html'}});
+    throw new Error('source offline');
+  };
+  const response=await handleResearch(request({mode:'coverage_check',urls:['https://evil.invalid'],recommendation:'buy'}),deps);
+  assert.equal(response.status,200);
+  const value=await response.json();
+  assert.equal(value.universeComplete,false);
+  assert.equal(value.recommendation,'insufficient');
+  assert.deepEqual(value.markets.map(m=>m.market),['MYX','US','HKEX']);
+  assert.ok(value.markets.every(m=>m.totalListed===null));
+  assert.equal(value.markets.find(m=>m.market==='HKEX').configured,0);
+  assert.equal(value.rows.find(r=>r.symbol==='MYX:99SMART').status,'readable');
+  assert.equal(value.rows.find(r=>r.symbol==='MYX:IJM').status,'not_checked');
+  assert.equal(value.rows.find(r=>r.symbol==='MYX:MAYBANK').status,'unavailable');
+  assert.equal(value.markets.reduce((n,m)=>n+m.configured,0),value.rows.length);
+  assert.equal(value.markets.reduce((n,m)=>n+m.readable,0),value.rows.filter(r=>r.status==='readable').length);
+  assert.ok(!sourceCalls.some(u=>/evil|googleapis|claim_investment/.test(u)));
+  const denied=harness({user:'other'});
+  assert.equal((await handleResearch(request({mode:'coverage_check'}),denied)).status,403);
+  assert.equal(denied.calls.length,1);
+});
+
 test('stock chat authenticates, shares quota and forwards only bounded conversation', async () => {
   const input={mode:'stock_chat',question:'What is an ETF?',language:'en',history:[{role:'user',text:'Explain shares'},{role:'assistant',text:'An ownership interest.'}],ledger:'must not forward'};
   const deps=harness({result:{finishReason:'STOP',content:{parts:[{thought:true,text:'private reasoning'},{text:'A hypothetical explanation.'}]}}});

@@ -121,6 +121,22 @@ import ImageIO
         guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
         return data
     }
+    func checkInvestmentCoverage() async throws -> Data {
+        guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
+        let api = try connectedService()
+        let data: Data
+        do { data = try await api.checkInvestmentCoverage() }
+        catch CloudFailure.session {
+            let refreshed = try await api.refresh()
+            guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+            try CloudCredentials.save(CloudCredential(server: api.configuration.server, session: refreshed))
+            session = refreshed
+            data = try await api.checkInvestmentCoverage()
+        }
+        try Task.checkCancellation()
+        guard session?.user.id == current.user.id, signedIn, !changingAccount else { throw CancellationError() }
+        return data
+    }
     func researchStock(symbols: [String], imported: StockResearchImport? = nil) async throws -> Data {
         guard signedIn, !changingAccount, !busy, let current = session else { throw CloudFailure.session }
         let api = try connectedService()
