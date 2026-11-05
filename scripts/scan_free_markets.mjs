@@ -18,10 +18,12 @@ try {
   let stop=false,usedThisRun=0;
   const utcDay=new Date().toISOString().slice(0,10);
   if (!Number.isInteger(state.usage[utcDay]??0) || (state.usage[utcDay]??0)<0)throw Error('invalid_usage');
+  console.log(`Starting/resuming. Local daily usage: ${state.usage[utcDay]??0}/20. No AI or paid endpoints are used.`);
   async function get(endpoint){
     if(stop || (state.usage[utcDay]??0)>=20)throw Error('local_daily_limit');
     state.usage[utcDay]=(state.usage[utcDay]??0)+1;usedThisRun++;
     await atomic('state.json',state); // Reserve before network; failed requests still count.
+    console.log(`[${state.usage[utcDay]}/20] ${endpoint} — requesting; timeout 20 seconds.`);
     if(usedThisRun>1)await new Promise(resolve=>setTimeout(resolve,3200));
     try{return await providerJSON(endpoint,key);}catch(e){if(/^provider_(401|403|429)$/.test(e.message))stop=true;throw e;}
   }
@@ -29,7 +31,7 @@ try {
     const prior=state.directories[market];
     if(prior && Date.now()-Date.parse(prior.at)<7*86400000)continue;
     if(stop || (state.usage[utcDay]??0)>=20)break;
-    try {const rows=directory(await get(`exchange-symbol-list/${market}`),market);state.directories[market]={at:new Date().toISOString(),rows};delete state.directoryErrors[market];}
+    try {const rows=directory(await get(`exchange-symbol-list/${market}`),market);state.directories[market]={at:new Date().toISOString(),rows};delete state.directoryErrors[market];console.log(`${market}: ${rows.length} directory rows; ${rows.filter(r=>r.excluded).length} excluded (reasons retained).`);}
     catch(e){if(e.message==='checkpoint_write_failed')throw e;state.directoryErrors[market]=['local_daily_limit','provider_401','provider_403','provider_429','invalid_directory','duplicate_symbol'].includes(e.message)?e.message:'directory_unavailable';}
     await atomic('state.json',state);
   }
@@ -46,6 +48,7 @@ try {
       try{result=observePrices(await get(`eod/${stock.symbol}`));}
       catch(e){if(e.message==='checkpoint_write_failed')throw e;result={status:'unavailable',reason:['provider_401','provider_403','provider_429','invalid_prices'].includes(e.message)?e.message:'prices_unavailable'};}
       state.observations[stock.symbol]={attemptedAt:new Date().toISOString(),result};await atomic('state.json',state);
+      console.log(`${stock.symbol}: ${result.status}${result.reason?' ('+result.reason+')':''}`);
     }
   }
   await atomic('report.json',buildReport(state));

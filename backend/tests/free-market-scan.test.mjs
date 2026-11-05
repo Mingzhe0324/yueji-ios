@@ -16,9 +16,15 @@ test('directory declares exclusions, rejects duplicate identities and unsafe sym
   const rows=directory([record,{...record,Code:'ETF',Type:'ETF'},{...record,Code:'OTC',Exchange:'PINK'}],'US');
   assert.equal(rows[0].symbol,'ABC.US');assert.equal(rows[0].excluded,null);
   assert.equal(rows[1].excluded,'not_common_stock');assert.equal(rows[2].excluded,'venue_outside_scope');
-  assert.throws(()=>directory([record,record],'US'),/duplicate/);
-  assert.throws(()=>directory([{...record,Code:'../secret'}],'US'));
+  assert.ok(directory([record,record],'US').every(r=>r.excluded==='duplicate_identity'));
+  assert.equal(directory([{...record,Code:'../secret'}],'US')[0].excluded,'invalid_metadata');
   assert.throws(()=>directory([], 'HK'));
+});
+test('one malformed directory record cannot hide valid companies or get fetched',()=>{
+  const rows=directory([record,{...record,Code:'BAD',Currency:null},null,{...record,Code:'OTHER',Type:null}],'US');
+  assert.equal(rows.length,4);assert.equal(rows[0].excluded,null);
+  assert.equal(rows.filter(r=>r.excluded==='invalid_metadata').length,3);
+  assert.equal(new Set(rows.map(r=>r.symbol)).size,4);
 });
 test('trend observations use adjusted series, never imply buy/sell, reject stale or malformed bars',()=>{
   const rows=bars(), result=observePrices(rows,now);

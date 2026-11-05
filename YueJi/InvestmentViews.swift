@@ -237,6 +237,9 @@ struct InvestmentWatchView: View {
             }
             Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
                 beginnerEntrance
+                NavigationLink { LocalMarketScanView() } label: {
+                    Label(tr("查看电脑采集结果", "View computer scan", "Lihat imbasan komputer"), systemImage: "tray.and.arrow.down")
+                }
                 NavigationLink { InvestmentCoverageView() } label: {
                     Label(tr("选股前 · 检查资料覆盖", "Before screening · Check coverage", "Sebelum saringan · Semak liputan"), systemImage: "checklist")
                 }
@@ -922,6 +925,121 @@ struct StockChatMessage: Identifiable {
     let id = UUID()
     let role: String
     let text: String
+}
+
+private struct LocalMarketScanView: View {
+    private struct Snapshot: Decodable {
+        struct Market: Decodable, Identifiable {
+            let market: String
+            let providerListed: Int?
+            let directoryError: String?
+            let states: [String: Int]
+            var id: String { market }
+        }
+        struct Row: Decodable, Identifiable {
+            let symbol: String
+            let name: String
+            let market: String
+            let status: String
+            let through: String?
+            var id: String { symbol }
+        }
+        let version: Int
+        let generatedAt: String
+        let provider: String
+        let fullMarketRecommendation: Bool
+        let recommendation: String
+        let markets: [Market]
+        let rows: [Row]
+    }
+    @ObservedObject private var account = CloudAccount.shared
+    @State private var snapshot: Snapshot?
+    @State private var choosingFile = false
+    @State private var error = ""
+    private let statuses = ["observed", "pending", "excluded", "unavailable", "stale", "short_history"]
+    private func label(_ status: String) -> String {
+        switch status {
+        case "observed": return tr("已取得价格记录", "Price records collected", "Rekod harga dikumpul")
+        case "pending": return tr("尚未采集", "Pending", "Belum dikumpul")
+        case "excluded": return tr("不在采集范围或资料异常", "Excluded or invalid metadata", "Dikecualikan atau metadata tidak sah")
+        case "stale": return tr("价格记录已旧", "Old price records", "Rekod harga lama")
+        case "short_history": return tr("历史记录不足", "Insufficient history", "Sejarah tidak cukup")
+        default: return tr("暂未取得", "Unavailable", "Tidak tersedia")
+        }
+    }
+    var body: some View {
+        List {
+            Section {
+                Text(tr("把电脑生成的 report.json 存到 iPhone 的“文件”，然后在这里选择。无需提供密钥。", "Save the computer's report.json in iPhone Files, then select it here. No API key needed.", "Simpan report.json komputer dalam Fail iPhone, kemudian pilih di sini. Tiada kunci API diperlukan."))
+                Button(tr("选择采集结果文件", "Choose scan report", "Pilih laporan imbasan")) { choosingFile = true }
+                Text(tr("只在本页读取文件，不发送给 AI。这里显示采集进度，不是股票推荐；仍缺财报、估值和公告。", "Read locally on this screen; nothing is sent to AI. This shows collection progress, not stock recommendations. Financials, valuations and announcements are still missing.", "Dibaca setempat di halaman ini; tidak dihantar ke AI. Ini kemajuan pengumpulan, bukan cadangan saham. Kewangan, penilaian dan pengumuman masih tiada.")).font(.caption).foregroundStyle(.secondary)
+                if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            }
+            if let snapshot {
+                Section(tr("文件中的采集进度", "Progress in this file", "Kemajuan dalam fail")) {
+                    Text(snapshot.generatedAt).font(.caption).foregroundStyle(.secondary)
+                    Text(tr("离线快照，不会自动更新。下列状态以文件生成时为准。", "Offline snapshot; does not update automatically. Statuses are as of file generation.", "Petikan luar talian; tidak dikemas kini automatik. Status pada masa fail dijana.")).font(.caption)
+                    ForEach(snapshot.markets) { market in
+                        VStack(alignment: .leading, spacing: 6) {
+                            Text(market.market == "KLSE" ? tr("马股", "Malaysia", "Malaysia") : market.market == "US" ? tr("美股", "US", "AS") : tr("港股", "Hong Kong", "Hong Kong")).font(.headline)
+                            if let listed = market.providerListed { Text("\(listed) " + tr("条服务商目录记录", "provider directory records", "rekod direktori pembekal")) }
+                            if market.directoryError != nil || market.providerListed == nil {
+                                Text(tr("目录未取得或更新失败，覆盖不完整", "Directory missing or refresh failed; coverage incomplete", "Direktori tiada atau kemas kini gagal; liputan tidak lengkap")).foregroundStyle(.orange)
+                            }
+                            ForEach(statuses, id: \.self) { status in
+                                if let count = market.states[status], count > 0 { Text("\(label(status)): \(count)").font(.caption) }
+                            }
+                        }.padding(.vertical, 4)
+                    }
+                }
+                Section(tr("已尝试的股票 · 非排名，最多显示 200 条", "Attempted stocks · Unranked, up to 200", "Saham dicuba · Tanpa kedudukan, sehingga 200")) {
+                    ForEach(Array(snapshot.rows.filter { !["pending", "excluded"].contains($0.status) }.prefix(200))) { row in
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(row.name).font(.headline)
+                            Text(row.symbol).font(.caption).foregroundStyle(.secondary)
+                            Text(label(row.status)).font(.subheadline)
+                            if let through = row.through { Text(tr("价格记录截至：", "Prices through: ", "Harga hingga: ") + through).font(.caption) }
+                        }
+                    }
+                }
+            }
+        }
+        .navigationTitle(tr("采集结果", "Scan results", "Hasil imbasan"))
+        .fileImporter(isPresented: $choosingFile, allowedContentTypes: [.json]) { result in
+            do {
+                let url = try result.get()
+                let access = url.startAccessingSecurityScopedResource()
+                defer { if access { url.stopAccessingSecurityScopedResource() } }
+                let handle = try FileHandle(forReadingFrom: url)
+                defer { try? handle.close() }
+                let data = try handle.read(upToCount: 10_000_001) ?? Data()
+                guard data.count <= 10_000_000 else { throw CloudFailure.invalidResponse }
+                let value = try JSONDecoder().decode(Snapshot.self, from: data)
+                let dateParser = ISO8601DateFormatter()
+                dateParser.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+                guard let generated = dateParser.date(from: value.generatedAt), generated <= Date().addingTimeInterval(300) else { throw CloudFailure.invalidResponse }
+                guard value.version == 1, value.provider == "EODHD", !value.fullMarketRecommendation,
+                      value.recommendation == "insufficient", value.markets.count == 3,
+                      Set(value.markets.map(\.market)) == Set(["KLSE", "US", "HK"]),
+                      value.rows.count <= 30_000, Set(value.rows.map(\.symbol)).count == value.rows.count,
+                      value.generatedAt.count <= 40,
+                      value.rows.allSatisfy({ statuses.contains($0.status) && ["KLSE", "US", "HK"].contains($0.market) && $0.name.count <= 300 && $0.symbol.count <= 80 && ($0.through?.count ?? 0) <= 10 }) else { throw CloudFailure.invalidResponse }
+                for market in value.markets {
+                    let rows = value.rows.filter { $0.market == market.market }
+                    guard (market.providerListed ?? 0) == rows.count,
+                          market.states.allSatisfy({ statuses.contains($0.key) && $0.value >= 0 && $0.value <= 30_000 }),
+                          market.states.values.reduce(0, +) == rows.count,
+                          statuses.allSatisfy({ status in (market.states[status] ?? 0) == rows.filter { $0.status == status }.count }) else { throw CloudFailure.invalidResponse }
+                }
+                snapshot = value; error = ""
+            } catch {
+                snapshot = nil
+                self.error = tr("无法读取。请选择采集器生成的 report.json（最多 10 MB、30,000 条记录）。", "Cannot read. Choose the collector's report.json (up to 10 MB and 30,000 rows).", "Tidak dapat dibaca. Pilih report.json pengumpul (sehingga 10 MB dan 30,000 rekod).")
+            }
+        }
+        .onDisappear { snapshot = nil; error = "" }
+        .onChange(of: account.researchHistoryScope) { _, _ in snapshot = nil; error = "" }
+    }
 }
 
 private struct InvestmentCoverageView: View {

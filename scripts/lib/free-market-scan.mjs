@@ -4,15 +4,20 @@ const day = 86400000;
 const validDate = value => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && Number.isFinite(Date.parse(value)) && new Date(value).toISOString().slice(0,10) === value;
 export function directory(rows, market) {
   if (!markets.includes(market) || !Array.isArray(rows) || !rows.length || rows.length > 100000) throw Error('invalid_directory');
-  const seen = new Set();
-  return rows.map(r => {
-    if (!r || typeof r.Code !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(r.Code) ||
+  const counts = new Map();
+  for (const r of rows) if (typeof r?.Code === 'string') counts.set(r.Code, (counts.get(r.Code)??0)+1);
+  return rows.map((r,index) => {
+    // Mixed-instrument directories can contain incomplete or unsupported records.
+    // Preserve each as an excluded row instead of dropping an entire exchange.
+    const validCode = typeof r?.Code === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,39}$/.test(r.Code);
+    if (!r || !validCode ||
         typeof r.Name !== 'string' || !r.Name.trim() || r.Name.length > 300 ||
         typeof r.Type !== 'string' || typeof r.Exchange !== 'string' ||
-        typeof r.Currency !== 'string' || !/^[A-Z]{3}$/.test(r.Currency)) throw Error('invalid_directory');
+        typeof r.Currency !== 'string' || !/^[A-Z]{3}$/.test(r.Currency) || counts.get(r.Code)>1) {
+      return {symbol:`INVALID-${market}-${index}`,market,name:'Unusable provider directory record',currency:null,venue:null,type:null,
+        excluded:validCode && counts.get(r.Code)>1?'duplicate_identity':'invalid_metadata',providerCode:typeof r?.Code==='string'?r.Code.slice(0,80):null};
+    }
     const symbol = `${r.Code}.${market}`;
-    if (seen.has(symbol)) throw Error('duplicate_symbol');
-    seen.add(symbol);
     // US means this explicitly declared venue set, never all US OTC securities.
     const excluded = r.Type !== 'Common Stock' ? 'not_common_stock' : market === 'US' && !['NYSE','NASDAQ','NYSE ARCA','BATS','NYSE MKT','AMEX'].includes(r.Exchange) ? 'venue_outside_scope' : null;
     return {symbol,market,name:r.Name,currency:r.Currency,venue:r.Exchange,type:r.Type,excluded};
