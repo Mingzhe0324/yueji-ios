@@ -1687,6 +1687,17 @@ struct TransactionAmount: View {
             .animation(reduceMotion ? nil : YueJiMotion.standard, value: cents)
     }
 }
+/// Source symbols describe how a record arrived, independently of its category.
+private func ledgerSourceSymbol(_ source: String) -> String {
+    if source == "手动" { return "square.and.pencil" }
+    if source == "Apple Pay" || source == "Grab Card" { return "creditcard.fill" }
+    if source == "固定消费" { return "repeat" }
+    if source == "交易截图" { return "doc.viewfinder" }
+    if ["TNG", "GrabPay", "ShopeePay"].contains(financialProvider(source) ?? source) { return "wallet.pass.fill" }
+    if financialProvider(source) != nil { return "building.columns.fill" }
+    return "doc.text"
+}
+
 struct ExpenseRow: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
@@ -1740,9 +1751,12 @@ struct ExpenseRow: View {
                         .accessibilityIdentifier("transaction.items.preview")
                 }
                 Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                Label(sourceLabel(entry.source), systemImage: ledgerSourceSymbol(entry.source))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("transaction.source")
                 if let accountID = entry.bankAccountID,
                    let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
-                    Label(account.name, systemImage: "creditcard")
+                    Label(account.name, systemImage: MalaysianBanks.walletsAndPayments.contains(account.institution ?? "") && account.institution != "TNG Card" ? "wallet.pass.fill" : "creditcard")
                         .font(.caption).foregroundStyle(.secondary)
                         .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                 }
@@ -2113,7 +2127,7 @@ struct ExpensesView: View {
                             }.pickerStyle(.menu)
                             Picker(selection: $providerFilter) {
                                 Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
-                                ForEach(model.ledger.availableSources, id: \.self) { Text(sourceLabel($0)).tag($0) }
+                                ForEach(model.ledger.availableSources, id: \.self) { Label(sourceLabel($0), systemImage: ledgerSourceSymbol($0)).tag($0) }
                             } label: {
                                 Label(tr("来源", "Source", "Sumber"), systemImage: "tray.full")
                             }.pickerStyle(.menu)
@@ -2189,7 +2203,7 @@ struct TNGTimelineRow: View {
         let layout = textSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8)) : AnyLayout(HStackLayout(alignment: .top, spacing: 12))
         layout {
             VStack(alignment: .leading, spacing: 6) {
-                Text(sourceLabel(notice.provider) + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " + movementLabel)
+                Label(sourceLabel(notice.provider) + (notice.accountSuffix.map { " · ••••" + $0 } ?? "") + " · " + movementLabel, systemImage: ledgerSourceSymbol(notice.provider))
                     .font(.headline).fixedSize(horizontal: false, vertical: true)
                 if let party = notice.party, !party.isEmpty {
                     Text((notice.accountDirection == .incoming ? tr("来自：", "From: ", "Daripada: ") : (notice.accountDirection == .outgoing ? tr("给：", "To: ", "Kepada: ") : tr("交易对象：", "Party: ", "Pihak: "))) + party)
