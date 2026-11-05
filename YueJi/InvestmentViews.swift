@@ -173,6 +173,7 @@ struct InvestmentWatchView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var search = ""
     @State private var market = "all"
+    @AppStorage("investment.compactWatchlist") private var compactWatchlist = false
     @Namespace private var cards
     private var saved: [ObservedStock] { ObservedStock.saved(watchlist) }
     private var examples: [ObservedStock] {
@@ -189,20 +190,40 @@ struct InvestmentWatchView: View {
                         .font(.title2.bold())
                     Text(tr("关注公司，理解价值", "Follow companies. Understand value.", "Ikuti syarikat. Fahami nilai."))
                         .foregroundStyle(.white.opacity(0.8))
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 12) {
-                            ForEach(saved.isEmpty ? Array(ObservedStock.examples.prefix(3)) : saved) { stock in
-                                NavigationLink { StockChartView(stock: stock).yuejiZoom(id: "hero" + stock.id, namespace: cards) } label: {
-                                    VStack(alignment: .leading, spacing: 10) {
-                                        StockCompanyLogo(stock: stock)
-                                        Text(stock.name).font(.headline).lineLimit(2)
+                    Picker(tr("自选布局", "Watchlist layout", "Susun atur senarai pantau"), selection: $compactWatchlist) {
+                        Text(tr("卡片", "Cards", "Kad")).tag(false)
+                        Text(tr("列表", "List", "Senarai")).tag(true)
+                    }.pickerStyle(.segmented)
+                    if compactWatchlist {
+                        ForEach(saved.isEmpty ? Array(ObservedStock.examples.prefix(3)) : saved) { stock in
+                            NavigationLink { StockChartView(stock: stock) } label: {
+                                HStack(spacing: 12) {
+                                    StockCompanyLogo(stock: stock)
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(stock.name).font(.subheadline.bold())
                                         Text(stock.symbol).font(.caption.monospaced())
-                                        Text(stock.hasOfficialImporter ? tr("自动研究", "Auto research", "Penyelidikan automatik") : tr("需导入资料", "Import required", "Import diperlukan"))
-                                            .font(.caption).foregroundStyle(.white.opacity(0.8))
-                                    }.frame(width: 170, alignment: .leading).padding(14)
-                                        .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
-                                        .yuejiZoomSource(id: "hero" + stock.id, namespace: cards)
-                                }.buttonStyle(.plain)
+                                    }
+                                    Spacer()
+                                    Text(stock.hasOfficialImporter ? tr("自动研究", "Auto research", "Kajian automatik") : tr("需导入资料", "Import required", "Import diperlukan")).font(.caption)
+                                }.padding(.vertical, 6)
+                            }.buttonStyle(InvestmentPressStyle())
+                        }
+                    } else {
+                        ScrollView(.horizontal, showsIndicators: false) {
+                            HStack(spacing: 12) {
+                                ForEach(saved.isEmpty ? Array(ObservedStock.examples.prefix(3)) : saved) { stock in
+                                    NavigationLink { StockChartView(stock: stock).yuejiZoom(id: "hero" + stock.id, namespace: cards) } label: {
+                                        VStack(alignment: .leading, spacing: 10) {
+                                            StockCompanyLogo(stock: stock)
+                                            Text(stock.name).font(.headline).lineLimit(2)
+                                            Text(stock.symbol).font(.caption.monospaced())
+                                            Text(stock.hasOfficialImporter ? tr("自动研究", "Auto research", "Penyelidikan automatik") : tr("需导入资料", "Import required", "Import diperlukan"))
+                                                .font(.caption).foregroundStyle(.white.opacity(0.8))
+                                        }.frame(width: 170, alignment: .leading).padding(14)
+                                            .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 20))
+                                            .yuejiZoomSource(id: "hero" + stock.id, namespace: cards)
+                                    }.buttonStyle(InvestmentPressStyle())
+                                }
                             }
                         }
                     }
@@ -213,6 +234,14 @@ struct InvestmentWatchView: View {
                 }.padding(18).foregroundStyle(.white)
                     .background(LinearGradient(colors: [Color(red: 0.07, green: 0.15, blue: 0.27), Color(red: 0.03, green: 0.07, blue: 0.14)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 26))
                     .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0)).listRowBackground(Color.clear)
+            }
+            Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
+                NavigationLink { StockComparisonPicker() } label: {
+                    Label(tr("对比 2–3 只股票", "Compare 2–3 stocks", "Bandingkan 2–3 saham"), systemImage: "square.split.2x2")
+                }
+                NavigationLink { ResearchHistoryView() } label: {
+                    Label(tr("研究历史", "Research history", "Sejarah penyelidikan"), systemImage: "clock.arrow.circlepath")
+                }
             }
             if !recentResearch.isEmpty {
                 Section(tr("最近研究", "Recent research", "Penyelidikan terkini")) {
@@ -227,29 +256,8 @@ struct InvestmentWatchView: View {
                     }
                 }
             }
-            Section {
-                VStack(alignment: .leading, spacing: 12) {
-                    Label(tr("投资观察", "Market watch", "Pantau pasaran"), systemImage: "chart.line.uptrend.xyaxis")
-                        .font(.title2.bold())
-                    Text(tr("关注公司，查看行情", "Follow companies. Explore their charts.", "Ikuti syarikat. Terokai carta."))
-                        .font(.subheadline).foregroundStyle(.secondary)
-                    Label(tr("免费图表 · TradingView", "Free charts · TradingView", "Carta percuma · TradingView"), systemImage: "globe")
-                        .font(.caption.weight(.semibold))
-                        .padding(.horizontal, 12).padding(.vertical, 8).ledgerGlass()
-                }.padding(.vertical, 8)
-                Text(tr("行情由 TradingView 提供；部分市场延迟或不可用，以图表标示为准。示例清单不是实时热门榜或买入建议。自选仅保存在此设备。", "Charts are provided by TradingView. Some markets are delayed or unavailable; check the chart labels. This curated list is not a live popularity ranking or a buy recommendation. Watchlists stay on this device.", "Carta disediakan oleh TradingView. Sesetengah pasaran tertunda atau tidak tersedia; semak label carta. Senarai ini bukan kedudukan populariti langsung atau cadangan beli. Senarai pantau disimpan pada peranti ini."))
-                    .font(.caption).foregroundStyle(.secondary)
-            }
-            Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
-                NavigationLink { StockComparisonPicker() } label: {
-                    Label(tr("对比 2–3 只股票", "Compare 2–3 stocks", "Bandingkan 2–3 saham"), systemImage: "square.split.2x2")
-                }
-                NavigationLink { ResearchHistoryView() } label: {
-                    Label(tr("研究历史", "Research history", "Sejarah penyelidikan"), systemImage: "clock.arrow.circlepath")
-                }
-            }
             Section(tr("自动 AI 研究", "Automatic AI research", "Penyelidikan AI automatik")) {
-                DisclosureGroup(tr("选择公司开始研究", "Choose a company to research", "Pilih syarikat untuk dikaji")) {
+                InvestmentDisclosure(tr("选择公司开始研究", "Choose a company to research", "Pilih syarikat untuk dikaji")) {
                 ForEach(ObservedStock.examples.filter { $0.hasOfficialImporter } + [ObservedStock(symbol: "MYX:IJM", name: "IJM · 怡保工程"), ObservedStock(symbol: "MYX:SUNWAY", name: "Sunway · 双威")]) { stock in
                     NavigationLink { StockResearchView(symbols: [stock.symbol]) } label: {
                         HStack(spacing: 12) {
@@ -274,6 +282,12 @@ struct InvestmentWatchView: View {
                         watchlist = values.map(\.symbol).joined(separator: "\n")
                     }
             }
+            Section {
+                InvestmentDisclosure(tr("行情说明", "About market data", "Tentang data pasaran")) {
+                Text(tr("行情由 TradingView 提供；部分市场延迟或不可用，以图表标示为准。示例清单不是实时热门榜或买入建议。自选仅保存在此设备。", "Charts are provided by TradingView. Some markets are delayed or unavailable; check the chart labels. This curated list is not a live popularity ranking or a buy recommendation. Watchlists stay on this device.", "Carta disediakan oleh TradingView. Sesetengah pasaran tertunda atau tidak tersedia; semak label carta. Senarai ini bukan kedudukan populariti langsung atau cadangan beli. Senarai pantau disimpan pada peranti ini."))
+                    .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section(tr("浏览股票", "Explore stocks", "Terokai saham")) {
                 Picker(tr("市场", "Market", "Pasaran"), selection: $market) {
                     Text(tr("全部", "All", "Semua")).tag("all")
@@ -294,7 +308,7 @@ struct InvestmentWatchView: View {
                     Text(tr("印度", "India", "India")).tag("NSE")
                     Text(tr("韩国", "South Korea", "Korea Selatan")).tag("KRX")
                 }
-                ForEach(examples) { stock in stockLink(stock, source: "example") }
+                ForEach(examples) { stock in stockLink(stock, source: "example").transition(.opacity) }
                 if examples.isEmpty {
                     Text(tr("清单中没有匹配项目，可输入交易所代码查看。", "No matches in this list. Enter an exchange-qualified symbol to explore.", "Tiada padanan. Masukkan kod saham dengan bursa untuk melihat."))
                         .foregroundStyle(.secondary)
@@ -316,6 +330,8 @@ struct InvestmentWatchView: View {
             .navigationTitle(tr("投资观察", "Market watch", "Pantau pasaran"))
             .searchable(text: $search, prompt: tr("公司或交易所:代码", "Company or EXCHANGE:SYMBOL", "Syarikat atau BURSA:KOD"))
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: market)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.24), value: watchlist)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: compactWatchlist)
             .onAppear(perform: loadRecentResearch)
             .onChange(of: account.researchHistoryScope) { _, _ in loadRecentResearch() }
     }
@@ -360,6 +376,14 @@ private struct StockChartView: View {
     // Prefer the full website for Malaysian listings after the MYX widget restriction.
     private var prefersFullPage: Bool { stock.market == "MYX" }
     private var following: Bool { ObservedStock.saved(watchlist).contains { $0.symbol == stock.symbol } }
+    @ViewBuilder private var primaryActions: some View {
+        Button { browserPage = StockBrowserPage(url: TradingStockChart.sourceURL(stock.symbol)) } label: {
+            Label(tr("查看行情", "View chart", "Lihat carta"), systemImage: "chart.xyaxis.line").frame(maxWidth: .infinity).padding(14)
+        }.buttonStyle(InvestmentPressStyle()).foregroundStyle(.blue).background(Color.blue.opacity(0.12), in: RoundedRectangle(cornerRadius: 18))
+        NavigationLink { StockResearchView(stock: stock) } label: {
+            Label(tr("AI 研究", "AI research", "Penyelidikan AI"), systemImage: "sparkles").frame(maxWidth: .infinity).padding(14)
+        }.buttonStyle(InvestmentPressStyle()).foregroundStyle(.white).background(Color.blue, in: RoundedRectangle(cornerRadius: 18))
+    }
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -369,6 +393,10 @@ private struct StockChartView: View {
                         Text(stock.name).font(.title2.bold())
                         Text(stock.symbol).font(.subheadline.monospaced()).foregroundStyle(.secondary)
                     }
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 12) { primaryActions }
+                    VStack(spacing: 12) { primaryActions }
                 }
                 if let profile = stock.profile {
                     VStack(alignment: .leading, spacing: 10) {
@@ -432,11 +460,7 @@ private struct StockChartView: View {
                         Label(tr("在 App 内查看行情", "View chart in app", "Lihat carta dalam aplikasi"), systemImage: "globe")
                     }
                 }.buttonStyle(.bordered)
-                NavigationLink {
-                    StockResearchView(stock: stock)
-                } label: {
-                    Label(tr("AI 公司研究 · 个人试用", "AI company research · Personal preview", "Penyelidikan syarikat AI · Pratonton peribadi"), systemImage: "sparkles")
-                }.buttonStyle(.bordered)
+
                 Text(tr("打开图表会连接 TradingView，其服务和隐私政策适用。不会发送月记账本内容。", "Charts connect to TradingView and are subject to its service and privacy policies. Your ledger contents are not sent.", "Carta bersambung ke TradingView dan tertakluk pada dasar perkhidmatan dan privasinya. Kandungan lejar tidak dihantar."))
                     .font(.caption).foregroundStyle(.secondary)
             }.padding(20)
@@ -528,15 +552,44 @@ private struct ResearchSource: Decodable, Identifiable {
     let fetchedAt: String
 }
 
+private struct InvestmentPressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.98 : 1)
+            .opacity(configuration.isPressed ? 0.82 : 1)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.16), value: configuration.isPressed)
+    }
+}
+
+private struct InvestmentDisclosure<Content: View>: View {
+    let title: String
+    let content: Content
+    @State private var expanded = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    init(_ title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+    var body: some View {
+        DisclosureGroup(title, isExpanded: Binding(get: { expanded }, set: { value in
+            withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.22)) { expanded = value }
+        })) { content }
+    }
+}
+
 private struct ResearchReportCards: View {
     let report: StockResearchReport
     @State private var browserPage: StockBrowserPage?
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
+            if let companies = report.assessments, companies.count > 1 {
+                ResearchComparisonCards(companies: companies)
+            }
             ForEach(report.assessments ?? []) { company in
                 ResearchCompanyCards(company: company)
             }
-            DisclosureGroup(tr("资料来源", "Sources", "Sumber")) {
+            InvestmentDisclosure(tr("资料来源", "Sources", "Sumber")) {
                 ForEach(report.sources ?? []) { source in
                     VStack(alignment: .leading, spacing: 6) {
                         Text("[\(source.id)] \(source.company)").font(.headline)
@@ -549,11 +602,50 @@ private struct ResearchReportCards: View {
                 }
             }.padding(16).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
             if let text = report.text {
-                DisclosureGroup(tr("完整报告与引用", "Full report and citations", "Laporan penuh dan petikan")) {
+                InvestmentDisclosure(tr("完整报告与引用", "Full report and citations", "Laporan penuh dan petikan")) {
                     Text(text).font(.subheadline).textSelection(.enabled).padding(.top, 10)
                 }.padding(16).background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 20))
             }
         }.sheet(item: $browserPage) { StockInAppBrowser(url: $0.url).ignoresSafeArea() }
+    }
+}
+
+private struct ResearchComparisonCards: View {
+    let companies: [ResearchAssessment]
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.dynamicTypeSize) private var typeSize
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Label(tr("同维度比较", "Compare by dimension", "Banding mengikut dimensi"), systemImage: "rectangle.split.3x1").font(.headline)
+            Text(tr("报告期间逐项列出；币种与单位请核对原文，未做汇率换算。资料不足时不排名。", "Reporting periods are shown below. Check source currencies and units; no currency conversion is applied. Missing evidence is not ranked.", "Tempoh laporan ditunjukkan di bawah. Semak mata wang dan unit sumber; tiada penukaran mata wang. Bukti tidak lengkap tidak diberi kedudukan.")).font(.caption).foregroundStyle(.secondary)
+            ForEach(["growth", "profitability", "balanceSheet", "valuation", "risk"], id: \.self) { key in
+                if let label = companies.first?.dimensions.first(where: { $0.key == key })?.label {
+                    InvestmentDisclosure(label) {
+                        if sizeClass == .regular && !typeSize.isAccessibilitySize {
+                            HStack(alignment: .top, spacing: 12) { entries(key) }
+                        } else {
+                            VStack(alignment: .leading, spacing: 12) { entries(key) }
+                        }
+                    }
+                }
+            }
+        }.researchCard()
+    }
+    @ViewBuilder private func entries(_ key: String) -> some View {
+        ForEach(companies) { company in
+            VStack(alignment: .leading, spacing: 8) {
+                Text(company.symbol).font(.subheadline.bold())
+                Text(company.period).font(.caption).foregroundStyle(.secondary)
+                if let dimension = company.dimensions.first(where: { $0.key == key }) {
+                    if let score = dimension.score, (0...20).contains(score) {
+                        Text("\(score)/20").monospacedDigit().foregroundStyle(.blue)
+                    } else {
+                        Text(tr("资料不足", "Insufficient data", "Data tidak mencukupi")).foregroundStyle(.orange)
+                    }
+                    Text(dimension.reason).font(.subheadline)
+                }
+            }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
+        }
     }
 }
 
@@ -584,6 +676,14 @@ private struct ResearchCompanyCards: View {
                     .font(.headline).foregroundStyle(company.action == "avoid" && total != nil ? Color.red : Color.orange)
                 Text(company.summary).textSelection(.enabled)
                 Text(company.period).font(.caption).foregroundStyle(.secondary)
+                if let evidence = company.dimensions.first(where: { $0.key != "risk" && $0.score != nil }) {
+                    Label(tr("关键依据", "Key evidence", "Bukti utama"), systemImage: "doc.text.magnifyingglass").font(.subheadline.bold())
+                    Text(evidence.reason).font(.subheadline)
+                }
+                if let risk = company.dimensions.first(where: { $0.key == "risk" }) {
+                    Label(tr("风险与未知", "Risks and unknowns", "Risiko dan perkara belum diketahui"), systemImage: "exclamationmark.triangle").font(.subheadline.bold()).foregroundStyle(.orange)
+                    Text(risk.reason).font(.subheadline)
+                }
                 if total == nil {
                     Text(company.missing).font(.subheadline).foregroundStyle(.orange)
                 }
@@ -593,9 +693,9 @@ private struct ResearchCompanyCards: View {
                     Text(tr("综合分：资料不足", "Overall: insufficient evidence", "Keseluruhan: bukti tidak mencukupi")).foregroundStyle(.secondary)
                 }
                 Text(tr("研究评价，不是上涨概率", "Research rating, not a winning probability", "Penilaian kajian, bukan kebarangkalian untung")).font(.caption).foregroundStyle(.secondary)
+                Text(tr("公司表现良好，不代表当前价格值得买入。", "Strong business performance does not establish value at today's price.", "Prestasi syarikat yang baik tidak menentukan nilai pada harga hari ini.")).font(.caption).foregroundStyle(.secondary)
             }.researchCard()
-            VStack(alignment: .leading, spacing: 16) {
-                Label(tr("财务表现与风险", "Financials and risks", "Kewangan dan risiko"), systemImage: "chart.bar.xaxis").font(.headline)
+            InvestmentDisclosure(tr("财务表现与风险 · 查看评分", "Financials and risks · View ratings", "Kewangan dan risiko · Lihat penilaian")) {
                 ForEach(company.dimensions) { dimension in
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -615,13 +715,13 @@ private struct ResearchCompanyCards: View {
                         }
                         Text(dimension.reason).font(.subheadline).foregroundStyle(dimension.key == "risk" ? Color.orange : Color.secondary)
                         if !dimension.evidence.isEmpty {
-                            DisclosureGroup(tr("引用依据", "Evidence", "Bukti")) {
+                            InvestmentDisclosure(tr("引用依据", "Evidence", "Bukti")) {
                                 ForEach(Array(dimension.evidence.enumerated()), id: \.offset) { _, citation in
                                     Text("[\(citation.sourceId)] \(citation.quote)").font(.caption).textSelection(.enabled).padding(.vertical, 4)
                                 }
                             }.font(.caption)
                         }
-                    }
+                    }.padding(.vertical, 8)
                 }
             }.researchCard().opacity(revealed ? 1 : 0)
                 .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.08), value: revealed)
@@ -728,46 +828,48 @@ private struct StockResearchView: View {
     @State private var saveMessage = ""
     @State private var imported: StockResearchImport?
     @State private var showingImport = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    private func startResearch() {
+        guard !running else { return }
+        report = nil; error = ""; saveMessage = ""; running = true
+        task = Task { @MainActor in
+            defer { running = false }
+            do {
+                let scope = account.researchHistoryScope
+                let data = try await account.researchStock(symbols: symbols, imported: imported)
+                try Task.checkCancellation()
+                let value = try JSONDecoder().decode(StockResearchReport.self, from: data)
+                guard (value.symbols ?? [value.symbol]) == symbols, value.html.utf8.count <= 300000,
+                      scope != nil, scope == account.researchHistoryScope else { throw CloudFailure.invalidResponse }
+                report = value
+            } catch is CancellationError { }
+            catch { if !Task.isCancelled { self.error = error.localizedDescription } }
+        }
+    }
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
+            InvestmentDisclosure(tr("研究范围与资料说明", "Research scope and sources", "Skop kajian dan sumber")) {
             Text(tr("自动读取已适配公司的官方网页或 PDF 文本，再由 Gemini 分析。部分来源为固定期间公告，不保证最新；报告列出来源、日期和资料范围。新增来源需部署新版后使用。仅供配置的个人账号使用，不上传账本。", "Fetches supported companies' official pages or PDF text for Gemini analysis. Some sources are fixed-period releases, not guaranteed latest; reports list sources, dates and scope. New sources require the updated deployment. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi atau teks PDF syarikat yang disokong untuk analisis Gemini. Sesetengah sumber ialah laporan tempoh tetap, bukan semestinya terkini; laporan menyenaraikan sumber, tarikh dan skop. Sumber baharu memerlukan versi baharu. Akaun peribadi sahaja; lejar tidak dihantar."))
                 .font(.caption).foregroundStyle(.secondary)
+            }
             if symbols.contains(where: { !ObservedStock(symbol: $0, name: $0).hasOfficialImporter }) && imported == nil {
                 Text(tr("所选股票含尚未适配的自动来源。可打开单只股票导入行情与财报文本。", "Some stocks have no automatic source yet. Open a single stock to import prices and financial text.", "Sesetengah saham belum mempunyai sumber automatik. Buka satu saham untuk mengimport harga dan teks kewangan."))
                     .font(.caption).foregroundStyle(.orange)
             }
             HStack {
                 Button {
-                    report = nil; error = ""; saveMessage = ""; running = true
-                    task = Task { @MainActor in
-                        defer { running = false }
-                        do {
-                            let scope = account.researchHistoryScope
-                            let data = try await account.researchStock(symbols: symbols, imported: imported)
-                            try Task.checkCancellation()
-                            let value = try JSONDecoder().decode(StockResearchReport.self, from: data)
-                            guard (value.symbols ?? [value.symbol]) == symbols, value.html.utf8.count <= 300000,
-                                  scope != nil, scope == account.researchHistoryScope else { throw CloudFailure.invalidResponse }
-                            report = value
-                        } catch is CancellationError { }
-                        catch { if !Task.isCancelled { self.error = error.localizedDescription } }
-                    }
+                    startResearch()
                 } label: {
                     Label(imported == nil ? tr("自动获取并分析", "Fetch and analyze", "Dapatkan dan analisis") : tr("分析导入资料", "Analyze imported materials", "Analisis bahan diimport"), systemImage: "sparkle.magnifyingglass")
-                }.buttonStyle(.borderedProminent).disabled(running)
+                        .padding(12).foregroundStyle(.white)
+                        .background(Color.blue, in: RoundedRectangle(cornerRadius: 16))
+                }.buttonStyle(InvestmentPressStyle()).disabled(running).opacity(running ? 0.6 : 1)
                 if running {
                     ProgressView()
                     Button(tr("取消", "Cancel", "Batal")) { task?.cancel() }
                 }
-            }
-            if running {
-                VStack(alignment: .leading, spacing: 8) {
-                    Label(tr("正在准备研究报告", "Preparing research report", "Menyediakan laporan penyelidikan"), systemImage: "doc.text.magnifyingglass").font(.headline)
-                    Text(tr("服务正在读取资料、分析并核对引用。完成后会显示报告，你也可以随时取消。", "The service reads sources, analyzes them and checks citations. Your report will appear when ready; you can cancel at any time.", "Perkhidmatan membaca sumber, menganalisis dan menyemak petikan. Laporan dipaparkan apabila siap; anda boleh membatalkan bila-bila masa."))
-                        .font(.caption).foregroundStyle(.secondary)
-                }.researchCard().accessibilityElement(children: .combine)
             }
             if symbols.count == 1 {
                 HStack {
@@ -781,7 +883,22 @@ private struct StockResearchView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
-            if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
+            if running {
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(tr("正在准备研究报告", "Preparing research report", "Menyediakan laporan penyelidikan"), systemImage: "doc.text.magnifyingglass").font(.headline)
+                    Text(tr("服务正在读取资料、分析并核对引用。完成后会显示报告，你也可以随时取消。", "The service reads sources, analyzes them and checks citations. Your report will appear when ready; you can cancel at any time.", "Perkhidmatan membaca sumber, menganalisis dan menyemak petikan. Laporan dipaparkan apabila siap; anda boleh membatalkan bila-bila masa."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }.researchCard().accessibilityElement(children: .combine).transition(.opacity)
+            }
+            if !error.isEmpty {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text(error).font(.footnote).foregroundStyle(.red)
+                    if report == nil {
+                        Button(tr("重试研究", "Retry research", "Cuba semula kajian")) { startResearch() }
+                            .buttonStyle(.bordered).disabled(running)
+                    }
+                }.researchCard().transition(.opacity)
+            }
             if let report {
                 if report.cached == true {
                     Text(tr("复用 24 小时内的报告；已重新核对来源内容。", "Reused a report from the last 24 hours; source content was checked again.", "Laporan dalam 24 jam digunakan semula; kandungan sumber disemak semula."))
@@ -800,18 +917,22 @@ private struct StockResearchView: View {
                 }
                 if !saveMessage.isEmpty { Text(saveMessage).font(.caption).foregroundStyle(.secondary) }
                 if let assessments = report.assessments, !assessments.isEmpty {
-                    ResearchReportCards(report: report).id(report.generatedAt)
+                    ResearchReportCards(report: report).id(report.generatedAt).transition(.opacity)
                 } else {
                     ResearchWebView(html: report.html).frame(minHeight: 600).id(report.generatedAt)
                 }
-            } else {
+            } else if !running && error.isEmpty {
                 Spacer()
                 Text(tr("分析会列出机会、风险、资料日期和下一步条件。评分是研究评价，不是上涨概率；缺少关键资料时不计算综合分。当前不是实时行情或后台持续监控。", "Analysis lists opportunities, risks, evidence dates and next steps. Ratings are research judgments, not winning probabilities; incomplete evidence means no overall score. This is not live pricing or background monitoring.", "Analisis menyenaraikan peluang, risiko, tarikh bukti dan langkah seterusnya. Penilaian bukan kebarangkalian untung; bukti tidak lengkap bermakna tiada skor keseluruhan. Bukan harga langsung atau pemantauan latar."))
                     .font(.subheadline).foregroundStyle(.secondary)
                 Spacer()
             }
         }.padding()
-        }.navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
+        }
+        .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: running)
+        .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: report?.generatedAt)
+        .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.2), value: error)
+        .navigationTitle(tr("AI 公司研究", "AI company research", "Penyelidikan syarikat AI"))
             .sheet(isPresented: $showingImport) {
                 StockImportForm(symbol: symbols[0]) { value in
                     imported = value; report = nil; error = ""; saveMessage = ""
