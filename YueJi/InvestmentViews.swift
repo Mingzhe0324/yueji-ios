@@ -801,13 +801,14 @@ private struct InvestmentAssistantOrb: ViewModifier {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @AppStorage("investment.assistantOrb.right") private var onRight = true
     @AppStorage("investment.assistantOrb.height") private var heightFraction = 0.9
-    @GestureState private var translation = CGSize.zero
+    @State private var translation = CGSize.zero
     @State private var showingChat = false
     private let diameter: CGFloat = 64
     private func position(in size: CGSize, offset: CGSize = .zero) -> CGPoint {
         let margin = diameter / 2 + 12
         let maxX = max(margin, size.width - margin)
-        let maxY = max(margin, size.height - margin)
+        // Keep the whole orb above the bottom action area, including its shadow.
+        let maxY = max(margin, size.height - margin - 80)
         let fraction = heightFraction.isFinite ? min(1, max(0, heightFraction)) : 0.9
         return CGPoint(x: min(maxX, max(margin, (onRight ? maxX : margin) + offset.width)),
                        y: min(maxY, max(margin, margin + (maxY - margin) * CGFloat(fraction) + offset.height)))
@@ -826,21 +827,28 @@ private struct InvestmentAssistantOrb: ViewModifier {
                             .shadow(color: .blue.opacity(0.25), radius: 10, y: 4)
                             .contentShape(Circle())
                     }
-                    .buttonStyle(InvestmentPressStyle())
+                    .buttonStyle(.plain)
                     .accessibilityLabel(tr("股票 AI 助手", "Stock AI assistant", "Pembantu AI saham"))
                     .accessibilityHint(tr("点击提问；可拖到屏幕两侧", "Tap to ask; drag to either side", "Tekan untuk bertanya; seret ke mana-mana sisi"))
-                    .accessibilityAction(named: Text(tr("移到另一侧", "Move to other side", "Alih ke sisi lain"))) { onRight.toggle() }
+                    .accessibilityAction(named: Text(tr("移到另一侧", "Move to other side", "Alih ke sisi lain"))) {
+                        withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.22)) { onRight.toggle() }
+                    }
                     .highPriorityGesture(DragGesture(minimumDistance: 10)
-                        .updating($translation) { value, state, _ in state = value.translation }
+                        .onChanged { value in
+                            var transaction = Transaction(); transaction.disablesAnimations = true
+                            withTransaction(transaction) { translation = value.translation }
+                        }
                         .onEnded { value in
                             let point = position(in: geometry.size, offset: value.translation)
                             let margin = diameter / 2 + 12
-                            withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.2)) {
+                            withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.22)) {
                                 onRight = point.x >= geometry.size.width / 2
-                                heightFraction = Double(min(1, max(0, (point.y - margin) / max(1, geometry.size.height - 2 * margin))))
+                                heightFraction = Double(min(1, max(0, (point.y - margin) / max(1, geometry.size.height - 2 * margin - 80))))
+                                translation = .zero
                             }
                         })
                     .position(position(in: geometry.size, offset: translation))
+                    .onDisappear { translation = .zero }
                 }
             }
             .sheet(isPresented: $showingChat) {
