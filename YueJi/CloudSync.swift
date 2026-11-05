@@ -283,6 +283,21 @@ actor SupabaseCloudService: CloudRemote {
             if path == "/functions/v1/investment-research", response.statusCode == 403 {
                 throw reviewError("公司研究仅限服务端配置的个人账号使用。", "Company research is restricted to the configured personal account.", "Penyelidikan syarikat terhad kepada akaun peribadi yang ditetapkan.")
             }
+            if path == "/functions/v1/investment-research", response.statusCode != 401 {
+                switch object?["error"] as? String {
+                case "unsupported_source":
+                    throw reviewError("这家公司暂未接入自动研究。你不需要准备文件，可以先查看行情，或研究其他已支持的公司。", "Automatic research is not connected for this company yet. No files are required. View its chart or research a supported company.", "Kajian automatik belum tersedia untuk syarikat ini. Anda tidak perlu menyediakan fail. Lihat carta atau kaji syarikat yang disokong.")
+                case "source_unavailable":
+                    throw reviewError("暂时无法读取这家公司的公开财报。你没有漏交资料，也不需要上传文件，请稍后重试。", "We could not read this company's public financial report right now. You have not missed any documents and do not need to upload files. Please retry later.", "Laporan kewangan awam syarikat ini tidak dapat dibaca sekarang. Anda tidak tertinggal dokumen dan tidak perlu memuat naik fail. Cuba lagi kemudian.")
+                case "no_grounded_research":
+                    throw reviewError("这次 AI 报告未通过依据检查，因此没有展示。不是你少提供了文件。可以稍后重试；再次分析可能占用一次研究额度。", "This AI report did not pass the evidence checks, so it was not shown. You are not missing any files. Retry later; another analysis may use a research allowance.", "Laporan AI ini tidak lulus semakan bukti, jadi ia tidak dipaparkan. Anda tidak kekurangan fail. Cuba kemudian; analisis baharu mungkin menggunakan kuota kajian.")
+                case "invalid_import":
+                    throw reviewError("导入的文件格式不符合要求。请按进阶选项中的格式检查文件；使用自动研究不需要导入。", "The imported file does not match the required format. Check the format in advanced options. Automatic research needs no import.", "Format fail import tidak menepati keperluan. Semak format dalam pilihan lanjutan. Kajian automatik tidak memerlukan import.")
+                case "not_configured", "quota_unavailable":
+                    throw reviewError("研究服务尚未准备好，需要维护后才能使用。你不需要准备或上传资料。", "The research service needs maintenance before it can be used. You do not need to prepare or upload documents.", "Perkhidmatan kajian memerlukan penyelenggaraan sebelum digunakan. Anda tidak perlu menyediakan atau memuat naik dokumen.")
+                default: break
+                }
+            }
             if path == "/functions/v1/receipt-gemini", response.statusCode != 401,
                let receiptCode = object?["error"] as? String,
                let failure = ReceiptRecognitionFailure(rawValue: receiptCode) { throw failure }
@@ -331,9 +346,9 @@ actor SupabaseCloudService: CloudRemote {
                 throw reviewError("导入资料校验失败：请检查日期顺序、重复或未来日期、币种、开高低收价格和成交量。", "Imported materials failed validation. Check date order, duplicate or future dates, currency, OHLC prices and volume.", "Bahan import gagal disahkan. Semak susunan tarikh, tarikh berulang atau masa depan, mata wang, harga OHLC dan volum.")
             }
             if status == 422 {
-                throw reviewError("这只股票的资料来源尚未接入、暂时无法读取，或分析缺少依据。请查看股票详情的资料范围，并稍后重试。", "This stock's source is not connected, temporarily unavailable, or the analysis lacks evidence. Check its source coverage in stock details and retry later.", "Sumber saham ini belum disambungkan, tidak tersedia atau analisis tiada bukti. Semak liputan sumber dalam butiran saham dan cuba lagi kemudian.")
+                throw reviewError("这次没有生成可用的研究报告。服务没有说明具体原因，你不需要因此上传文件，请稍后重试。", "No usable report was generated. The service did not specify why; this does not mean you need to upload files. Please retry later.", "Tiada laporan yang boleh digunakan dijana. Perkhidmatan tidak menyatakan sebab; anda tidak perlu memuat naik fail. Cuba lagi kemudian.")
             }
-            throw reviewError("公司研究尚未就绪，请检查 investment-research 部署及独立研究配置。", "Company research is unavailable. Check investment-research deployment and its separate configuration.", "Penyelidikan syarikat belum tersedia. Semak penggunaan investment-research dan konfigurasi berasingan.")
+            throw reviewError("研究服务暂时无法完成请求，请稍后重试。你不需要准备文件。", "The research service cannot complete this request right now. Retry later; you do not need to prepare files.", "Perkhidmatan kajian tidak dapat melengkapkan permintaan sekarang. Cuba kemudian; anda tidak perlu menyediakan fail.")
         }
     }
     func recognizeReceipt(image: Data, transaction: Bool = false) async throws -> Data {

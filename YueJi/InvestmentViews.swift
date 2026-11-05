@@ -770,9 +770,15 @@ private struct StockImportForm: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section(tr("这些资料是什么？", "What are these materials?", "Apakah bahan ini?")) {
+                    Text(tr("股价文件：记录每天开盘价、最高价、最低价、收盘价和成交量。财报文字：公司公开说明赚了多少、欠了多少，以及有什么风险。都不是你的银行账单或持仓截图。", "Price files record daily open, high, low, close and trading volume. Financial reports explain company earnings, debt and risks. Neither is your bank statement or a screenshot of your holdings.", "Fail harga mencatat harga buka, tinggi, rendah, tutup dan volum harian. Laporan kewangan menerangkan pendapatan, hutang dan risiko syarikat. Bukan penyata bank atau tangkap layar pegangan anda."))
+                    Text(tr("1. 从你使用的行情服务导出历史日线 CSV；服务不提供导出时，可直接取消。\n2. 按下方表头整理至少 20 个交易日，使用当前股票代码、同一币种，并按日期从旧到新排列。\n3. 财报文字可从公司官网的「投资者关系／财务业绩」复制，保留标题、日期和单位。不知道怎么准备时，请返回自动研究。", "1. Export historical daily prices as CSV from your market-data service; cancel if export is unavailable.\n2. Match the header below with at least 20 trading days, this symbol, one currency, oldest date first.\n3. Copy financial text from the company's Investor Relations / Financial Results page, keeping headings, dates and units. If unsure, return to automatic research.", "1. Eksport harga harian sejarah sebagai CSV daripada perkhidmatan harga anda; batalkan jika tiada eksport.\n2. Ikuti pengepala di bawah dengan sekurang-kurangnya 20 hari dagangan, kod ini, satu mata wang dan tarikh paling lama dahulu.\n3. Salin teks daripada Hubungan Pelabur / Keputusan Kewangan laman syarikat, bersama tajuk, tarikh dan unit. Jika tidak pasti, kembali ke kajian automatik."))
+                }
                 Section(symbol) {
                     Text(tr("导入 UTF-8 CSV，20–1000 个交易日，日期从旧到新。每行股票代码必须与当前股票一致。", "Import UTF-8 CSV with 20–1000 daily bars, oldest first. Every row must match this stock symbol.", "Import CSV UTF-8 dengan 20–1000 bar harian, paling lama dahulu. Setiap baris mesti sepadan dengan kod saham ini."))
                     Text("symbol,currency,date,open,high,low,close,volume").font(.caption.monospaced()).textSelection(.enabled)
+                    Text(tr("下行仅演示格式，数字是虚构的，不可用于分析；正式文件需至少 20 行真实记录。", "The row below only illustrates the format. Numbers are fictional and must not be analyzed; use at least 20 real rows.", "Baris di bawah hanya contoh format. Angka rekaan tidak boleh dianalisis; gunakan sekurang-kurangnya 20 baris sebenar.")).font(.caption).foregroundStyle(.secondary)
+                    Text("\(symbol),\(symbol.hasPrefix("MYX:") ? "MYR" : "USD"),2025-01-02,10,11,9,10.5,1000").font(.caption.monospaced()).textSelection(.enabled)
                     Button(tr("选择行情 CSV", "Choose price CSV", "Pilih CSV harga")) { choosingFile = true }
                     if !csv.isEmpty {
                         Text(String(csv.prefix(1500))).font(.caption.monospaced()).textSelection(.enabled)
@@ -850,19 +856,22 @@ private struct StockResearchView: View {
         ScrollView {
         VStack(alignment: .leading, spacing: 14) {
             Text(symbols.joined(separator: " / ")).font(.headline)
+            if imported == nil {
+                Text(tr("不需要准备文件。点下面的按钮，App 会尝试读取公司的公开财报，帮你了解赚钱能力、负债和风险。", "No files to prepare. Tap below and the app will try to read public company reports to explain earnings, debt and risks.", "Tidak perlu menyediakan fail. Tekan butang di bawah untuk mendapatkan laporan awam dan memahami pendapatan, hutang serta risiko syarikat.")).font(.subheadline)
+            }
             InvestmentDisclosure(tr("研究范围与资料说明", "Research scope and sources", "Skop kajian dan sumber")) {
-            Text(tr("自动读取已适配公司的官方网页或 PDF 文本，再由 Gemini 分析。部分来源为固定期间公告，不保证最新；报告列出来源、日期和资料范围。新增来源需部署新版后使用。仅供配置的个人账号使用，不上传账本。", "Fetches supported companies' official pages or PDF text for Gemini analysis. Some sources are fixed-period releases, not guaranteed latest; reports list sources, dates and scope. New sources require the updated deployment. Personal account only; no ledger upload.", "Mendapatkan halaman rasmi atau teks PDF syarikat yang disokong untuk analisis Gemini. Sesetengah sumber ialah laporan tempoh tetap, bukan semestinya terkini; laporan menyenaraikan sumber, tarikh dan skop. Sumber baharu memerlukan versi baharu. Akaun peribadi sahaja; lejar tidak dihantar."))
+            Text(tr("公开财报会交给 Gemini 整理，报告会注明日期和来源。部分资料可能较旧，不能据此判断今天是否值得买入。仅限已开通的个人账号使用，不上传你的账本。", "Public reports are sent to Gemini for analysis, with dates and sources shown. Some materials may be old and cannot establish whether today's price is attractive. Available to the enabled personal account; your ledger is not uploaded.", "Laporan awam dihantar ke Gemini untuk analisis dengan tarikh dan sumber. Sesetengah bahan mungkin lama dan tidak menentukan nilai harga hari ini. Untuk akaun peribadi yang diaktifkan; lejar anda tidak dimuat naik."))
                 .font(.caption).foregroundStyle(.secondary)
             }
             if symbols.contains(where: { !ObservedStock(symbol: $0, name: $0).hasOfficialImporter }) && imported == nil {
-                Text(tr("所选股票含尚未适配的自动来源。可打开单只股票导入行情与财报文本。", "Some stocks have no automatic source yet. Open a single stock to import prices and financial text.", "Sesetengah saham belum mempunyai sumber automatik. Buka satu saham untuk mengimport harga dan teks kewangan."))
+                Text(tr("所选公司中，有些尚未接入自动研究。能否研究以服务返回为准；暂不支持时，你可以先查看行情或选择其他公司，不必自己找文件。", "Some selected companies are not yet listed for automatic research. The service will confirm availability. If unsupported, view charts or choose another company; you do not need to find files.", "Sesetengah syarikat belum disenaraikan untuk kajian automatik. Perkhidmatan akan mengesahkan ketersediaan. Jika tidak disokong, lihat carta atau pilih syarikat lain; tidak perlu mencari fail."))
                     .font(.caption).foregroundStyle(.orange)
             }
             HStack {
                 Button {
                     startResearch()
                 } label: {
-                    Label(imported == nil ? tr("自动获取并分析", "Fetch and analyze", "Dapatkan dan analisis") : tr("分析导入资料", "Analyze imported materials", "Analisis bahan diimport"), systemImage: "sparkle.magnifyingglass")
+                    Label(imported == nil ? tr("帮我研究", "Research for me", "Bantu saya mengkaji") : tr("分析导入资料", "Analyze imported materials", "Analisis bahan diimport"), systemImage: "sparkle.magnifyingglass")
                         .padding(12).foregroundStyle(.white)
                         .background(Color.blue, in: RoundedRectangle(cornerRadius: 16))
                 }.buttonStyle(InvestmentPressStyle()).disabled(running).opacity(running ? 0.6 : 1)
@@ -872,15 +881,19 @@ private struct StockResearchView: View {
                 }
             }
             if symbols.count == 1 {
+                InvestmentDisclosure(tr("进阶选项 · 自备资料", "Advanced · Use your own files", "Lanjutan · Guna fail sendiri")) {
+                Text(tr("可跳过。仅适合已经有股价 CSV 和财报文字的人。自动研究失败时，不代表你必须导入。", "Optional, for people who already have a price CSV and financial report text. An automatic research failure does not require an import.", "Pilihan untuk pengguna yang sudah mempunyai CSV harga dan teks laporan kewangan. Kegagalan kajian automatik tidak memerlukan import.")).font(.caption).foregroundStyle(.secondary)
                 HStack {
                     Button(tr("导入行情与财报文本", "Import prices and financial text", "Import harga dan teks kewangan")) { showingImport = true }
                     if imported != nil {
                         Button(tr("清除导入", "Clear import", "Kosongkan import")) { imported = nil; report = nil; error = ""; saveMessage = "" }
                     }
                 }.disabled(running)
+                }
                 if imported != nil {
                     Text(tr("本次仅分析用户导入资料，不自动获取网页；资料未独立核实。", "This analysis uses only user imports, without fetching websites. Materials are not independently verified.", "Analisis ini hanya menggunakan import pengguna tanpa mendapatkan laman web. Bahan tidak disahkan secara bebas."))
                         .font(.caption).foregroundStyle(.secondary)
+                    Button(tr("返回自动研究", "Return to automatic research", "Kembali ke kajian automatik")) { imported = nil; report = nil; error = ""; saveMessage = "" }.disabled(running)
                 }
             }
             if running {

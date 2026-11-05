@@ -243,6 +243,23 @@ private final class CloudHTTPStub: URLProtocol {
 }
 
 final class CloudHTTPTests: XCTestCase {
+    func testResearchFailuresStayDistinctAndPreserveSessionRefresh() async throws {
+        var messages = Set<String>()
+        for code in ["unsupported_source", "source_unavailable", "no_grounded_research"] {
+            let (api, _) = try service(replies: [(422, "{\"error\":\"\(code)\"}")], signedIn: true)
+            do {
+                _ = try await api.researchStock(symbols: ["MYX:MAYBANK"])
+                XCTFail("Expected research failure")
+            } catch { messages.insert(error.localizedDescription) }
+        }
+        XCTAssertEqual(messages.count, 3, "Different causes must not collapse into one upload instruction")
+        let (expired, _) = try service(replies: [(401, #"{"error":"source_unavailable"}"#)], signedIn: true)
+        do { _ = try await expired.researchStock(symbols: ["MYX:MAYBANK"]); XCTFail("Expected session refresh") }
+        catch CloudFailure.session {}
+        let (unknown, _) = try service(replies: [(422, #"{"error":"private upstream content"}"#)], signedIn: true)
+        do { _ = try await unknown.researchStock(symbols: ["MYX:MAYBANK"]); XCTFail("Expected failure") }
+        catch { XCTAssertFalse(error.localizedDescription.contains("private upstream content")) }
+    }
     func testAssistantUsesAuthenticatedEndpointAndPreservesExpiredSession() async throws {
         let (api, host) = try service(replies: [(200, #"{"category":"Shopping"}"#)], signedIn: true)
         _ = try await api.assistant(mode: "classify", text: "Soap", categories: ["Shopping"])
