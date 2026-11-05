@@ -1751,9 +1751,6 @@ struct ExpenseRow: View {
                         .accessibilityIdentifier("transaction.items.preview")
                 }
                 Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
-                Label(sourceLabel(entry.source), systemImage: ledgerSourceSymbol(entry.source))
-                    .font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("transaction.source")
                 if let accountID = entry.bankAccountID,
                    let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
                     Label(account.name, systemImage: MalaysianBanks.walletsAndPayments.contains(account.institution ?? "") && account.institution != "TNG Card" ? "wallet.pass.fill" : "creditcard")
