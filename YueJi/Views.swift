@@ -2468,7 +2468,7 @@ struct ExpenseDetailView: View {
                     ExpenseEditor(original: entry)
                         .yuejiZoom(id: "expense-edit-" + id, namespace: detailTransition)
                 case .items(let entry, let selectedID):
-                    ExpenseItemsEditor(original: entry, selectedID: selectedID)
+                    ExpenseItemsEditor(original: entry, selectedID: selectedID, onClose: { editing = nil })
                 }
             }
             .onChange(of: editing?.id) { _, value in if value != nil { editorPresented = true } }

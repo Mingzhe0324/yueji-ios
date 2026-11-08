@@ -2165,9 +2165,9 @@ struct SavedTransactionItemsSection: View {
 struct ExpenseItemsEditor: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject private var model: LedgerModel
-    @Environment(\.dismiss) private var dismiss
     let original: Expense
     var selectedID: String? = nil
+    let onClose: () -> Void
     @FocusState private var focusedField: ExpenseInputField?
     @State private var items: [ExpenseItemDraft] = []
     @State private var initialized = false
@@ -2202,7 +2202,7 @@ struct ExpenseItemsEditor: View {
     private func requestClose() {
         guard !saving else { return }
         focusedField = nil
-        if hasChanges { confirmingDiscard = true } else { dismiss() }
+        if hasChanges { confirmingDiscard = true } else { onClose() }
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -2265,27 +2265,35 @@ struct ExpenseItemsEditor: View {
                     }
                 }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
-                    Button("OK") {}
+                    Button("OK") { error = nil }
                 } message: { Text(error ?? "") }
             }
         }.yuejiSheetSurface().ledgerFeedback(modal: true)
-            .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: { dismiss() })
+            .editorDismissal(hasChanges: hasChanges, saving: saving, confirming: $confirmingDiscard, discard: onClose)
     }
     private func save() {
         guard initialized, !saving else { return }
+        #if DEBUG
+        print("Item editor save requested")
+        #endif
         focusedField = nil
+        error = nil
         do {
             let charges = chargesEnabled ? try ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent, rounding: chargeRounding) : nil
             let entry = try original.replacingItemCharges(charges, paymentMinor: paymentMinor, items: try items.map { try $0.savedItem() }, allowedCategories: model.ledger.categoryNames)
             saving = true
             Task { @MainActor in
-                defer { saving = false }
                 do {
                     try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: false)
+                    #if DEBUG
+                    print("Item editor write committed; closing presentation")
+                    #endif
+                    // End the parent's presentation before publishing a new ledger.
+                    // Keep Save disabled after a committed write until the sheet leaves.
+                    onClose()
                     await model.refresh(postRecurring: false)
                     model.showSaved(message: tr("物品已保存", "Items saved", "Item disimpan"))
-                    dismiss()
-                } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
+                } catch { saving = false; self.error = error.localizedDescription; FeedbackHaptics.error() }
             }
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
@@ -2393,7 +2401,8 @@ struct TNGNoticeView: View {
             .sheet(item: $editing, onDismiss: { itemsEditorPresented = false }) { route in
                 switch route {
                 case .expense(let entry): ExpenseEditor(original: entry)
-                case .items(let entry, let selectedID): ExpenseItemsEditor(original: entry, selectedID: selectedID)
+                case .items(let entry, let selectedID):
+                    ExpenseItemsEditor(original: entry, selectedID: selectedID, onClose: { editing = nil })
                 }
             }
             .confirmationDialog(tr("排除此通知？如已自动入账，将移除关联消费；已有分账或退款时会阻止操作。", "Exclude this notice? Its linked expense will be removed unless splits or refunds exist.", "Kecualikan notifikasi? Belanja berkaitan dibuang kecuali bahagian atau pulangan wujud."), isPresented: $excluding, titleVisibility: .visible) {

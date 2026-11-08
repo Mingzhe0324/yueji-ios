@@ -344,11 +344,11 @@ final class TransactionFormTests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Spending categories"].waitForExistence(timeout: 5))
     }
 
-    private func waitUntilGone(_ element: XCUIElement) {
+    private func waitUntilGone(_ element: XCUIElement, file: StaticString = #filePath, line: UInt = #line) {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
         let result = XCTWaiter.wait(for: [gone], timeout: 10)
         let alerts = result == .completed ? "" : (runningApp?.alerts.debugDescription ?? "")
-        XCTAssertEqual(result, .completed, "Unexpectedly retained \(element). Visible alerts: \(alerts)")
+        XCTAssertEqual(result, .completed, "Unexpectedly retained \(element). Visible alerts: \(alerts)", file: file, line: line)
     }
 
     private func verifyFirstAddItem(opening: Bool) {
