@@ -6,6 +6,34 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testParkingHintsRequireCompleteEndDateAndKeepAmountChoices() {
+        let hints = ParkingReceiptHints(text: "RM 3.00\nMYR 5.00\nRM 3.00\nLocation: Mall A\nPaid until: 08/11/2026 15:30")
+        XCTAssertEqual(hints.amounts, ["3.00", "5.00"])
+        XCTAssertEqual(hints.places, ["Mall A"])
+        XCTAssertEqual(hints.endDates.count, 1)
+        XCTAssertTrue(ParkingReceiptHints(text: "Paid until: 15:30").endDates.isEmpty)
+        XCTAssertTrue(ParkingReceiptHints(text: "08/11/2026 15:30").endDates.isEmpty)
+    }
+    func testParkingReminderSkipsPastAndEndedSessions() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = ParkingSession()
+        XCTAssertNil(session.reminderDate(now: now))
+        session.paidUntil = now.addingTimeInterval(3600)
+        XCTAssertEqual(session.reminderDate(now: now), now.addingTimeInterval(3000))
+        XCTAssertNil(session.reminderDate(now: now.addingTimeInterval(3000)))
+        session.endedAt = now
+        XCTAssertNil(session.reminderDate(now: now))
+    }
+    func testParkingExpenseRequiresDuplicateReviewWithoutScreenshotSource() throws {
+        let existing = Expense(merchant: "Parking", cents: 300, date: Date().addingTimeInterval(-60))
+        let ledger = Ledger(expenses: [existing])
+        var entry = Expense(merchant: "Parking", cents: 300, date: existing.date, source: "手动")
+        entry.bankAccountID = "parking-payment-account"
+        XCTAssertThrowsError(try ledger.validateScreenshotImport(entry, acknowledged: [], forceReview: true))
+        XCTAssertNoThrow(try ledger.validateScreenshotImport(entry, acknowledged: ["expense:" + existing.id], forceReview: true))
+        entry.bankAccountID = nil
+        XCTAssertThrowsError(try ledger.validateScreenshotImport(entry, acknowledged: ["expense:" + existing.id], forceReview: true))
+    }
     func testScreenshotAIOnlyAllowsCompletedMYRPurchases() {
         func draft(kind: String = "payment", completed: Bool = true, currency: String = "MYR", amount: String = "3.00") -> ScreenshotAIDraft {
             ScreenshotAIDraft(merchant: "Parking", amount: amount, date: "2026-09-02", currency: currency, kind: kind, description: "Parking fee", completed: completed)

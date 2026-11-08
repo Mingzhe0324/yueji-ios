@@ -311,11 +311,16 @@ struct BankAccountsView: View {
             .navigationTitle(tr("账户", "Accounts", "Akaun"))
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
+                    Menu {
                     NavigationLink { InvestmentWatchView() } label: {
-                        Image(systemName: "chart.line.uptrend.xyaxis")
+                        Label(tr("投资观察", "Market watch", "Pantau pasaran"), systemImage: "chart.line.uptrend.xyaxis")
                     }
-                    .accessibilityLabel(tr("投资观察", "Market watch", "Pantau pasaran"))
-                    .accessibilityIdentifier("bankAccount.marketWatch")
+                    NavigationLink { ParkingView() } label: {
+                        Label(tr("停车助手", "Parking assistant", "Pembantu parkir"), systemImage: "parkingsign.circle")
+                    }
+                    } label: { Image(systemName: "square.grid.2x2") }
+                    .accessibilityLabel(tr("账户工具", "Account tools", "Alat akaun"))
+                    .accessibilityIdentifier("bankAccount.tools")
                 }
                 ToolbarItem(placement: .topBarTrailing) {
                     Button { adding = true } label: { Image(systemName: "plus.circle.fill") }

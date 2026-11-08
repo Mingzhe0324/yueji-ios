@@ -842,8 +842,8 @@ extension Ledger {
         }.map { "notice:" + $0.id }
         return Set(entries + notices)
     }
-    func validateScreenshotImport(_ entry: Expense, acknowledged: Set<String>) throws {
-        guard entry.source == "交易截图" else { return }
+    func validateScreenshotImport(_ entry: Expense, acknowledged: Set<String>, forceReview: Bool = false) throws {
+        guard entry.source == "交易截图" || forceReview else { return }
         guard !expenses.contains(where: { $0.id == entry.id }) else {
             throw reviewError("这张截图已导入，请查看已有账目。", "This screenshot was already imported. View the existing entry.", "Tangkapan skrin ini sudah diimport. Lihat rekod sedia ada.")
         }

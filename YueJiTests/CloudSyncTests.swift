@@ -243,6 +243,18 @@ private final class CloudHTTPStub: URLProtocol {
 }
 
 final class CloudHTTPTests: XCTestCase {
+    func testModelDiagnosticsSurviveChatAndResearchWrappers() async throws {
+        for code in ["model_access_denied", "model_request_rejected", "model_unavailable", "model_rate_limit", "research_timeout", "chat_unavailable"] {
+            for chat in [true, false] {
+                let (api, _) = try service(replies: [(code == "model_rate_limit" ? 429 : 502, "{\"error\":\"\(code)\"}")], signedIn: true)
+                do {
+                    if chat { _ = try await api.askStockQuestion("ETF?", history: [], language: "en") }
+                    else { _ = try await api.researchStock(symbols: ["NASDAQ:AAPL"]) }
+                    XCTFail("Expected model failure")
+                } catch { XCTAssertTrue(error.localizedDescription.contains(code)) }
+            }
+        }
+    }
     func testStockChatUsesResearchEndpointAndKeepsSessionRefresh() async throws {
         let (api, host) = try service(replies: [(200, #"{"answer":"Example","kind":"education","liveData":false}"#)], signedIn: true)
         _ = try await api.askStockQuestion("What is an ETF?", history: [], language: "en")

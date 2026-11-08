@@ -12,7 +12,7 @@
     <key>YueJiSupabasePublicKey</key>
     <string></string>
     <key>NSLocationWhenInUseUsageDescription</key>
-    <string>为新账目添加当前位置作为消费地点。你可以修改或删除地点；不允许定位也能记账。</string>
+    <string>为新账目添加消费地点，或在开始停车时保存位置方便找车。你可以修改或删除地点；不允许定位也能继续使用。</string>
 	<key>CFBundleDisplayName</key>
 	<string>月记</string>
 	<key>CFBundleExecutable</key>

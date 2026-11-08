@@ -123,6 +123,17 @@ test('upstream failures and network failures return stable codes only', async ()
   const response = await handleResearch(request(), deps);
   assert.equal(response.status, 502); assert.deepEqual(await response.json(), {error:'research_unavailable'});
 });
+
+test('research and chat expose actionable model codes without upstream bodies', async () => {
+  for (const input of [{symbol:'NASDAQ:AAPL'}, {mode:'stock_chat',question:'What is an ETF?',language:'en'}]) {
+    for (const [status, error] of [[400,'model_request_rejected'],[401,'model_access_denied'],[403,'model_access_denied'],[404,'model_unavailable'],[429,'model_rate_limit'],[503,'model_unavailable']]) {
+      const deps = harness({status});
+      const response = await handleResearch(request(input), deps);
+      assert.equal(response.status, status === 429 ? 429 : 502);
+      assert.deepEqual(await response.json(), {error});
+    }
+  }
+});
 test('comparison allows two or three unique stocks, strips private fields and spends one quota claim', async () => {
   for (const symbols of [['NASDAQ:AAPL','NASDAQ:MSFT'], ['NASDAQ:AAPL','NASDAQ:MSFT','HKEX:700']]) {
     const deps = harness();

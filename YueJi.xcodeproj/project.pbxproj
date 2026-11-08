@@ -5,6 +5,8 @@
 	};
 	"objectVersion" = 56;
 	"objects" = {
+        "CD7200000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "ParkingViews.swift"; "sourceTree" = "<group>"; };
+        "CD7200000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CD7200000000000000000001"; };
         "CD7100000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "InvestmentViews.swift"; "sourceTree" = "<group>"; };
         "CD7100000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CD7100000000000000000001"; };
         "CF6000000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "CloudSync.swift"; "sourceTree" = "<group>"; };
@@ -183,6 +185,7 @@
                 "CF4000000000000000000007",
                 "CF5000000000000000000001",
                 "CD7100000000000000000001",
+                "CD7200000000000000000001",
 				"CE6600000000000000000001",
 				"CE7300000000000000000001",
 				"CE7300000000000000000003",
@@ -262,6 +265,7 @@
                 "CF4000000000000000000008",
                 "CF5000000000000000000002",
                 "CD7100000000000000000002",
+                "CD7200000000000000000002",
 				"18C3C4F160B163CE58D17794",
                 "CB9300000000000000000002",
                 "CB9400000000000000000002",

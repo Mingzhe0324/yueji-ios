@@ -46,6 +46,11 @@ export function groundedReport(candidate) {
   // preserved; the client disables scripts and uses an isolated nonpersistent view.
   return `<pre>${escape(text)}</pre><hr><h2>Sources / 来源</h2><ol>${citations.join("")}</ol>${suggestions}`;
 }
+function modelFailure(status) {
+  const error = status === 429 ? 'model_rate_limit' : status === 404 ? 'model_unavailable' :
+    [401, 403].includes(status) ? 'model_access_denied' : status === 400 ? 'model_request_rejected' : 'model_unavailable';
+  return reply(status === 429 ? 429 : 502, {error});
+}
 export async function handleResearch(request, deps) {
   if (request.method !== "POST") return reply(405, { error: "method" });
   const auth = request.headers.get("Authorization") ?? "";
@@ -102,7 +107,7 @@ export async function handleResearch(request, deps) {
           contents:[...history.map(m=>({role:m.role==='assistant'?'model':'user',parts:[{text:m.text}]})),{role:'user',parts:[{text:input.question.trim()}]}],
           generationConfig:{temperature:0.2,maxOutputTokens:2048}})
       });
-      if (!response.ok) return reply(response.status===429?429:502,{error:'research_unavailable'});
+      if (!response.ok) return modelFailure(response.status);
       const result = await read(response.body,150000), candidate=result.candidates?.[0];
       const answer=candidate?.content?.parts?.filter(p=>!p.thought).map(p=>p.text??'').join('');
       if (candidate?.finishReason!=='STOP' || typeof answer!=='string' || !answer.trim() || answer.length>12000) return reply(422,{error:'chat_unavailable'});
@@ -123,7 +128,7 @@ export async function handleResearch(request, deps) {
         method:'POST', headers:{'Content-Type':'application/json','x-goog-api-key':key},
         body:JSON.stringify({systemInstruction:{parts:[{text:importedPrompt + '\nA non-null valuation score must cite BOTH the price/date from U1 and matching fundamentals from U2. Every other financial score must cite U2.'}]},contents:[{role:'user',parts:[{text:JSON.stringify({symbols,evidence:imported.evidence,analysisDate:new Date().toISOString()})}]}],generationConfig:{maxOutputTokens:8192,responseMimeType:'application/json'}})
       });
-      if (!response.ok) return reply(response.status === 429 ? 429 : 502,{error:'research_unavailable'});
+      if (!response.ok) return modelFailure(response.status);
       const result = await read(response.body,300000);
       const report = evidenceReport(result.candidates?.[0],symbols,imported.evidence,{imported:true,allowFullScore:imported.recent && imported.hasFinancials});
       if (!report) return reply(422,{error:'no_grounded_research'});
@@ -159,7 +164,7 @@ export async function handleResearch(request, deps) {
           contents: [{ role: "user", parts: [{ text: JSON.stringify({ symbols, evidence }) }] }],
           generationConfig: { maxOutputTokens: 8192, responseMimeType: "application/json" } }),
       });
-      if (!response.ok) return reply(response.status === 429 ? 429 : 502, { error: "research_unavailable" });
+      if (!response.ok) return modelFailure(response.status);
       const result = await read(response.body, 300000);
       const report = evidenceReport(result.candidates?.[0], symbols, evidence);
       if (!report) return reply(422, { error: "no_grounded_research" });
@@ -177,10 +182,10 @@ export async function handleResearch(request, deps) {
           ...(symbols.length > 1 ? { task: "Compare these companies over the same 6-12 month horizon. For EACH company provide dated evidence, growth, valuation (only sourced comparable figures with dates; otherwise unavailable), financial health, risks and thesis invalidation conditions. Explain tradeoffs and conditional next steps. Do not force a winner when evidence is insufficient or metrics are not comparable. Distinguish currencies and reporting periods. Do not compare only headlines or invent scores." } : {}) }) }] }],
         tools: [{ google_search: {} }], generationConfig: { temperature: 0.2, maxOutputTokens: 4096 } }),
     });
-    if (!response.ok) return reply(response.status === 429 ? 429 : 502, { error: "research_unavailable" });
+    if (!response.ok) return modelFailure(response.status);
     const result = await read(response.body, 300000), html = groundedReport(result.candidates?.[0]);
     if (!html) return reply(422, { error: "no_grounded_research" });
     const text = result.candidates[0].content.parts.filter(p => !p.thought).map(p => p.text ?? "").join("");
     return reply(200, { symbol: symbols[0], symbols, generatedAt: new Date().toISOString(), html, text });
-  } catch { return reply(502, { error: "research_unavailable" }); }
+  } catch { return reply(502, { error: signal.aborted ? 'research_timeout' : 'research_unavailable' }); }
 }

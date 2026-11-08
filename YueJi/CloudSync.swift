@@ -285,6 +285,18 @@ actor SupabaseCloudService: CloudRemote {
             }
             if path == "/functions/v1/investment-research", response.statusCode != 401 {
                 switch object?["error"] as? String {
+                case "model_access_denied":
+                    throw reviewError("AI 服务密钥或权限未通过检查，需要检查服务器 Gemini 配置。[model_access_denied]", "Check the server Gemini key and permissions. [model_access_denied]", "Semak kunci dan kebenaran Gemini pelayan. [model_access_denied]")
+                case "model_request_rejected":
+                    throw reviewError("AI 拒绝了请求，需要检查模型名称和请求配置。[model_request_rejected]", "Check the model name and request configuration. [model_request_rejected]", "Semak nama model dan konfigurasi permintaan. [model_request_rejected]")
+                case "model_unavailable":
+                    throw reviewError("配置的 AI 模型不存在或暂时不可用。[model_unavailable]", "The configured AI model is missing or unavailable. [model_unavailable]", "Model AI tiada atau tidak tersedia. [model_unavailable]")
+                case "model_rate_limit":
+                    throw reviewError("Gemini 额度或请求频率达到限制，请稍后再试。[model_rate_limit]", "Gemini quota or rate limit reached. Retry later. [model_rate_limit]", "Kuota atau had kadar Gemini dicapai. Cuba kemudian. [model_rate_limit]")
+                case "research_timeout":
+                    throw reviewError("本次研究等待超时，请稍后重试。[research_timeout]", "Research timed out. Retry later. [research_timeout]", "Kajian tamat masa. Cuba kemudian. [research_timeout]")
+                case "chat_unavailable":
+                    throw reviewError("AI 回答不完整；重试可能再次使用额度。[chat_unavailable]", "The AI answer was incomplete. Retrying may use allowance again. [chat_unavailable]", "Jawapan AI tidak lengkap. Cubaan semula mungkin menggunakan kuota lagi. [chat_unavailable]")
                 case "unsupported_source":
                     throw reviewError("这家公司暂未接入自动研究。你不需要准备文件，可以先查看行情，或研究其他已支持的公司。", "Automatic research is not connected for this company yet. No files are required. View its chart or research a supported company.", "Kajian automatik belum tersedia untuk syarikat ini. Anda tidak perlu menyediakan fail. Lihat carta atau kaji syarikat yang disokong.")
                 case "source_unavailable":

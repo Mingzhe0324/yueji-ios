@@ -1,0 +1,352 @@
+import SwiftUI
+import PhotosUI
+import MapKit
+import UserNotifications
+import CryptoKit
+
+struct ParkingReceiptHints {
+    var amounts: [String] = []
+    var endDates: [Date] = []
+    var places: [String] = []
+    init(text: String) {
+        let lines = text.components(separatedBy: .newlines)
+        let money = try! NSRegularExpression(pattern: #"(?i)\b(?:RM|MYR)\s*([0-9]{1,5}\.[0-9]{2})\b"#)
+        for match in money.matches(in: text, range: NSRange(text.startIndex..., in: text)) {
+            if let range = Range(match.range(at: 1), in: text) {
+                let value = String(text[range])
+                if !amounts.contains(value) { amounts.append(value) }
+            }
+        }
+        for (index, line) in lines.enumerated() {
+            if line.range(of: #"(?i)^\s*(location|car park|parking location|lokasi)\s*:\s*\S"#, options: .regularExpression) != nil,
+               let colon = line.firstIndex(of: ":") {
+                places.append(String(line[line.index(after: colon)...].trimmingCharacters(in: .whitespaces).prefix(200)))
+            }
+            guard line.range(of: #"(?i)(expiry|expires|end time|paid until|tamat|到期|结束时间)"#, options: .regularExpression) != nil else { continue }
+            // A time alone is ambiguous; only offer complete date + time candidates.
+            let candidates = [line.components(separatedBy: ": ").last ?? line, index + 1 < lines.count ? lines[index + 1] : ""]
+            for candidate in candidates {
+                guard candidate.range(of: #"\b\d{4}\b"#, options: .regularExpression) != nil,
+                      candidate.range(of: #"\d{1,2}:\d{2}"#, options: .regularExpression) != nil else { continue }
+                for format in ["dd/MM/yyyy HH:mm", "dd/MM/yyyy h:mm a", "yyyy-MM-dd HH:mm", "d MMM yyyy h:mm a"] {
+                    let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX")
+                    formatter.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur"); formatter.dateFormat = format; formatter.isLenient = false
+                    if let date = formatter.date(from: candidate.trimmingCharacters(in: .whitespaces)), !endDates.contains(date) { endDates.append(date) }
+                }
+            }
+        }
+    }
+}
+
+struct ParkingSession: Codable, Identifiable {
+    var id = UUID().uuidString
+    var startedAt = Date()
+    var endedAt: Date?
+    var plate = ""
+    var name = ""
+    var bay = ""
+    var place: ExpensePlace?
+    var photo: Data?
+    var paidUntil: Date?
+    var paidCents: Int?
+    var reminderMinutes = 10
+    var expenseID: String?
+    var notificationID: String { "parking." + id }
+    func reminderDate(now: Date) -> Date? {
+        guard endedAt == nil, let paidUntil else { return nil }
+        let date = paidUntil.addingTimeInterval(-Double(reminderMinutes * 60))
+        return date > now ? date : nil
+    }
+}
+
+@MainActor
+final class ParkingStore: ObservableObject {
+    @Published private(set) var sessions: [ParkingSession] = []
+    let scope: String
+    private let url: URL
+    init(scope: String) {
+        self.scope = scope
+        let hash = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
+        url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("Parking").appendingPathComponent(hash + ".json")
+    }
+    func load() throws {
+        guard FileManager.default.fileExists(atPath: url.path) else { return }
+        sessions = try JSONDecoder().decode([ParkingSession].self, from: Data(contentsOf: url))
+    }
+    func save(_ session: ParkingSession) throws {
+        var updated = sessions.filter { $0.id != session.id }
+        updated.insert(session, at: 0)
+        try persist(updated)
+    }
+    func delete(_ session: ParkingSession) throws {
+        try persist(sessions.filter { $0.id != session.id })
+        cancelReminder(session)
+    }
+    private func persist(_ updated: [ParkingSession]) throws {
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(updated).write(to: url, options: [.atomic, .completeFileProtection])
+        sessions = updated
+    }
+    func cancelReminder(_ session: ParkingSession) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [session.notificationID])
+        center.removeDeliveredNotifications(withIdentifiers: [session.notificationID])
+    }
+    func remind(_ session: ParkingSession) async throws -> Bool {
+        cancelReminder(session)
+        guard let date = session.reminderDate(now: Date()) else { return false }
+        let center = UNUserNotificationCenter.current()
+        guard try await center.requestAuthorization(options: [.alert, .sound]) else { return false }
+        guard let current = sessions.first(where: { $0.id == session.id }), current.endedAt == nil,
+              current.paidUntil == session.paidUntil, date > Date(),
+              CloudAccount.shared.researchHistoryScope == scope else { return false }
+        let content = UNMutableNotificationContent()
+        content.title = tr("停车即将到期", "Parking expires soon", "Parkir hampir tamat")
+        content.body = tr("请查看已确认的停车结束时间，按需续费或取车。", "Check your confirmed parking end time and renew or collect your car.", "Semak masa tamat parkir dan lanjutkan atau ambil kereta.")
+        content.sound = .default
+        try await center.add(UNNotificationRequest(identifier: session.notificationID, content: content,
+            trigger: UNTimeIntervalNotificationTrigger(timeInterval: max(1, date.timeIntervalSinceNow), repeats: false)))
+        return true
+    }
+}
+
+struct ParkingView: View {
+    @ObservedObject private var account = CloudAccount.shared
+    var body: some View {
+        Group {
+            if let scope = account.researchHistoryScope { ParkingHome(scope: scope).id(scope) }
+            else { ContentUnavailableView(tr("请先登录", "Sign in first", "Log masuk dahulu"), systemImage: "person.crop.circle") }
+        }.navigationTitle(tr("停车助手", "Parking assistant", "Pembantu parkir"))
+    }
+}
+
+private struct ParkingHome: View {
+    @StateObject private var store: ParkingStore
+    @StateObject private var locator = ExpensePlaceLocator()
+    @Environment(\.openURL) private var openURL
+    @State private var plate = ""
+    @State private var name = ""
+    @State private var bay = ""
+    @State private var error = ""
+    @State private var ready = false
+    @State private var startingID: String?
+    @State private var goToTNG = false
+    init(scope: String) { _store = StateObject(wrappedValue: ParkingStore(scope: scope)) }
+    private func launchTNG() {
+        openURL(URL(string: "https://visit.tngdigital.com.my/StreetParking")!) { accepted in
+            if !accepted { error = tr("无法打开 TNG，请手动打开 eWallet 的 Parking。记录已保存。", "Open Parking in TNG manually. Your record is saved.", "Buka Parking dalam TNG sendiri. Rekod telah disimpan.") }
+        }
+    }
+    private func start(tng: Bool) {
+        guard ready, startingID == nil, !store.sessions.contains(where: { $0.endedAt == nil }) else { return }
+        do {
+            var session = ParkingSession()
+            session.plate = String(plate.prefix(20)); session.name = String(name.prefix(200)); session.bay = String(bay.prefix(200))
+            try store.save(session)
+            startingID = session.id; goToTNG = tng; error = ""
+            locator.start()
+        } catch { self.error = error.localizedDescription }
+    }
+    private func finishLocation() {
+        guard let id = startingID else { return }
+        startingID = nil
+        if var session = store.sessions.first(where: { $0.id == id }) {
+            session.place = locator.result
+            do { try store.save(session) } catch { self.error = error.localizedDescription }
+        }
+        if goToTNG { goToTNG = false; launchTNG() }
+    }
+    var body: some View {
+        List {
+            Section {
+                Text(tr("保存车位、停车计时、前往 TNG 缴费。记录仅保存在这台设备，不随账本同步。", "Save your bay, track time and pay through TNG. Parking records stay on this device and do not sync with the ledger.", "Simpan petak, kira masa dan bayar melalui TNG. Rekod parkir hanya pada peranti ini, tidak disegerak dengan lejar."))
+                    .font(.footnote).foregroundStyle(.secondary)
+            }
+            if !store.sessions.contains(where: { $0.endedAt == nil }) {
+                Section(tr("开始停车", "Start parking", "Mula parkir")) {
+                    TextField(tr("车牌（可选）", "Plate (optional)", "Plat (pilihan)"), text: $plate)
+                    TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $name)
+                    TextField(tr("楼层 / 区域 / 车位号", "Floor / zone / bay", "Tingkat / zon / petak"), text: $bay)
+                    Button(tr("开始停车并前往 TNG", "Start and open TNG", "Mula dan buka TNG")) { start(tng: true) }.disabled(!ready)
+                    Button(tr("只记录停车", "Record parking only", "Rekod parkir sahaja")) { start(tng: false) }.disabled(!ready)
+                }
+            }
+            if startingID != nil {
+                Section {
+                    ProgressView(tr("记录已保存，正在定位…", "Saved. Finding location…", "Disimpan. Mencari lokasi…"))
+                    Button(tr("跳过定位，继续", "Skip location and continue", "Langkau lokasi dan teruskan")) { locator.cancel(); finishLocation() }
+                }
+            }
+            if let message = locator.message { Text(message).font(.footnote).foregroundStyle(.secondary) }
+            if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            Section(tr("停车记录", "Parking records", "Rekod parkir")) {
+                ForEach(store.sessions) { session in
+                    NavigationLink { ParkingDetail(store: store, session: session) } label: {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(session.name.isEmpty ? tr("停车", "Parking", "Parkir") : session.name, systemImage: "parkingsign.circle.fill")
+                            Text(session.startedAt, style: .date).font(.caption)
+                            Text(session.endedAt == nil ? tr("停车中", "Parked", "Sedang parkir") : tr("已结束", "Ended", "Tamat")).foregroundStyle(.secondary)
+                        }
+                    }.disabled(startingID != nil)
+                }
+            }
+        }
+        .task { do { try store.load(); ready = true } catch { self.error = error.localizedDescription } }
+        .onChange(of: locator.result) { _, result in if result != nil { finishLocation() } }
+        .onChange(of: locator.message) { _, message in if message != nil { finishLocation() } }
+        .onDisappear { locator.cancel(); startingID = nil; goToTNG = false }
+    }
+}
+
+private struct ParkingDetail: View {
+    @ObservedObject var store: ParkingStore
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.openURL) private var openURL
+    @Environment(\.dismiss) private var dismiss
+    @State var session: ParkingSession
+    @State private var until = Date().addingTimeInterval(3600)
+    @State private var amount = ""
+    @State private var message = ""
+    @State private var photo: PhotosPickerItem?
+    @State private var receipt: PhotosPickerItem?
+    @State private var receiptText = ""
+    @State private var busy = false
+    @State private var deleting = false
+    @State private var expenseDraft: Expense?
+    private func save() { do { try store.save(session); message = tr("已保存", "Saved", "Disimpan") } catch { message = error.localizedDescription } }
+    private func confirmPayment() {
+        guard until > Date(), until > session.startedAt else { message = tr("请选择未来的结束时间", "Choose a future end time", "Pilih masa tamat akan datang"); return }
+        do {
+            let cents: Int? = amount.isEmpty ? nil : try toCents(amount)
+            if let cents, cents <= 0 { throw LedgerError.invalid(tr("金额必须大于零", "Amount must be positive", "Amaun mesti positif")) }
+            var updated = session; updated.paidUntil = until; updated.paidCents = cents
+            try store.save(updated); session = updated; busy = true
+            Task { @MainActor in
+                defer { busy = false }
+                do {
+                    let scheduled = try await store.remind(updated)
+                    message = scheduled ? tr("已确认，提醒已安排", "Confirmed; reminder scheduled", "Disahkan; peringatan dijadualkan") : tr("已确认，但未安排提醒：检查通知权限或提前时间。", "Confirmed, but no reminder scheduled. Check permission and lead time.", "Disahkan tetapi tiada peringatan. Semak kebenaran dan masa awal.")
+                } catch { message = tr("已确认，但提醒设置失败。", "Confirmed, but reminder setup failed.", "Disahkan tetapi peringatan gagal.") }
+            }
+        } catch { message = error.localizedDescription }
+    }
+    private func prepareExpense() {
+        guard let cents = session.paidCents, session.expenseID == nil else { return }
+        var draft = Expense(merchant: session.name.isEmpty ? "Parking" : session.name, cents: cents, date: session.startedAt, category: "交通", source: "手动")
+        draft.note = tr("停车费用；请核对付款时间、账户和已有记录。", "Parking fee; verify payment time, account and existing entries.", "Bayaran parkir; semak masa, akaun dan rekod sedia ada.")
+        // Use the existing screenshot duplicate-review flow; no ledger entry is created here.
+        expenseDraft = draft
+    }
+    var body: some View {
+        Form {
+            Section {
+                if let end = session.endedAt {
+                    Text(tr("已结束", "Ended", "Tamat")); Text(end, style: .time)
+                } else {
+                    Label(tr("停车计时", "Elapsed parking time", "Masa parkir"), systemImage: "timer")
+                    Text(session.startedAt, style: .timer).font(.largeTitle.monospacedDigit())
+                }
+                Text(session.paidUntil == nil ? tr("缴费待确认", "Payment awaiting confirmation", "Bayaran menunggu pengesahan") : tr("缴费由你确认，未与 TNG 同步", "Payment confirmed by you; not synced with TNG", "Bayaran disahkan oleh anda; tidak disegerak dengan TNG"))
+                    .font(.footnote).foregroundStyle(.secondary)
+                if let end = session.paidUntil { LabeledContent(tr("已确认的结束时间", "Confirmed end time", "Masa tamat disahkan")) { Text(end, format: .dateTime.month().day().hour().minute()) } }
+            }
+            Section(tr("我的车位", "My parking spot", "Tempat kereta saya")) {
+                TextField(tr("车牌", "Plate", "Plat"), text: $session.plate)
+                TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $session.name)
+                TextField(tr("楼层 / 区域 / 车位号", "Floor / zone / bay", "Tingkat / zon / petak"), text: $session.bay)
+                if let place = session.place, let lat = place.latitude, let lon = place.longitude {
+                    Text(place.name).font(.caption)
+                    Button(tr("地图找车", "Find car on map", "Cari kereta pada peta")) {
+                        MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+                            .openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeWalking])
+                    }
+                }
+                Text(tr("定位无法判断楼层；请补充车位号或照片。", "GPS cannot identify the floor. Add a bay number or photo.", "GPS tidak mengenal pasti tingkat. Tambah nombor petak atau foto.")).font(.caption)
+                PhotosPicker(selection: $photo, matching: .images) { Label(tr("添加车位照片", "Add parking photo", "Tambah foto parkir"), systemImage: "photo") }.disabled(busy)
+                if let data = session.photo, let image = UIImage(data: data) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 240)
+                    Button(tr("移除照片", "Remove photo", "Buang foto")) { session.photo = nil; save() }
+                }
+                Button(tr("保存车位资料", "Save parking details", "Simpan butiran parkir"), action: save)
+            }
+            if session.endedAt == nil {
+                Section(tr("缴费与提醒", "Payment and reminder", "Bayaran dan peringatan")) {
+                    Link(tr("前往 TNG 停车缴费", "Open TNG parking", "Buka parkir TNG"), destination: URL(string: "https://visit.tngdigital.com.my/StreetParking")!)
+                    Text(tr("跳转不会确认付款。请按 TNG 收据核对以下资料。", "Opening TNG does not confirm payment. Check these fields against your receipt.", "Membuka TNG tidak mengesahkan bayaran. Semak medan dengan resit.")) .font(.caption)
+                    PhotosPicker(selection: $receipt, matching: .images) { Text(tr("识别付款截图（本机）", "Read payment screenshot (on device)", "Baca tangkap layar bayaran (pada peranti)")) }.disabled(busy)
+                    if !receiptText.isEmpty {
+                        DisclosureGroup(tr("识别文字 · 请核对", "Recognized text · review", "Teks dikenal pasti · semak")) { Text(receiptText).font(.caption).textSelection(.enabled) }
+                        let hints = ParkingReceiptHints(text: receiptText)
+                        ForEach(hints.amounts, id: \.self) { value in
+                            Button("MYR " + value) { amount = value }
+                        }
+                        ForEach(hints.endDates, id: \.self) { date in
+                            Button { until = date } label: { Text(date, format: .dateTime.year().month().day().hour().minute()) }
+                        }
+                        ForEach(Array(Set(hints.places)).sorted(), id: \.self) { place in
+                            Button(place) { session.name = place }
+                        }
+                        Text(tr("点选候选资料填入表单，不会自动确认付款。", "Tap a candidate to fill the form; this does not confirm payment.", "Tekan cadangan untuk mengisi borang; bayaran tidak disahkan automatik.")).font(.caption)
+                    }
+                    DatePicker(tr("已付费至", "Paid until", "Dibayar sehingga"), selection: $until)
+                    TextField(tr("付款金额 MYR（可选）", "Amount MYR (optional)", "Amaun MYR (pilihan)"), text: $amount).keyboardType(.decimalPad)
+                    Picker(tr("提前提醒", "Remind before", "Ingatkan sebelum"), selection: $session.reminderMinutes) {
+                        ForEach([5, 10, 15], id: \.self) { Text("\($0) min").tag($0) }
+                    }
+                    Button(tr("确认已付款并设置提醒", "Confirm payment and set reminder", "Sahkan bayaran dan tetapkan peringatan"), action: confirmPayment).disabled(busy)
+                }
+            }
+            Section {
+                if let id = session.expenseID {
+                    Text(model.ledger.expenses.contains(where: { $0.id == id }) ? tr("已保存到账本", "Saved to ledger", "Disimpan dalam lejar") : tr("曾保存到账本，原记录已不在当前账本中。", "Previously saved; the entry is no longer in this ledger.", "Pernah disimpan; rekod tiada lagi dalam lejar ini."))
+                } else if session.paidCents != nil {
+                    Button(tr("核对并记账", "Review and record expense", "Semak dan rekod belanja"), action: prepareExpense)
+                }
+                if session.endedAt == nil {
+                    Button(tr("结束停车", "End parking", "Tamatkan parkir")) {
+                        var updated = session; updated.endedAt = Date()
+                        do { try store.save(updated); session = updated; store.cancelReminder(updated) } catch { message = error.localizedDescription }
+                    }.disabled(busy)
+                }
+                Button(tr("删除停车记录", "Delete parking record", "Padam rekod parkir"), role: .destructive) { deleting = true }.disabled(busy)
+                if busy { ProgressView() }
+                if !message.isEmpty { Text(message).font(.footnote) }
+            }
+        }.navigationTitle(tr("停车详情", "Parking details", "Butiran parkir"))
+        .onAppear { until = session.paidUntil ?? Date().addingTimeInterval(3600); amount = session.paidCents.map { Currency.input($0, "MYR") } ?? "" }
+        .task(id: photo) {
+            guard let photo else { return }; busy = true; defer { busy = false }
+            do {
+                guard let data = try await photo.loadTransferable(type: Data.self), data.count <= 20_000_000,
+                      let image = UIImage(data: data) else { throw CloudFailure.invalidResponse }
+                let scale = min(1, 1200 / max(image.size.width, image.size.height))
+                let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                let format = UIGraphicsImageRendererFormat(); format.scale = 1
+                let resized = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+                try Task.checkCancellation()
+                session.photo = resized.jpegData(compressionQuality: 0.7); save()
+            } catch is CancellationError { } catch { message = tr("无法读取照片", "Unable to read photo", "Tidak dapat membaca foto") }
+        }
+        .task(id: receipt) {
+            guard let receipt else { return }; busy = true; defer { busy = false }
+            do {
+                guard let data = try await receipt.loadTransferable(type: Data.self), data.count <= 20_000_000 else { throw CloudFailure.invalidResponse }
+                let text = try await ReceiptOCR.read(data); try Task.checkCancellation()
+                receiptText = String(text.prefix(12000))
+                message = tr("请从识别文字核对地点、金额及完整日期时间，再确认付款。模糊资料不会自动填写。", "Review place, amount and full date/time from the recognized text before confirming. Ambiguous details are not filled automatically.", "Semak tempat, amaun dan tarikh/masa penuh daripada teks sebelum mengesahkan. Butiran kabur tidak diisi automatik.")
+            } catch is CancellationError { } catch { message = tr("截图识别失败，请手动填写", "Screenshot recognition failed; enter details manually", "Pengecaman gagal; isi butiran sendiri") }
+        }
+        .sheet(item: $expenseDraft) { draft in
+            ExpenseEditor(original: nil, initialDraft: draft, reviewDuplicates: true, onSaved: {
+                session.expenseID = draft.id; save()
+            })
+        }
+        .alert(tr("删除停车记录？", "Delete parking record?", "Padam rekod parkir?"), isPresented: $deleting) {
+            Button(tr("删除", "Delete", "Padam"), role: .destructive) {
+                do { try store.delete(session); dismiss() } catch { message = error.localizedDescription }
+            }
+            Button(tr("取消", "Cancel", "Batal"), role: .cancel) {}
+        } message: { Text(tr("会移除照片和提醒，账本中的消费不会删除。", "Removes the photo and reminder, but keeps ledger expenses.", "Memadam foto dan peringatan tetapi mengekalkan belanja lejar.")) }
+    }
+}

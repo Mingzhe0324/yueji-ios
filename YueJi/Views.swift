@@ -2803,8 +2803,9 @@ struct ExpenseEditor: View {
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
     var pendingNotice: TNGNotice? = nil
+    var reviewDuplicates = false
     @State private var screenshotAcknowledged = Set<String>()
-    private var screenshotImport: Bool { original == nil && initialDraft?.source == "交易截图" }
+    private var screenshotImport: Bool { original == nil && (initialDraft?.source == "交易截图" || reviewDuplicates) }
     private var draftStorageID: String? { pendingNotice.map { "notice-" + $0.id } ?? original?.id ?? (screenshotImport ? initialDraft?.id : nil) }
     private var screenshotMatches: Set<String> { model.ledger.screenshotMatches(cents: (try? total()) ?? 0, date: date) }
     var startWithSplit = false
@@ -3372,7 +3373,7 @@ struct ExpenseEditor: View {
                 entry.reimbursement = nil
             }
             try entry.validateReimbursement()
-            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty, notice: pendingNotice, screenshotAcknowledged: screenshotAcknowledged)
+            try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty, notice: pendingNotice, screenshotAcknowledged: screenshotAcknowledged, reviewDuplicates: reviewDuplicates)
             await model.refresh(postRecurring: false)
             finishDraft()
             model.highlightSavedExpense(entry.id)

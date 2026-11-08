@@ -833,7 +833,8 @@ private struct InvestmentAssistantOrb: ViewModifier {
                     .accessibilityAction(named: Text(tr("移到另一侧", "Move to other side", "Alih ke sisi lain"))) {
                         withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.22)) { onRight.toggle() }
                     }
-                    .highPriorityGesture(DragGesture(minimumDistance: 10)
+                    // Measure against the stationary overlay, not the moving button.
+                    .highPriorityGesture(DragGesture(minimumDistance: 10, coordinateSpace: .named("investmentOrbOverlay"))
                         .onChanged { value in
                             var transaction = Transaction(); transaction.disablesAnimations = true
                             withTransaction(transaction) { translation = value.translation }
@@ -850,6 +851,7 @@ private struct InvestmentAssistantOrb: ViewModifier {
                     .position(position(in: geometry.size, offset: translation))
                     .onDisappear { translation = .zero }
                 }
+                .coordinateSpace(name: "investmentOrbOverlay")
             }
             .sheet(isPresented: $showingChat) {
                 NavigationStack {
@@ -1178,6 +1180,7 @@ private struct StockChatView: View {
     @Environment(\.scenePhase) private var phase
     @State private var draft: String
     @State private var messages: [StockChatMessage] = []
+    @State private var pendingQuestion: String?
     @State private var running = false
     @State private var error = ""
     @State private var task: Task<Void, Never>?
@@ -1189,10 +1192,10 @@ private struct StockChatView: View {
         guard !running, !question.isEmpty, question.utf16.count <= 2000 else { return }
         var history = Array(messages.suffix(6))
         while history.reduce(0, { $0 + $1.text.utf16.count }) > 24000 { history.removeFirst(2) }
-        running = true; error = ""
+        running = true; error = ""; pendingQuestion = question
         let scope = account.researchHistoryScope
         task = Task { @MainActor in
-            defer { running = false }
+            defer { running = false; pendingQuestion = nil }
             do {
                 let data = try await account.askStockQuestion(question, history: history, language: tr("zh", "en", "ms"))
                 try Task.checkCancellation()
@@ -1207,8 +1210,9 @@ private struct StockChatView: View {
             catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
     }
-    private func clear() { task?.cancel(); messages = []; draft = ""; error = "" }
+    private func clear() { task?.cancel(); messages = []; draft = ""; error = ""; pendingQuestion = nil }
     var body: some View {
+        ScrollViewReader { proxy in
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text(tr("可以问术语、财报、ETF、风险和投资入门。这里解释知识，没有接入实时行情；不能核实今天该买什么。", "Ask about terms, reports, ETFs, risks and getting started. This explains concepts without live market data; it cannot verify what to buy today.", "Tanya istilah, laporan, ETF, risiko dan asas pelaburan. Ini menerangkan konsep tanpa data pasaran langsung; tidak dapat mengesahkan apa yang patut dibeli hari ini.")).font(.subheadline)
@@ -1222,10 +1226,29 @@ private struct StockChatView: View {
                     VStack(alignment: .leading, spacing: 8) {
                         Label(message.role == "user" ? tr("你", "You", "Anda") : tr("AI · 知识解答", "AI · Explanation", "AI · Penjelasan"), systemImage: message.role == "user" ? "person" : "sparkles").font(.caption.bold()).foregroundStyle(.secondary)
                         Text(message.text).textSelection(.enabled)
-                    }.researchCard()
+                    }
+                    .padding(14)
+                    .background(message.role == "user" ? Color.blue.opacity(0.15) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 18))
+                    .frame(maxWidth: .infinity, alignment: message.role == "user" ? .trailing : .leading)
                 }
+                if let pendingQuestion {
+                    Text(pendingQuestion).padding(14)
+                        .background(Color.blue.opacity(0.15), in: RoundedRectangle(cornerRadius: 18))
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+                    ProgressView(tr("正在回答…", "Preparing an answer…", "Menyediakan jawapan…"))
+                }
+                if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red).textSelection(.enabled) }
+                Color.clear.frame(height: 1).id("chatBottom")
+            }.padding()
+        }
+        .scrollDismissesKeyboard(.interactively)
+        .onChange(of: messages.count) { _, _ in proxy.scrollTo("chatBottom", anchor: .bottom) }
+        .onChange(of: running) { _, _ in proxy.scrollTo("chatBottom", anchor: .bottom) }
+        .onChange(of: error) { _, _ in proxy.scrollTo("chatBottom", anchor: .bottom) }
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(alignment: .leading, spacing: 8) {
                 TextField(tr("输入股票问题，可继续追问", "Ask a stock question or follow up", "Tanya soalan saham atau soalan susulan"), text: $draft, axis: .vertical)
-                    .lineLimit(3...8).textFieldStyle(.roundedBorder).disabled(running)
+                    .lineLimit(1...5).textFieldStyle(.roundedBorder).disabled(running)
                 Text("\(draft.utf16.count)/2000").font(.caption).foregroundStyle(draft.utf16.count > 2000 ? Color.red : Color.secondary)
                 HStack {
                     Button(action: send) { Label(tr("发送", "Send", "Hantar"), systemImage: "arrow.up.circle.fill") }.buttonStyle(.borderedProminent)
@@ -1235,9 +1258,10 @@ private struct StockChatView: View {
                         Button(tr("取消", "Cancel", "Batal")) { task?.cancel() }
                     }
                 }
-                if !error.isEmpty { Text(error).foregroundStyle(.red) }
-            }.padding()
+            }.padding().background(.regularMaterial)
+        }
         }.navigationTitle(tr("股票问答", "Stock Q&A", "Soal jawab saham"))
+            .navigationBarTitleDisplayMode(.inline)
             .toolbar { Button(tr("清空", "Clear", "Kosongkan"), action: clear) }
             .onDisappear(perform: clear)
             .onChange(of: account.researchHistoryScope) { _, _ in clear() }
