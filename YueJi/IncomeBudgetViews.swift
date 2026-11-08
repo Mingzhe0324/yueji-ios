@@ -107,18 +107,12 @@ private struct BankWalletCard: View {
 
 private struct BankBreathingBackground: View {
     let brand: Color
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorSchemeContrast) private var contrast
-    @Environment(\.scenePhase) private var scenePhase
-    @State private var visible = false
-    private var animates: Bool {
-        visible && scenePhase == .active && !reduceMotion && !reduceTransparency && contrast != .increased
-    }
 
     var body: some View {
-        TimelineView(.animation(minimumInterval: 1.0 / 20, paused: !animates)) { context in
-            let breath = animates ? (sin(context.date.timeIntervalSinceReferenceDate * .pi / 4) + 1) / 2 : 0.5
+        // Static lighting keeps card lists idle during tab transitions and UI interaction.
+        let breath = 0.5
             GeometryReader { geometry in
                 ZStack {
                     Color(red: 0.025, green: 0.035, blue: 0.055)
@@ -134,10 +128,7 @@ private struct BankBreathingBackground: View {
                     }
                 }
             }
-        }
         .allowsHitTesting(false).accessibilityHidden(true)
-        .onAppear { visible = true }
-        .onDisappear { visible = false }
     }
 }
 
@@ -234,7 +225,8 @@ struct BankAccountsView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var walletTransition
     @State private var adding = false
-    @State private var entered = false
+    private enum Tool: Hashable { case investment, parking }
+    @State private var tool: Tool?
 
     private func moveAccount(_ id: String, by offset: Int) {
         model.perform(key: "account-order", action: { ledger in
@@ -244,7 +236,7 @@ struct BankAccountsView: View {
         })
     }
 
-    private func cardLink(_ account: BankAccount, collapsed: Bool = false) -> some View {
+    private func cardLink(_ account: BankAccount, balance: Int, collapsed: Bool = false) -> some View {
         NavigationLink {
             if #available(iOS 18.0, *), !reduceMotion {
                 BankAccountDetail(accountID: account.id)
@@ -254,14 +246,14 @@ struct BankAccountsView: View {
             }
         } label: {
             if #available(iOS 18.0, *), !reduceMotion {
-                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed, appeared: entered)
+                BankWalletCard(account: account, balance: balance, collapsed: collapsed)
                     .matchedTransitionSource(id: account.id, in: walletTransition)
             } else {
-                BankWalletCard(account: account, balance: model.ledger.bankBalance(account), collapsed: collapsed, appeared: entered)
+                BankWalletCard(account: account, balance: balance, collapsed: collapsed)
             }
         }
         .buttonStyle(BankCardPressStyle())
-        .accessibilityLabel(account.name + ", " + money(model.ledger.bankBalance(account)))
+        .accessibilityLabel(account.name + ", " + money(balance))
         .accessibilityHint(tr("查看账户详情", "View account details", "Lihat butiran akaun"))
         .accessibilityAction(named: Text(tr("上移", "Move up", "Alih ke atas"))) {
             moveAccount(account.id, by: -1)
@@ -271,16 +263,17 @@ struct BankAccountsView: View {
         }
     }
     var body: some View {
+        let balances = Dictionary(uniqueKeysWithValues: model.ledger.bankAccounts.map { ($0.id, model.ledger.bankBalance($0)) })
         NavigationStack {
             List {
                 Section {
                     LabeledContent(tr("账面总余额", "Recorded balance", "Baki direkod"),
-                                   value: money(model.ledger.bankAccounts.reduce(0) { $0 + model.ledger.bankBalance($1) }))
+                                   value: money(balances.values.reduce(0, +)))
                         .font(.headline).monospacedDigit()
                 }
                 Section(tr("我的账户", "My accounts", "Akaun saya")) {
                     ForEach(model.ledger.bankAccounts) { account in
-                        cardLink(account)
+                        cardLink(account, balance: balances[account.id] ?? account.openingCents)
                         .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                         .listRowBackground(Color.clear).listRowSeparator(.hidden)
                     }.onMove { offsets, destination in
@@ -312,10 +305,10 @@ struct BankAccountsView: View {
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     Menu {
-                    NavigationLink { InvestmentWatchView() } label: {
+                    Button { tool = .investment } label: {
                         Label(tr("投资观察", "Market watch", "Pantau pasaran"), systemImage: "chart.line.uptrend.xyaxis")
                     }
-                    NavigationLink { ParkingView() } label: {
+                    Button { tool = .parking } label: {
                         Label(tr("停车助手", "Parking assistant", "Pembantu parkir"), systemImage: "parkingsign.circle")
                     }
                     } label: { Image(systemName: "square.grid.2x2") }
@@ -329,8 +322,12 @@ struct BankAccountsView: View {
                 }
             }
             .sheet(isPresented: $adding) { BankAccountEditor() }
-            .onAppear { entered = true }
-            .onDisappear { entered = false }
+            .navigationDestination(item: $tool) { destination in
+                switch destination {
+                case .investment: InvestmentWatchView()
+                case .parking: ParkingView()
+                }
+            }
         }
     }
 }

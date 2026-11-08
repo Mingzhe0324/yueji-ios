@@ -3374,11 +3374,13 @@ struct ExpenseEditor: View {
             }
             try entry.validateReimbursement()
             try await LedgerRefreshWorker.shared.saveExpense(entry, replacing: original, rememberCategory: rememberCategory && itemDrafts.isEmpty, notice: pendingNotice, screenshotAcknowledged: screenshotAcknowledged, reviewDuplicates: reviewDuplicates)
-            await model.refresh(postRecurring: false)
+            // The durable write succeeded. Dismiss before refreshing projections so
+            // a busy startup refresh cannot leave a saved form waiting on screen.
             finishDraft()
+            dismiss(); onSaved?()
+            await model.refresh(postRecurring: false)
             model.highlightSavedExpense(entry.id)
             model.showSaved(firstEntry: original == nil)
-            dismiss(); onSaved?()
         } catch { self.error = error.localizedDescription; FeedbackHaptics.error() }
     }
 }

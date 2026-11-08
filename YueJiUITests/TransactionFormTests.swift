@@ -49,6 +49,31 @@ final class TransactionFormTests: XCTestCase {
         verifyFirstAddItem(opening: true)
     }
 
+    func testAccountToolsAfterColdLaunchAndTabSwitches() {
+        let app = XCUIApplication()
+        runningApp = app
+        app.launchArguments = ["-appLanguage", "en", "-completedUsageGuide", "YES",
+                               "-openingAnimationEnabled", "YES", "-playfulAnimations", "NO",
+                               "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
+        app.launch()
+        let accounts = app.tabBars.buttons["Accounts"]
+        XCTAssertTrue(accounts.waitForExistence(timeout: 20))
+        for _ in 0..<3 {
+            accounts.tap()
+            let tools = app.buttons["bankAccount.tools"].firstMatch
+            XCTAssertTrue(tools.waitForExistence(timeout: 5))
+            tools.tap()
+            let parking = app.buttons["Parking assistant"]
+            XCTAssertTrue(parking.waitForExistence(timeout: 5))
+            parking.tap()
+            let page = app.navigationBars["Parking assistant"]
+            XCTAssertTrue(page.waitForExistence(timeout: 5))
+            page.buttons.element(boundBy: 0).tap()
+            XCTAssertTrue(app.navigationBars["Accounts"].waitForExistence(timeout: 5))
+            app.tabBars.buttons["Ledger"].tap()
+        }
+    }
+
     func testBankInterestFirstPresentationAfterColdLaunch() {
         let app = XCUIApplication()
         runningApp = app
@@ -321,7 +346,9 @@ final class TransactionFormTests: XCTestCase {
 
     private func waitUntilGone(_ element: XCUIElement) {
         let gone = XCTNSPredicateExpectation(predicate: NSPredicate(format: "exists == false"), object: element)
-        XCTAssertEqual(XCTWaiter.wait(for: [gone], timeout: 10), .completed, "Unexpectedly retained \(element)")
+        let result = XCTWaiter.wait(for: [gone], timeout: 10)
+        let alerts = result == .completed ? "" : (runningApp?.alerts.debugDescription ?? "")
+        XCTAssertEqual(result, .completed, "Unexpectedly retained \(element). Visible alerts: \(alerts)")
     }
 
     private func verifyFirstAddItem(opening: Bool) {
