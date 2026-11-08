@@ -160,14 +160,15 @@ export async function handleResearch(request, deps) {
     if (mode === "official") {
       const response = await get(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
         method: "POST", headers: { "Content-Type": "application/json", "x-goog-api-key": key },
-        body: JSON.stringify({ systemInstruction: { parts: [{ text: evidencePrompt }] },
+        body: JSON.stringify({ systemInstruction: { parts: [{ text: evidencePrompt + '\nOutput contract: every summary/period/conditions/missing is a nonempty string <=1800 characters, reason <=1000. Every evidence quote is 12..1200 characters, at most five per dimension. Copy quotes exactly including table separators, currency, punctuation and units. Use [] for unsupported dimensions and null scores. Valuation and risk must be null for these official pages. Return only the JSON object, no Markdown fences.' }] },
           contents: [{ role: "user", parts: [{ text: JSON.stringify({ symbols, evidence }) }] }],
           generationConfig: { maxOutputTokens: 8192, responseMimeType: "application/json" } }),
       });
       if (!response.ok) return modelFailure(response.status);
       const result = await read(response.body, 300000);
-      const report = evidenceReport(result.candidates?.[0], symbols, evidence);
-      if (!report) return reply(422, { error: "no_grounded_research" });
+      let reason = 'invalid_structure';
+      const report = evidenceReport(result.candidates?.[0], symbols, evidence, {onReject: value => { reason = value; }});
+      if (!report) return reply(422, { error: "no_grounded_research", reason });
       const value = { symbol: symbols[0], symbols, generatedAt: new Date().toISOString(), ...report };
       if (cacheEnabled) {
         try { await get(url + '/rest/v1/rpc/save_investment_report', {method:'POST',headers,body:JSON.stringify({report_key:cacheKey,report_value:{symbol:symbols[0],symbols,generatedAt:value.generatedAt,candidate:result.candidates[0]}})}); }

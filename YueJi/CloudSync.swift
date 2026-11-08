@@ -302,6 +302,10 @@ actor SupabaseCloudService: CloudRemote {
                 case "source_unavailable":
                     throw reviewError("暂时无法读取这家公司的公开财报。你没有漏交资料，也不需要上传文件，请稍后重试。", "We could not read this company's public financial report right now. You have not missed any documents and do not need to upload files. Please retry later.", "Laporan kewangan awam syarikat ini tidak dapat dibaca sekarang. Anda tidak tertinggal dokumen dan tidak perlu memuat naik fail. Cuba lagi kemudian.")
                 case "no_grounded_research":
+                    let reasons = ["incomplete_output", "invalid_json", "invalid_structure", "invalid_citation", "quote_mismatch"]
+                    if let reason = object?["reason"] as? String, reasons.contains(reason) {
+                        throw LedgerError.invalid(tr("AI 报告未通过完整性、格式或引用检查，未展示结果。诊断码：", "The AI report failed completeness, format or citation checks. Diagnostic: ", "Laporan AI gagal semakan kelengkapan, format atau petikan. Diagnostik: ") + "[" + reason + "]")
+                    }
                     throw reviewError("这次 AI 报告未通过依据检查，因此没有展示。不是你少提供了文件。可以稍后重试；再次分析可能占用一次研究额度。", "This AI report did not pass the evidence checks, so it was not shown. You are not missing any files. Retry later; another analysis may use a research allowance.", "Laporan AI ini tidak lulus semakan bukti, jadi ia tidak dipaparkan. Anda tidak kekurangan fail. Cuba kemudian; analisis baharu mungkin menggunakan kuota kajian.")
                 case "invalid_import":
                     throw reviewError("导入的文件格式不符合要求。请按进阶选项中的格式检查文件；使用自动研究不需要导入。", "The imported file does not match the required format. Check the format in advanced options. Automatic research needs no import.", "Format fail import tidak menepati keperluan. Semak format dalam pilihan lanjutan. Kajian automatik tidak memerlukan import.")

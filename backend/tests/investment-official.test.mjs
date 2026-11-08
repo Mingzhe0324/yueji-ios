@@ -11,6 +11,30 @@ const company = () => ({symbol,summary:'示例分析',period:'2026',action:'cons
 const candidate = c => ({finishReason:'STOP',content:{parts:[{text:JSON.stringify({companies:[c]})}]}});
 const json = value => new Response(JSON.stringify(value));
 
+test('accepts whitespace-only citation differences and restores original text', () => {
+  const original = 'Revenue\n2026\u00a0quarter   profit 99 Speed Mart';
+  const result = evidenceReport(candidate(company()), [symbol], [{...source,text:original}]);
+  assert.ok(result);
+  assert.equal(result.assessments[0].dimensions[0].evidence[0].quote, original);
+  const changed = company(); changed.dimensions[0].evidence[0].quote = quote.replace('2026', '2025');
+  assert.equal(evidenceReport(candidate(changed), [symbol], [{...source,text:original}]), null);
+  assert.equal(evidenceReport(candidate(company()), [symbol], [{...source,text:quote.replace('Revenue ', 'Revenue | ')}]), null);
+});
+
+test('accepts one JSON fence but rejects surrounding prose and reports incomplete output', () => {
+  const value = candidate(company());
+  const raw = value.content.parts[0].text;
+  value.content.parts[0].text = '```json\n' + raw + '\n```';
+  assert.ok(evidenceReport(value, [symbol], [source]));
+  value.content.parts[0].text = 'Explanation\n' + raw;
+  let reason;
+  assert.equal(evidenceReport(value, [symbol], [source], {onReject:r=>reason=r}), null);
+  assert.equal(reason, 'invalid_json');
+  value.finishReason = 'MAX_TOKENS';
+  assert.equal(evidenceReport(value, [symbol], [source], {onReject:r=>reason=r}), null);
+  assert.equal(reason, 'incomplete_output');
+});
+
 test('CIMB income and TNB annual summary use source-specific period checks', async () => {
   for (const [ticker, body, required] of [
     ['MYX:CIMB', 'CIMB Group Holdings Berhad Total income profit second quarter ended 30 June 2026', 'second quarter ended 30 June 2026'],

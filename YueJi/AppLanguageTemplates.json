@@ -1838,6 +1838,7 @@
   "Tax (SST)",
   "Tax and service",
   "Teal",
+  "The AI report failed completeness, format or citation checks. Diagnostic: ",
   "The account opens after this statement starts. Earlier entries are covered by the opening balance and will be skipped. Check that amount and time.",
   "The amount is missing, there are multiple amounts, or it is not a single MYR amount. Check the original text and currency; excluded from spending.",
   "The amount, merchant and time are close to an existing entry. Check whether this is the same transaction.",

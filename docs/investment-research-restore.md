@@ -2,6 +2,14 @@
 
 本地源码还在。恢复云端不会自动更新已安装的 IPA；新增来源提示需要新版 App。
 
+## 2026-11-08：报告依据检查
+
+`no_grounded_research` 表示模型响应未通过报告校验，不代表用户缺少文件，也不能单凭此错误判断为密钥问题。本次允许引用仅空白排版不同，并恢复原文显示；数字、标点、单位、表格分隔符及来源归属仍严格匹配。允许单一 JSON 代码围栏，拒绝夹带说明文字、截断或虚构引用。提示词补齐校验器要求的长度和引用数量限制。
+
+官方资料模式失败响应增加受控 `reason`：`incomplete_output`、`invalid_json`、`invalid_structure`、`invalid_citation`、`quote_mismatch`。新版 App 展示这些诊断码；不包含密钥、模型原始回答或用户资料。没有自动再次调用模型。
+
+已通过 28 项投资后端模拟测试及部署包语法检查。尚未捕获用户失败请求的原始响应，因此不能断言该请求由空白差异引起。必须将重新生成的 `builds/investment-research-deploy/index.ts` 部署到 Supabase 的 `investment-research` 才生效；GitHub push 和 iOS 构建不会部署此函数。本次无需修改 SQL 或 Secrets。
+
 ## 2026-11-06：聊天布局、拖动及错误定位
 
 本次需要分别更新两端：重新生成并部署 `builds/investment-research-deploy/index.ts`，以及重新构建、安装 App。只保存本机 `index.ts` 不会更新云端；只部署函数不会更新圆球或聊天布局。本次无需新增 Secrets 或 SQL。
