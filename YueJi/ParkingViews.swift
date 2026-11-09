@@ -3,15 +3,96 @@ import PhotosUI
 import MapKit
 import UserNotifications
 import CryptoKit
+import SceneKit
 
 private let parkingAccent = Color(red: 0.12, green: 0.65, blue: 0.39)
+
+/// Local, generic body-style models; never a claimed replica of a brand/model.
+private struct ParkingVehicleModel: View {
+    let vehicle: ParkingVehicle
+    @State private var interactive = false
+    private func scene() -> SCNScene {
+        let scene = SCNScene()
+        scene.background.contents = UIColor(white: 0.94, alpha: 1)
+        let mpv = vehicle.body == "mpv"
+        let suv = vehicle.body == "suv"
+        let sedan = vehicle.body == "sedan"
+        let length: CGFloat = mpv ? 4.8 : (sedan ? 4.6 : (suv ? 4.4 : 3.8))
+        let roof: CGFloat = mpv ? 1.95 : (suv ? 1.85 : 1.5)
+        let paint = UIColor(vehicle.tint)
+        func material(_ color: UIColor, metal: CGFloat = 0) -> SCNMaterial {
+            let m = SCNMaterial(); m.diffuse.contents = color
+            m.lightingModel = .physicallyBased; m.metalness.contents = metal; m.roughness.contents = 0.3
+            return m
+        }
+        func box(_ w: CGFloat, _ h: CGFloat, _ d: CGFloat, _ x: CGFloat, _ y: CGFloat, _ z: CGFloat, _ color: UIColor) {
+            let g = SCNBox(width: w, height: h, length: d, chamferRadius: min(0.1, h / 3))
+            g.materials = [material(color, metal: color == paint ? 0.45 : 0)]
+            let n = SCNNode(geometry: g); n.position = SCNVector3(Float(x), Float(y), Float(z))
+            scene.rootNode.addChildNode(n)
+        }
+        box(length, 0.65, 1.75, 0, 0.75, 0, paint)
+        let front: CGFloat = mpv ? -1.65 : -0.9
+        let rear: CGFloat = sedan ? 0.85 : length / 2 - 0.25
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: front - 0.35, y: 1.02))
+        path.addLine(to: CGPoint(x: front + 0.35, y: roof))
+        path.addLine(to: CGPoint(x: rear - 0.2, y: roof))
+        path.addLine(to: CGPoint(x: rear + 0.2, y: 1.02))
+        path.close()
+        let cabin = SCNShape(path: path, extrusionDepth: 1.5)
+        cabin.chamferRadius = 0.08; cabin.materials = [material(UIColor(red: 0.13, green: 0.2, blue: 0.24, alpha: 1), metal: 0.3)]
+        scene.rootNode.addChildNode(SCNNode(geometry: cabin))
+        box(rear - front - 0.45, 0.10, 1.48, (front + rear + 0.15) / 2, roof, 0, paint)
+        for side in [-1, 1] as [CGFloat] {
+            for x in [-length * 0.31, length * 0.31] {
+                let tire = SCNCylinder(radius: 0.39, height: 0.25)
+                tire.materials = [material(.init(white: 0.08, alpha: 1))]
+                let wheel = SCNNode(geometry: tire)
+                wheel.eulerAngles.x = .pi / 2
+                wheel.position = SCNVector3(Float(x), 0.42, Float(side * 0.85))
+                scene.rootNode.addChildNode(wheel)
+                let hub = SCNCylinder(radius: 0.25, height: 0.265)
+                hub.materials = [material(.lightGray, metal: 0.8)]
+                let rim = SCNNode(geometry: hub); wheel.addChildNode(rim)
+            }
+            box(0.09, roof - 1.08, 0.06, (front + rear) / 2, (roof + 1.08) / 2, side * 0.77, paint)
+            box(0.26, 0.04, 0.04, 0.5, 0.98, side * 0.89, .lightGray)
+            box(0.22, 0.15, 0.24, front + 0.1, 1.15, side * 0.95, paint)
+            box(0.06, 0.16, 0.45, -length / 2, 0.88, side * 0.56, .white)
+            box(0.06, 0.16, 0.38, length / 2, 0.88, side * 0.58, .systemRed)
+        }
+        box(0.06, 0.23, 0.85, -length / 2 - 0.01, 0.6, 0, .darkGray)
+        box(6, 0.08, 3.2, 0, -0.03, 0, UIColor(white: 0.88, alpha: 1))
+        let camera = SCNNode(); camera.camera = SCNCamera()
+        camera.camera?.usesOrthographicProjection = true; camera.camera?.orthographicScale = 3.25
+        camera.position = SCNVector3(-6, 3.5, 6)
+        camera.look(at: SCNVector3(0, 0.8, 0)); scene.rootNode.addChildNode(camera)
+        let light = SCNNode(); light.light = SCNLight(); light.light?.type = .omni
+        light.light?.intensity = 1300; light.position = SCNVector3(-3, 6, 5)
+        scene.rootNode.addChildNode(light)
+        let ambient = SCNNode(); ambient.light = SCNLight(); ambient.light?.type = .ambient
+        ambient.light?.intensity = 450; scene.rootNode.addChildNode(ambient)
+        return scene
+    }
+    var body: some View {
+        SceneView(scene: scene(), options: interactive ? [.allowsCameraControl] : [])
+            .allowsHitTesting(interactive)
+            .overlay(alignment: .bottomTrailing) {
+                Button { interactive.toggle() } label: {
+                    Label(interactive ? tr("完成", "Done", "Selesai") : tr("旋转 3D", "Rotate 3D", "Putar 3D"), systemImage: "rotate.3d")
+                        .font(.caption).padding(8).background(.regularMaterial, in: Capsule())
+                }.padding(8)
+            }
+    }
+}
 
 struct ParkingVehicle: Codable, Equatable {
     var brand = ""
     var model = ""
     var year = ""
     var color = "silver"
-    var body = "car"
+    var body = "hatchback"
     var photo: Data?
     var title: String { [brand, model, year].filter { !$0.isEmpty }.joined(separator: " · ") }
     var tint: Color {
@@ -89,7 +170,7 @@ private struct ParkingMapCard: View {
                     if let data = shownVehicle?.photo, let image = UIImage(data: data) {
                         Image(uiImage: image).resizable().scaledToFit()
                     } else {
-                        Image("ParkingCarHero").resizable().scaledToFit()
+                        ParkingVehicleModel(vehicle: shownVehicle ?? ParkingVehicle())
                     }
                 }.frame(maxWidth: .infinity).frame(height: 170)
                     .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 20))
@@ -372,6 +453,7 @@ private struct ParkingHome: View {
     @State private var search = ""
     @State private var openedSession: ParkingSession?
     @State private var editingVehicle = false
+    @State private var addingVehicle = false
     private var active: ParkingSession? { store.sessions.first { $0.endedAt == nil } }
     private var previewSession: ParkingSession {
         var value = ParkingSession()
@@ -473,11 +555,16 @@ private struct ParkingHome: View {
                             TextField(tr("输入车牌，自动记住", "Plate — remembered automatically", "Plat — diingati automatik"), text: $plate)
                                 .textInputAutocapitalization(.characters).autocorrectionDisabled().font(.title3.bold())
                                 .onSubmit { store.rememberPlate(plate) }
-                            Button { store.rememberPlate(plate); editingVehicle = true } label: {
+                            Button { store.rememberPlate(plate); addingVehicle = false; editingVehicle = true } label: {
                                 Image(systemName: "slider.horizontal.3").padding(10).background(.quaternary, in: Circle())
                             }.accessibilityLabel(tr("编辑车辆和照片", "Edit vehicle and photo", "Ubah kenderaan dan foto"))
                                 .disabled(ParkingStore.plateKey(plate).isEmpty)
                         }
+                        Button {
+                            addingVehicle = true; editingVehicle = true
+                        } label: {
+                            Label(tr("添加车辆", "Add vehicle", "Tambah kenderaan"), systemImage: "plus.circle.fill")
+                        }.buttonStyle(.bordered)
                         Divider()
                         HStack(alignment: .top) {
                             Image(systemName: "location.fill").foregroundStyle(parkingAccent)
@@ -550,7 +637,9 @@ private struct ParkingHome: View {
             openedSession = active
         }))
         .sheet(isPresented: $editingVehicle) {
-            ParkingVehicleEditor(store: store, plate: plate, vehicle: store.vehicle(for: plate) ?? ParkingVehicle())
+            ParkingVehicleEditor(store: store, plate: addingVehicle ? "" : plate,
+                vehicle: addingVehicle ? ParkingVehicle() : (store.vehicle(for: plate) ?? ParkingVehicle()),
+                adding: addingVehicle, onSaved: { plate = $0 })
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: Binding(get: { openedSession != nil }, set: { if !$0 { openedSession = nil } })) {
@@ -581,6 +670,9 @@ private struct ParkingVehicleEditor: View {
     @ObservedObject var store: ParkingStore
     let plate: String
     @State var vehicle: ParkingVehicle
+    var adding = false
+    var onSaved: (String) -> Void = { _ in }
+    @State private var newPlate = ""
     @Environment(\.dismiss) private var dismiss
     @State private var error = ""
     @State private var selectedPhoto: PhotosPickerItem?
@@ -589,12 +681,19 @@ private struct ParkingVehicleEditor: View {
         NavigationStack {
             Form {
                 Section(plate) {
+                    if adding {
+                        TextField(tr("车牌号码", "Plate number", "Nombor plat"), text: $newPlate)
+                            .textInputAutocapitalization(.characters).autocorrectionDisabled()
+                    }
                     TextField(tr("品牌（例如 Perodua）", "Brand (e.g. Perodua)", "Jenama (cth. Perodua)"), text: $vehicle.brand)
                     TextField(tr("车型（例如 Myvi）", "Model (e.g. Myvi)", "Model (cth. Myvi)"), text: $vehicle.model)
                     TextField(tr("年份（可选）", "Year (optional)", "Tahun (pilihan)"), text: $vehicle.year).keyboardType(.numberPad)
                     Picker(tr("车身类型", "Body type", "Jenis badan"), selection: $vehicle.body) {
-                        Text(tr("轿车 / 掀背车", "Sedan / hatchback", "Sedan / hatchback")).tag("car")
-                        Text("SUV / MPV").tag("suv")
+                        Text(tr("通用车型（旧设置）", "Generic (legacy)", "Umum (lama)")).tag("car")
+                        Text("Hatchback · 掀背车").tag("hatchback")
+                        Text("Sedan · 三厢轿车").tag("sedan")
+                        Text("SUV").tag("suv")
+                        Text("MPV").tag("mpv")
                     }
                     Picker(tr("车身颜色", "Vehicle colour", "Warna kenderaan"), selection: $vehicle.color) {
                         Text(tr("银 / 灰", "Silver / grey", "Perak / kelabu")).tag("silver")
@@ -627,12 +726,18 @@ private struct ParkingVehicleEditor: View {
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button(tr("保存", "Save", "Simpan")) {
+                        let savedPlate = adding ? ParkingStore.plateKey(newPlate) : plate
+                        guard !ParkingStore.plateKey(savedPlate).isEmpty else { return }
+                        if adding && (store.vehicle(for: savedPlate) != nil || store.rememberedPlates.contains(where: { ParkingStore.plateKey($0) == savedPlate })) {
+                            error = tr("此车牌已存在，请通过换车选择。", "This plate already exists. Select it with Switch.", "Plat ini sudah ada. Pilih melalui Tukar.")
+                            return
+                        }
                         vehicle.brand = String(vehicle.brand.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
                         vehicle.model = String(vehicle.model.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
                         vehicle.year = String(vehicle.year.filter(\.isNumber).prefix(4))
-                        do { try store.saveVehicle(vehicle, plate: plate); dismiss() }
+                        do { try store.saveVehicle(vehicle, plate: savedPlate); onSaved(savedPlate); dismiss() }
                         catch { self.error = error.localizedDescription }
-                    }.disabled(loadingPhoto || vehicle.brand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vehicle.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.disabled(loadingPhoto || (adding && ParkingStore.plateKey(newPlate).isEmpty))
                 }
             }
             .task(id: selectedPhoto) {

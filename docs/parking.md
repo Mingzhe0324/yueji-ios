@@ -36,3 +36,11 @@ Device acceptance checks:
 - Import a photo and a receipt; confirm no payment is marked until explicitly confirmed.
 - Save a parking expense with an existing same-day/same-amount payment; review duplicates, cancel/reopen and save once.
 - Switch accounts; verify records remain isolated and old reminders are cleared.
+# Vehicle selection and 3D illustrations
+
+The idle parking screen offers Add vehicle and Switch. Adding uses a separate draft, checks normalized plates for duplicates, and selects the new vehicle only after saving. A plate is required; brand, model and photo are optional.
+
+Without a personal photo, a local SceneKit illustration reflects the selected hatchback, sedan, SUV or MPV body and colour. These are generic stylized models, not manufacturer replicas. Tap Rotate 3D to enable camera control, then Done to return to normal scrolling. The scene has no continuous rotation. Old `car` body values remain supported. Personal photos retain priority.
+
+Windows validation covers syntax and bundled resources; native rendering and interaction still require iOS validation.
+
