@@ -11,6 +11,37 @@ const company = () => ({symbol,summary:'示例分析',period:'2026',action:'cons
 const candidate = c => ({finishReason:'STOP',content:{parts:[{text:JSON.stringify({companies:[c]})}]}});
 const json = value => new Response(JSON.stringify(value));
 
+test('repairs mismatched quotes once, revalidates and caches only the accepted candidate', async () => {
+  for (const repairWorks of [true, false]) {
+    let modelCalls=0, quotaCalls=0, saved;
+    const bad=company(); bad.dimensions[0].evidence[0].quote='A fabricated quotation from nowhere';
+    const good=candidate(company());
+    const deps={env:k=>({SUPABASE_URL:'https://test.invalid',SUPABASE_ANON_KEY:'anon',INVESTMENT_RESEARCH_USER_ID:'owner',GEMINI_RESEARCH_API_KEY:'key',GEMINI_RESEARCH_MODEL:'gemini-test',INVESTMENT_RESEARCH_CACHE:'true'})[k],fetch:async(u,o)=>{
+      if(u.endsWith('/auth/v1/user'))return json({id:'owner'});
+      if(u.startsWith('https://99speedmart.com.my/'))return new Response(html,{headers:{'Content-Type':'text/html'}});
+      if(u.endsWith('/read_investment_report'))return json(null);
+      if(u.endsWith('/claim_investment_research')){quotaCalls++;return json(true);}
+      if(u.includes('googleapis')){
+        modelCalls++;
+        if(modelCalls===2){
+          const body=JSON.parse(o.body);
+          assert.match(body.systemInstruction.parts[0].text,/untrusted data/);
+          assert.equal(JSON.parse(body.contents[0].parts[0].text).evidence[0].text,source.text);
+        }
+        return json({candidates:[modelCalls===2&&repairWorks?good:candidate(bad)]});
+      }
+      if(u.endsWith('/save_investment_report')){saved=JSON.parse(o.body).report_value;return json(null);}
+      throw new Error('unexpected request');
+    }};
+    const response=await handleResearch(new Request('https://test.invalid',{method:'POST',headers:{Authorization:'Bearer user','Content-Type':'application/json'},body:JSON.stringify({symbols:[symbol]})}),deps);
+    assert.equal(modelCalls,2); assert.equal(quotaCalls,1);
+    assert.equal(response.status,repairWorks?200:422);
+    const value=await response.json();
+    if(repairWorks){assert.deepEqual(saved.candidate,good);assert.ok(!value.text.includes('fabricated'));}
+    else{assert.equal(saved,undefined);assert.equal(value.reason,'quote_mismatch');}
+  }
+});
+
 test('accepts whitespace-only citation differences and restores original text', () => {
   const original = 'Revenue\n2026\u00a0quarter   profit 99 Speed Mart';
   const result = evidenceReport(candidate(company()), [symbol], [{...source,text:original}]);
