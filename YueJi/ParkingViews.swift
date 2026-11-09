@@ -12,6 +12,7 @@ struct ParkingVehicle: Codable, Equatable {
     var year = ""
     var color = "silver"
     var body = "car"
+    var photo: Data?
     var title: String { [brand, model, year].filter { !$0.isEmpty }.joined(separator: " · ") }
     var tint: Color {
         switch color {
@@ -32,6 +33,33 @@ private struct ParkingActionStyle: ButtonStyle {
             .foregroundStyle(.white)
             .background(parkingAccent, in: Capsule())
             .opacity(configuration.isPressed ? 0.75 : 1)
+    }
+}
+
+private struct ParkingPaymentReturn: ViewModifier {
+    @ObservedObject var store: ParkingStore
+    let sessionID: String?
+    var enabled = true
+    let review: () -> Void
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var asking = false
+    private func check() {
+        asking = enabled && store.sessions.contains { $0.id == sessionID && $0.endedAt == nil && $0.awaitingPaymentReview == true }
+    }
+    private func clear() {
+        guard var session = store.sessions.first(where: { $0.id == sessionID }) else { return }
+        session.awaitingPaymentReview = false
+        try? store.save(session)
+    }
+    func body(content: Content) -> some View {
+        content.onAppear { check() }
+            .onChange(of: scenePhase) { _, phase in if phase == .active { check() } }
+            .confirmationDialog(tr("已在 TNG 完成付款？", "Did you pay in TNG?", "Sudah bayar dalam TNG?"), isPresented: $asking, titleVisibility: .visible) {
+                Button(tr("已付款，核对资料", "Paid — review details", "Sudah bayar — semak butiran")) { clear(); review() }
+                Button(tr("还没付款", "Not paid yet", "Belum bayar"), role: .cancel) { clear() }
+            } message: {
+                Text(tr("请核对收据金额与到期时间，确认后再记账。", "Check the receipt amount and expiry before recording the expense.", "Semak amaun resit dan masa tamat sebelum merekod belanja."))
+            }
     }
 }
 
@@ -67,10 +95,14 @@ private struct ParkingMapCard: View {
                         RoundedRectangle(cornerRadius: 24).strokeBorder(.secondary.opacity(0.15), style: StrokeStyle(lineWidth: 2, dash: [10]))
                             .padding(30)
                         VStack(spacing: 12) {
+                            if let data = shownVehicle?.photo, let image = UIImage(data: data) {
+                                Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 120)
+                            } else {
                             Image(systemName: shownVehicle?.body == "suv" ? "suv.side.fill" : "car.side.fill")
                                 .font(.system(size: 76, weight: .light))
                                 .foregroundStyle(shownVehicle?.tint ?? .gray)
                                 .shadow(color: .black.opacity(0.25), radius: 2, y: 2)
+                            }
                             Text(tr("车辆示意图", "Vehicle illustration", "Ilustrasi kenderaan"))
                                 .font(.caption).foregroundStyle(.secondary)
                         }.offset(y: -18)
@@ -83,13 +115,15 @@ private struct ParkingMapCard: View {
                     .background(.regularMaterial, in: Capsule()).padding(16)
             }.frame(height: 250).clipShape(RoundedRectangle(cornerRadius: 30))
             HStack(spacing: 12) {
-                Image(systemName: "car.fill").font(.title2)
+                if let data = shownVehicle?.photo, let image = UIImage(data: data) {
+                    Image(uiImage: image).resizable().scaledToFit().frame(width: 64, height: 48).clipShape(RoundedRectangle(cornerRadius: 8))
+                } else { Image(systemName: "car.fill").font(.title2) }
                 VStack(alignment: .leading, spacing: 4) {
                     Text(session?.plate.isEmpty == false ? session!.plate : tr("我的车辆", "My vehicle", "Kenderaan saya")).font(.headline)
                     if let vehicle = shownVehicle, !vehicle.title.isEmpty {
                         Text(vehicle.title).font(.subheadline).lineLimit(2)
                     }
-                    Text(session?.bay.isEmpty == false ? session!.bay : tr("记录车位 · 计时 · 找车", "Save your bay · track time · find car", "Simpan petak · kira masa · cari kereta"))
+                    Text(session?.spotLabel.isEmpty == false ? session!.spotLabel : tr("记录车位 · 计时 · 找车", "Save your bay · track time · find car", "Simpan petak · kira masa · cari kereta"))
                         .font(.caption)
                 }
                 Spacer()
@@ -121,6 +155,11 @@ private struct ParkingTimerDial: View {
                     Text("\(minutes / 60) h \(minutes % 60) min").font(.title.bold().monospacedDigit())
                     Text(session.endedAt == nil ? tr("已停时长", "Time parked", "Tempoh parkir") : tr("总停车时长", "Total parking time", "Jumlah tempoh parkir"))
                         .font(.caption).foregroundStyle(.secondary)
+                    if session.endedAt == nil, let end = session.paidUntil {
+                        let remaining = max(0, Int(ceil(end.timeIntervalSince(context.date) / 60)))
+                        Text(remaining > 0 ? tr("剩余", "Remaining", "Baki") + " \(remaining) min" : tr("已到期", "Expired", "Tamat"))
+                            .font(.headline).foregroundStyle(parkingAccent)
+                    }
                 }
             }.frame(width: 220, height: 220).padding(18).frame(maxWidth: .infinity)
         }
@@ -175,6 +214,19 @@ struct ParkingSession: Codable, Identifiable {
     var paidCents: Int?
     var reminderMinutes = 10
     var expenseID: String?
+    var renewalExpenseIDs: [String]?
+    var floor: String?
+    var zone: String?
+    var awaitingPaymentReview: Bool?
+    var spotLabel: String { [floor ?? "", zone ?? "", bay].filter { !$0.isEmpty }.joined(separator: " · ") }
+    var ledgerIDs: [String] { (expenseID.map { [$0] } ?? []) + (renewalExpenseIDs ?? []) }
+    func renewalDifference(expenses: [Expense]) -> Int? {
+        guard !ledgerIDs.isEmpty, Set(ledgerIDs).count == ledgerIDs.count, let total = paidCents else { return nil }
+        let linked = expenses.filter { ledgerIDs.contains($0.id) }
+        guard linked.count == ledgerIDs.count else { return nil }
+        let difference = total - linked.reduce(0) { $0 + $1.cents }
+        return difference > 0 ? difference : nil
+    }
     var notificationID: String { "parking." + id }
     func durationMinutes(now: Date) -> Int {
         max(0, Int((endedAt ?? now).timeIntervalSince(startedAt) / 60))
@@ -336,6 +388,9 @@ private struct ParkingHome: View {
     }
     init(scope: String) { _store = StateObject(wrappedValue: ParkingStore(scope: scope)) }
     private func launchTNG() {
+        guard var session = active else { return }
+        session.awaitingPaymentReview = true
+        do { try store.save(session) } catch { self.error = error.localizedDescription; return }
         openURL(URL(string: "https://visit.tngdigital.com.my/StreetParking")!) { accepted in
             if !accepted { error = tr("无法打开 TNG，请手动打开 eWallet 的 Parking。记录已保存。", "Open Parking in TNG manually. Your record is saved.", "Buka Parking dalam TNG sendiri. Rekod telah disimpan.") }
         }
@@ -364,7 +419,7 @@ private struct ParkingHome: View {
     var body: some View {
         List {
             Section {
-                ParkingMapCard(session: active, vehicle: store.vehicle(for: plate))
+                if active == nil { ParkingMapCard(session: nil, vehicle: store.vehicle(for: plate)) }
             }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             Section {
                 Text(tr("保存车位、停车计时、前往 TNG 缴费。记录仅保存在这台设备，不随账本同步。", "Save your bay, track time and pay through TNG. Parking records stay on this device and do not sync with the ledger.", "Simpan petak, kira masa dan bayar melalui TNG. Rekod parkir hanya pada peranti ini, tidak disegerak dengan lejar."))
@@ -372,7 +427,18 @@ private struct ParkingHome: View {
             }
             if let session = active {
                 Section(tr("正在停车", "Current parking", "Parkir semasa")) {
+                    ParkingTimerDial(session: session)
                     ParkingStatus(session: session)
+                    Text(session.spotLabel).font(.headline)
+                    if let place = session.place, let lat = place.latitude, let lon = place.longitude {
+                        Button(tr("地图找车", "Find car on map", "Cari kereta pada peta")) {
+                            MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+                                .openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeWalking])
+                        }
+                    }
+                    if session.paidCents != nil {
+                        Button(tr("核对停车账目", "Review parking expense", "Semak belanja parkir")) { openedSession = session }
+                    }
                     Button(tr("管理停车 · 找车 / 续费 / 结束", "Manage · find car / renew / end", "Urus · cari kereta / lanjut / tamat")) { openedSession = session }
                         .buttonStyle(ParkingActionStyle())
                         .disabled(startingID != nil)
@@ -439,6 +505,9 @@ private struct ParkingHome: View {
             }.font(.footnote)
         }
         .listStyle(.insetGrouped).tint(parkingAccent)
+        .modifier(ParkingPaymentReturn(store: store, sessionID: active?.id, enabled: openedSession == nil, review: {
+            openedSession = active
+        }))
         .sheet(isPresented: $editingVehicle) {
             ParkingVehicleEditor(store: store, plate: plate, vehicle: store.vehicle(for: plate) ?? ParkingVehicle())
         }
@@ -465,6 +534,8 @@ private struct ParkingVehicleEditor: View {
     @State var vehicle: ParkingVehicle
     @Environment(\.dismiss) private var dismiss
     @State private var error = ""
+    @State private var selectedPhoto: PhotosPickerItem?
+    @State private var loadingPhoto = false
     var body: some View {
         NavigationStack {
             Form {
@@ -486,8 +557,15 @@ private struct ParkingVehicleEditor: View {
                     }
                 }
                 Section {
+                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
+                        Label(tr("选择自己的车辆照片", "Choose your vehicle photo", "Pilih foto kenderaan sendiri"), systemImage: "photo")
+                    }.disabled(loadingPhoto)
+                    if vehicle.photo != nil {
+                        Button(tr("移除车辆照片", "Remove vehicle photo", "Buang foto kenderaan")) { vehicle.photo = nil; selectedPhoto = nil }
+                    }
+                    if loadingPhoto { ProgressView() }
                     ParkingMapCard(session: nil, vehicle: vehicle)
-                    Text(tr("资料由你填写并绑定车牌。目前按车身类型和颜色显示示意图，不是品牌车型的精确外观。", "Your details are saved against this plate. The illustration uses body type and colour, not the exact model design.", "Butiran disimpan mengikut plat ini. Ilustrasi menggunakan jenis badan dan warna, bukan reka bentuk model tepat."))
+                    Text(tr("资料和照片绑定车牌保存。未选照片时，按车身类型和颜色显示示意图。", "Details and photos are saved against this plate. Without a photo, body type and colour provide an illustration.", "Butiran dan foto disimpan mengikut plat. Tanpa foto, jenis badan dan warna digunakan sebagai ilustrasi."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !error.isEmpty { Text(error).foregroundStyle(.red) }
@@ -505,7 +583,23 @@ private struct ParkingVehicleEditor: View {
                         vehicle.year = String(vehicle.year.filter(\.isNumber).prefix(4))
                         do { try store.saveVehicle(vehicle, plate: plate); dismiss() }
                         catch { self.error = error.localizedDescription }
-                    }.disabled(vehicle.brand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vehicle.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }.disabled(loadingPhoto || vehicle.brand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vehicle.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
+            .task(id: selectedPhoto) {
+                guard let selectedPhoto else { return }
+                loadingPhoto = true; defer { loadingPhoto = false }
+                do {
+                    guard let data = try await selectedPhoto.loadTransferable(type: Data.self), data.count <= 20_000_000,
+                          let image = UIImage(data: data) else { throw CloudFailure.invalidResponse }
+                    let scale = min(1, 900 / max(image.size.width, image.size.height))
+                    let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+                    let format = UIGraphicsImageRendererFormat(); format.scale = 1
+                    let resized = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
+                    try Task.checkCancellation()
+                    vehicle.photo = resized.jpegData(compressionQuality: 0.75)
+                } catch is CancellationError {} catch {
+                    self.error = tr("无法读取照片", "Unable to read photo", "Tidak dapat membaca foto")
                 }
             }
         }
@@ -529,13 +623,29 @@ private struct ParkingDetail: View {
     @State private var ending = false
     @State private var initialized = false
     @State private var expenseDraft: Expense?
+    @State private var editingExpense = false
+    private var linkedExpenses: [Expense] { model.ledger.expenses.filter { session.ledgerIDs.contains($0.id) } }
+    private func launchTNG() {
+        session.awaitingPaymentReview = true
+        do { try store.save(session) } catch { message = error.localizedDescription; return }
+        openURL(URL(string: "https://visit.tngdigital.com.my/StreetParking")!)
+    }
+    private func prepareRenewal() {
+        guard let difference = session.renewalDifference(expenses: model.ledger.expenses) else {
+            message = tr("累计费用没有增加，请核对已有账目。", "The total has not increased. Review existing entries.", "Jumlah tidak meningkat. Semak rekod sedia ada."); return
+        }
+        editingExpense = false
+        var draft = Expense(merchant: session.name.isEmpty ? "Parking" : session.name, cents: difference, date: Date(), category: "交通", source: "手动")
+        draft.note = tr("停车续费差额；请核对本次付款金额和时间。", "Parking renewal difference; verify this payment amount and time.", "Perbezaan lanjutan parkir; semak amaun dan masa bayaran ini.")
+        expenseDraft = draft
+    }
     private func save() { do { try store.save(session); message = tr("已保存", "Saved", "Disimpan") } catch { message = error.localizedDescription } }
     private func confirmPayment() {
         guard until > Date(), until > session.startedAt else { message = tr("请选择未来的结束时间", "Choose a future end time", "Pilih masa tamat akan datang"); return }
         do {
             let cents: Int? = amount.isEmpty ? nil : try toCents(amount)
             if let cents, cents <= 0 { throw LedgerError.invalid(tr("金额必须大于零", "Amount must be positive", "Amaun mesti positif")) }
-            var updated = session; updated.paidUntil = until; updated.paidCents = cents
+            var updated = session; updated.paidUntil = until; updated.paidCents = cents; updated.awaitingPaymentReview = false
             try store.save(updated); session = updated; busy = true
             Task { @MainActor in
                 defer { busy = false }
@@ -551,6 +661,7 @@ private struct ParkingDetail: View {
         var draft = Expense(merchant: session.name.isEmpty ? "Parking" : session.name, cents: cents, date: session.startedAt, category: "交通", source: "手动")
         draft.note = tr("停车费用；请核对付款时间、账户和已有记录。", "Parking fee; verify payment time, account and existing entries.", "Bayaran parkir; semak masa, akaun dan rekod sedia ada.")
         // Use the existing screenshot duplicate-review flow; no ledger entry is created here.
+        editingExpense = false
         expenseDraft = draft
     }
     var body: some View {
@@ -577,7 +688,10 @@ private struct ParkingDetail: View {
             Section(tr("我的车位", "My parking spot", "Tempat kereta saya")) {
                 TextField(tr("车牌", "Plate", "Plat"), text: $session.plate)
                 TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $session.name)
-                TextField(tr("楼层 / 区域 / 车位号", "Floor / zone / bay", "Tingkat / zon / petak"), text: $session.bay)
+                Text(session.spotLabel).font(.headline)
+                TextField(tr("楼层", "Floor", "Tingkat"), text: Binding(get: { session.floor ?? "" }, set: { session.floor = String($0.prefix(40)) }))
+                TextField(tr("区域", "Zone", "Zon"), text: Binding(get: { session.zone ?? "" }, set: { session.zone = String($0.prefix(60)) }))
+                TextField(tr("车位号 / 原车位备注", "Bay / previous spot notes", "Petak / nota tempat lama"), text: $session.bay)
                 if let place = session.place, let lat = place.latitude, let lon = place.longitude {
                     Text(place.name).font(.caption)
                     Button(tr("地图找车", "Find car on map", "Cari kereta pada peta")) {
@@ -595,7 +709,7 @@ private struct ParkingDetail: View {
             }
             if session.endedAt == nil {
                 Section(tr("缴费与提醒", "Payment and reminder", "Bayaran dan peringatan")) {
-                    Link(tr("前往 TNG 停车缴费", "Open TNG parking", "Buka parkir TNG"), destination: URL(string: "https://visit.tngdigital.com.my/StreetParking")!)
+                    Button(tr("前往 TNG 停车缴费", "Open TNG parking", "Buka parkir TNG"), action: launchTNG)
                     Text(tr("跳转不会确认付款。请按 TNG 收据核对以下资料。", "Opening TNG does not confirm payment. Check these fields against your receipt.", "Membuka TNG tidak mengesahkan bayaran. Semak medan dengan resit.")) .font(.caption)
                     PhotosPicker(selection: $receipt, matching: .images) { Text(tr("识别付款截图（本机）", "Read payment screenshot (on device)", "Baca tangkap layar bayaran (pada peranti)")) }.disabled(busy)
                     if !receiptText.isEmpty {
@@ -614,7 +728,7 @@ private struct ParkingDetail: View {
                     }
                     DatePicker(tr("已付费至", "Paid until", "Dibayar sehingga"), selection: $until)
                     TextField(tr("累计付款金额 MYR（可选）", "Total paid MYR (optional)", "Jumlah dibayar MYR (pilihan)"), text: $amount).keyboardType(.decimalPad)
-                    Text(tr("续费后填写累计金额，并更新到期时间；已记账的消费需要到账本修改。", "After renewal, enter the total paid and new expiry. Update any saved expense in Ledger.", "Selepas lanjutan, isi jumlah bayaran dan tamat baharu. Kemas kini belanja tersimpan dalam Lejar."))
+                    Text(tr("续费后填写累计金额和新到期时间，再在下方更新原账目或记录续费差额。", "After renewal, enter the cumulative total and new expiry, then update an existing entry or record the difference below.", "Selepas lanjutan, isi jumlah terkumpul dan tamat baharu, kemudian kemas kini rekod atau rekod perbezaan di bawah."))
                         .font(.caption).foregroundStyle(.secondary)
                     Picker(tr("提前提醒", "Remind before", "Ingatkan sebelum"), selection: $session.reminderMinutes) {
                         ForEach([5, 10, 15], id: \.self) { Text("\($0) min").tag($0) }
@@ -623,7 +737,7 @@ private struct ParkingDetail: View {
                         .buttonStyle(ParkingActionStyle()).disabled(busy)
                 }
             }
-            if session.endedAt != nil && session.expenseID == nil {
+            if session.endedAt != nil {
                 Section(tr("补录停车费用", "Add final parking fee", "Tambah bayaran akhir parkir")) {
                     TextField(tr("累计付款金额 MYR", "Total paid MYR", "Jumlah dibayar MYR"), text: $amount).keyboardType(.decimalPad)
                     Button(tr("保存费用", "Save fee", "Simpan bayaran")) {
@@ -639,6 +753,14 @@ private struct ParkingDetail: View {
             Section {
                 if let id = session.expenseID {
                     Text(model.ledger.expenses.contains(where: { $0.id == id }) ? tr("已保存到账本", "Saved to ledger", "Disimpan dalam lejar") : tr("曾保存到账本，原记录已不在当前账本中。", "Previously saved; the entry is no longer in this ledger.", "Pernah disimpan; rekod tiada lagi dalam lejar ini."))
+                    ForEach(linkedExpenses) { entry in
+                        Button(tr("查看 / 修改停车账目", "Review / edit parking expense", "Semak / ubah belanja parkir") + " · " + money(entry.cents)) {
+                            editingExpense = true; expenseDraft = entry
+                        }
+                    }
+                    if linkedExpenses.count == session.ledgerIDs.count {
+                        Button(tr("新增续费差额", "Record renewal difference", "Rekod perbezaan lanjutan"), action: prepareRenewal)
+                    }
                 } else if session.paidCents != nil {
                     Button(tr("核对并记账", "Review and record expense", "Semak dan rekod belanja"), action: prepareExpense)
                 }
@@ -651,6 +773,13 @@ private struct ParkingDetail: View {
             }
         }.navigationTitle(tr("停车详情", "Parking details", "Butiran parkir"))
         .tint(parkingAccent).navigationBarTitleDisplayMode(.inline)
+        .modifier(ParkingPaymentReturn(store: store, sessionID: session.id, review: {
+            session.awaitingPaymentReview = false
+            message = tr("请核对缴费金额和到期时间，再确认并记账。", "Review amount and expiry in Payment and reminder, then confirm and record.", "Semak amaun dan tamat dalam Bayaran dan peringatan, kemudian sahkan dan rekod.")
+        }))
+        .onChange(of: store.sessions.first(where: { $0.id == session.id })?.awaitingPaymentReview) { _, value in
+            session.awaitingPaymentReview = value
+        }
         .onAppear {
             guard !initialized else { return }; initialized = true
             until = session.paidUntil ?? Date().addingTimeInterval(3600)
@@ -688,8 +817,13 @@ private struct ParkingDetail: View {
             } catch is CancellationError { } catch { message = tr("截图识别失败，请手动填写", "Screenshot recognition failed; enter details manually", "Pengecaman gagal; isi butiran sendiri") }
         }
         .sheet(item: $expenseDraft) { draft in
-            ExpenseEditor(original: nil, initialDraft: draft, reviewDuplicates: true, onSaved: {
-                session.expenseID = draft.id; save()
+            ExpenseEditor(original: editingExpense ? draft : nil, initialDraft: editingExpense ? nil : draft, reviewDuplicates: true, onSaved: {
+                if !editingExpense {
+                    if session.expenseID == nil { session.expenseID = draft.id }
+                    else if !session.ledgerIDs.contains(draft.id) { session.renewalExpenseIDs = (session.renewalExpenseIDs ?? []) + [draft.id] }
+                }
+                session.awaitingPaymentReview = false
+                save()
             })
         }
         .alert(tr("删除停车记录？", "Delete parking record?", "Padam rekod parkir?"), isPresented: $deleting) {

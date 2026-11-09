@@ -14,7 +14,9 @@ Records contain start/end times, optional plate, car park, bay, GPS place and a 
 
 Paid-until time and optional amount are explicitly confirmed by the user. Receipt screenshots use on-device OCR; amount, labeled location and full end-date/time candidates require selection and confirmation. No TNG credentials, payment API or order synchronization are used. Reminder permission is requested when confirming payment. A reminder already in the past is not scheduled. Ending/deleting cancels the session notification. Switching ledger accounts clears pending notifications; returning to an account requires confirming its reminder again.
 
-“Review and record expense” opens the existing ledger editor with duplicate review and payment-account selection. The actual save also validates matching records. Deleting a parking record leaves its ledger expense intact. Renewed fees are not automatically added to a previously saved ledger expense.
+“Review and record expense” opens the existing ledger editor with duplicate review and payment-account selection. The actual save also validates matching records. Deleting a parking record leaves its ledger expense intact. Existing linked entries can be opened for editing. A renewal draft uses the confirmed cumulative total less the amounts of all linked expenses, and requires duplicate review. Missing linked entries or a nonpositive difference prevent a new renewal draft. No expense changes occur without saving in the ledger editor.
+
+Opening TNG marks the session as awaiting review. On returning to the foreground (or reopening the parking screen), the user can confirm they paid or dismiss as not paid. This prompt never proves payment or writes a ledger expense. Floor and zone are separate optional fields alongside legacy bay notes. Vehicle profiles can store a resized personal photo; no exact-model image service is connected. The active home screen prioritizes the timer, remaining confirmed minutes, plate and spot details.
 
 ## Validation
 

@@ -6,6 +6,20 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testParkingRenewalOnlyRecordsUnrecordedDifference() {
+        let first = Expense(merchant: "Parking", cents: 300, date: Date())
+        let renewal = Expense(merchant: "Parking", cents: 200, date: Date())
+        var session = ParkingSession()
+        session.expenseID = first.id; session.paidCents = 500
+        XCTAssertEqual(session.renewalDifference(expenses: [first]), 200)
+        session.renewalExpenseIDs = [renewal.id]
+        XCTAssertNil(session.renewalDifference(expenses: [first, renewal]))
+        session.paidCents = 600
+        XCTAssertEqual(session.renewalDifference(expenses: [first, renewal]), 100)
+        XCTAssertNil(session.renewalDifference(expenses: [first]))
+        session.paidCents = 200
+        XCTAssertNil(session.renewalDifference(expenses: [first, renewal]))
+    }
     func testParkingVehiclePreservesOldSessionsAndSnapshots() throws {
         var session = ParkingSession()
         let legacy = try JSONEncoder().encode(session)
