@@ -4,7 +4,7 @@ import MapKit
 import UserNotifications
 import CryptoKit
 
-private let parkingAccent = Color(red: 1, green: 0.32, blue: 0.035)
+private let parkingAccent = Color(red: 0.12, green: 0.65, blue: 0.39)
 
 struct ParkingVehicle: Codable, Equatable {
     var brand = ""
@@ -27,12 +27,15 @@ struct ParkingVehicle: Codable, Equatable {
 }
 
 private struct ParkingActionStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.headline)
             .frame(maxWidth: .infinity, minHeight: 52)
             .foregroundStyle(.white)
             .background(parkingAccent, in: Capsule())
             .opacity(configuration.isPressed ? 0.75 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.97 : 1)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: configuration.isPressed)
     }
 }
 
@@ -53,6 +56,7 @@ private struct ParkingPaymentReturn: ViewModifier {
     }
     func body(content: Content) -> some View {
         content.onAppear { check() }
+            .onChange(of: sessionID) { _, _ in check() }
             .onChange(of: scenePhase) { _, phase in if phase == .active { check() } }
             .confirmationDialog(tr("已在 TNG 完成付款？", "Did you pay in TNG?", "Sudah bayar dalam TNG?"), isPresented: $asking, titleVisibility: .visible) {
                 Button(tr("已付款，核对资料", "Paid — review details", "Sudah bayar — semak butiran")) { clear(); review() }
@@ -69,73 +73,57 @@ private struct ParkingMapCard: View {
     var vehicle: ParkingVehicle? = nil
     private var shownVehicle: ParkingVehicle? { session?.vehicle ?? vehicle }
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            HStack(alignment: .top) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(tr("每一次停靠", "Every stop", "Setiap persinggahan"))
-                        .font(.title2.weight(.light)).foregroundStyle(.secondary)
-                    Text(tr("都有迹可寻", "Find your way back", "Cari jalan kembali"))
-                        .font(.largeTitle.bold())
+        VStack(spacing: 0) {
+            if let place = session?.place, let latitude = place.latitude, let longitude = place.longitude {
+                let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
+                Map(initialPosition: .region(MKCoordinateRegion(center: coordinate,
+                    span: MKCoordinateSpan(latitudeDelta: 0.004, longitudeDelta: 0.004))), interactionModes: [.pan, .zoom]) {
+                    Marker(session?.name.isEmpty == false ? session!.name : place.name, systemImage: "parkingsign", coordinate: coordinate).tint(parkingAccent)
                 }
-                Spacer(minLength: 8)
-                Image(systemName: "parkingsign").font(.title2.bold()).foregroundStyle(.white)
-                    .frame(width: 52, height: 52).background(parkingAccent, in: Circle())
+                .id("\(latitude),\(longitude)")
+                .frame(height: 190)
+                .accessibilityLabel(tr("停车位置地图", "Parking location map", "Peta lokasi parkir"))
             }
-            ZStack(alignment: .bottomLeading) {
-                if let place = session?.place, let latitude = place.latitude, let longitude = place.longitude {
-                    let coordinate = CLLocationCoordinate2D(latitude: latitude, longitude: longitude)
-                    Map(initialPosition: .region(MKCoordinateRegion(center: coordinate,
-                        span: MKCoordinateSpan(latitudeDelta: 0.006, longitudeDelta: 0.006))), interactionModes: []) {
-                        Marker(session?.name.isEmpty == false ? session!.name : place.name, systemImage: "car.fill", coordinate: coordinate)
-                            .tint(parkingAccent)
-                    }.accessibilityLabel(tr("已记录的停车位置", "Recorded parking location", "Lokasi parkir direkodkan"))
-                } else {
-                    ZStack {
-                        Color(uiColor: .tertiarySystemGroupedBackground)
-                        RoundedRectangle(cornerRadius: 24).strokeBorder(.secondary.opacity(0.15), style: StrokeStyle(lineWidth: 2, dash: [10]))
-                            .padding(30)
-                        VStack(spacing: 12) {
-                            if let data = shownVehicle?.photo, let image = UIImage(data: data) {
-                                Image(uiImage: image).resizable().scaledToFit().frame(maxHeight: 120)
-                            } else {
-                            Image(systemName: shownVehicle?.body == "suv" ? "suv.side.fill" : "car.side.fill")
-                                .font(.system(size: 76, weight: .light))
-                                .foregroundStyle(shownVehicle?.tint ?? .gray)
-                                .shadow(color: .black.opacity(0.25), radius: 2, y: 2)
-                            }
-                            Text(tr("车辆示意图", "Vehicle illustration", "Ilustrasi kenderaan"))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }.offset(y: -18)
+            VStack(alignment: .leading, spacing: 14) {
+                Group {
+                    if let data = shownVehicle?.photo, let image = UIImage(data: data) {
+                        Image(uiImage: image).resizable().scaledToFit()
+                    } else {
+                        Image("ParkingCarHero").resizable().scaledToFit()
                     }
-                }
-                Label(session?.place == nil
-                    ? tr("开始停车后记录位置", "Save a location when you park", "Simpan lokasi apabila parkir")
-                    : tr("我的停车位置", "My parked car", "Lokasi kereta saya"), systemImage: "location.fill")
-                    .font(.subheadline.weight(.semibold)).padding(12)
-                    .background(.regularMaterial, in: Capsule()).padding(16)
-            }.frame(height: 250).clipShape(RoundedRectangle(cornerRadius: 30))
-            HStack(spacing: 12) {
-                if let data = shownVehicle?.photo, let image = UIImage(data: data) {
-                    Image(uiImage: image).resizable().scaledToFit().frame(width: 64, height: 48).clipShape(RoundedRectangle(cornerRadius: 8))
-                } else { Image(systemName: "car.fill").font(.title2) }
-                VStack(alignment: .leading, spacing: 4) {
-                    Text(session?.plate.isEmpty == false ? session!.plate : tr("我的车辆", "My vehicle", "Kenderaan saya")).font(.headline)
-                    if let vehicle = shownVehicle, !vehicle.title.isEmpty {
-                        Text(vehicle.title).font(.subheadline).lineLimit(2)
+                }.frame(maxWidth: .infinity).frame(height: 170)
+                    .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 20))
+                    .clipShape(RoundedRectangle(cornerRadius: 20))
+                    .accessibilityLabel(shownVehicle?.photo == nil ? tr("默认车辆展示图", "Default vehicle illustration", "Ilustrasi kenderaan lalai") : tr("我的车辆照片", "My vehicle photo", "Foto kenderaan saya"))
+                HStack(alignment: .top) {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(shownVehicle?.title.isEmpty == false ? shownVehicle!.title : tr("我的车辆", "My vehicle", "Kenderaan saya"))
+                            .font(.title3.bold())
+                        if let plate = session?.plate, !plate.isEmpty {
+                            Text(plate).font(.subheadline.monospaced().weight(.semibold)).foregroundStyle(.secondary)
+                        }
                     }
-                    Text(session?.spotLabel.isEmpty == false ? session!.spotLabel : tr("记录车位 · 计时 · 找车", "Save your bay · track time · find car", "Simpan petak · kira masa · cari kereta"))
-                        .font(.caption)
+                    Spacer()
+                    Image(systemName: "car.side.fill").foregroundStyle(parkingAccent).padding(12)
+                        .background(parkingAccent.opacity(0.1), in: Circle())
                 }
-                Spacer()
-                Image(systemName: "arrow.down.right").font(.title2)
-            }.foregroundStyle(.white).padding(20)
-                .background(parkingAccent, in: RoundedRectangle(cornerRadius: 26))
-        }.padding(.vertical, 8)
+                if let name = session?.name, !name.isEmpty {
+                    Label(name, systemImage: "mappin.and.ellipse").font(.subheadline).foregroundStyle(.secondary)
+                }
+                if shownVehicle?.photo == nil {
+                    Text(tr("默认示意图 · 可在车辆设置换成自己的照片", "Default illustration · add your photo in vehicle settings", "Ilustrasi lalai · tambah foto dalam tetapan kenderaan"))
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
+            }.padding(18)
+        }.background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+            .clipShape(RoundedRectangle(cornerRadius: 28))
+            .shadow(color: .black.opacity(0.04), radius: 12, y: 5)
     }
 }
 
 private struct ParkingTimerDial: View {
     let session: ParkingSession
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         TimelineView(.periodic(from: .now, by: 60)) { context in
             let elapsed = max(0, (session.endedAt ?? context.date).timeIntervalSince(session.startedAt))
@@ -147,12 +135,15 @@ private struct ParkingTimerDial: View {
                     Circle().trim(from: 0, to: fraction)
                         .stroke(parkingAccent, style: StrokeStyle(lineWidth: 16, lineCap: .round))
                         .rotationEffect(.degrees(-90))
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.5), value: fraction)
                 }
                 VStack(spacing: 10) {
                     Image(systemName: session.endedAt == nil ? "hourglass" : "checkmark")
                         .font(.title2).foregroundStyle(parkingAccent)
                     let minutes = session.durationMinutes(now: context.date)
                     Text("\(minutes / 60) h \(minutes % 60) min").font(.title.bold().monospacedDigit())
+                        .contentTransition(.numericText())
+                        .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: minutes)
                     Text(session.endedAt == nil ? tr("已停时长", "Time parked", "Tempoh parkir") : tr("总停车时长", "Total parking time", "Jumlah tempoh parkir"))
                         .font(.caption).foregroundStyle(.secondary)
                     if session.endedAt == nil, let end = session.paidUntil {
@@ -368,6 +359,9 @@ private struct ParkingHome: View {
     @StateObject private var store: ParkingStore
     @StateObject private var locator = ExpensePlaceLocator()
     @Environment(\.openURL) private var openURL
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var locatedAt: Date?
+    @State private var automaticName = ""
     @State private var plate = ""
     @State private var name = ""
     @State private var bay = ""
@@ -379,6 +373,12 @@ private struct ParkingHome: View {
     @State private var openedSession: ParkingSession?
     @State private var editingVehicle = false
     private var active: ParkingSession? { store.sessions.first { $0.endedAt == nil } }
+    private var previewSession: ParkingSession {
+        var value = ParkingSession()
+        value.plate = plate; value.name = name; value.bay = bay
+        value.vehicle = store.vehicle(for: plate); value.place = locator.result
+        return value
+    }
     private var savedPlates: [String] {
         store.rememberedPlates
     }
@@ -401,9 +401,12 @@ private struct ParkingHome: View {
             var session = ParkingSession()
             session.plate = String(plate.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().prefix(20)); session.name = String(name.prefix(200)); session.bay = String(bay.prefix(200))
             session.vehicle = store.vehicle(for: plate)
+            if let locatedAt, Date().timeIntervalSince(locatedAt) < 60 { session.place = locator.result }
+            if session.place == nil && session.name == automaticName { session.name = "" }
             try store.save(session)
             startingID = session.id; goToTNG = tng; error = ""
-            locator.start()
+            if session.place != nil { finishLocation() }
+            else { locator.start(automatic: true) }
         } catch { self.error = error.localizedDescription }
     }
     private func finishLocation() {
@@ -411,100 +414,138 @@ private struct ParkingHome: View {
         startingID = nil
         if var session = store.sessions.first(where: { $0.id == id }) {
             session.place = locator.result
+            if session.name.isEmpty || session.name == automaticName { session.name = locator.result?.name ?? session.name }
             do { try store.save(session) } catch { self.error = error.localizedDescription }
         }
         if goToTNG { goToTNG = false; launchTNG() }
         else { openedSession = store.sessions.first { $0.id == id } }
     }
+    private var homeContent: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(active == nil ? tr("轻松停好，安心出发", "Park easy. Go freely.", "Parkir mudah. Teruskan perjalanan.") : tr("你的车，就在这里", "Your car is right here", "Kereta anda di sini"))
+                            .font(.title2.bold())
+                        Text(active == nil ? tr("选好车辆，位置自动填入", "Choose your car. Location fills itself.", "Pilih kereta. Lokasi diisi automatik.") : tr("计时、找车、缴费，一目了然", "Time, location and payment at a glance", "Masa, lokasi dan bayaran sepintas lalu"))
+                            .font(.subheadline).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "parkingsign").font(.title2.bold()).foregroundStyle(.white)
+                        .frame(width: 48, height: 48).background(parkingAccent, in: RoundedRectangle(cornerRadius: 16))
+                }
+                ParkingMapCard(session: active ?? previewSession)
+                if let session = active {
+                    VStack(spacing: 16) {
+                        ParkingTimerDial(session: session)
+                        HStack {
+                            Label(session.plate.isEmpty ? tr("我的车辆", "My car", "Kereta saya") : session.plate, systemImage: "car.side")
+                            Spacer()
+                            Text(session.paidCents.map { money($0) } ?? tr("待确认付款", "Payment unconfirmed", "Bayaran belum disahkan"))
+                        }.font(.subheadline.weight(.medium))
+                        if !session.spotLabel.isEmpty { Text(session.spotLabel).font(.headline) }
+                        HStack(spacing: 12) {
+                            if let place = session.place, let lat = place.latitude, let lon = place.longitude {
+                                Button {
+                                    MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
+                                        .openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeWalking])
+                                } label: { Label(tr("找车", "Find car", "Cari kereta"), systemImage: "location.fill") }
+                            }
+                            Spacer()
+                            Button(action: launchTNG) { Label(tr("缴费 / 续费", "Pay / renew", "Bayar / lanjut"), systemImage: "creditcard") }
+                        }.buttonStyle(.bordered).tint(parkingAccent).disabled(startingID != nil)
+                        Button { openedSession = session } label: {
+                            Text(tr("管理停车与记账", "Manage parking & expense", "Urus parkir dan belanja"))
+                        }.buttonStyle(ParkingActionStyle()).disabled(startingID != nil)
+                    }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+                } else {
+                    VStack(alignment: .leading, spacing: 16) {
+                        HStack {
+                            Label(tr("我的车辆", "My vehicle", "Kenderaan saya"), systemImage: "car.side.fill").font(.headline)
+                            Spacer()
+                            if !savedPlates.isEmpty {
+                                Menu(tr("换车", "Switch", "Tukar")) {
+                                    ForEach(savedPlates, id: \.self) { value in Button(value) { plate = value } }
+                                }
+                            }
+                        }
+                        HStack {
+                            TextField(tr("输入车牌，自动记住", "Plate — remembered automatically", "Plat — diingati automatik"), text: $plate)
+                                .textInputAutocapitalization(.characters).autocorrectionDisabled().font(.title3.bold())
+                                .onSubmit { store.rememberPlate(plate) }
+                            Button { store.rememberPlate(plate); editingVehicle = true } label: {
+                                Image(systemName: "slider.horizontal.3").padding(10).background(.quaternary, in: Circle())
+                            }.accessibilityLabel(tr("编辑车辆和照片", "Edit vehicle and photo", "Ubah kenderaan dan foto"))
+                                .disabled(ParkingStore.plateKey(plate).isEmpty)
+                        }
+                        Divider()
+                        HStack(alignment: .top) {
+                            Image(systemName: "location.fill").foregroundStyle(parkingAccent)
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(name.isEmpty ? (locator.busy ? tr("正在查找位置", "Finding your location", "Mencari lokasi anda") : tr("暂未获取位置", "Location not available", "Lokasi belum tersedia")) : name).font(.headline)
+                                Text(locator.result == nil ? tr("可重试定位，也可直接开始", "Retry location or start now", "Cuba lokasi lagi atau mula sekarang") : tr("自动定位附近地址，可修改", "Nearby address detected; editable", "Alamat berdekatan dikesan; boleh diubah"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            if locator.busy { ProgressView() }
+                            else { Button { name = ""; locator.start(automatic: true) } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel(tr("重新定位", "Refresh location", "Segarkan lokasi")) }
+                        }
+                        DisclosureGroup(tr("修改位置 / 补充车位（可选）", "Edit location / add bay (optional)", "Ubah lokasi / tambah petak (pilihan)")) {
+                            VStack(spacing: 12) {
+                                TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $name)
+                                TextField(tr("楼层 / 区域 / 车位号", "Floor / zone / bay", "Tingkat / zon / petak"), text: $bay)
+                                Text(tr("楼层和车位号可稍后补充。", "Add floor and bay later if needed.", "Tambah tingkat dan petak kemudian jika perlu.")).font(.caption).foregroundStyle(.secondary)
+                            }.padding(.top, 10)
+                        }.font(.subheadline)
+                    }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+                }
+                if startingID != nil {
+                    VStack(spacing: 10) {
+                        ProgressView(tr("正在保存位置…", "Saving location…", "Menyimpan lokasi…"))
+                        Button(tr("跳过定位，继续", "Skip location and continue", "Langkau lokasi dan teruskan")) { locator.cancel(); finishLocation() }
+                    }.frame(maxWidth: .infinity)
+                }
+                if let message = locator.message { Text(message).font(.caption).foregroundStyle(.secondary) }
+                if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
+                DisclosureGroup(tr("停车历史", "Parking history", "Sejarah parkir")) {
+                    VStack(alignment: .leading, spacing: 16) {
+                        TextField(tr("搜索地点、车牌或车位", "Search place, plate or bay", "Cari tempat, plat atau petak"), text: $search)
+                        if history.isEmpty { Text(tr("暂无停车记录", "No parking history yet", "Belum ada sejarah parkir")).foregroundStyle(.secondary) }
+                        ForEach(history) { session in
+                            NavigationLink { ParkingDetail(store: store, session: session) } label: {
+                                HStack {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(session.name.isEmpty ? tr("停车", "Parking", "Parkir") : session.name).font(.headline)
+                                        Text(session.startedAt, style: .date).font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                    Text(session.paidCents.map { money($0) } ?? "—")
+                                    Image(systemName: "chevron.right").font(.caption)
+                                }
+                            }.disabled(startingID != nil)
+                        }
+                    }.padding(.top, 16)
+                }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
+                Text(tr("停车资料仅保存在此设备；付款后请返回核对。", "Parking details stay on this device. Return after paying to review.", "Butiran parkir kekal pada peranti ini. Kembali selepas bayar untuk semakan."))
+                    .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
+            }.padding(20)
+        }.background(Color(uiColor: .systemGroupedBackground))
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: active?.id)
+            .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: plate)
+    }
+
     var body: some View {
-        List {
-            Section {
-                if active == nil { ParkingMapCard(session: nil, vehicle: store.vehicle(for: plate)) }
-            }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
-            Section {
-                Text(tr("保存车位、停车计时、前往 TNG 缴费。记录仅保存在这台设备，不随账本同步。", "Save your bay, track time and pay through TNG. Parking records stay on this device and do not sync with the ledger.", "Simpan petak, kira masa dan bayar melalui TNG. Rekod parkir hanya pada peranti ini, tidak disegerak dengan lejar."))
-                    .font(.footnote).foregroundStyle(.secondary)
-            }
-            if let session = active {
-                Section(tr("正在停车", "Current parking", "Parkir semasa")) {
-                    ParkingTimerDial(session: session)
-                    ParkingStatus(session: session)
-                    Text(session.spotLabel).font(.headline)
-                    if let place = session.place, let lat = place.latitude, let lon = place.longitude {
-                        Button(tr("地图找车", "Find car on map", "Cari kereta pada peta")) {
-                            MKMapItem(placemark: MKPlacemark(coordinate: CLLocationCoordinate2D(latitude: lat, longitude: lon)))
-                                .openInMaps(launchOptions: [MKLaunchOptionsDirectionsModeKey: MKLaunchOptionsDirectionsModeWalking])
-                        }
-                    }
-                    if session.paidCents != nil {
-                        Button(tr("核对停车账目", "Review parking expense", "Semak belanja parkir")) { openedSession = session }
-                    }
-                    Button(tr("管理停车 · 找车 / 续费 / 结束", "Manage · find car / renew / end", "Urus · cari kereta / lanjut / tamat")) { openedSession = session }
-                        .buttonStyle(ParkingActionStyle())
-                        .disabled(startingID != nil)
-                    Button(tr("前往 TNG 停车缴费", "Open TNG parking", "Buka parkir TNG"), action: launchTNG)
-                        .disabled(startingID != nil)
-                }
-            } else {
-                Section(tr("开始停车", "Start parking", "Mula parkir")) {
-                    TextField(tr("车牌（可选）", "Plate (optional)", "Plat (pilihan)"), text: $plate)
-                        .textInputAutocapitalization(.characters).autocorrectionDisabled()
-                        .onSubmit { store.rememberPlate(plate) }
-                    Button(tr("记住车牌", "Remember plate", "Ingat plat")) { store.rememberPlate(plate) }
-                        .disabled(plate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    Button {
-                        editingVehicle = true
-                    } label: {
-                        Label(store.vehicle(for: plate)?.title.isEmpty == false ? store.vehicle(for: plate)!.title :
-                            tr("设置品牌、车型与颜色", "Set brand, model and colour", "Tetapkan jenama, model dan warna"), systemImage: "car.side.fill")
-                    }.disabled(ParkingStore.plateKey(plate).isEmpty)
-                    if !savedPlates.isEmpty {
-                        Menu(tr("选择已用车牌", "Choose a used plate", "Pilih plat terdahulu")) {
-                            ForEach(savedPlates, id: \.self) { value in Button(value) { plate = value } }
-                        }
-                        Text(tr("已记住上次车牌，可直接使用或修改。", "Your last plate is remembered. Use it or change it.", "Plat terakhir diingati. Gunakan atau ubah."))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                    TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $name)
-                    TextField(tr("楼层 / 区域 / 车位号", "Floor / zone / bay", "Tingkat / zon / petak"), text: $bay)
-                    Button(tr("开始停车并前往 TNG", "Start and open TNG", "Mula dan buka TNG")) { start(tng: true) }
+        homeContent.tint(parkingAccent)
+        .safeAreaInset(edge: .bottom) {
+            if active == nil {
+                VStack(spacing: 10) {
+                    Button(tr("开始停车 · 前往 TNG", "Start parking · Open TNG", "Mula parkir · Buka TNG")) { start(tng: true) }
                         .buttonStyle(ParkingActionStyle()).disabled(!ready)
-                    Button(tr("只记录停车", "Record parking only", "Rekod parkir sahaja")) { start(tng: false) }.disabled(!ready)
-                }
+                    Button(tr("只保存位置", "Save location only", "Simpan lokasi sahaja")) { start(tng: false) }
+                        .font(.subheadline).disabled(!ready)
+                }.padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
             }
-            if startingID != nil {
-                Section {
-                    ProgressView(tr("记录已保存，正在定位…", "Saved. Finding location…", "Disimpan. Mencari lokasi…"))
-                    Button(tr("跳过定位，继续", "Skip location and continue", "Langkau lokasi dan teruskan")) { locator.cancel(); finishLocation() }
-                }
-            }
-            if let message = locator.message { Text(message).font(.footnote).foregroundStyle(.secondary) }
-            if !error.isEmpty { Text(error).foregroundStyle(.red) }
-            Section(tr("停车历史", "Parking history", "Sejarah parkir")) {
-                TextField(tr("搜索地点、车牌或车位", "Search place, plate or bay", "Cari tempat, plat atau petak"), text: $search)
-                if history.isEmpty {
-                    Text(tr("暂无匹配记录。结束停车后，可在这里查看时长和费用。", "No matching records. Finished parking appears here with duration and fees.", "Tiada rekod sepadan. Parkir tamat muncul di sini dengan tempoh dan bayaran."))
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-                ForEach(history) { session in
-                    NavigationLink { ParkingDetail(store: store, session: session) } label: {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Label(session.name.isEmpty ? tr("停车", "Parking", "Parkir") : session.name, systemImage: "parkingsign.circle.fill")
-                            Text(session.startedAt, style: .date).font(.caption)
-                            let minutes = session.durationMinutes(now: Date())
-                            Text("\(minutes / 60) h \(minutes % 60) min" + (session.paidCents.map { " · " + money($0) } ?? ""))
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                    }.disabled(startingID != nil)
-                }
-            }
-            Section(tr("使用步骤", "How it works", "Cara penggunaan")) {
-                Label(tr("1. 开始停车，保存地点与车位", "1. Start and save your location and bay", "1. Mula dan simpan lokasi serta petak"), systemImage: "mappin")
-                Label(tr("2. 在 TNG 付款，返回确认到期时间", "2. Pay in TNG, return to confirm expiry", "2. Bayar dalam TNG, kembali sahkan tamat"), systemImage: "creditcard")
-                Label(tr("3. 到期提醒、地图找车，结束后核对记账", "3. Reminder, find car, then review the expense", "3. Peringatan, cari kereta, kemudian semak belanja"), systemImage: "checkmark.circle")
-            }.font(.footnote)
         }
-        .listStyle(.insetGrouped).tint(parkingAccent)
         .modifier(ParkingPaymentReturn(store: store, sessionID: active?.id, enabled: openedSession == nil, review: {
             openedSession = active
         }))
@@ -516,10 +557,18 @@ private struct ParkingHome: View {
             if let session = openedSession { ParkingDetail(store: store, session: session) }
         }
         .task {
-            do { try store.load(); if plate.isEmpty { plate = savedPlates.first ?? "" }; ready = true }
+            do {
+                try store.load(); if plate.isEmpty { plate = savedPlates.first ?? "" }; ready = true
+                if active == nil && locator.result == nil && !locator.busy { locator.start(automatic: true) }
+            }
             catch { self.error = error.localizedDescription }
         }
-        .onChange(of: locator.result) { _, result in if result != nil { finishLocation() } }
+        .onChange(of: locator.result) { _, result in
+            guard let result else { return }
+            locatedAt = Date()
+            if name.isEmpty || name == automaticName { name = result.name; automaticName = result.name }
+            finishLocation()
+        }
         .onChange(of: locator.message) { _, message in if message != nil { finishLocation() } }
         .onDisappear {
             store.rememberPlate(plate)
@@ -671,21 +720,21 @@ private struct ParkingDetail: View {
             }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             Section {
                 ParkingTimerDial(session: session)
-                ParkingStatus(session: session)
+                if !session.spotLabel.isEmpty { Label(session.spotLabel, systemImage: "mappin.and.ellipse").font(.headline) }
+                DisclosureGroup(tr("停车时间详情", "Parking time details", "Butiran masa parkir")) {
                 LabeledContent(tr("开始时间", "Start time", "Masa mula")) {
                     Text(session.startedAt, format: .dateTime.month().day().hour().minute())
                 }
                 if let end = session.endedAt {
                     Text(tr("已结束", "Ended", "Tamat")); Text(end, style: .time)
-                } else {
-                    Label(tr("停车计时", "Elapsed parking time", "Masa parkir"), systemImage: "timer")
-                    Text(session.startedAt, style: .timer).font(.largeTitle.monospacedDigit())
+                }
                 }
                 Text(session.paidUntil == nil ? tr("缴费待确认", "Payment awaiting confirmation", "Bayaran menunggu pengesahan") : tr("缴费由你确认，未与 TNG 同步", "Payment confirmed by you; not synced with TNG", "Bayaran disahkan oleh anda; tidak disegerak dengan TNG"))
                     .font(.footnote).foregroundStyle(.secondary)
                 if let end = session.paidUntil { LabeledContent(tr("已确认的结束时间", "Confirmed end time", "Masa tamat disahkan")) { Text(end, format: .dateTime.month().day().hour().minute()) } }
             }
             Section(tr("我的车位", "My parking spot", "Tempat kereta saya")) {
+                DisclosureGroup(tr("车位备注与照片", "Spot notes & photo", "Nota petak dan foto")) {
                 TextField(tr("车牌", "Plate", "Plat"), text: $session.plate)
                 TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $session.name)
                 Text(session.spotLabel).font(.headline)
@@ -706,6 +755,7 @@ private struct ParkingDetail: View {
                     Button(tr("移除照片", "Remove photo", "Buang foto")) { session.photo = nil; save() }
                 }
                 Button(tr("保存车位资料", "Save parking details", "Simpan butiran parkir"), action: save)
+                }
             }
             if session.endedAt == nil {
                 Section(tr("缴费与提醒", "Payment and reminder", "Bayaran dan peringatan")) {

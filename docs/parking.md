@@ -2,6 +2,12 @@
 
 Entry: Accounts → top-left tools menu → Parking assistant.
 
+The redesigned home uses a green accent, an interactive location map and a large vehicle photo card. Parking starts from a fixed bottom action; vehicle selection and optional location edits sit in a compact card, with history collapsed. Opening the idle screen requests location and reverse-geocodes a nearby address. A location obtained within 60 seconds can be reused when starting; otherwise starting requests a fresh fix. The detected address fills the session name without replacing a user-edited name. Location failure or denial does not block starting. An address is not a verified car park name, floor, bay, live availability or rate.
+
+Button presses, vehicle/session transitions and timer changes use short animations respecting Reduce Motion. Native device visual acceptance remains required.
+
+`YueJi/Assets.xcassets/ParkingCarHero.imageset/car.png` was generated with the built-in imagegen tool as a generic default illustration. Prompt: “Create a photorealistic automotive product image for a minimal mobile parking app card. One unbranded pearl white modern compact hatchback, front three-quarter view facing left, entire vehicle visible, elegant realistic proportions, black tires and subtle silver wheels. Clean very pale cool grey studio background, soft ground shadow, diffused daylight. Wide horizontal composition with generous margin, car fills 80 percent width. No text, logos, badges, license plate characters, UI or border. This is a generic illustrative car, not a specific make or model.” Personal vehicle photos take precedence. The default image does not claim to match the entered make/model/colour.
+
 The home screen shows the active place, plate, bay, elapsed hours/minutes, confirmed expiry and paid amount. Completed sessions have searchable place/plate/bay history and fixed durations. Record-only starts open details after location completes. Ending requires confirmation; fees can be entered after ending and reviewed in the ledger editor. Renewal amounts are cumulative, not an additional charge.
 
 Plates are normalized and remembered locally per account after saving a session. The last used plate is prefilled and previous plates are selectable. Deleting a parking history record does not erase the remembered plates.
