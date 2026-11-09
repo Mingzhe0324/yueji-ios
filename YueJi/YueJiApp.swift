@@ -44,6 +44,8 @@ struct RestoredLedgerFeedback {
     private var refreshRequest = UUID()
     private var overviewCache: [String: OverviewSnapshot] = [:]
     private let projectionWorker = LedgerProjectionWorker()
+    // First-tab timeline reads must not queue behind overview charts and exports.
+    private let timelineWorker = LedgerProjectionWorker()
     private var navigationIndex: LedgerNavigationIndex?
     @Published private(set) var operationKeys: Set<String> = []
     private var operations: [String: Task<Void, Never>] = [:]
@@ -162,7 +164,7 @@ struct RestoredLedgerFeedback {
     }
     func timeline(month: Date, query: LedgerTimelineQuery) async throws -> LedgerTimelineSnapshot {
         guard query.revision == ledgerRevision else { throw CancellationError() }
-        let snapshot = try await projectionWorker.timeline(ledger: ledger, month: month, query: query)
+        let snapshot = try await timelineWorker.timeline(ledger: ledger, month: month, query: query)
         try Task.checkCancellation()
         guard query.revision == ledgerRevision else { throw CancellationError() }
         return snapshot

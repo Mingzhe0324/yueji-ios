@@ -2,6 +2,10 @@
 
 Entry: Accounts → top-left tools menu → Parking assistant.
 
+The home screen shows the active place, plate, bay, elapsed hours/minutes, confirmed expiry and paid amount. Completed sessions have searchable place/plate/bay history and fixed durations. Record-only starts open details after location completes. Ending requires confirmation; fees can be entered after ending and reviewed in the ledger editor. Renewal amounts are cumulative, not an additional charge.
+
+Plates are normalized and remembered locally per account after saving a session. The last used plate is prefilled and previous plates are selectable. Deleting a parking history record does not erase the remembered plates.
+
 Starting saves a local parking session before requesting location. The user can skip location or continue when permission/location fails. “Start and open TNG” then opens the official HTTPS link `https://visit.tngdigital.com.my/StreetParking`. The public redirect was checked; its destination inside the installed iPhone app still needs device verification. Opening the link is never treated as proof of payment.
 
 Records contain start/end times, optional plate, car park, bay, GPS place and a resized photo. They are stored in an account-scoped, protected local file, outside ledger cloud sync. GPS does not determine a floor or bay. Maps can navigate to the saved coordinate.

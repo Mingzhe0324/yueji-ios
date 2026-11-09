@@ -360,6 +360,7 @@ struct MainView: View {
     @State private var showingGuide = false
     @State private var showingBackupWelcome = true
     @State private var selectedTab = 0
+    @SceneStorage("ledgerMonth") private var ledgerMonthTimestamp = Date().timeIntervalSince1970
     @State private var ledgerMonthRequest: LedgerMonthRequest?
     @State private var showingNewTNG = false
     @State private var pendingInbox = false
@@ -436,6 +437,14 @@ struct MainView: View {
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 3).environment(\.ambientActive, selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 4).environment(\.ambientActive, selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
         }.tint(ink).modifier(YueJiTabBarMotion())
+            .task(id: model.ledgerRevision) {
+                // Prepare the saved month while Overview is visible, before the
+                // first Ledger transition. The worker caches by revision/query.
+                let month = Date(timeIntervalSince1970: ledgerMonthTimestamp)
+                let query = LedgerTimelineQuery(revision: model.ledgerRevision, month: month,
+                    search: "", filter: LedgerFilter(), provider: "all")
+                _ = try? await model.timeline(month: month, query: query)
+            }
     }
     var body: some View {
         let _ = uiLocale.identifier
@@ -1975,6 +1984,10 @@ struct ExpensesView: View {
                         .listRowSeparator(.hidden)
                 }
                 .listRowBackground(Color.clear)
+                if loadedQuery == nil {
+                    ProgressView(tr("正在加载账本…", "Loading ledger…", "Memuatkan lejar…"))
+                        .accessibilityIdentifier("ledger.loading")
+                }
                 if timeline.count == 0 && loadedQuery != nil {
                     let filtered = filter.active || !search.isEmpty || providerFilter != "all"
                     IslandEmptyState(title: tr("暂无记录", "No entries", "Tiada rekod"),

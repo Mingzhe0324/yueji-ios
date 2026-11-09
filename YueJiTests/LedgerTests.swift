@@ -6,6 +6,14 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testParkingDurationStopsAtEndAndNeverBecomesNegative() {
+        let start = Date(timeIntervalSince1970: 1_800_000_000)
+        var session = ParkingSession(); session.startedAt = start
+        XCTAssertEqual(session.durationMinutes(now: start.addingTimeInterval(3660)), 61)
+        XCTAssertEqual(session.durationMinutes(now: start.addingTimeInterval(-60)), 0)
+        session.endedAt = start.addingTimeInterval(7200)
+        XCTAssertEqual(session.durationMinutes(now: start.addingTimeInterval(14400)), 120)
+    }
     func testParkingHintsRequireCompleteEndDateAndKeepAmountChoices() {
         let hints = ParkingReceiptHints(text: "RM 3.00\nMYR 5.00\nRM 3.00\nLocation: Mall A\nPaid until: 08/11/2026 15:30")
         XCTAssertEqual(hints.amounts, ["3.00", "5.00"])
