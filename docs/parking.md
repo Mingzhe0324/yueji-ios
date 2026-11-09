@@ -6,6 +6,8 @@ The home screen shows the active place, plate, bay, elapsed hours/minutes, confi
 
 Plates are normalized and remembered locally per account after saving a session. The last used plate is prefilled and previous plates are selectable. Deleting a parking history record does not erase the remembered plates.
 
+Vehicle profiles accept a user-entered brand, model, optional year, body type and colour. They are saved locally per account and matched by plate ignoring case and whitespace. Each new parking session keeps a snapshot of its vehicle details. Existing sessions without vehicle details remain readable. The visual is a body-type/colour illustration, not an exact make/model image.
+
 Starting saves a local parking session before requesting location. The user can skip location or continue when permission/location fails. “Start and open TNG” then opens the official HTTPS link `https://visit.tngdigital.com.my/StreetParking`. The public redirect was checked; its destination inside the installed iPhone app still needs device verification. Opening the link is never treated as proof of payment.
 
 Records contain start/end times, optional plate, car park, bay, GPS place and a resized photo. They are stored in an account-scoped, protected local file, outside ledger cloud sync. GPS does not determine a floor or bay. Maps can navigate to the saved coordinate.

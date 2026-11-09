@@ -6,6 +6,17 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testParkingVehiclePreservesOldSessionsAndSnapshots() throws {
+        var session = ParkingSession()
+        let legacy = try JSONEncoder().encode(session)
+        XCTAssertNil(try JSONDecoder().decode(ParkingSession.self, from: legacy).vehicle)
+        var vehicle = ParkingVehicle(brand: "Perodua", model: "Myvi", year: "2022", color: "blue", body: "car")
+        session.vehicle = vehicle
+        vehicle.model = "Axia"
+        let restored = try JSONDecoder().decode(ParkingSession.self, from: JSONEncoder().encode(session))
+        XCTAssertEqual(restored.vehicle?.model, "Myvi")
+        XCTAssertEqual(restored.vehicle?.color, "blue")
+    }
     func testParkingDurationStopsAtEndAndNeverBecomesNegative() {
         let start = Date(timeIntervalSince1970: 1_800_000_000)
         var session = ParkingSession(); session.startedAt = start

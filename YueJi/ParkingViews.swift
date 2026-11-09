@@ -6,6 +6,25 @@ import CryptoKit
 
 private let parkingAccent = Color(red: 1, green: 0.32, blue: 0.035)
 
+struct ParkingVehicle: Codable, Equatable {
+    var brand = ""
+    var model = ""
+    var year = ""
+    var color = "silver"
+    var body = "car"
+    var title: String { [brand, model, year].filter { !$0.isEmpty }.joined(separator: " · ") }
+    var tint: Color {
+        switch color {
+        case "white": return .white
+        case "black": return Color(white: 0.15)
+        case "red": return .red
+        case "blue": return .blue
+        case "green": return .green
+        default: return .gray
+        }
+    }
+}
+
 private struct ParkingActionStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label.font(.headline)
@@ -19,6 +38,8 @@ private struct ParkingActionStyle: ButtonStyle {
 /// The map represents only a recorded coordinate, never available parking spaces.
 private struct ParkingMapCard: View {
     let session: ParkingSession?
+    var vehicle: ParkingVehicle? = nil
+    private var shownVehicle: ParkingVehicle? { session?.vehicle ?? vehicle }
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             HStack(alignment: .top) {
@@ -45,8 +66,14 @@ private struct ParkingMapCard: View {
                         Color(uiColor: .tertiarySystemGroupedBackground)
                         RoundedRectangle(cornerRadius: 24).strokeBorder(.secondary.opacity(0.15), style: StrokeStyle(lineWidth: 2, dash: [10]))
                             .padding(30)
-                        Image(systemName: "car.side.fill").font(.system(size: 76, weight: .light))
-                            .foregroundStyle(.primary.opacity(0.8)).offset(y: -18)
+                        VStack(spacing: 12) {
+                            Image(systemName: shownVehicle?.body == "suv" ? "suv.side.fill" : "car.side.fill")
+                                .font(.system(size: 76, weight: .light))
+                                .foregroundStyle(shownVehicle?.tint ?? .gray)
+                                .shadow(color: .black.opacity(0.25), radius: 2, y: 2)
+                            Text(tr("车辆示意图", "Vehicle illustration", "Ilustrasi kenderaan"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }.offset(y: -18)
                     }
                 }
                 Label(session?.place == nil
@@ -59,6 +86,9 @@ private struct ParkingMapCard: View {
                 Image(systemName: "car.fill").font(.title2)
                 VStack(alignment: .leading, spacing: 4) {
                     Text(session?.plate.isEmpty == false ? session!.plate : tr("我的车辆", "My vehicle", "Kenderaan saya")).font(.headline)
+                    if let vehicle = shownVehicle, !vehicle.title.isEmpty {
+                        Text(vehicle.title).font(.subheadline).lineLimit(2)
+                    }
                     Text(session?.bay.isEmpty == false ? session!.bay : tr("记录车位 · 计时 · 找车", "Save your bay · track time · find car", "Simpan petak · kira masa · cari kereta"))
                         .font(.caption)
                 }
@@ -136,6 +166,7 @@ struct ParkingSession: Codable, Identifiable {
     var startedAt = Date()
     var endedAt: Date?
     var plate = ""
+    var vehicle: ParkingVehicle?
     var name = ""
     var bay = ""
     var place: ExpensePlace?
@@ -159,9 +190,24 @@ struct ParkingSession: Codable, Identifiable {
 final class ParkingStore: ObservableObject {
     @Published private(set) var sessions: [ParkingSession] = []
     @Published private(set) var rememberedPlates: [String] = []
+    @Published private(set) var vehicles: [String: ParkingVehicle] = [:]
     let scope: String
     private let url: URL
     private let platesKey: String
+    private var vehiclesURL: URL { url.deletingPathExtension().appendingPathExtension("vehicles.json") }
+    static func plateKey(_ raw: String) -> String {
+        String(raw.uppercased().filter { !$0.isWhitespace }.prefix(20))
+    }
+    func vehicle(for plate: String) -> ParkingVehicle? { vehicles[Self.plateKey(plate)] }
+    func saveVehicle(_ vehicle: ParkingVehicle, plate: String) throws {
+        let key = Self.plateKey(plate)
+        guard !key.isEmpty else { throw LedgerError.invalid(tr("请先填写车牌", "Enter a plate first", "Isi plat dahulu")) }
+        var updated = vehicles; updated[key] = vehicle
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try JSONEncoder().encode(updated).write(to: vehiclesURL, options: [.atomic, .completeFileProtection])
+        vehicles = updated
+        rememberPlate(plate)
+    }
     init(scope: String) {
         self.scope = scope
         let hash = SHA256.hash(data: Data(scope.utf8)).map { String(format: "%02x", $0) }.joined()
@@ -171,6 +217,9 @@ final class ParkingStore: ObservableObject {
     }
     func load() throws {
         rememberedPlates = UserDefaults.standard.stringArray(forKey: platesKey) ?? []
+        if FileManager.default.fileExists(atPath: vehiclesURL.path) {
+            vehicles = try JSONDecoder().decode([String: ParkingVehicle].self, from: Data(contentsOf: vehiclesURL))
+        }
         guard FileManager.default.fileExists(atPath: url.path) else { return }
         sessions = try JSONDecoder().decode([ParkingSession].self, from: Data(contentsOf: url))
         if rememberedPlates.isEmpty {
@@ -276,6 +325,7 @@ private struct ParkingHome: View {
     @State private var goToTNG = false
     @State private var search = ""
     @State private var openedSession: ParkingSession?
+    @State private var editingVehicle = false
     private var active: ParkingSession? { store.sessions.first { $0.endedAt == nil } }
     private var savedPlates: [String] {
         store.rememberedPlates
@@ -295,6 +345,7 @@ private struct ParkingHome: View {
         do {
             var session = ParkingSession()
             session.plate = String(plate.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().prefix(20)); session.name = String(name.prefix(200)); session.bay = String(bay.prefix(200))
+            session.vehicle = store.vehicle(for: plate)
             try store.save(session)
             startingID = session.id; goToTNG = tng; error = ""
             locator.start()
@@ -313,7 +364,7 @@ private struct ParkingHome: View {
     var body: some View {
         List {
             Section {
-                ParkingMapCard(session: active)
+                ParkingMapCard(session: active, vehicle: store.vehicle(for: plate))
             }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             Section {
                 Text(tr("保存车位、停车计时、前往 TNG 缴费。记录仅保存在这台设备，不随账本同步。", "Save your bay, track time and pay through TNG. Parking records stay on this device and do not sync with the ledger.", "Simpan petak, kira masa dan bayar melalui TNG. Rekod parkir hanya pada peranti ini, tidak disegerak dengan lejar."))
@@ -335,6 +386,12 @@ private struct ParkingHome: View {
                         .onSubmit { store.rememberPlate(plate) }
                     Button(tr("记住车牌", "Remember plate", "Ingat plat")) { store.rememberPlate(plate) }
                         .disabled(plate.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    Button {
+                        editingVehicle = true
+                    } label: {
+                        Label(store.vehicle(for: plate)?.title.isEmpty == false ? store.vehicle(for: plate)!.title :
+                            tr("设置品牌、车型与颜色", "Set brand, model and colour", "Tetapkan jenama, model dan warna"), systemImage: "car.side.fill")
+                    }.disabled(ParkingStore.plateKey(plate).isEmpty)
                     if !savedPlates.isEmpty {
                         Menu(tr("选择已用车牌", "Choose a used plate", "Pilih plat terdahulu")) {
                             ForEach(savedPlates, id: \.self) { value in Button(value) { plate = value } }
@@ -382,6 +439,9 @@ private struct ParkingHome: View {
             }.font(.footnote)
         }
         .listStyle(.insetGrouped).tint(parkingAccent)
+        .sheet(isPresented: $editingVehicle) {
+            ParkingVehicleEditor(store: store, plate: plate, vehicle: store.vehicle(for: plate) ?? ParkingVehicle())
+        }
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: Binding(get: { openedSession != nil }, set: { if !$0 { openedSession = nil } })) {
             if let session = openedSession { ParkingDetail(store: store, session: session) }
@@ -395,6 +455,59 @@ private struct ParkingHome: View {
         .onDisappear {
             store.rememberPlate(plate)
             locator.cancel(); startingID = nil; goToTNG = false
+        }
+    }
+}
+
+private struct ParkingVehicleEditor: View {
+    @ObservedObject var store: ParkingStore
+    let plate: String
+    @State var vehicle: ParkingVehicle
+    @Environment(\.dismiss) private var dismiss
+    @State private var error = ""
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section(plate) {
+                    TextField(tr("品牌（例如 Perodua）", "Brand (e.g. Perodua)", "Jenama (cth. Perodua)"), text: $vehicle.brand)
+                    TextField(tr("车型（例如 Myvi）", "Model (e.g. Myvi)", "Model (cth. Myvi)"), text: $vehicle.model)
+                    TextField(tr("年份（可选）", "Year (optional)", "Tahun (pilihan)"), text: $vehicle.year).keyboardType(.numberPad)
+                    Picker(tr("车身类型", "Body type", "Jenis badan"), selection: $vehicle.body) {
+                        Text(tr("轿车 / 掀背车", "Sedan / hatchback", "Sedan / hatchback")).tag("car")
+                        Text("SUV / MPV").tag("suv")
+                    }
+                    Picker(tr("车身颜色", "Vehicle colour", "Warna kenderaan"), selection: $vehicle.color) {
+                        Text(tr("银 / 灰", "Silver / grey", "Perak / kelabu")).tag("silver")
+                        Text(tr("白色", "White", "Putih")).tag("white")
+                        Text(tr("黑色", "Black", "Hitam")).tag("black")
+                        Text(tr("红色", "Red", "Merah")).tag("red")
+                        Text(tr("蓝色", "Blue", "Biru")).tag("blue")
+                        Text(tr("绿色", "Green", "Hijau")).tag("green")
+                    }
+                }
+                Section {
+                    ParkingMapCard(session: nil, vehicle: vehicle)
+                    Text(tr("资料由你填写并绑定车牌。目前按车身类型和颜色显示示意图，不是品牌车型的精确外观。", "Your details are saved against this plate. The illustration uses body type and colour, not the exact model design.", "Butiran disimpan mengikut plat ini. Ilustrasi menggunakan jenis badan dan warna, bukan reka bentuk model tepat."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                if !error.isEmpty { Text(error).foregroundStyle(.red) }
+            }
+            .navigationTitle(tr("我的车辆", "My vehicle", "Kenderaan saya"))
+            .navigationBarTitleDisplayMode(.inline).tint(parkingAccent)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(tr("取消", "Cancel", "Batal")) { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(tr("保存", "Save", "Simpan")) {
+                        vehicle.brand = String(vehicle.brand.trimmingCharacters(in: .whitespacesAndNewlines).prefix(60))
+                        vehicle.model = String(vehicle.model.trimmingCharacters(in: .whitespacesAndNewlines).prefix(80))
+                        vehicle.year = String(vehicle.year.filter(\.isNumber).prefix(4))
+                        do { try store.saveVehicle(vehicle, plate: plate); dismiss() }
+                        catch { self.error = error.localizedDescription }
+                    }.disabled(vehicle.brand.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || vehicle.model.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                }
+            }
         }
     }
 }
