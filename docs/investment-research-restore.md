@@ -118,3 +118,20 @@ SQL Editor → New query，粘贴并运行仓库 `backend/investment-research.sq
 - https://supabase.com/docs/guides/functions/deploy
 - https://supabase.com/docs/guides/functions/secrets
 - https://ai.google.dev/gemini-api/docs/api-key
+# 2026-11-10: Server-resolved official citations
+
+Supersedes the quotation repair retry below. Official research now sends numbered,
+overlapping source fragments. The model returns source/fragment IDs; the server
+resolves them to exact original text and rejects unknown IDs, cross-company
+references, and model-supplied quote fields. Imported research retains exact quote
+validation. The cache version is now `official-v4-fragments`; cached candidates are
+validated using the same numbered contract. No second model call is needed.
+
+Fragments are contiguous text windows, not complete table rows or proof that a
+claim follows from a citation. Ambiguous table units/columns still require null
+scores. Existing valuation/risk restrictions remain in force.
+
+Validation: 29 investment backend tests pass; generated dashboard bundle passes
+Node syntax checking. Live Gemini/Supabase behavior has not been verified.
+Regenerated `../builds/investment-research-deploy/index.ts` must be redeployed to
+the Supabase investment-research function. No SQL or secret changes are required.

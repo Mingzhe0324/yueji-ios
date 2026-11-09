@@ -1,6 +1,6 @@
 // Account-scoped cache. Source collection still runs first so changed evidence
 // invalidates the report. Never include credentials or client-supplied documents.
-export const REPORT_VERSION = 'official-v3-pdf';
+export const REPORT_VERSION = 'official-v4-fragments';
 export async function reportKey(symbols, evidence, model) {
   const canonical = JSON.stringify({version:REPORT_VERSION,model,symbols,
     evidence:evidence.map(({id,symbol,company,url,scope,text})=>({id,symbol,company,url,scope,text}))});

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectOfficialEvidence, reportLinks, pageText, evidenceReport, dimensions } from '../../supabase/functions/investment-research/official.mjs';
+import { collectOfficialEvidence, reportLinks, pageText, evidenceFragments, evidenceReport, dimensions } from '../../supabase/functions/investment-research/official.mjs';
 import { handleResearch } from '../../supabase/functions/investment-research/handler.mjs';
 import { reportKey, validCachedReport } from '../../supabase/functions/investment-research/cache.mjs';
 const symbol = 'MYX:99SMART';
@@ -11,35 +11,20 @@ const company = () => ({symbol,summary:'示例分析',period:'2026',action:'cons
 const candidate = c => ({finishReason:'STOP',content:{parts:[{text:JSON.stringify({companies:[c]})}]}});
 const json = value => new Response(JSON.stringify(value));
 
-test('repairs mismatched quotes once, revalidates and caches only the accepted candidate', async () => {
-  for (const repairWorks of [true, false]) {
-    let modelCalls=0, quotaCalls=0, saved;
-    const bad=company(); bad.dimensions[0].evidence[0].quote='A fabricated quotation from nowhere';
-    const good=candidate(company());
-    const deps={env:k=>({SUPABASE_URL:'https://test.invalid',SUPABASE_ANON_KEY:'anon',INVESTMENT_RESEARCH_USER_ID:'owner',GEMINI_RESEARCH_API_KEY:'key',GEMINI_RESEARCH_MODEL:'gemini-test',INVESTMENT_RESEARCH_CACHE:'true'})[k],fetch:async(u,o)=>{
-      if(u.endsWith('/auth/v1/user'))return json({id:'owner'});
-      if(u.startsWith('https://99speedmart.com.my/'))return new Response(html,{headers:{'Content-Type':'text/html'}});
-      if(u.endsWith('/read_investment_report'))return json(null);
-      if(u.endsWith('/claim_investment_research')){quotaCalls++;return json(true);}
-      if(u.includes('googleapis')){
-        modelCalls++;
-        if(modelCalls===2){
-          const body=JSON.parse(o.body);
-          assert.match(body.systemInstruction.parts[0].text,/untrusted data/);
-          assert.equal(JSON.parse(body.contents[0].parts[0].text).evidence[0].text,source.text);
-        }
-        return json({candidates:[modelCalls===2&&repairWorks?good:candidate(bad)]});
-      }
-      if(u.endsWith('/save_investment_report')){saved=JSON.parse(o.body).report_value;return json(null);}
-      throw new Error('unexpected request');
-    }};
-    const response=await handleResearch(new Request('https://test.invalid',{method:'POST',headers:{Authorization:'Bearer user','Content-Type':'application/json'},body:JSON.stringify({symbols:[symbol]})}),deps);
-    assert.equal(modelCalls,2); assert.equal(quotaCalls,1);
-    assert.equal(response.status,repairWorks?200:422);
-    const value=await response.json();
-    if(repairWorks){assert.deepEqual(saved.candidate,good);assert.ok(!value.text.includes('fabricated'));}
-    else{assert.equal(saved,undefined);assert.equal(value.reason,'quote_mismatch');}
-  }
+const indexedCompany = () => {const c=company();for(const d of c.dimensions)d.evidence=[{sourceId:'S1',fragmentId:'F1'}];return c;};
+test('numbered citations resolve exact source text and reject unknown, cross-company and supplied quotes', () => {
+ const c=indexedCompany();
+ const report=evidenceReport(candidate(c),[symbol],[source],{indexed:true});
+ assert.equal(report.assessments[0].dimensions[0].evidence[0].quote,source.text);
+ for(const change of [c=>c.dimensions[0].evidence[0].fragmentId='F999',c=>c.dimensions[0].evidence[0].sourceId='S2',c=>c.dimensions[0].evidence[0].quote='fabricated']){
+  const bad=indexedCompany();change(bad);assert.equal(evidenceReport(candidate(bad),[symbol],[source],{indexed:true}),null);
+ }
+ assert.equal(evidenceReport(candidate(c),[symbol],[{...source,symbol:'NASDAQ:AAPL'}],{indexed:true}),null);
+ const text='header | Revenue 2026 | 100 |\n'.repeat(200);
+ const fragments=evidenceFragments(text);
+ assert.ok(fragments.length>1);
+ for(const f of fragments){assert.ok(text.includes(f.quote));assert.ok(f.quote.length<=1200);}
+ assert.ok(fragments.at(-1).quote.endsWith('100 |\n'));
 });
 
 test('accepts whitespace-only citation differences and restores original text', () => {
@@ -100,7 +85,7 @@ test('cache hit revalidates citations, avoids quota/model and never trusts cache
     if(u.endsWith('/auth/v1/user'))return json({id:'owner'});
     if(u.startsWith('https://99speedmart.com.my/'))return new Response(html,{headers:{'Content-Type':'text/html'}});
     if(u.endsWith('/read_investment_report')){
-      const c=company();if(forged)c.dimensions[0].evidence[0].quote='not in this company source';
+      const c=indexedCompany();if(forged)c.dimensions[0].evidence[0].fragmentId='F999';
       return json({symbol,symbols:[symbol],generatedAt:new Date().toISOString(),candidate:candidate(c),html:'<script>evil</script>'});
     }
     if(u.endsWith('/claim_investment_research'))return json(false);
@@ -164,7 +149,7 @@ test('rejects invented, cross-company and missing citations, duplicate dimension
 });
 test('default route imports evidence without Google Search, strips client documents and safely renders output', async () => {
   const calls=[];
-  const c=company(); c.summary='<script>example</script>';
+  const c=indexedCompany(); c.summary='<script>example</script>';
   const deps={env:k=>({SUPABASE_URL:'https://test.invalid',SUPABASE_ANON_KEY:'anon',INVESTMENT_RESEARCH_USER_ID:'owner',GEMINI_RESEARCH_API_KEY:'key',GEMINI_RESEARCH_MODEL:'gemini-test'})[k],fetch:async(u,o)=>{
     calls.push([u,o]);
     if(u.endsWith('/auth/v1/user'))return json({id:'owner'});
@@ -177,7 +162,7 @@ test('default route imports evidence without Google Search, strips client docume
   const value=await response.json(); assert.match(value.html,/&lt;script&gt;/); assert.ok(!value.html.includes('<script>'));
   const sent=JSON.parse(calls.at(-1)[1].body); assert.equal(sent.tools,undefined);
   assert.ok(!JSON.stringify(sent).includes('private'));assert.ok(!JSON.stringify(sent).includes('evil.test'));
-  assert.match(JSON.parse(sent.contents[0].parts[0].text).evidence[0].text,/Revenue/);
+  assert.match(JSON.parse(sent.contents[0].parts[0].text).evidence[0].fragments[0].quote,/Revenue/);
   calls.length=0;
   const unsupported=await handleResearch(request(['MYX:PBBANK']),deps);
   assert.equal(unsupported.status,422);assert.equal(calls.length,1);
