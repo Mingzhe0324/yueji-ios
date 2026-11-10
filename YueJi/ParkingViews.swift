@@ -3,89 +3,8 @@ import PhotosUI
 import MapKit
 import UserNotifications
 import CryptoKit
-import SceneKit
 
 private let parkingAccent = Color(red: 0.12, green: 0.65, blue: 0.39)
-
-/// Local, generic body-style models; never a claimed replica of a brand/model.
-private struct ParkingVehicleModel: View {
-    let vehicle: ParkingVehicle
-    @State private var interactive = false
-    private func scene() -> SCNScene {
-        let scene = SCNScene()
-        scene.background.contents = UIColor(white: 0.94, alpha: 1)
-        let mpv = vehicle.body == "mpv"
-        let suv = vehicle.body == "suv"
-        let sedan = vehicle.body == "sedan"
-        let length: CGFloat = mpv ? 4.8 : (sedan ? 4.6 : (suv ? 4.4 : 3.8))
-        let roof: CGFloat = mpv ? 1.95 : (suv ? 1.85 : 1.5)
-        let paint = UIColor(vehicle.tint)
-        func material(_ color: UIColor, metal: CGFloat = 0) -> SCNMaterial {
-            let m = SCNMaterial(); m.diffuse.contents = color
-            m.lightingModel = .physicallyBased; m.metalness.contents = metal; m.roughness.contents = 0.3
-            return m
-        }
-        func box(_ w: CGFloat, _ h: CGFloat, _ d: CGFloat, _ x: CGFloat, _ y: CGFloat, _ z: CGFloat, _ color: UIColor) {
-            let g = SCNBox(width: w, height: h, length: d, chamferRadius: min(0.1, h / 3))
-            g.materials = [material(color, metal: color == paint ? 0.45 : 0)]
-            let n = SCNNode(geometry: g); n.position = SCNVector3(Float(x), Float(y), Float(z))
-            scene.rootNode.addChildNode(n)
-        }
-        box(length, 0.65, 1.75, 0, 0.75, 0, paint)
-        let front: CGFloat = mpv ? -1.65 : -0.9
-        let rear: CGFloat = sedan ? 0.85 : length / 2 - 0.25
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: front - 0.35, y: 1.02))
-        path.addLine(to: CGPoint(x: front + 0.35, y: roof))
-        path.addLine(to: CGPoint(x: rear - 0.2, y: roof))
-        path.addLine(to: CGPoint(x: rear + 0.2, y: 1.02))
-        path.close()
-        let cabin = SCNShape(path: path, extrusionDepth: 1.5)
-        cabin.chamferRadius = 0.08; cabin.materials = [material(UIColor(red: 0.13, green: 0.2, blue: 0.24, alpha: 1), metal: 0.3)]
-        scene.rootNode.addChildNode(SCNNode(geometry: cabin))
-        box(rear - front - 0.45, 0.10, 1.48, (front + rear + 0.15) / 2, roof, 0, paint)
-        for side in [-1, 1] as [CGFloat] {
-            for x in [-length * 0.31, length * 0.31] {
-                let tire = SCNCylinder(radius: 0.39, height: 0.25)
-                tire.materials = [material(.init(white: 0.08, alpha: 1))]
-                let wheel = SCNNode(geometry: tire)
-                wheel.eulerAngles.x = .pi / 2
-                wheel.position = SCNVector3(Float(x), 0.42, Float(side * 0.85))
-                scene.rootNode.addChildNode(wheel)
-                let hub = SCNCylinder(radius: 0.25, height: 0.265)
-                hub.materials = [material(.lightGray, metal: 0.8)]
-                let rim = SCNNode(geometry: hub); wheel.addChildNode(rim)
-            }
-            box(0.09, roof - 1.08, 0.06, (front + rear) / 2, (roof + 1.08) / 2, side * 0.77, paint)
-            box(0.26, 0.04, 0.04, 0.5, 0.98, side * 0.89, .lightGray)
-            box(0.22, 0.15, 0.24, front + 0.1, 1.15, side * 0.95, paint)
-            box(0.06, 0.16, 0.45, -length / 2, 0.88, side * 0.56, .white)
-            box(0.06, 0.16, 0.38, length / 2, 0.88, side * 0.58, .systemRed)
-        }
-        box(0.06, 0.23, 0.85, -length / 2 - 0.01, 0.6, 0, .darkGray)
-        box(6, 0.08, 3.2, 0, -0.03, 0, UIColor(white: 0.88, alpha: 1))
-        let camera = SCNNode(); camera.camera = SCNCamera()
-        camera.camera?.usesOrthographicProjection = true; camera.camera?.orthographicScale = 3.25
-        camera.position = SCNVector3(-6, 3.5, 6)
-        camera.look(at: SCNVector3(0, 0.8, 0)); scene.rootNode.addChildNode(camera)
-        let light = SCNNode(); light.light = SCNLight(); light.light?.type = .omni
-        light.light?.intensity = 1300; light.position = SCNVector3(-3, 6, 5)
-        scene.rootNode.addChildNode(light)
-        let ambient = SCNNode(); ambient.light = SCNLight(); ambient.light?.type = .ambient
-        ambient.light?.intensity = 450; scene.rootNode.addChildNode(ambient)
-        return scene
-    }
-    var body: some View {
-        SceneView(scene: scene(), options: interactive ? [.allowsCameraControl] : [])
-            .allowsHitTesting(interactive)
-            .overlay(alignment: .bottomTrailing) {
-                Button { interactive.toggle() } label: {
-                    Label(interactive ? tr("完成", "Done", "Selesai") : tr("旋转 3D", "Rotate 3D", "Putar 3D"), systemImage: "rotate.3d")
-                        .font(.caption).padding(8).background(.regularMaterial, in: Capsule())
-                }.padding(8)
-            }
-    }
-}
 
 struct ParkingVehicle: Codable, Equatable {
     var brand = ""
@@ -94,6 +13,11 @@ struct ParkingVehicle: Codable, Equatable {
     var color = "silver"
     var body = "hatchback"
     var photo: Data?
+    var referenceAsset: String? {
+        let available = brand == "Perodua" ? ["Axia", "Alza", "Myvi", "Ativa", "Aruz", "Bezza"] :
+            brand == "Proton" ? ["Saga", "S70", "X50", "X70", "X90"] : []
+        return available.contains(model) ? "Vehicle_\(brand)_\(model)" : nil
+    }
     var title: String { [brand, model, year].filter { !$0.isEmpty }.joined(separator: " · ") }
     var tint: Color {
         switch color {
@@ -102,6 +26,19 @@ struct ParkingVehicle: Codable, Equatable {
         case "red": return .red
         case "blue": return .blue
         case "green": return .green
+        case "grey": return Color(white: 0.4)
+        case "pearl": return Color(red: 0.96, green: 0.94, blue: 0.87)
+        case "navy": return Color(red: 0.12, green: 0.2, blue: 0.4)
+        case "teal": return .teal
+        case "yellow": return .yellow
+        case "orange": return .orange
+        case "brown": return .brown
+        case "beige": return Color(red: 0.8, green: 0.73, blue: 0.6)
+        case "gold": return Color(red: 0.77, green: 0.61, blue: 0.3)
+        case "purple": return .purple
+        case "pink": return .pink
+        case "maroon": return Color(red: 0.5, green: 0.1, blue: 0.2)
+        case "bronze": return Color(red: 0.6, green: 0.4, blue: 0.25)
         default: return .gray
         }
     }
@@ -169,13 +106,19 @@ private struct ParkingMapCard: View {
                 Group {
                     if let data = shownVehicle?.photo, let image = UIImage(data: data) {
                         Image(uiImage: image).resizable().scaledToFit()
+                    } else if let asset = shownVehicle?.referenceAsset {
+                        Image(asset).resizable().scaledToFit()
                     } else {
-                        ParkingVehicleModel(vehicle: shownVehicle ?? ParkingVehicle())
+                        VStack(spacing: 10) {
+                            Image(systemName: "photo").font(.largeTitle).foregroundStyle(.secondary)
+                            Text(tr("添加车辆实拍照片", "Add a photo of your car", "Tambah foto kereta anda"))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
                     }
                 }.frame(maxWidth: .infinity).frame(height: 170)
                     .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 20))
                     .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .accessibilityLabel(shownVehicle?.photo == nil ? tr("默认车辆展示图", "Default vehicle illustration", "Ilustrasi kenderaan lalai") : tr("我的车辆照片", "My vehicle photo", "Foto kenderaan saya"))
+                    .accessibilityLabel(shownVehicle?.photo == nil ? tr("车型参考图片", "Model reference image", "Imej rujukan model") : tr("我的车辆照片", "My vehicle photo", "Foto kenderaan saya"))
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(shownVehicle?.title.isEmpty == false ? shownVehicle!.title : tr("我的车辆", "My vehicle", "Kenderaan saya"))
@@ -192,8 +135,22 @@ private struct ParkingMapCard: View {
                     Label(name, systemImage: "mappin.and.ellipse").font(.subheadline).foregroundStyle(.secondary)
                 }
                 if shownVehicle?.photo == nil {
-                    Text(tr("默认示意图 · 可在车辆设置换成自己的照片", "Default illustration · add your photo in vehicle settings", "Ilustrasi lalai · tambah foto dalam tetapan kenderaan"))
+                    Text(shownVehicle?.referenceAsset != nil
+                         ? tr("官方车型参考图 · 年份、配置与颜色可能不同", "Manufacturer reference · year, trim and colour may differ", "Rujukan pengeluar · tahun, varian dan warna mungkin berbeza")
+                         : tr("此车型暂无参考图，可添加自己的照片", "No reference image for this model; add your own photo", "Tiada imej rujukan model ini; tambah foto sendiri"))
                         .font(.caption2).foregroundStyle(.secondary)
+                    if let vehicle = shownVehicle, vehicle.referenceAsset != nil,
+                       let url = URL(string: vehicle.brand == "Perodua"
+                           ? "https://www.perodua.com.my/our-models/choose-model" : "https://www.proton.com/") {
+                        Link(tr("图片来源：", "Image source: ", "Sumber imej: ") + vehicle.brand, destination: url)
+                            .font(.caption2)
+                    }
+                }
+                if let vehicle = shownVehicle {
+                    HStack(spacing: 8) {
+                        Circle().fill(vehicle.tint).frame(width: 16, height: 16).overlay(Circle().stroke(.gray.opacity(0.5)))
+                        Text(VehicleChoices.colourName(vehicle.color)).font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }.padding(18)
         }.background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
@@ -666,6 +623,144 @@ private struct ParkingHome: View {
     }
 }
 
+private enum VehicleChoices {
+    // Includes older models for existing owners; not an assertion of current sales availability.
+    static let brands: [(String, String)] = [
+        ("Perodua", "Myvi|Axia|Bezza|Ativa|Alza|Aruz|Viva|Kancil|Kelisa|Kenari|Kembara|Nautica|Rusa"),
+        ("Proton", "Saga|Persona|Iriz|S70|X50|X70|X90|e.MAS 7|Exora|Preve|Suprima S|Inspira|Waja|Wira|Iswara|Satria|Putra|Perdana|Gen-2|Savvy"),
+        ("Toyota", "Vios|Yaris|Corolla|Corolla Cross|Camry|Altis|Avanza|Veloz|Innova|Innova Zenix|Hilux|Fortuner|Harrier|RAV4|Alphard|Vellfire|Hiace|Land Cruiser|Prius|86|GR86|Supra|C-HR|bZ4X|Wish|Estima|Sienta"),
+        ("Honda", "City|City Hatchback|Civic|Accord|HR-V|CR-V|WR-V|BR-V|Jazz|Fit|Freed|Odyssey|Stream|Stepwgn|Insight|e|ZR-V"),
+        ("Nissan", "Almera|Sylphy|Sentra|Teana|Latio|Livina|Serena|X-Trail|Kicks|Navara|Leaf|March|Note|Juke|Qashqai|Patrol|GT-R|370Z|Z"),
+        ("Mazda", "2|3|6|CX-3|CX-30|CX-5|CX-8|CX-9|CX-60|CX-80|CX-90|MX-5|BT-50|Biante"),
+        ("Mitsubishi", "Xpander|Triton|ASX|Outlander|Pajero|Pajero Sport|Lancer|Attrage|Mirage|Grandis|Eclipse Cross"),
+        ("Suzuki", "Swift|Jimny|Vitara|S-Cross|Ertiga|Alto|Baleno|Ciaz|Ignis|SX4|Kizashi"),
+        ("Subaru", "XV|Crosstrek|Forester|Outback|Impreza|WRX|BRZ|Legacy|Levorg|Solterra"),
+        ("Isuzu", "D-Max|MU-X|Trooper"),
+        ("Daihatsu", "Mira|Move|Tanto|Terios|Rocky|Sirion|Copen|Gran Max|Xenia|Ayla"),
+        ("Lexus", "IS|ES|LS|UX|NX|RX|GX|LX|LBX|LM|LC|RC|RZ|CT"),
+        ("BMW", "1 Series|2 Series|3 Series|4 Series|5 Series|6 Series|7 Series|8 Series|X1|X2|X3|X4|X5|X6|X7|i3|i4|i5|i7|iX|iX1|iX3|Z4|M2|M3|M4|M5"),
+        ("Mercedes-Benz", "A-Class|B-Class|C-Class|E-Class|S-Class|CLA|CLS|GLA|GLB|GLC|GLE|GLS|G-Class|EQA|EQB|EQC|EQE|EQS|V-Class|Vito|SL|SLC|AMG GT"),
+        ("Audi", "A1|A3|A4|A5|A6|A7|A8|Q2|Q3|Q5|Q7|Q8|Q4 e-tron|Q8 e-tron|e-tron GT|TT|R8"),
+        ("Volkswagen", "Polo|Golf|Jetta|Passat|Arteon|Tiguan|Touareg|T-Cross|T-Roc|Touran|Sharan|Vento|Beetle|ID.3|ID.4|ID.5|ID.7|ID. Buzz"),
+        ("MINI", "Cooper|Clubman|Countryman|Aceman"),
+        ("Volvo", "S60|S90|V40|V60|V90|XC40|XC60|XC90|C40|EX30|EX90"),
+        ("Peugeot", "208|2008|308|3008|408|5008|508|RCZ|Traveller"),
+        ("Renault", "Clio|Captur|Megane|Fluence|Koleos|Kadjar|Scenic|Zoe"),
+        ("Citroen", "C3|C4|C5|C3 Aircross|C5 Aircross|Berlingo|Grand C4 Picasso"),
+        ("Skoda", "Fabia|Octavia|Superb|Kamiq|Karoq|Kodiaq|Enyaq"),
+        ("Hyundai", "i10|i20|i30|Accent|Elantra|Sonata|Kona|Tucson|Santa Fe|Palisade|Staria|Starex|Ioniq|Ioniq 5|Ioniq 6"),
+        ("Kia", "Picanto|Rio|Cerato|Forte|K3|K5|Optima|Seltos|Sportage|Sorento|Carnival|Niro|Stinger|EV3|EV6|EV9"),
+        ("Ford", "Fiesta|Focus|Mondeo|Mustang|Ranger|Everest|Escape|Kuga|Explorer|F-150|Bronco|Transit"),
+        ("Chevrolet", "Spark|Aveo|Sonic|Cruze|Malibu|Captiva|Trax|Trailblazer|Equinox|Tahoe|Suburban|Silverado|Camaro|Corvette"),
+        ("Tesla", "Model 3|Model Y|Model S|Model X|Cybertruck"),
+        ("BYD", "Atto 3|Dolphin|Seal|Sealion 7|M6|Atto 2|Han|Tang|Song Plus|Yuan Plus|Qin Plus"),
+        ("Chery", "Omoda 5|Tiggo 7 Pro|Tiggo 8 Pro|Tiggo 4 Pro|Arrizo 5|Arrizo 8"),
+        ("Omoda", "C5|E5|C9"), ("Jaecoo", "J7|J8"),
+        ("GWM", "Haval H6|Haval Jolion|Ora Good Cat|Ora 07|Tank 300|Tank 500|Cannon"),
+        ("Geely", "Coolray|Boyue|Boyue L|Monjaro|Emgrand|Okavango|Geometry C"),
+        ("MG", "MG3|MG4|MG5|ZS|HS|Cyberster"),
+        ("GAC", "GS3 Emzoom|GS8|M8|Aion Y Plus|Aion ES"),
+        ("XPeng", "G6|G9|P7|X9"), ("Zeekr", "001|007|009|X"),
+        ("Nio", "ET5|ET7|ES6|ES8|EC6"), ("Leapmotor", "T03|C10|C11|C16"),
+        ("smart", "fortwo|forfour|#1|#3|#5"),
+        ("Porsche", "911|718 Cayman|718 Boxster|Cayenne|Macan|Panamera|Taycan"),
+        ("Land Rover", "Defender|Discovery|Discovery Sport|Range Rover|Range Rover Sport|Range Rover Evoque|Range Rover Velar"),
+        ("Jaguar", "XE|XF|XJ|F-Type|F-Pace|E-Pace|I-Pace"),
+        ("Jeep", "Wrangler|Grand Cherokee|Cherokee|Compass|Renegade|Gladiator"),
+        ("Fiat", "500|Panda|Tipo|Punto|124 Spider"),
+        ("Alfa Romeo", "Giulia|Stelvio|Tonale|Giulietta|159|4C"),
+        ("Ferrari", "Roma|Portofino|296|SF90|812|F8|488|458|Purosangue"),
+        ("Lamborghini", "Huracan|Aventador|Urus|Revuelto|Gallardo"),
+        ("Maserati", "Ghibli|Quattroporte|Levante|Grecale|GranTurismo|MC20"),
+        ("Bentley", "Continental GT|Flying Spur|Bentayga|Mulsanne"),
+        ("Rolls-Royce", "Ghost|Phantom|Cullinan|Wraith|Dawn|Spectre"),
+        ("Aston Martin", "DB9|DB11|DB12|Vantage|DBX|DBS"),
+        ("McLaren", "570S|600LT|720S|750S|GT|Artura"),
+        ("Lotus", "Elise|Exige|Evora|Emira|Eletre|Emeya"),
+        ("Infiniti", "Q50|Q60|Q70|QX50|QX60|QX80"),
+        ("Acura", "Integra|TLX|RDX|MDX|NSX"), ("Genesis", "G70|G80|G90|GV60|GV70|GV80"),
+        ("Polestar", "1|2|3|4"), ("Saab", "9-3|9-5|900|9000"),
+        ("SEAT", "Ibiza|Leon|Arona|Ateca|Tarraco"), ("Cupra", "Born|Formentor|Leon|Ateca|Tavascan"),
+        ("Dacia", "Sandero|Duster|Logan|Jogger|Spring"),
+        ("Tata", "Tiago|Tigor|Nexon|Harrier|Safari|Punch"),
+        ("Mahindra", "Scorpio|XUV700|Thar|Bolero|XUV300"),
+        ("Changan", "Alsvin|CS35 Plus|CS55 Plus|CS75 Plus|UNI-T|UNI-K"),
+        ("Wuling", "Hongguang|Hongguang Mini EV|Air EV|Bingo|Almaz"),
+        ("Maxus", "G10|G50|MIFA 9|T60|T90"), ("JAC", "T8|T9|JS4|JS6"),
+        ("BAIC", "X55|BJ40|BJ80"), ("Chrysler", "300|Pacifica|Voyager"),
+        ("Dodge", "Charger|Challenger|Durango|Journey"), ("Ram", "1500|2500|3500"),
+        ("GMC", "Sierra|Yukon|Acadia|Terrain|Hummer EV"),
+        ("Cadillac", "CT4|CT5|XT4|XT5|XT6|Escalade|Lyriq"),
+        ("Lincoln", "Navigator|Aviator|Corsair|Nautilus"),
+        ("Buick", "Encore|Envision|Enclave|LaCrosse"),
+        ("Rivian", "R1T|R1S"), ("Lucid", "Air|Gravity"),
+        ("VinFast", "VF 3|VF 5|VF 6|VF 7|VF 8|VF 9"),
+        ("Denza", "D9|N7|Z9"), ("Hongqi", "H5|H9|HS5|HS7|E-HS9")
+    ]
+    static func models(_ brand: String) -> [String] {
+        brands.first { $0.0 == brand }?.1.components(separatedBy: "|") ?? []
+    }
+    static let colours = ["silver", "grey", "white", "pearl", "black", "red", "maroon", "blue", "navy", "teal", "green", "yellow", "orange", "brown", "beige", "gold", "bronze", "purple", "pink"]
+    static func colourName(_ id: String) -> String {
+        switch id {
+        case "silver": return tr("银色", "Silver", "Perak")
+        case "grey": return tr("灰色", "Grey", "Kelabu")
+        case "white": return tr("白色", "White", "Putih")
+        case "pearl": return tr("珍珠白", "Pearl white", "Putih mutiara")
+        case "black": return tr("黑色", "Black", "Hitam")
+        case "red": return tr("红色", "Red", "Merah")
+        case "maroon": return tr("酒红色", "Maroon", "Merah hati")
+        case "blue": return tr("蓝色", "Blue", "Biru")
+        case "navy": return tr("深蓝色", "Navy", "Biru tua")
+        case "teal": return tr("蓝绿色", "Teal", "Biru kehijauan")
+        case "green": return tr("绿色", "Green", "Hijau")
+        case "yellow": return tr("黄色", "Yellow", "Kuning")
+        case "orange": return tr("橙色", "Orange", "Jingga")
+        case "brown": return tr("棕色", "Brown", "Coklat")
+        case "beige": return tr("米色", "Beige", "Beige")
+        case "gold": return tr("金色", "Gold", "Emas")
+        case "bronze": return tr("铜色", "Bronze", "Gangsa")
+        case "purple": return tr("紫色", "Purple", "Ungu")
+        case "pink": return tr("粉红色", "Pink", "Merah jambu")
+        default: return id
+        }
+    }
+}
+
+private struct VehicleChoiceList: View {
+    let title: String
+    let choices: [String]
+    @Binding var selection: String
+    @State private var search = ""
+    @Environment(\.dismiss) private var dismiss
+    private var matches: [String] {
+        let all = selection.isEmpty || choices.contains(selection) ? choices : [selection] + choices
+        return search.isEmpty ? all : all.filter { $0.localizedCaseInsensitiveContains(search) }
+    }
+    var body: some View {
+        List {
+            ForEach(matches, id: \.self) { value in
+                Button {
+                    selection = value
+                    dismiss()
+                } label: {
+                    HStack {
+                        Text(value).foregroundStyle(.primary)
+                        Spacer()
+                        if selection == value { Image(systemName: "checkmark").foregroundStyle(parkingAccent) }
+                    }
+                }
+            }
+            if matches.isEmpty {
+                Text(tr("没有匹配车型，请尝试其他名称", "No match. Try another name.", "Tiada padanan. Cuba nama lain."))
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .navigationTitle(title)
+        .searchable(text: $search)
+    }
+}
+
 private struct ParkingVehicleEditor: View {
     @ObservedObject var store: ParkingStore
     let plate: String
@@ -685,9 +780,28 @@ private struct ParkingVehicleEditor: View {
                         TextField(tr("车牌号码", "Plate number", "Nombor plat"), text: $newPlate)
                             .textInputAutocapitalization(.characters).autocorrectionDisabled()
                     }
-                    TextField(tr("品牌（例如 Perodua）", "Brand (e.g. Perodua)", "Jenama (cth. Perodua)"), text: $vehicle.brand)
-                    TextField(tr("车型（例如 Myvi）", "Model (e.g. Myvi)", "Model (cth. Myvi)"), text: $vehicle.model)
-                    TextField(tr("年份（可选）", "Year (optional)", "Tahun (pilihan)"), text: $vehicle.year).keyboardType(.numberPad)
+                    NavigationLink {
+                        VehicleChoiceList(title: tr("选择品牌", "Choose brand", "Pilih jenama"), choices: VehicleChoices.brands.map { $0.0 },
+                            selection: Binding(get: { vehicle.brand }, set: {
+                                if vehicle.brand != $0 { vehicle.brand = $0; vehicle.model = "" }
+                            }))
+                    } label: {
+                        LabeledContent(tr("品牌", "Brand", "Jenama"), value: vehicle.brand.isEmpty ? tr("请选择", "Choose", "Pilih") : vehicle.brand)
+                    }
+                    NavigationLink {
+                        VehicleChoiceList(title: tr("选择车型", "Choose model", "Pilih model"), choices: VehicleChoices.models(vehicle.brand), selection: $vehicle.model)
+                    } label: {
+                        LabeledContent(tr("车型", "Model", "Model"), value: vehicle.model.isEmpty ? tr("请选择", "Choose", "Pilih") : vehicle.model)
+                    }.disabled(vehicle.brand.isEmpty)
+                    Picker(tr("年份（可选）", "Year (optional)", "Tahun (pilihan)"), selection: $vehicle.year) {
+                        Text(tr("未选择", "Not selected", "Belum dipilih")).tag("")
+                        if !vehicle.year.isEmpty, !(1950...Calendar.current.component(.year, from: Date())).contains(Int(vehicle.year) ?? 0) {
+                            Text(vehicle.year).tag(vehicle.year)
+                        }
+                        ForEach((1950...Calendar.current.component(.year, from: Date())).reversed(), id: \.self) { year in
+                            Text(String(year)).tag(String(year))
+                        }
+                    }
                     Picker(tr("车身类型", "Body type", "Jenis badan"), selection: $vehicle.body) {
                         Text(tr("通用车型（旧设置）", "Generic (legacy)", "Umum (lama)")).tag("car")
                         Text("Hatchback · 掀背车").tag("hatchback")
@@ -696,12 +810,9 @@ private struct ParkingVehicleEditor: View {
                         Text("MPV").tag("mpv")
                     }
                     Picker(tr("车身颜色", "Vehicle colour", "Warna kenderaan"), selection: $vehicle.color) {
-                        Text(tr("银 / 灰", "Silver / grey", "Perak / kelabu")).tag("silver")
-                        Text(tr("白色", "White", "Putih")).tag("white")
-                        Text(tr("黑色", "Black", "Hitam")).tag("black")
-                        Text(tr("红色", "Red", "Merah")).tag("red")
-                        Text(tr("蓝色", "Blue", "Biru")).tag("blue")
-                        Text(tr("绿色", "Green", "Hijau")).tag("green")
+                        ForEach(VehicleChoices.colours, id: \.self) { colour in
+                            Text(VehicleChoices.colourName(colour)).tag(colour)
+                        }
                     }
                 }
                 Section {
@@ -713,7 +824,7 @@ private struct ParkingVehicleEditor: View {
                     }
                     if loadingPhoto { ProgressView() }
                     ParkingMapCard(session: nil, vehicle: vehicle)
-                    Text(tr("资料和照片绑定车牌保存。未选照片时，按车身类型和颜色显示示意图。", "Details and photos are saved against this plate. Without a photo, body type and colour provide an illustration.", "Butiran dan foto disimpan mengikut plat. Tanpa foto, jenis badan dan warna digunakan sebagai ilustrasi."))
+                    Text(tr("资料和照片绑定车牌保存。车型库包含新旧车型；颜色用于记录实际车色，不代表原厂可选配置，也不会改变参考图。", "Saved against this plate. The catalogue includes older models. Colour records your car's paint; it does not indicate factory availability or recolour reference images.", "Disimpan mengikut plat. Katalog termasuk model lama. Warna merekod cat kereta, bukan pilihan kilang, dan tidak menukar imej rujukan."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !error.isEmpty { Text(error).foregroundStyle(.red) }

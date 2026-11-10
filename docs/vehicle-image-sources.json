@@ -1,0 +1,82 @@
+{
+  "note": "Manufacturer reference imagery. Copyright belongs to the respective manufacturers. Does not assert exact year, trim or paint match.",
+  "images": [
+    {
+      "brand": "Perodua",
+      "model": "Axia",
+      "url": "https://www.perodua.com.my/img.php?a=images/new_axia/our_car_models/Axia-category-image-ssilver-01.webp&w=960&v=2",
+      "page": "https://www.perodua.com.my/our-models/choose-model",
+      "asset": "Vehicle_Perodua_Axia"
+    },
+    {
+      "brand": "Perodua",
+      "model": "Alza",
+      "url": "https://www.perodua.com.my/img.php?a=images/new_alza/cp-assets/EN/our_models/Thumbnail.webp&w=960&v=2",
+      "page": "https://www.perodua.com.my/our-models/choose-model",
+      "asset": "Vehicle_Perodua_Alza"
+    },
+    {
+      "brand": "Perodua",
+      "model": "Myvi",
+      "url": "https://www.perodua.com.my/img.php?a=images/myvi-category-image.webp&w=960&v=2",
+      "page": "https://www.perodua.com.my/our-models/choose-model",
+      "asset": "Vehicle_Perodua_Myvi"
+    },
+    {
+      "brand": "Perodua",
+      "model": "Ativa",
+      "url": "https://www.perodua.com.my/img.php?a=images/choosecar-ativa-cblue.webp&w=960&v=2",
+      "page": "https://www.perodua.com.my/our-models/choose-model",
+      "asset": "Vehicle_Perodua_Ativa"
+    },
+    {
+      "brand": "Perodua",
+      "model": "Aruz",
+      "url": "https://www.perodua.com.my/img.php?a=images/aruz/choosecar-aruzpi-brown.webp&w=960&v=2",
+      "page": "https://www.perodua.com.my/our-models/choose-model",
+      "asset": "Vehicle_Perodua_Aruz"
+    },
+    {
+      "brand": "Perodua",
+      "model": "Bezza",
+      "url": "https://www.perodua.com.my/img.php?a=images/choosecar-bezza.webp&w=960&v=2",
+      "page": "https://www.perodua.com.my/our-models/choose-model",
+      "asset": "Vehicle_Perodua_Bezza"
+    },
+    {
+      "brand": "Proton",
+      "model": "X50",
+      "url": "https://cms-assets.proton.com/proton-cms-blob/media/wxaip352/model-x50-01-copy.png",
+      "page": "https://www.proton.com/",
+      "asset": "Vehicle_Proton_X50"
+    },
+    {
+      "brand": "Proton",
+      "model": "X70",
+      "url": "https://cms-assets.proton.com/proton-cms-blob/media/e3jm4grp/model-x70.png",
+      "page": "https://www.proton.com/",
+      "asset": "Vehicle_Proton_X70"
+    },
+    {
+      "brand": "Proton",
+      "model": "X90",
+      "url": "https://cms-assets.proton.com/proton-cms-blob/media/xcxpvkh5/model-x90.png",
+      "page": "https://www.proton.com/",
+      "asset": "Vehicle_Proton_X90"
+    },
+    {
+      "brand": "Proton",
+      "model": "S70",
+      "url": "https://cms-assets.proton.com/proton-cms-blob/media/pwtfsjvq/model-s70.png",
+      "page": "https://www.proton.com/",
+      "asset": "Vehicle_Proton_S70"
+    },
+    {
+      "brand": "Proton",
+      "model": "Saga",
+      "url": "https://cms-assets.proton.com/proton-cms-blob/media/yileabdk/model-saga_360x200.png",
+      "page": "https://www.proton.com/",
+      "asset": "Vehicle_Proton_Saga"
+    }
+  ]
+}
