@@ -2199,10 +2199,16 @@ struct ExpensesView: View {
 }
 private struct TNGTimelineDetail: View {
     @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
     let notice: TNGNotice
     var body: some View {
         let _ = uiLocale.identifier
-        Group { if notice.kind == "incoming" { TNGIncomingView(id: notice.id) } else { TNGNoticeView(id: notice.id) } }
+        Group {
+            if let id = model.notice(id: notice.id)?.expenseID, model.expense(id: id) != nil {
+                ExpenseDetailView(id: id, embeddedInNavigation: true)
+            } else if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+            else { TNGNoticeView(id: notice.id) }
+        }
     }
 }
 struct TNGTimelineRow: View {
@@ -2836,6 +2842,7 @@ struct ExpenseEditor: View {
     var onSaved: (() -> Void)? = nil
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var foreignExpanded = false
+    @State private var moreDetails = false
     @FocusState private var focusedField: ExpenseInputField?
     @State private var draftSaveTask: Task<Void, Never>?
     @State private var deleting: Expense?
@@ -2934,9 +2941,11 @@ struct ExpenseEditor: View {
                 }
                 if original == nil && initialDraft == nil { ManualEntryTypeSection(selection: $entryType) }
                 paymentSection
-                chargeSection
-                payerSection
                 merchantSection
+                Section {
+                    DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
+                        .disabled((original?.refunded ?? 0) > 0 || screenshotImport)
+                }
                 if screenshotImport {
                     Section(tr("核对重复交易", "Review matching transactions", "Semak transaksi sepadan")) {
                         ForEach(model.ledger.expenses.filter { screenshotMatches.contains("expense:" + $0.id) }) { entry in
@@ -2957,6 +2966,25 @@ struct ExpenseEditor: View {
                         Text(tr("已有记录请返回查看，不要再次保存；同日同金额只提示可能重复。", "For an existing payment, go back without saving. Same-day amounts indicate possible duplicates only.", "Untuk bayaran sedia ada, kembali tanpa menyimpan. Amaun hari sama hanya menunjukkan kemungkinan pendua.")).font(.caption)
                     }
                 }
+                Section {
+                    Button {
+                        finishKeyboard()
+                        moreDetails.toggle()
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(tr("更多账目选项", "More entry options", "Pilihan rekod lanjut")).font(.headline)
+                                Text(tr("物品、分账、税费、地点与外币", "Items, splits, charges, location and currency", "Item, bahagian, caj, lokasi dan mata wang"))
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                            Image(systemName: moreDetails ? "chevron.up" : "chevron.down")
+                        }.padding(.vertical, 4)
+                    }.accessibilityIdentifier("transaction.moreOptions")
+                }
+                if moreDetails {
+                chargeSection
+                payerSection
                 if !model.ledger.trips.isEmpty {
                     Section(tr("旅行账本", "Travel book", "Buku perjalanan")) {
                         Picker(tr("预算归属", "Budget", "Bajet"), selection: $tripID) {
@@ -2992,6 +3020,7 @@ struct ExpenseEditor: View {
                         ShareLink(item: summary) { Label(tr("分享明细", "Share details", "Kongsi butiran"), systemImage: "square.and.arrow.up") }
                     }
                 }
+                }
                 if let original {
                     Section {
                         Button(role: .destructive) { deleting = original } label: {
@@ -3013,7 +3042,13 @@ struct ExpenseEditor: View {
                         Button(tr("完成", "Done", "Selesai")) { finishKeyboard() }
                     }
                 }
-                .onAppear { load() }
+                .onAppear {
+                    let firstLoad = !initialized
+                    load()
+                    if firstLoad {
+                        moreDetails = startWithSplit || friendPays || splitting || chargesEnabled || !itemDrafts.isEmpty || currency != "MYR" || reimbursementEnabled || (original?.refunded ?? 0) > 0 || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false)
+                    }
+                }
                 .onChange(of: snapshot) { _, _ in
                     screenshotAcknowledged.removeAll()
                     draftSaveTask?.cancel()
@@ -3189,7 +3224,7 @@ struct ExpenseEditor: View {
             }.padding(.vertical, 4)
             // Keep this navigation row mounted when the first item is inserted.
             // Removing it in the same Form update can invalidate native navigation.
-            if itemDrafts.isEmpty {
+            if itemDrafts.isEmpty && (original == nil || moreDetails) {
                 AIClassificationRow(text: entryDescription, merchant: name, rememberedCategory: model.ledger.merchantCategories[friendKey(name)], categories: model.ledger.categoryNames, category: $category, manuallySelected: manualCategory || fuel || saving || draftFinished || resumedDraft || recoverable != nil || (original != nil && name == original?.merchant && entryDescription == (original?.entryDescription ?? "")) || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
             }
             Picker(tr("分类", "Category", "Kategori"), selection: Binding(get: { category }, set: { manualCategory = true; category = $0 })) {
@@ -3198,8 +3233,9 @@ struct ExpenseEditor: View {
                 }
             }.pickerStyle(.navigationLink).disabled(!itemDrafts.isEmpty)
                 .accessibilityIdentifier("transaction.category")
-            Text(tr("填写物品后，消费按每件物品的分类统计。", "When items are entered, spending uses each item's category.", "Apabila item diisi, belanja menggunakan kategori setiap item."))
+            if !itemDrafts.isEmpty { Text(tr("填写物品后，消费按每件物品的分类统计。", "When items are entered, spending uses each item's category.", "Apabila item diisi, belanja menggunakan kategori setiap item."))
                 .font(.footnote).foregroundStyle(.secondary)
+            }
         }.disabled((original?.refunded ?? 0) > 0)
     }
     private var currencySection: some View {
@@ -3207,7 +3243,6 @@ struct ExpenseEditor: View {
             AICategorySettings()
             Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
                 .disabled(!itemDrafts.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-            DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
             DisclosureGroup(isExpanded: $foreignExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
                     currency = code
@@ -4969,8 +5004,7 @@ struct NotificationDestinationView: View {
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { dismiss() } } }
                 }
             } else if let id = target.expenseID(in: model.ledger), let entry = model.expense(id: id) {
-                if ["category", "edit"].contains(target.action) { ExpenseEditor(original: entry) }
-                else { ExpenseDetailView(id: entry.id) }
+                ExpenseEditor(original: entry)
             } else {
                 NavigationStack {
                     Group {
