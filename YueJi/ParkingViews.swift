@@ -619,6 +619,13 @@ private struct ParkingHome: View {
                         }
                         DisclosureGroup(tr("修改位置 / 补充车位（可选）", "Edit location / add bay (optional)", "Ubah lokasi / tambah petak (pilihan)")) {
                             VStack(spacing: 12) {
+                                if let last = store.sessions.first(where: { $0.endedAt != nil && !$0.name.isEmpty && $0.plate == plate }) {
+                                    Button(tr("沿用上次停车地点：", "Use previous parking place: ", "Guna tempat parkir terdahulu: ") + last.name) {
+                                        name = last.name
+                                        // A bay can change on every visit; never silently reuse it.
+                                        bay = ""
+                                    }
+                                }
                                 TextField(tr("停车场或地区", "Car park or area", "Tempat atau kawasan"), text: $name)
                                 TextField(tr("楼层 / 区域 / 车位号", "Floor / zone / bay", "Tingkat / zon / petak"), text: $bay)
                                 Text(tr("楼层和车位号可稍后补充。", "Add floor and bay later if needed.", "Tambah tingkat dan petak kemudian jika perlu.")).font(.caption).foregroundStyle(.secondary)

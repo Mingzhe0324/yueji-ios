@@ -1631,6 +1631,7 @@ import UserNotifications
 import UIKit
 
 struct NotificationSettingsView: View {
+    @AppStorage("automaticNoticeMode") private var noticeMode = "every"
     @Environment(\.locale) private var uiLocale
     @Environment(\.scenePhase) private var scenePhase
     @State private var daily = UserDefaults.standard.bool(forKey: "dailyReminder")
@@ -1651,6 +1652,15 @@ struct NotificationSettingsView: View {
                 Toggle(tr("每日记账提醒", "Daily spending reminder", "Peringatan belanja harian"), isOn: Binding(get: { daily }, set: { guard !busy else { return }; daily = $0; saveReminders() }))
                 if daily { DatePicker(tr("每天提醒时间", "Daily reminder time", "Masa peringatan harian"), selection: Binding(get: { time }, set: { guard !busy else { return }; time = $0; saveReminders() }), displayedComponents: .hourAndMinute) }
                 Toggle(tr("自动记账后通知我", "Notify me after automatic recording", "Maklum selepas rekod automatik"), isOn: Binding(get: { results }, set: { guard !busy else { return }; results = $0; saveReminders() }))
+                if results {
+                    Picker(tr("通知频率", "Notification frequency", "Kekerapan notifikasi"), selection: $noticeMode) {
+                        ForEach(AutomaticNoticeMode.allCases) { Text($0.title).tag($0.rawValue) }
+                    }
+                    if noticeMode == "daily" && !daily {
+                        DatePicker(tr("摘要时间", "Summary time", "Masa ringkasan"), selection: Binding(get: { time }, set: { time = $0; saveReminders() }), displayedComponents: .hourAndMinute)
+                    }
+                    Text(tr("待确认和处理失败仍及时提醒。摘要只在有自动入账时安排。", "Reviews and failures still alert immediately. A summary is scheduled only after an automatic entry.", "Semakan dan kegagalan masih dimaklumkan segera. Ringkasan hanya dijadualkan selepas rekod automatik.")).font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle(tr("通知里隐藏金额和姓名", "Hide amounts and names in notifications", "Sembunyikan amaun dan nama dalam notifikasi"), isOn: $hideDetails)
                 Text(tr("系统通知会用不同声音区分收款与扣款：收款是清亮上扬音，扣款是较低的下落音；待确认或失败使用普通提示音。", "System notifications use a bright rising tone for incoming money and a lower falling tone for outgoing money. Unclear results or failures use the regular tone.", "Notifikasi sistem menggunakan nada menaik untuk wang masuk dan nada menurun untuk wang keluar. Hasil tidak jelas atau kegagalan menggunakan nada biasa.")).font(.footnote)
                 if busy { ProgressView() }
@@ -1705,6 +1715,9 @@ struct NotificationSettingsView: View {
                 if enabled { Task { await UnusualSpendingNotifier.shared.check() } }
             }
             .onChange(of: scenePhase) { _, phase in if phase == .active { Task { await refreshPermission() } } }
+            .onChange(of: noticeMode) { _, _ in
+                UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["yueji.automatic.summary"])
+            }
             .alert(tr("通知设置", "Notification settings", "Tetapan notifikasi"), isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } })) { Button("OK") {} } message: { Text(message ?? "") }
     }
     private static func savedReminderTime() -> Date {
@@ -2083,9 +2096,17 @@ func tngStatus(_ notice: TNGNotice) -> String {
 }
 struct LedgerReviewQueue: View {
     @EnvironmentObject var model: LedgerModel
+    @State private var reviewing: TNGNotice?
+    @State private var lastReviewedID: String?
+    @State private var continueReview = false
     var body: some View {
         List {
             Section {
+                if let first = model.readIndex.pendingNotices.first {
+                    Button(tr("连续核对", "Review one by one", "Semak satu demi satu")) {
+                        continueReview = true; lastReviewedID = first.id; reviewing = first
+                    }
+                }
                 NavigationLink { DuplicateReviewView() } label: {
                     Label(tr("检查可能重复的账目", "Check possible duplicates", "Semak kemungkinan pendua"), systemImage: "doc.on.doc")
                 }
@@ -2110,6 +2131,22 @@ struct LedgerReviewQueue: View {
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("待核对", "To review", "Untuk disemak"))
+            .sheet(item: $reviewing, onDismiss: {
+                guard continueReview, let id = lastReviewedID,
+                      !model.readIndex.pendingNotices.contains(where: { $0.id == id }),
+                      let next = model.readIndex.pendingNotices.first else { continueReview = false; return }
+                lastReviewedID = next.id; reviewing = next
+            }) { notice in
+                NavigationStack {
+                    Group {
+                        if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+                        else { FinancialNoticeReviewView(id: notice.id) }
+                    }
+                    .toolbar { ToolbarItem(placement: .cancellationAction) {
+                        Button(tr("稍后继续", "Continue later", "Sambung kemudian")) { continueReview = false; reviewing = nil }
+                    } }
+                }.ledgerFeedback(modal: true)
+            }
     }
 }
 
@@ -3549,6 +3586,7 @@ struct ReceiptScanView: View {
     @State private var date = Date()
     @State private var dateMissing = false
     @State private var existingID = ""
+    @State private var separateReceiptPayment = false
     @State private var error: String?
     @State private var reviewed = false
     @State private var scanNotice = ""
@@ -3607,7 +3645,11 @@ struct ReceiptScanView: View {
     }
     private var matching: [Expense] {
         guard let total = try? toCents(printedTotal) else { return [] }
-        return model.ledger.expenses.filter { $0.cents == total && $0.foreign == nil && $0.shares.isEmpty && $0.refunded == 0 }.sorted { $0.date > $1.date }
+        return model.ledger.expenses.filter {
+            $0.cents == total && $0.foreign == nil && $0.shares.isEmpty && $0.refunded == 0 &&
+            $0.paidByFriend == nil && !model.ledger.hasActiveSettlement(expenseID: $0.id) &&
+            Calendar.current.isDate($0.date, inSameDayAs: date)
+        }.sorted { $0.date > $1.date }
     }
     private func amountRow(_ title: String, _ value: Binding<String>, signed: Bool = false) -> some View {
         HStack {
@@ -3806,11 +3848,18 @@ struct ReceiptScanView: View {
                 Text(validationMessage).font(.caption).foregroundStyle(.orange)
             }
             if !matching.isEmpty || !existingID.isEmpty {
+                if existingID.isEmpty, matching.count == 1, let match = matching.first {
+                    Button(tr("补充到已有付款", "Attach to existing payment", "Lampir pada bayaran sedia ada")) { existingID = match.id }
+                    Text(match.displayName + " · " + money(match.cents)).font(.caption).foregroundStyle(.secondary)
+                }
                 Picker(tr("保存到", "Save to", "Simpan ke"), selection: $existingID) {
                     Text(tr("新增账目", "New expense", "Belanja baharu")).tag("")
                     ForEach(matching) { entry in Text(entry.displayName + " · " + dateLabel(entry.date)).tag(entry.id) }
                 }
                 Text(tr("这笔付款已入账？选原账目，避免重复。", "Already recorded? Choose the original payment to avoid duplicates.", "Sudah direkod? Pilih bayaran asal supaya tidak berganda.")).font(.caption)
+                if existingID.isEmpty {
+                    Toggle(tr("这是另一笔付款", "This is a separate payment", "Ini bayaran berasingan"), isOn: $separateReceiptPayment)
+                }
             }
             if existingID.isEmpty && !savesCategories {
                 Picker(tr("分类", "Category", "Kategori"), selection: $category) {
@@ -3820,7 +3869,7 @@ struct ReceiptScanView: View {
                 }.accessibilityIdentifier("receipt.category")
             }
             Toggle(tr("已核对日期、项目和金额", "Date, items and amounts checked", "Tarikh, item dan amaun disemak"), isOn: $reviewed)
-            Button(tr("保存分账", "Save split", "Simpan pembahagian")) { save() }.disabled(!reviewed || busy || (try? breakdown()) == nil)
+            Button(tr("保存分账", "Save split", "Simpan pembahagian")) { save() }.disabled(!reviewed || busy || (try? breakdown()) == nil || (existingID.isEmpty && !matching.isEmpty && !separateReceiptPayment))
         }
     }
     private func itemShare(_ item: ScannedReceipt.Item, person: UUID) -> Int {
@@ -3869,7 +3918,7 @@ struct ReceiptScanView: View {
             .sheet(item: $comparingItem) { item in
                 if let receiptImage { ReceiptComparisonView(image: receiptImage, item: item).ledgerFeedback(modal: true) }
             }
-            .onChange(of: reviewKey) { _, _ in reviewed = false }
+            .onChange(of: reviewKey) { _, _ in reviewed = false; separateReceiptPayment = false }
             .disabled(model.isWorking("receipt-save"))
             .overlay { if model.isWorking("receipt-save") { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .sheet(isPresented: $camera) {
@@ -3960,7 +4009,7 @@ struct ReceiptScanView: View {
             merchant = receipt.merchant; category = "其他"; subtotal = receipt.subtotal; tax = receipt.tax
             service = receipt.service; discount = receipt.discount; rounding = receipt.rounding
             printedTotal = receipt.total; items = receipt.items; date = receipt.date ?? Date()
-            dateMissing = receipt.date == nil; existingID = ""; hasReceipt = true; receiptImage = UIImage(data: data)
+            dateMissing = receipt.date == nil; existingID = ""; separateReceiptPayment = false; hasReceipt = true; receiptImage = UIImage(data: data)
             return true
         } catch is CancellationError { return false }
         catch { if !Task.isCancelled, scanRequest == request { self.error = error.localizedDescription }; return false }
@@ -3968,6 +4017,7 @@ struct ReceiptScanView: View {
     private func save() {
         do {
             let result = try breakdown(), total = try toCents(printedTotal)
+            guard !existingID.isEmpty || matching.isEmpty || separateReceiptPayment else { throw LedgerError.invalid("Review the matching payment first") }
             guard !merchant.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw LedgerError.invalid("Enter merchant") }
             let shares = people.enumerated().compactMap { index, person -> Share? in
                 guard person.id != myID, result.totals[index] > 0 else { return nil }

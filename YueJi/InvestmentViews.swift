@@ -1342,6 +1342,8 @@ private struct StockResearchView: View {
     @State private var saveMessage = ""
     @State private var imported: StockResearchImport?
     @State private var showingImport = false
+    @State private var previousReport: ResearchHistoryEntry?
+    @State private var previousScope: String?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private func startResearch() {
         guard !running else { return }
@@ -1356,6 +1358,10 @@ private struct StockResearchView: View {
                 guard (value.symbols ?? [value.symbol]) == symbols, value.html.utf8.count <= 300000,
                       scope != nil, scope == account.researchHistoryScope else { throw CloudFailure.invalidResponse }
                 report = value
+                if imported == nil, let scope, let text = value.text, !text.isEmpty {
+                    do { try ResearchHistory.save(symbols: symbols, text: text, generatedAt: value.generatedAt, scope: scope) }
+                    catch { saveMessage = tr("报告已生成，但本机保存失败。", "Report ready, but local saving failed.", "Laporan siap, tetapi simpanan tempatan gagal.") }
+                }
             } catch is CancellationError { }
             catch { if !Task.isCancelled { self.error = error.localizedDescription } }
         }
@@ -1363,6 +1369,18 @@ private struct StockResearchView: View {
     var body: some View {
         ScrollView {
         VStack(alignment: .leading, spacing: 14) {
+            if report == nil, imported == nil, let previousReport, let previousScope, previousScope == account.researchHistoryScope {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(tr("上次研究 · 尚未重新核对来源", "Previous research · sources not refreshed", "Kajian terdahulu · sumber belum dikemas kini")).font(.headline)
+                        Text(previousReport.generatedAt).font(.caption).foregroundStyle(.secondary)
+                        Text(String(previousReport.text.prefix(400))).font(.subheadline)
+                        NavigationLink { ResearchHistoryDetail(entry: previousReport, scope: previousScope) } label: {
+                            Text(tr("查看完整报告", "Read full report", "Baca laporan penuh"))
+                        }
+                    }
+                }
+            }
             Text(symbols.joined(separator: " / ")).font(.headline)
             if imported == nil {
                 Text(tr("不需要准备文件。点下面的按钮，App 会尝试读取公司的公开财报，帮你了解赚钱能力、负债和风险。", "No files to prepare. Tap below and the app will try to read public company reports to explain earnings, debt and risks.", "Tidak perlu menyediakan fail. Tekan butang di bawah untuk mendapatkan laporan awam dan memahami pendapatan, hutang serta risiko syarikat.")).font(.subheadline)
@@ -1462,7 +1480,15 @@ private struct StockResearchView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .onDisappear { task?.cancel(); report = nil }
-            .onChange(of: account.researchHistoryScope) { _, _ in task?.cancel(); report = nil; imported = nil; showingImport = false; error = ""; saveMessage = "" }
+            .task(id: account.researchHistoryScope) {
+                previousReport = nil
+                previousScope = nil
+                if let scope = account.researchHistoryScope {
+                    previousReport = (try? ResearchHistory.load(scope: scope))?.first { $0.symbols == symbols }
+                    previousScope = scope
+                }
+            }
+            .onChange(of: account.researchHistoryScope) { _, _ in task?.cancel(); report = nil; previousReport = nil; imported = nil; showingImport = false; error = ""; saveMessage = "" }
             .onChange(of: phase) { _, value in
                 if value != .active { task?.cancel(); report = nil }
             }

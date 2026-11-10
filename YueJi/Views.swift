@@ -517,12 +517,12 @@ struct MainView: View {
                 guard !Task.isCancelled else { return }
                 await model.refresh(postRecurring: false)
                 openPendingNotification()
+                // A slow exchange-rate service must not delay the local backup.
+                await AutoBackup.run()
                 await AutomaticRates.shared.refreshSaved()
                 guard !Task.isCancelled else { return }
                 await model.refresh(postRecurring: false)
                 openPendingNotification()
-                // A copy outside the app, when one is due and something changed.
-                await AutoBackup.run()
             }
             .onChange(of: phase) { _, value in
                 // Leaving the app is the other moment worth a copy: the day's entries are in.
@@ -2325,6 +2325,13 @@ struct ExpenseDetailView: View {
                     let entry = detail.entry
                     Section {
                         ExpenseDetailHero(entry: entry, compact: $compactTitle)
+                        Button {
+                            guard !editorPresented else { return }
+                            editorPresented = true
+                            editing = .expense(entry)
+                        } label: {
+                            Label(tr("修改金额、商家、分类或日期", "Change amount, merchant, category or date", "Ubah amaun, peniaga, kategori atau tarikh"), systemImage: "square.and.pencil")
+                        }.accessibilityIdentifier("transaction.quickEdit")
                     }
                     // Where a payment's notification about a subscription leads: the schedule it
                     // renewed, or the possible subscription it may be part of.
@@ -2963,6 +2970,19 @@ struct ExpenseEditor: View {
                     DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
                         .disabled((original?.refunded ?? 0) > 0 || screenshotImport)
                 }
+                if original == nil && tripID.isEmpty {
+                    let suggestions = model.ledger.trips.filter {
+                        let day = Calendar.current.startOfDay(for: date)
+                        return day >= Calendar.current.startOfDay(for: $0.start) && day <= Calendar.current.startOfDay(for: $0.end)
+                    }
+                    if !suggestions.isEmpty {
+                        Section(tr("可能属于这次旅行", "Possible travel book", "Mungkin buku perjalanan ini")) {
+                            ForEach(suggestions) { trip in
+                                Button(trip.name) { tripID = trip.id; moreDetails = true }
+                            }
+                        }
+                    }
+                }
                 if screenshotImport {
                     Section(tr("核对重复交易", "Review matching transactions", "Semak transaksi sepadan")) {
                         ForEach(model.ledger.expenses.filter { screenshotMatches.contains("expense:" + $0.id) }) { entry in
@@ -3251,6 +3271,8 @@ struct ExpenseEditor: View {
                 }
             }.pickerStyle(.navigationLink).disabled(!itemDrafts.isEmpty)
                 .accessibilityIdentifier("transaction.category")
+            Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
+                .disabled(!itemDrafts.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             if !itemDrafts.isEmpty { Text(tr("填写物品后，消费按每件物品的分类统计。", "When items are entered, spending uses each item's category.", "Apabila item diisi, belanja menggunakan kategori setiap item."))
                 .font(.footnote).foregroundStyle(.secondary)
             }
@@ -3259,8 +3281,6 @@ struct ExpenseEditor: View {
     private var currencySection: some View {
         Section {
             AICategorySettings()
-            Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $rememberCategory)
-                .disabled(!itemDrafts.isEmpty || name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
             DisclosureGroup(isExpanded: $foreignExpanded.animation(reduceMotion ? nil : YueJiMotion.standard)) {
                 Picker(tr("币种", "Currency", "Mata wang"), selection: Binding(get: { currency }, set: { code in
                     currency = code
@@ -3300,6 +3320,12 @@ struct ExpenseEditor: View {
             Button(tr("全是朋友的", "Entirely my friend's", "Sepenuhnya milik rakan")) { splitting = true; equal = true; includeMe = false; people = Array(people.prefix(1)) }
             Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
             if splitting {
+                if original == nil, people.allSatisfy({ $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+                   let last = model.ledger.expenses.filter({ !$0.shares.isEmpty && $0.paidByFriend == nil }).max(by: { $0.date < $1.date }) {
+                    Button(tr("沿用上次分账的朋友", "Use friends from the last split", "Guna rakan pembahagian terakhir")) {
+                        people = last.shares.map { share in var draft = FriendDraft(); draft.name = share.name; return draft }
+                    }
+                }
                 Toggle(tr("行程油费", "Trip fuel cost", "Kos minyak perjalanan"), isOn: $fuel).onChange(of: fuel) { _, value in if value { category = "交通" } }
                 Picker(tr("分摊方式", "Split method", "Cara pembahagian"), selection: $equal) { Text(tr("平均", "Equal", "Sama rata")).tag(true); Text(tr("自定", "Custom", "Tersuai")).tag(false) }.pickerStyle(.segmented)
                 if equal { Toggle(tr("我也参与分摊", "Include my share", "Termasuk bahagian saya"), isOn: $includeMe) }
@@ -3951,9 +3977,20 @@ struct SimpleSettingsRow: View {
 
 struct AutomationSetupView: View {
     @Environment(\.locale) private var uiLocale
+    @EnvironmentObject private var model: LedgerModel
     var body: some View {
         let _ = uiLocale.identifier
         List {
+            Section(tr("日常自动处理", "Everyday automation", "Automasi harian")) {
+                NavigationLink { LedgerReviewQueue() } label: {
+                    LabeledContent(tr("需要核对", "Needs review", "Perlu semakan"), value: "\(model.readIndex.pendingNotices.count)")
+                }
+                NavigationLink(tr("账户与付款对应", "Accounts and payment links", "Akaun dan pautan bayaran")) { BankAccountsView() }
+                NavigationLink(tr("通知频率", "Notification frequency", "Kekerapan notifikasi")) { NotificationSettingsView() }
+                NavigationLink(tr("记住的商家分类", "Remembered merchant categories", "Kategori peniaga diingati")) { MerchantRulesView() }
+            }
+            IncomeAutoAllocationSection()
+            AutoBackupSection()
             Section {
                 NavigationLink { ShortcutHelpView() } label: {
                     SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: IslandPalette.sky)
@@ -5015,7 +5052,19 @@ struct NotificationDestinationView: View {
     var body: some View {
         let _ = uiLocale.identifier
         Group {
-            if target.kind == "recurring" {
+            if target.kind == "summary" {
+                NavigationStack {
+                    List {
+                        NavigationLink { LedgerReviewQueue() } label: { Label(tr("待核对", "To review", "Untuk disemak"), systemImage: "checklist") }
+                        ForEach(model.ledger.expenses.sorted { $0.date > $1.date }.prefix(30)) { entry in
+                            NavigationLink { ExpenseEditor(original: entry) } label: {
+                                Text(entry.displayName + " · " + money(entry.cents))
+                            }
+                        }
+                    }.navigationTitle(tr("最近账目", "Recent entries", "Rekod terkini"))
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai")) { dismiss() } } }
+                }
+            } else if target.kind == "recurring" {
                 // A renewal reminder opens its schedule.
                 NavigationStack {
                     RecurringDetailView(ruleID: target.recordID)

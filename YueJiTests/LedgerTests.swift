@@ -6,6 +6,19 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testAutomaticNoticeModesKeepExceptionsImmediate() {
+        for mode in AutomaticNoticeMode.allCases {
+            XCTAssertTrue(mode.deliversImmediately(recorded: false))
+        }
+        XCTAssertTrue(AutomaticNoticeMode.every.deliversImmediately(recorded: true))
+        XCTAssertFalse(AutomaticNoticeMode.daily.deliversImmediately(recorded: true))
+        XCTAssertFalse(AutomaticNoticeMode.attention.deliversImmediately(recorded: true))
+    }
+    func testSummaryBannerHasAUsableDestination() {
+        let notice = ForegroundLedgerNotice(title: "Summary", message: "Ready", userInfo: ["recordID": "daily", "recordKind": "summary"])
+        XCTAssertEqual(notice.destination?["kind"], "summary")
+        XCTAssertEqual(notice.destination?["recordID"], "daily")
+    }
     func testBatchCategoryIsAtomicAndLearnsOnlyWhenRequested() throws {
         let first = Expense(id: "category-one", merchant: "Cafe", cents: 500, date: Date())
         let second = Expense(id: "category-two", merchant: "Shop", cents: 800, date: Date())

@@ -227,7 +227,17 @@ actor AutoBackupWriter {
             }
         }
         let job = AutoBackupJob(bookmark: bookmark, force: force, lastHash: defaults.string(forKey: AutoBackupKeys.lastHash), keep: keep, now: now)
-        let result = await AutoBackupWriter.shared.perform(job)
+        var result = await AutoBackupWriter.shared.perform(job)
+        if case .failed = result.outcome {
+            // A transient file-provider failure gets one retry before surfacing an error.
+            // Keep the same snapshot policy and never switch folders during the retry.
+            do {
+                try await Task.sleep(for: .seconds(1))
+                if defaults.data(forKey: AutoBackupKeys.bookmark) == bookmark {
+                    result = await AutoBackupWriter.shared.perform(job)
+                }
+            } catch { }
+        }
         record(result, now: now, bookmark: bookmark)
         return result.outcome
     }

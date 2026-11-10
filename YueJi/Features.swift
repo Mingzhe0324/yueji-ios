@@ -1142,6 +1142,19 @@ import UserNotifications
 import UIKit
 import PhotosUI
 
+enum AutomaticNoticeMode: String, CaseIterable, Identifiable {
+    case every, daily, attention
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .every: return tr("每笔通知", "Every entry", "Setiap rekod")
+        case .daily: return tr("每日摘要", "Daily summary", "Ringkasan harian")
+        case .attention: return tr("只提醒待处理", "Only needs attention", "Hanya perlu tindakan")
+        }
+    }
+    func deliversImmediately(recorded: Bool) -> Bool { !recorded || self == .every }
+}
+
 final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     static let shared = LedgerNotifications()
     static let dailyID = "yueji.daily-reminder"
@@ -1176,7 +1189,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         // Renewal reminders open their schedule ("recurring").
         guard response.actionIdentifier != UNNotificationDismissActionIdentifier,
               let recordID = info["recordID"] as? String, let kind = info["recordKind"] as? String,
-              ["expense", "notice", "recurring"].contains(kind), !recordID.isEmpty else { completionHandler(); return }
+              ["expense", "notice", "recurring", "summary"].contains(kind), !recordID.isEmpty else { completionHandler(); return }
         let target = ["recordID": recordID, "kind": kind, "action": response.actionIdentifier]
         UserDefaults.standard.set(target, forKey: "pendingNotificationDestination")
         DispatchQueue.main.async { NotificationCenter.default.post(name: .init("YueJiNotificationDestination"), object: nil) }
@@ -1220,6 +1233,7 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         } else { center.removePendingNotificationRequests(withIdentifiers: [dailyID]) }
         let defaults = UserDefaults.standard
         defaults.set(daily, forKey: "dailyReminder"); defaults.set(results, forKey: "automationNotifications")
+        if !results { center.removePendingNotificationRequests(withIdentifiers: ["yueji.automatic.summary"]) }
         defaults.set(hour * 60 + minute, forKey: "reminderMinutes")
         defaults.set(dailyReminderVersion, forKey: "dailyReminderVersion")
 
@@ -1257,7 +1271,9 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         // Requested migration: enable system result alerts once on this update.
         // Subsequent user changes remain respected.
         if !UserDefaults.standard.bool(forKey: "automaticSystemAlertsBuild65") {
-            UserDefaults.standard.set(true, forKey: "automationNotifications")
+            if UserDefaults.standard.object(forKey: "automationNotifications") == nil {
+                UserDefaults.standard.set(true, forKey: "automationNotifications")
+            }
             UserDefaults.standard.set(true, forKey: "automaticSystemAlertsBuild65")
         }
         UserDefaults.standard.register(defaults: ["automationNotifications": true])
@@ -1278,6 +1294,26 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
         let settings = await center.notificationSettings()
         guard settings.authorizationStatus == .authorized || settings.authorizationStatus == .provisional else {
             saveResultDelivery(tr("系统通知未获允许，请在 iPhone 设置 → 通知 → 月记开启。", "Notifications are not allowed. Enable them in iPhone Settings → Notifications → YueJi.", "Notifikasi tidak dibenarkan. Aktifkan dalam Tetapan iPhone → Notifikasi → YueJi."))
+            return
+        }
+        let mode = AutomaticNoticeMode(rawValue: UserDefaults.standard.string(forKey: "automaticNoticeMode") ?? "every") ?? .every
+        if !mode.deliversImmediately(recorded: expenseID != nil) {
+            if mode == .daily {
+                let content = UNMutableNotificationContent()
+                content.title = tr("月记 · 记账摘要", "YueJi · Recording summary", "YueJi · Ringkasan rekod")
+                content.body = tr("已有自动记录的账目，打开查看明细与待核对事项。", "Automatic entries are ready. Open to view entries and anything needing review.", "Rekod automatik tersedia. Buka untuk melihat rekod dan perkara untuk disemak.")
+                content.sound = automationSound
+                content.userInfo = ["recordID": "daily", "recordKind": "summary"]
+                let defaults = UserDefaults.standard
+                let minutes = defaults.object(forKey: "reminderMinutes") == nil ? 1260 : defaults.integer(forKey: "reminderMinutes")
+                let calendar = Calendar.current
+                let next = calendar.nextDate(after: Date(), matching: DateComponents(hour: minutes / 60, minute: minutes % 60), matchingPolicy: .nextTime) ?? Date().addingTimeInterval(86400)
+                let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: next)
+                // One pending summary, replaced by subsequent successful entries; never rewrite money.
+                do { try await center.add(UNNotificationRequest(identifier: "yueji.automatic.summary", content: content, trigger: UNCalendarNotificationTrigger(dateMatching: parts, repeats: false))) }
+                catch { saveResultDelivery(error.localizedDescription); return }
+            }
+            saveResultDelivery(mode.title)
             return
         }
         let content = UNMutableNotificationContent(); content.title = title; content.body = UserDefaults.standard.bool(forKey: "hideNotificationDetails") ? tr("请打开月记查看处理结果。", "Open YueJi to view the result.", "Buka YueJi untuk melihat hasil.") : body; content.sound = systemSound(for: sound)
@@ -2034,7 +2070,10 @@ actor AutomaticRates {
     func refreshSaved() async {
         guard let ledger = try? LocalStore.shared.read() else { return }
         let codes = Set(Array(ledger.rates.keys) + ledger.recurring.filter { $0.active }.map(\.currency)).filter { $0 != "MYR" }
-        for code in codes { _ = try? await refresh(code) }
+        for code in codes {
+            guard !Task.isCancelled else { return }
+            _ = try? await refresh(code)
+        }
     }
 }
 struct FuelQuote: Codable {
