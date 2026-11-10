@@ -1550,6 +1550,25 @@ func optionalMoney(_ value: String) throws -> Int? {
     if text == "0" || text == "0.00" { return 0 }
     return try toCents(text)
 }
+extension Ledger {
+    func canQuickCategorise(_ entry: Expense) -> Bool {
+        (entry.items ?? []).isEmpty && entry.refunded == 0 && !hasActiveSettlement(expenseID: entry.id)
+    }
+    mutating func categorise(_ expected: [Expense], as category: String, remember: Bool) throws {
+        guard !expected.isEmpty, Set(expected.map(\.id)).count == expected.count,
+              categoryNames.contains(category), expected.allSatisfy({ old in
+                  expenses.contains(old) && canQuickCategorise(old)
+              }) else {
+            throw reviewError("账目已改变或不能快捷改分类，请重新选择。", "Entries changed or cannot be quickly categorised. Select them again.", "Rekod berubah atau tidak boleh dikategorikan dengan cepat. Pilih semula.")
+        }
+        let ids = Set(expected.map(\.id))
+        for i in expenses.indices where ids.contains(expenses[i].id) { expenses[i].category = category }
+        if remember {
+            for entry in expected where !friendKey(entry.merchant).isEmpty { merchantCategories[friendKey(entry.merchant)] = category }
+        }
+    }
+}
+
 struct LedgerFilter: Hashable {
     var category = ""
     var source = ""

@@ -6,6 +6,25 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testBatchCategoryIsAtomicAndLearnsOnlyWhenRequested() throws {
+        let first = Expense(id: "category-one", merchant: "Cafe", cents: 500, date: Date())
+        let second = Expense(id: "category-two", merchant: "Shop", cents: 800, date: Date())
+        var ledger = Ledger(expenses: [first, second])
+        let category = try XCTUnwrap(ledger.categoryNames.first(where: { $0 != first.category }))
+        var stale = second; stale.cents += 1
+        XCTAssertThrowsError(try ledger.categorise([first, stale], as: category, remember: true))
+        XCTAssertEqual(ledger.expenses, [first, second])
+        XCTAssertTrue(ledger.merchantCategories.isEmpty)
+        XCTAssertThrowsError(try ledger.categorise([first, first], as: category, remember: true))
+        try ledger.categorise([first, second], as: category, remember: false)
+        XCTAssertTrue(ledger.expenses.allSatisfy { $0.category == category })
+        XCTAssertTrue(ledger.merchantCategories.isEmpty)
+        let updated = ledger.expenses
+        try ledger.categorise(updated, as: category, remember: true)
+        XCTAssertEqual(ledger.merchantCategories[friendKey("Cafe")], category)
+        XCTAssertEqual(ledger.merchantCategories[friendKey("Shop")], category)
+        XCTAssertEqual(ledger.expenses.map(\.cents), [500, 800])
+    }
     func testNotificationOpensExactRecordedEntryAndResolvesReviewedNotice() {
         let entry = Expense(id: "auto-entry", merchant: "Cafe", cents: 500, date: Date())
         var ledger = Ledger(expenses: [entry])

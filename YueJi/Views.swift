@@ -1719,6 +1719,7 @@ struct ExpenseRow: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.colorSchemeContrast) private var contrast
     let entry: Expense
+    var timeOnly = false
     private var symbol: String {
         if entry.fuel { return "fuelpump.fill" }
         if entry.recurringKey != nil { return "repeat" }
@@ -1764,7 +1765,7 @@ struct ExpenseRow: View {
                         .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("transaction.items.preview")
                 }
-                Text(entry.categorySummary + " · " + dateLabel(entry.date)).font(.caption).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                Text(entry.categorySummary + " · " + (timeOnly ? entry.date.formatted(.dateTime.hour().minute().locale(Locale(identifier: AppLanguage.localeID))) : dateLabel(entry.date))).font(.caption).foregroundStyle(.secondary).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
                 if let accountID = entry.bankAccountID,
                    let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
                     Label(account.name, systemImage: MalaysianBanks.walletsAndPayments.contains(account.institution ?? "") && account.institution != "TNG Card" ? "wallet.pass.fill" : "creditcard")
@@ -1890,13 +1891,14 @@ private struct LedgerActiveFilters: View {
 }
 
 private enum LedgerSheetRoute: Identifiable {
-    case new(Date), filter, edit(Expense), income
+    case new(Date), filter, edit(Expense), income, categories([Expense])
     var id: String {
         switch self {
         case .new: return "manual-entry"
         case .filter: return "filters"
         case .edit(let entry): return "edit-" + entry.id
         case .income: return "manual-income"
+        case .categories: return "quick-categories"
         }
     }
 }
@@ -1971,6 +1973,15 @@ struct ExpensesView: View {
                 Section {
                     MonthPicker(month: monthBinding)
                         .listRowSeparator(.hidden)
+                    NavigationLink { LedgerReviewQueue() } label: {
+                        Label(tr("待核对", "To review", "Untuk disemak") + " · " + String(model.readIndex.pendingNotices.count), systemImage: "checklist")
+                    }
+                    NavigationLink { LedgerMonthStory(month: month) } label: {
+                        Label(tr("这个月的钱花在哪里？", "Where did my money go?", "Ke mana wang saya pergi?"), systemImage: "chart.bar.doc.horizontal")
+                    }
+                    Button { sheet = .categories(timeline.expenses) } label: {
+                        Label(tr("批量修改分类", "Change categories together", "Ubah kategori bersama"), systemImage: "checkmark.circle")
+                    }.disabled(timeline.expenses.isEmpty || loadedQuery != query)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(filtering || !search.isEmpty ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
                             .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
@@ -2042,10 +2053,15 @@ struct ExpensesView: View {
                                 }
                             case .expense(let entry):
                             NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
-                                ExpenseRow(entry: entry).foregroundStyle(.primary)
+                                ExpenseRow(entry: entry, timeOnly: true).foregroundStyle(.primary)
                                     .yuejiZoomSource(id: "expense:" + entry.id, namespace: expenseTransition)
                             }
                                 .guideTarget(entry.id == "guide-lunch" ? "ledger.expense" : "ledger.other")
+                                .swipeActions(edge: .leading, allowsFullSwipe: false) {
+                                    Button { sheet = .categories([entry]) } label: {
+                                        Label(tr("改分类", "Category", "Kategori"), systemImage: "tag")
+                                    }.tint(.teal).disabled(!model.ledger.canQuickCategorise(entry))
+                                }
                                 // Two round actions, as in the kit's Messages swipe actions.
                                 .swipeActions(edge: .trailing, allowsFullSwipe: false) {
                                     Button { deleting = entry } label: {
@@ -2131,6 +2147,7 @@ struct ExpensesView: View {
                     case .new(let date): ExpenseEditor(original: nil, initialDate: date)
                     case .edit(let expense): ExpenseEditor(original: expense)
                     case .income: IncomeEditor()
+                    case .categories(let entries): LedgerCategoryBatch(entries: entries).ledgerFeedback(modal: true)
                     }
                 }
                 .yuejiPlainListSurface().navigationTitle(tr("账本", "Ledger", "Lejar")).navigationBarTitleDisplayMode(.large)

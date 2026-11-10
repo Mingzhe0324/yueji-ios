@@ -1031,8 +1031,14 @@ struct DuplicateReviewView: View {
             ForEach(pairs) { pair in
                 Section {
                     ExpenseRow(entry: pair.first)
+                    LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(pair.first.source))
+                    Text(dateLabel(pair.first.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                    NavigationLink(tr("查看详情", "View details", "Lihat butiran")) { ExpenseDetailView(id: pair.first.id, embeddedInNavigation: true) }
                     Button(tr("删除上面这笔", "Delete the entry above", "Padam rekod di atas"), role: .destructive) { deleting = pair.first }
                     ExpenseRow(entry: pair.second)
+                    LabeledContent(tr("来源", "Source", "Sumber"), value: sourceLabel(pair.second.source))
+                    Text(dateLabel(pair.second.date, time: true)).font(.caption).foregroundStyle(.secondary)
+                    NavigationLink(tr("查看详情", "View details", "Lihat butiran")) { ExpenseDetailView(id: pair.second.id, embeddedInNavigation: true) }
                     Button(tr("删除上面这笔", "Delete the entry above", "Padam rekod di atas"), role: .destructive) { deleting = pair.second }
                     Button(tr("这是两笔不同消费", "These are separate payments", "Ini dua bayaran berbeza")) { model.change { [pair] in $0.dismissedDuplicates.insert(pair.id) } }
                 }
@@ -2075,6 +2081,160 @@ func tngStatus(_ notice: TNGNotice) -> String {
     default: return notice.possibleDuplicate ? tr("疑似重复 · 待确认", "Possible duplicate · review", "Mungkin pendua · semak") : tr("待确认", "Needs review", "Perlu semakan")
     }
 }
+struct LedgerReviewQueue: View {
+    @EnvironmentObject var model: LedgerModel
+    var body: some View {
+        List {
+            Section {
+                NavigationLink { DuplicateReviewView() } label: {
+                    Label(tr("检查可能重复的账目", "Check possible duplicates", "Semak kemungkinan pendua"), systemImage: "doc.on.doc")
+                }
+            }
+            Section(tr("待确认 · 全部月份", "Needs review · all months", "Perlu semakan · semua bulan")) {
+                if model.readIndex.pendingNotices.isEmpty {
+                    Label(tr("全部核对好了", "All caught up", "Semua sudah disemak"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                }
+                ForEach(model.readIndex.pendingNotices) { notice in
+                    NavigationLink {
+                        if let id = notice.expenseID, model.expense(id: id) != nil { ExpenseDetailView(id: id, embeddedInNavigation: true) }
+                        else if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+                        else { FinancialNoticeReviewView(id: notice.id) }
+                    } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            TNGTimelineRow(notice: notice)
+                            Label(notice.possibleDuplicate ? tr("核对是否重复", "Check for a duplicate", "Semak pendua") : notice.cents == nil ? tr("补充金额并确认用途", "Add amount and confirm purpose", "Isi amaun dan sahkan tujuan") : tr("确认这笔钱的用途", "Confirm what this payment was for", "Sahkan tujuan bayaran ini"), systemImage: "exclamationmark.circle")
+                                .font(.caption.weight(.medium)).foregroundStyle(.orange)
+                            if let reason = notice.reviewReason { Text(localizedError(reason)).font(.caption).foregroundStyle(.secondary) }
+                        }
+                    }
+                }
+            }
+        }.yuejiListSurface().navigationTitle(tr("待核对", "To review", "Untuk disemak"))
+    }
+}
+
+struct LedgerCategoryBatch: View {
+    @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let entries: [Expense]
+    @State private var selected = Set<String>()
+    @State private var category = ""
+    @State private var remember = true
+    @State private var initialized = false
+    private var eligible: [Expense] { entries.filter { model.ledger.canQuickCategorise($0) } }
+    var body: some View {
+        NavigationStack {
+            List {
+                Section {
+                    Picker(tr("改为分类", "New category", "Kategori baharu"), selection: $category) {
+                        Text(tr("请选择", "Please select", "Sila pilih")).tag("")
+                        ForEach(model.ledger.categoryNames, id: \.self) { Text(categoryLabel($0)).tag($0) }
+                    }
+                    Toggle(tr("以后此商户使用这个分类", "Use this category for this merchant next time", "Guna kategori ini untuk peniaga ini lain kali"), isOn: $remember)
+                    Text(tr("有物品分类、退款或已结算的账目，请打开完整编辑页处理。", "Use the full editor for entries with item categories, refunds or settlements.", "Gunakan editor penuh untuk rekod dengan kategori item, pulangan atau penyelesaian.")).font(.caption).foregroundStyle(.secondary)
+                }
+                Section {
+                    Button(selected.count == eligible.count ? tr("取消全选", "Deselect all", "Nyahpilih semua") : tr("选择可修改账目", "Select eligible entries", "Pilih rekod yang boleh diubah")) {
+                        selected = selected.count == eligible.count ? [] : Set(eligible.map(\.id))
+                    }
+                    ForEach(entries) { entry in
+                        Toggle(isOn: Binding(get: { selected.contains(entry.id) }, set: { if $0 { selected.insert(entry.id) } else { selected.remove(entry.id) } })) {
+                            ExpenseRow(entry: entry)
+                        }.disabled(!model.ledger.canQuickCategorise(entry))
+                    }
+                }
+            }.yuejiListSurface().navigationTitle(tr("修改分类", "Change category", "Ubah kategori"))
+                .disabled(model.isWorking("batch-category"))
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(model.isWorking("batch-category")) }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(tr("保存", "Save", "Simpan") + " (\(selected.count))") {
+                            let expected = entries.filter { selected.contains($0.id) }, value = category, learn = remember
+                            model.perform(key: "batch-category", action: { try $0.categorise(expected, as: value, remember: learn) }, completion: { _ in model.showSaved(); dismiss() })
+                        }.disabled(selected.isEmpty || category.isEmpty || model.isWorking("batch-category"))
+                    }
+                }
+                .onAppear { if !initialized { initialized = true; if eligible.count == 1 { selected = Set(eligible.map(\.id)) } } }
+                .interactiveDismissDisabled(model.isWorking("batch-category"))
+        }.yuejiSheetSurface()
+    }
+}
+
+struct LedgerMonthStory: View {
+    @EnvironmentObject var model: LedgerModel
+    let month: Date
+    @State private var summary = OverviewSnapshot()
+    @State private var previous = OverviewSnapshot()
+    @State private var ready = false
+    private var categories: [String] { summary.categoryTotals.keys.sorted { (summary.categoryTotals[$0] ?? 0) > (summary.categoryTotals[$1] ?? 0) } }
+    var body: some View {
+        List {
+            if !ready { ProgressView() }
+            else {
+                Section(tr("本月已记录消费", "Recorded spending this month", "Belanja direkod bulan ini")) {
+                    Text(money(summary.personal)).font(.largeTitle.bold())
+                    let difference = summary.personal - previous.personal
+                    Text((difference >= 0 ? tr("比上月多花了 ", "More than last month: ", "Lebih daripada bulan lalu: ") : tr("比上月少花了 ", "Less than last month: ", "Kurang daripada bulan lalu: ")) + money(abs(difference)))
+                    Text(tr("按已记录账目比较；本月未结束时不代表最终结果。", "Compares recorded entries; an unfinished month is not a final result.", "Membandingkan rekod; bulan belum tamat bukan hasil akhir.")).font(.caption).foregroundStyle(.secondary)
+                    NavigationLink { LedgerStoryEntries(entries: summary.entries) } label: { Label(tr("查看这些账目", "View these entries", "Lihat rekod ini"), systemImage: "list.bullet") }
+                }
+                Section(tr("钱花在哪里", "Where the money went", "Ke mana wang dibelanjakan")) {
+                    ForEach(categories, id: \.self) { category in
+                        NavigationLink {
+                            LedgerStoryEntries(entries: summary.entries.filter { $0.personalAmount(category: category) != 0 })
+                        } label: {
+                            VStack(alignment: .leading, spacing: 6) {
+                                LabeledContent(categoryLabel(category), value: money(summary.categoryTotals[category] ?? 0))
+                                let delta = (summary.categoryTotals[category] ?? 0) - (previous.categoryTotals[category] ?? 0)
+                                Text((delta >= 0 ? tr("比上月增加 ", "Increase from last month: ", "Peningkatan daripada bulan lalu: ") : tr("比上月减少 ", "Decrease from last month: ", "Penurunan daripada bulan lalu: ")) + money(abs(delta))).font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+                Section(tr("固定支出", "Recurring spending", "Belanja berulang")) {
+                    let fixed = summary.entries.filter { $0.recurringKey != nil || $0.renewalOf != nil }
+                    NavigationLink { LedgerStoryEntries(entries: fixed) } label: {
+                        LabeledContent(tr("已关联固定项目的消费", "Spending linked to recurring items", "Belanja dipautkan kepada item berulang"), value: money(fixed.reduce(0) { $0 + $1.personalSpending }))
+                    }
+                }
+                Section(tr("剩余预算", "Remaining budget", "Baki bajet")) {
+                    let budget = model.ledger.monthlyBudget(monthKey(month))
+                    let remaining = budget.total - summary.entries.filter { $0.tripID == nil }.reduce(0) { $0 + $1.personalSpending }
+                    if model.ledger.budgets[monthKey(month)] != nil || budget.income > 0 {
+                        LabeledContent(tr("日常预算余额", "Daily budget balance", "Baki bajet harian"), value: money(remaining))
+                        if monthKey(month) == monthKey(Date()), let range = Calendar.current.range(of: .day, in: .month, for: Date()) {
+                            let days = max(1, range.count - Calendar.current.component(.day, from: Date()) + 1)
+                            Text(remaining >= 0 ? tr("从今天起平均每天约 ", "Average per day from today: ", "Purata sehari mulai hari ini: ") + money(remaining / days) : tr("已超出预算，先核对本月消费。", "Over budget. Review this month's spending first.", "Melebihi bajet. Semak belanja bulan ini dahulu."))
+                        }
+                        NavigationLink { LedgerStoryEntries(entries: summary.entries.filter { $0.tripID == nil }) } label: { Text(tr("查看日常消费", "View daily spending", "Lihat belanja harian")) }
+                    } else { Text(tr("尚未设置这个月的预算", "No budget set for this month", "Tiada bajet ditetapkan bulan ini")) }
+                }
+            }
+        }.yuejiListSurface().navigationTitle(tr("月度总结", "Monthly summary", "Ringkasan bulanan"))
+            .task(id: model.overviewQuery(month: month)) {
+                ready = false
+                do {
+                    let current = try await model.preparedOverview(month: month, query: model.overviewQuery(month: month))
+                    let priorMonth = shiftedMonth(month, by: -1)
+                    let prior = try await model.preparedOverview(month: priorMonth, query: model.overviewQuery(month: priorMonth))
+                    guard !Task.isCancelled else { return }
+                    summary = current; previous = prior; ready = true
+                } catch is CancellationError { } catch { model.error = error.localizedDescription }
+            }
+    }
+}
+private struct LedgerStoryEntries: View {
+    let entries: [Expense]
+    var body: some View {
+        List {
+            if entries.isEmpty { Text(tr("暂无记录", "No entries", "Tiada rekod")) }
+            ForEach(entries) { entry in
+                NavigationLink { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) } label: { ExpenseRow(entry: entry) }
+            }
+        }.yuejiListSurface().navigationTitle(tr("相关账目", "Related entries", "Rekod berkaitan"))
+    }
+}
+
 struct TNGInboxView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
@@ -2092,7 +2252,12 @@ struct TNGInboxView: View {
             }
             Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
             ForEach(pendingOnly ? model.readIndex.pendingNotices : model.readIndex.notices) { item in
-                NavigationLink { if item.kind == "incoming" { TNGIncomingView(id: item.id) } else { TNGNoticeView(id: item.id) } } label: {
+                NavigationLink {
+                    if let id = item.expenseID, model.expense(id: id) != nil { ExpenseDetailView(id: id, embeddedInNavigation: true) }
+                    else if item.kind == "incoming" { TNGIncomingView(id: item.id) }
+                    else if ["pending", "transfer"].contains(item.status) { FinancialNoticeReviewView(id: item.id) }
+                    else { TNGNoticeView(id: item.id) }
+                } label: {
                     TNGTimelineRow(notice: item)
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
                     .modifier(AutomaticRecordDeleteActions { deletingNotice = item })
