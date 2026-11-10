@@ -473,9 +473,15 @@ private struct ParkingHome: View {
                     Image(systemName: "parkingsign").font(.title2.bold()).foregroundStyle(.white)
                         .frame(width: 48, height: 48).background(parkingAccent, in: RoundedRectangle(cornerRadius: 16))
                 }
-                ParkingMapCard(session: active ?? previewSession)
                 if let session = active {
                     VStack(spacing: 16) {
+                        HStack {
+                            Label(tr("正在停车", "PARKED", "SEDANG PARKIR"), systemImage: "parkingsign.circle.fill")
+                                .font(.caption.weight(.bold)).foregroundStyle(parkingAccent)
+                            Spacer()
+                            Text(session.name.isEmpty ? tr("我的车位", "My parking spot", "Tempat kereta saya") : session.name)
+                                .font(.subheadline.weight(.medium)).lineLimit(2)
+                        }
                         ParkingTimerDial(session: session)
                         HStack {
                             Label(session.plate.isEmpty ? tr("我的车辆", "My car", "Kereta saya") : session.plate, systemImage: "car.side")
@@ -494,11 +500,15 @@ private struct ParkingHome: View {
                             Button(action: launchTNG) { Label(tr("缴费 / 续费", "Pay / renew", "Bayar / lanjut"), systemImage: "creditcard") }
                         }.buttonStyle(.bordered).tint(parkingAccent).disabled(startingID != nil)
                         Button { openedSession = session } label: {
-                            Text(tr("管理停车与记账", "Manage parking & expense", "Urus parkir dan belanja"))
+                            Label(tr("查看车位 · 结束停车", "Parking details · Finish", "Butiran parkir · Tamat"), systemImage: "arrow.right.circle.fill")
                         }.buttonStyle(ParkingActionStyle()).disabled(startingID != nil)
-                    }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+                    }.padding(24)
+                        .background(LinearGradient(colors: [parkingAccent.opacity(0.16), Color(uiColor: .secondarySystemGroupedBackground)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
+                        .overlay(RoundedRectangle(cornerRadius: 28).stroke(parkingAccent.opacity(0.2)))
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
+                        Label(tr("第一步 · 选好这次开的车", "1 · Choose your car", "1 · Pilih kereta anda"), systemImage: "checkmark.circle.fill")
+                            .font(.caption.weight(.bold)).foregroundStyle(parkingAccent)
                         HStack {
                             Label(tr("我的车辆", "My vehicle", "Kenderaan saya"), systemImage: "car.side.fill").font(.headline)
                             Spacer()
@@ -523,6 +533,8 @@ private struct ParkingHome: View {
                             Label(tr("添加车辆", "Add vehicle", "Tambah kenderaan"), systemImage: "plus.circle.fill")
                         }.buttonStyle(.bordered)
                         Divider()
+                        Label(tr("第二步 · 确认停在哪里", "2 · Confirm the location", "2 · Sahkan lokasi"), systemImage: "mappin.circle.fill")
+                            .font(.caption.weight(.bold)).foregroundStyle(parkingAccent)
                         HStack(alignment: .top) {
                             Image(systemName: "location.fill").foregroundStyle(parkingAccent)
                             VStack(alignment: .leading, spacing: 5) {
@@ -549,6 +561,9 @@ private struct ParkingHome: View {
                         Button(tr("跳过定位，继续", "Skip location and continue", "Langkau lokasi dan teruskan")) { locator.cancel(); finishLocation() }
                     }.frame(maxWidth: .infinity)
                 }
+                DisclosureGroup(tr("查看车辆与地图", "Car & map", "Kereta dan peta")) {
+                    ParkingMapCard(session: active ?? previewSession).padding(.top, 12)
+                }.padding(18).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
                 if let message = locator.message { Text(message).font(.caption).foregroundStyle(.secondary) }
                 if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
                 DisclosureGroup(tr("停车历史", "Parking history", "Sejarah parkir")) {
@@ -583,9 +598,9 @@ private struct ParkingHome: View {
         .safeAreaInset(edge: .bottom) {
             if active == nil {
                 VStack(spacing: 10) {
-                    Button(tr("开始停车 · 前往 TNG", "Start parking · Open TNG", "Mula parkir · Buka TNG")) { start(tng: true) }
+                    Button(tr("停好了 · 去 TNG 缴费", "Parked · Pay in TNG", "Sudah parkir · Bayar di TNG")) { start(tng: true) }
                         .buttonStyle(ParkingActionStyle()).disabled(!ready)
-                    Button(tr("只保存位置", "Save location only", "Simpan lokasi sahaja")) { start(tng: false) }
+                    Button(tr("不用缴费，只帮我记住车位", "Just remember my spot", "Simpan tempat kereta sahaja")) { start(tng: false) }
                         .font(.subheadline).disabled(!ready)
                 }.padding(.horizontal, 20).padding(.vertical, 12).background(.regularMaterial)
             }

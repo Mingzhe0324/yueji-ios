@@ -186,10 +186,17 @@ struct InvestmentWatchView: View {
         List {
             Section {
                 VStack(alignment: .leading, spacing: 16) {
-                    Label(tr("投资观察 · AI 研究", "Investing · AI research", "Pelaburan · Penyelidikan AI"), systemImage: "sparkles")
-                        .font(.title2.bold())
-                    Text(tr("关注公司，理解价值", "Follow companies. Understand value.", "Ikuti syarikat. Fahami nilai."))
+                    Label(tr("看懂一家公司", "Understand a company", "Fahami syarikat"), systemImage: "sparkles")
+                        .font(.largeTitle.bold())
+                    Text(tr("先看评分，再看理由。", "See the rating. Understand why.", "Lihat skor. Fahami sebabnya."))
                         .foregroundStyle(.white.opacity(0.8))
+                    HStack(spacing: 12) {
+                        Label(tr("选公司", "Choose", "Pilih"), systemImage: "1.circle.fill")
+                        Image(systemName: "chevron.right").font(.caption2)
+                        Label(tr("看评分", "Review", "Semak"), systemImage: "2.circle.fill")
+                        Image(systemName: "chevron.right").font(.caption2)
+                        Label(tr("再决定", "Decide", "Putuskan"), systemImage: "3.circle.fill")
+                    }.font(.caption.weight(.semibold)).foregroundStyle(.mint)
                     Picker(tr("自选布局", "Watchlist layout", "Susun atur senarai pantau"), selection: $compactWatchlist) {
                         Text(tr("卡片", "Cards", "Kad")).tag(false)
                         Text(tr("列表", "List", "Senarai")).tag(true)
@@ -237,6 +244,7 @@ struct InvestmentWatchView: View {
             }
             Section(tr("研究工具", "Research tools", "Alat penyelidikan")) {
                 beginnerEntrance
+                DisclosureGroup(tr("比较、历史与更多工具", "Compare, history & more", "Banding, sejarah dan lagi")) {
                 NavigationLink { LocalMarketScanView() } label: {
                     Label(tr("查看电脑采集结果", "View computer scan", "Lihat imbasan komputer"), systemImage: "tray.and.arrow.down")
                 }
@@ -248,6 +256,7 @@ struct InvestmentWatchView: View {
                 }
                 NavigationLink { ResearchHistoryView() } label: {
                     Label(tr("研究历史", "Research history", "Sejarah penyelidikan"), systemImage: "clock.arrow.circlepath")
+                }
                 }
             }
             if !recentResearch.isEmpty {
@@ -551,11 +560,11 @@ private struct ResearchDimension: Decodable, Identifiable {
     var id: String { key }
     var label: String {
         switch key {
-        case "growth": return tr("成长", "Growth", "Pertumbuhan")
-        case "profitability": return tr("盈利能力", "Profitability", "Keuntungan")
-        case "balanceSheet": return tr("财务稳健", "Financial health", "Kesihatan kewangan")
-        case "valuation": return tr("估值", "Valuation", "Penilaian")
-        default: return tr("风险控制", "Risk resilience", "Ketahanan risiko")
+        case "growth": return tr("生意有变好吗", "Is it growing?", "Adakah ia berkembang?")
+        case "profitability": return tr("赚钱能力强吗", "Does it earn well?", "Adakah ia menguntungkan?")
+        case "balanceSheet": return tr("财务撑得住吗", "Are finances sound?", "Adakah kewangan kukuh?")
+        case "valuation": return tr("价格划算吗", "Is the price fair?", "Adakah harga berpatutan?")
+        default: return tr("风险能承受吗", "How resilient is it?", "Sejauh mana ketahanannya?")
         }
     }
 }
@@ -676,40 +685,89 @@ private struct ResearchCompanyCards: View {
         guard complete, let overall = company.overall, overall == company.dimensions.reduce(0, { $0 + ($1.score ?? 0) }) else { return nil }
         return overall
     }
-    private var conclusion: String {
-        guard total != nil else { return tr("观察 · 关键资料待补齐", "Watch · Key evidence missing", "Pantau · Bukti utama belum lengkap") }
+    private var supportedCount: Int { company.dimensions.filter { (0...20).contains($0.score ?? -1) }.count }
+    private var ratingColor: Color {
+        guard total != nil else { return .orange }
+        return company.action == "consider" ? .mint : company.action == "avoid" ? .red : .orange
+    }
+    private var verdict: String {
+        guard total != nil else { return tr("先等等，还不能判断", "Wait — not enough evidence", "Tunggu — bukti belum cukup") }
         switch company.action {
-        case "consider": return tr("可进一步考虑", "Consider further research", "Pertimbangkan kajian lanjut")
-        case "avoid": return tr("暂不考虑", "Avoid for now", "Elakkan buat masa ini")
-        default: return tr("观察，等待条件确认", "Watch for confirmation", "Pantau untuk pengesahan")
+        case "consider": return tr("值得进一步了解", "Worth a closer look", "Wajar dikaji lanjut")
+        case "avoid": return tr("暂时不考虑", "Pass for now", "Elakkan buat masa ini")
+        default: return tr("继续观察", "Keep watching", "Terus pantau")
+        }
+    }
+    private var ratingDial: some View {
+        ZStack {
+            Circle().stroke(.white.opacity(0.12), lineWidth: 10)
+            if let total {
+                Circle().trim(from: 0, to: Double(total) / 100)
+                    .stroke(ratingColor, style: StrokeStyle(lineWidth: 10, lineCap: .round))
+                    .rotationEffect(.degrees(-90))
+            }
+            VStack(spacing: 2) {
+                Text(total.map(String.init) ?? "—").font(.system(size: 42, weight: .bold, design: .rounded))
+                Text(total == nil ? tr("暂不评分", "Unrated", "Belum dinilai") : "/ 100").font(.caption)
+            }
+        }.frame(width: 126, height: 126)
+            .accessibilityElement(children: .combine)
+    }
+    private var verdictText: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(tr("现在怎么看？", "What now?", "Apa seterusnya?")).font(.caption).foregroundStyle(.white.opacity(0.7))
+            Text(verdict).font(.title2.bold()).fixedSize(horizontal: false, vertical: true)
+            Text(company.period).font(.caption).foregroundStyle(.white.opacity(0.8))
         }
     }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 20) {
+                HStack {
+                    Label(company.symbol, systemImage: "sparkles").font(.headline)
+                    Spacer()
+                    Text(tr("研究评分", "Research rating", "Skor kajian")).font(.caption)
+                }
+                ViewThatFits(in: .horizontal) {
+                    HStack(spacing: 24) { ratingDial; verdictText }
+                    VStack(alignment: .leading, spacing: 16) { ratingDial; verdictText }
+                }
+                Divider().overlay(.white.opacity(0.2))
+                HStack {
+                    Text(tr("有依据的项目", "Supported checks", "Semakan disokong"))
+                    Spacer()
+                    Text("\(supportedCount) / 5").monospacedDigit().bold()
+                }.font(.subheadline)
+                Text(tr("分数是对资料的研究评价，不是上涨概率或买入指令。", "Scores rate the evidence, not the chance of profit or an instruction to buy.", "Skor menilai bukti, bukan peluang untung atau arahan membeli."))
+                    .font(.caption).foregroundStyle(.white.opacity(0.8))
+            }.padding(24).foregroundStyle(.white)
+                .background(LinearGradient(colors: [Color(red: 0.09, green: 0.19, blue: 0.3), Color(red: 0.04, green: 0.09, blue: 0.17)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 145), spacing: 12)], spacing: 12) {
+                ForEach(company.dimensions) { dimension in
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(dimension.label).font(.subheadline.weight(.semibold))
+                        if let score = dimension.score, (0...20).contains(score) {
+                            HStack(alignment: .firstTextBaseline, spacing: 3) {
+                                Text(String(score)).font(.system(.title, design: .rounded).bold())
+                                Text("/20").font(.caption).foregroundStyle(.secondary)
+                            }
+                            ProgressView(value: Double(score), total: 20).tint(score >= 13 ? .teal : .orange)
+                            Text(score >= 13 ? tr("表现较好", "Favourable", "Baik") : score >= 9 ? tr("好坏参半", "Mixed", "Bercampur") : tr("需要留意", "Needs attention", "Perlu perhatian"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("—").font(.title.bold()).foregroundStyle(.secondary)
+                            Text(tr("缺资料，暂不评分", "Missing data · unrated", "Data tiada · belum dinilai"))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }.frame(maxWidth: .infinity, minHeight: 115, alignment: .topLeading).padding(16)
+                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
+                }
+            }
+            Text(tr("每项满分 20 分，越高越好；五项资料齐全才计算总分。风险项高分代表已知风险较少。", "Each check is out of 20; higher is better. All five are needed for a total. A higher risk score means fewer evidenced risks.", "Setiap semakan daripada 20; lebih tinggi lebih baik. Lima semakan diperlukan untuk jumlah. Skor risiko tinggi bermakna risiko terbukti lebih rendah."))
+                .font(.caption).foregroundStyle(.secondary)
             VStack(alignment: .leading, spacing: 12) {
-                Text(company.symbol).font(.title3.bold())
-                Label(conclusion, systemImage: total == nil ? "clock" : "doc.text.magnifyingglass")
-                    .font(.headline).foregroundStyle(company.action == "avoid" && total != nil ? Color.red : Color.orange)
+                Text(tr("一句话看懂", "At a glance", "Sepintas lalu")).font(.headline)
                 Text(company.summary).textSelection(.enabled)
-                Text(company.period).font(.caption).foregroundStyle(.secondary)
-                if let evidence = company.dimensions.first(where: { $0.key != "risk" && $0.score != nil }) {
-                    Label(tr("关键依据", "Key evidence", "Bukti utama"), systemImage: "doc.text.magnifyingglass").font(.subheadline.bold())
-                    Text(evidence.reason).font(.subheadline)
-                }
-                if let risk = company.dimensions.first(where: { $0.key == "risk" }) {
-                    Label(tr("风险与未知", "Risks and unknowns", "Risiko dan perkara belum diketahui"), systemImage: "exclamationmark.triangle").font(.subheadline.bold()).foregroundStyle(.orange)
-                    Text(risk.reason).font(.subheadline)
-                }
-                if total == nil {
-                    Text(company.missing).font(.subheadline).foregroundStyle(.orange)
-                }
-                if let total {
-                    Text("\(total)/100").font(.system(.largeTitle, design: .rounded).bold()).foregroundStyle(.blue)
-                } else {
-                    Text(tr("综合分：资料不足", "Overall: insufficient evidence", "Keseluruhan: bukti tidak mencukupi")).foregroundStyle(.secondary)
-                }
-                Text(tr("研究评价，不是上涨概率", "Research rating, not a winning probability", "Penilaian kajian, bukan kebarangkalian untung")).font(.caption).foregroundStyle(.secondary)
-                Text(tr("公司表现良好，不代表当前价格值得买入。", "Strong business performance does not establish value at today's price.", "Prestasi syarikat yang baik tidak menentukan nilai pada harga hari ini.")).font(.caption).foregroundStyle(.secondary)
             }.researchCard()
             InvestmentDisclosure(tr("财务表现与风险 · 查看评分", "Financials and risks · View ratings", "Kewangan dan risiko · Lihat penilaian")) {
                 ForEach(company.dimensions) { dimension in
@@ -742,13 +800,15 @@ private struct ResearchCompanyCards: View {
             }.researchCard().opacity(revealed ? 1 : 0)
                 .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.08), value: revealed)
             VStack(alignment: .leading, spacing: 10) {
-                Label(tr("买卖条件与判断失效", "Entry, exit and invalidation", "Syarat masuk, keluar dan pembatalan"), systemImage: "checklist").font(.headline)
-                Text(company.conditions).textSelection(.enabled)
+                InvestmentDisclosure(tr("下一步怎么做？", "What should I check next?", "Apa perlu disemak seterusnya?")) {
+                    Text(company.conditions).textSelection(.enabled)
+                }
             }.researchCard().opacity(revealed ? 1 : 0)
                 .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.16), value: revealed)
             VStack(alignment: .leading, spacing: 10) {
-                Label(tr("仍需核实", "Still to verify", "Masih perlu disahkan"), systemImage: "exclamationmark.circle").font(.headline).foregroundStyle(.orange)
-                Text(company.missing).textSelection(.enabled)
+                InvestmentDisclosure(tr("还缺哪些资料？", "What is missing?", "Apa yang belum lengkap?")) {
+                    Text(company.missing).textSelection(.enabled)
+                }
             }.researchCard().opacity(revealed ? 1 : 0)
                 .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeOut(duration: 0.3).delay(0.24), value: revealed)
         }
