@@ -382,6 +382,16 @@ final class TransactionFormTests: XCTestCase {
         enterText("Unsaved purchase", into: merchant, in: app)
         finishKeyboard(in: app)
 
+        // Optional fields are deliberately collapsed in a new, simple entry.
+        // Follow the user's disclosure action before exercising location/items.
+        let moreOptions = app.buttons["transaction.moreOptions"]
+        reveal(moreOptions, in: app)
+        XCTAssertEqual(moreOptions.value as? String, "Collapsed")
+        moreOptions.tap()
+        let expanded = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", "Expanded"), object: moreOptions)
+        XCTAssertEqual(XCTWaiter.wait(for: [expanded], timeout: 5), .completed,
+                       "More entry options must expose the optional editing fields")
+
         if !opening {
             let location = app.buttons["transaction.place.edit"]
             reveal(location, in: app); location.tap()

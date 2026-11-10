@@ -2998,6 +2998,7 @@ struct ExpenseEditor: View {
                             Image(systemName: moreDetails ? "chevron.up" : "chevron.down")
                         }.padding(.vertical, 4)
                     }.accessibilityIdentifier("transaction.moreOptions")
+                        .accessibilityValue(moreDetails ? tr("已展开", "Expanded", "Dikembangkan") : tr("已收起", "Collapsed", "Diringkaskan"))
                 }
                 if moreDetails {
                 chargeSection
