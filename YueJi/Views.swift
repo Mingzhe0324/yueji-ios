@@ -1914,6 +1914,12 @@ private struct LedgerDayHeader: View {
     }
 }
 
+// Scroll bookkeeping is not presentation state. Updating it must not invalidate
+// the entire ledger list while rows move through the viewport.
+private final class LedgerScrollAnchors {
+    var values: [LedgerTimelineQuery: String] = [:]
+}
+
 struct ExpensesView: View {
     @Environment(\.locale) private var uiLocale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -1938,7 +1944,7 @@ struct ExpensesView: View {
     @State private var deleting: Expense?
     @State private var timeline = LedgerTimelineSnapshot()
     @State private var loadedQuery: LedgerTimelineQuery?
-    @State private var scrollAnchors: [LedgerTimelineQuery: String] = [:]
+    @State private var scrollAnchors = LedgerScrollAnchors()
     private var query: LedgerTimelineQuery {
         LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: search, filter: filter, provider: providerFilter)
     }
@@ -2054,9 +2060,9 @@ struct ExpensesView: View {
                                 let frame = geometry.frame(in: .named("ledger-list"))
                                 return frame.minY >= 0 && frame.minY < 100
                             } action: { atTop in
-                                guard atTop, path.isEmpty, loadedQuery == query else { return }
-                                if scrollAnchors.count > 24 { scrollAnchors.removeAll() }
-                                scrollAnchors[scrollKey] = item.id
+                                guard isActive, atTop, path.isEmpty, loadedQuery == query else { return }
+                                if scrollAnchors.values.count > 24 { scrollAnchors.values.removeAll() }
+                                scrollAnchors.values[scrollKey] = item.id
                             }
                         }
                     } header: { LedgerDayHeader(day: day) }
@@ -2088,7 +2094,7 @@ struct ExpensesView: View {
                             let notices = feedback.noticeIDs.intersection(Set(fresh.transfers.map(\.id))).subtracting(Set(timeline.transfers.map(\.id)))
                             return feedback.date.timeIntervalSinceNow > -3 && (!expenses.isEmpty || !notices.isEmpty)
                         } ?? false
-                        let savedAnchor = scrollAnchors[scrollKey]
+                        let savedAnchor = scrollAnchors.values[scrollKey]
                         withAnimation(!reduceMotion && (changingSelection || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
                             timeline = fresh
                             loadedQuery = query
@@ -2137,7 +2143,7 @@ struct ExpensesView: View {
                             }.pickerStyle(.menu)
                             Picker(selection: $providerFilter) {
                                 Text(tr("全部来源", "All sources", "Semua sumber")).tag("all")
-                                ForEach(model.ledger.availableSources, id: \.self) { Label(sourceLabel($0), systemImage: ledgerSourceSymbol($0)).tag($0) }
+                                ForEach(timeline.sources, id: \.self) { Label(sourceLabel($0), systemImage: ledgerSourceSymbol($0)).tag($0) }
                             } label: {
                                 Label(tr("来源", "Source", "Sumber"), systemImage: "tray.full")
                             }.pickerStyle(.menu)
