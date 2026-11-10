@@ -391,7 +391,12 @@ struct MainView: View {
               model.feedbackOwners.isVisible(nil),
               let value = UserDefaults.standard.dictionary(forKey: "pendingNotificationDestination"),
               let recordID = value["recordID"] as? String, let kind = value["kind"] as? String else { return }
-        notificationDestination = NotificationDestination(recordID: recordID, kind: kind, action: value["action"] as? String ?? "view")
+        let target = NotificationDestination(recordID: recordID, kind: kind, action: value["action"] as? String ?? "view")
+        if let id = target.expenseID(in: model.ledger), let entry = model.expense(id: id) {
+            ledgerMonthRequest = LedgerMonthRequest(month: entry.date)
+            selectedTab = 1
+        }
+        notificationDestination = target
         UserDefaults.standard.removeObject(forKey: "pendingNotificationDestination")
     }
     private func openPendingInbox() {
@@ -4939,6 +4944,15 @@ struct NotificationDestination: Identifiable {
     let recordID: String
     let kind: String
     let action: String
+    /// An old review notification may now refer to a confirmed ledger entry.
+    func expenseID(in ledger: Ledger) -> String? {
+        let candidate: String?
+        if kind == "expense" { candidate = recordID }
+        else if kind == "notice" { candidate = ledger.tngNotices.first { $0.id == recordID }?.expenseID }
+        else { candidate = nil }
+        guard let candidate, ledger.expenses.contains(where: { $0.id == candidate }) else { return nil }
+        return candidate
+    }
 }
 struct NotificationDestinationView: View {
     @Environment(\.locale) private var uiLocale
@@ -4954,7 +4968,7 @@ struct NotificationDestinationView: View {
                     RecurringDetailView(ruleID: target.recordID)
                         .toolbar { ToolbarItem(placement: .confirmationAction) { Button(tr("完成", "Done", "Selesai"), systemImage: "checkmark") { dismiss() } } }
                 }
-            } else if target.kind == "expense", let entry = model.expense(id: target.recordID) {
+            } else if let id = target.expenseID(in: model.ledger), let entry = model.expense(id: id) {
                 if ["category", "edit"].contains(target.action) { ExpenseEditor(original: entry) }
                 else { ExpenseDetailView(id: entry.id) }
             } else {

@@ -1164,10 +1164,10 @@ final class LedgerNotifications: NSObject, UNUserNotificationCenterDelegate {
     static var automationSound: UNNotificationSound { systemSound(for: .neutral) }
     static func registerActions() {
         let view = UNNotificationAction(identifier: "view", title: tr("查看账目", "View record", "Lihat rekod"), options: [.foreground])
-        let category = UNNotificationAction(identifier: "category", title: tr("修改分类", "Change category", "Ubah kategori"), options: [.foreground])
+        let edit = UNNotificationAction(identifier: "edit", title: tr("编辑账目", "Edit entry", "Edit rekod"), options: [.foreground])
         let review = UNNotificationAction(identifier: "review", title: tr("确认用途", "Review purpose", "Semak tujuan"), options: [.foreground])
         UNUserNotificationCenter.current().setNotificationCategories([
-            UNNotificationCategory(identifier: "yueji.expense", actions: [view, category], intentIdentifiers: [], options: []),
+            UNNotificationCategory(identifier: "yueji.expense", actions: [view, edit], intentIdentifiers: [], options: []),
             UNNotificationCategory(identifier: "yueji.review", actions: [review], intentIdentifiers: [], options: [])
         ])
     }

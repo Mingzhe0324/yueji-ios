@@ -6,6 +6,30 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testNotificationOpensExactRecordedEntryAndResolvesReviewedNotice() {
+        let entry = Expense(id: "auto-entry", merchant: "Cafe", cents: 500, date: Date())
+        var ledger = Ledger(expenses: [entry])
+        ledger.tngNotices = [TNGNotice(id: "old-review", body: "Payment", title: "Bank", date: entry.date,
+            usesReceivedDate: false, kind: "payment", status: "recorded", cents: 500, party: "Cafe", expenseID: entry.id)]
+        let direct = NotificationDestination(recordID: entry.id, kind: "expense", action: "edit")
+        let reviewed = NotificationDestination(recordID: "old-review", kind: "notice", action: "view")
+        XCTAssertEqual(direct.expenseID(in: ledger), entry.id)
+        XCTAssertEqual(reviewed.expenseID(in: ledger), entry.id)
+        XCTAssertNil(NotificationDestination(recordID: entry.id, kind: "recurring", action: "view").expenseID(in: ledger))
+        ledger.expenses.removeAll()
+        XCTAssertNil(direct.expenseID(in: ledger))
+        XCTAssertNil(reviewed.expenseID(in: ledger))
+    }
+    func testVehicleBodyMatchingPreservesManualChoiceAndLegacyData() throws {
+        let legacy = Data(#"{"brand":"Perodua","model":"Myvi","year":"2022","color":"blue","body":"car"}"#.utf8)
+        var vehicle = try JSONDecoder().decode(ParkingVehicle.self, from: legacy)
+        XCTAssertEqual(vehicle.displayBody, "hatchback")
+        vehicle.bodyOverride = "sedan"
+        XCTAssertEqual(try JSONDecoder().decode(ParkingVehicle.self, from: JSONEncoder().encode(vehicle)).displayBody, "sedan")
+        XCTAssertEqual(ParkingVehicle(brand: "Toyota", model: "Hilux").displayBody, "pickup")
+        XCTAssertEqual(ParkingVehicle(brand: "Perodua", model: "Alza").displayBody, "mpv")
+        XCTAssertEqual(ParkingVehicle(brand: "Unknown", model: "Custom", body: "suv").displayBody, "suv")
+    }
     func testParkingRenewalOnlyRecordsUnrecordedDifference() {
         let first = Expense(merchant: "Parking", cents: 300, date: Date())
         let renewal = Expense(merchant: "Parking", cents: 200, date: Date())

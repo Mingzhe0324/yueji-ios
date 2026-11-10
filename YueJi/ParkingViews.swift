@@ -3,8 +3,97 @@ import PhotosUI
 import MapKit
 import UserNotifications
 import CryptoKit
+import SceneKit
 
 private let parkingAccent = Color(red: 0.12, green: 0.65, blue: 0.39)
+
+/// Local, generic body-style models; never a claimed replica of a brand/model.
+private struct ParkingVehicleModel: View {
+    let vehicle: ParkingVehicle
+    @State private var interactive = false
+    private func scene() -> SCNScene {
+        let scene = SCNScene()
+        scene.background.contents = UIColor(white: 0.94, alpha: 1)
+        let mpv = vehicle.displayBody == "mpv"
+        let suv = vehicle.displayBody == "suv"
+        let pickup = vehicle.displayBody == "pickup"
+        let coupe = vehicle.displayBody == "coupe"
+        let sedan = vehicle.displayBody == "sedan" || coupe
+        let length: CGFloat = pickup ? 5.2 : mpv ? 4.8 : (sedan ? 4.6 : (suv ? 4.4 : 3.8))
+        let roof: CGFloat = pickup ? 1.85 : coupe ? 1.35 : mpv ? 1.95 : (suv ? 1.85 : 1.5)
+        let paint = UIColor(vehicle.tint)
+        func material(_ color: UIColor, metal: CGFloat = 0) -> SCNMaterial {
+            let m = SCNMaterial(); m.diffuse.contents = color
+            m.lightingModel = .physicallyBased; m.metalness.contents = metal; m.roughness.contents = 0.3
+            return m
+        }
+        func box(_ w: CGFloat, _ h: CGFloat, _ d: CGFloat, _ x: CGFloat, _ y: CGFloat, _ z: CGFloat, _ color: UIColor) {
+            let g = SCNBox(width: w, height: h, length: d, chamferRadius: min(0.1, h / 3))
+            g.materials = [material(color, metal: color == paint ? 0.45 : 0)]
+            let n = SCNNode(geometry: g); n.position = SCNVector3(Float(x), Float(y), Float(z))
+            scene.rootNode.addChildNode(n)
+        }
+        box(length, 0.65, 1.75, 0, 0.75, 0, paint)
+        if pickup {
+            box(1.8, 0.1, 1.45, 1.55, 1.1, 0, .darkGray)
+            box(1.8, 0.35, 0.12, 1.55, 1.22, -0.8, paint)
+            box(1.8, 0.35, 0.12, 1.55, 1.22, 0.8, paint)
+            box(0.12, 0.35, 1.6, 2.5, 1.22, 0, paint)
+        }
+        let front: CGFloat = mpv ? -1.65 : -0.9
+        let rear: CGFloat = pickup ? 0.2 : sedan ? 0.85 : length / 2 - 0.25
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: front - 0.35, y: 1.02))
+        path.addLine(to: CGPoint(x: front + 0.35, y: roof))
+        path.addLine(to: CGPoint(x: rear - 0.2, y: roof))
+        path.addLine(to: CGPoint(x: rear + 0.2, y: 1.02))
+        path.close()
+        let cabin = SCNShape(path: path, extrusionDepth: 1.5)
+        cabin.chamferRadius = 0.08; cabin.materials = [material(UIColor(red: 0.13, green: 0.2, blue: 0.24, alpha: 1), metal: 0.3)]
+        scene.rootNode.addChildNode(SCNNode(geometry: cabin))
+        box(rear - front - 0.45, 0.10, 1.48, (front + rear + 0.15) / 2, roof, 0, paint)
+        for side in [-1, 1] as [CGFloat] {
+            for x in [-length * 0.31, length * 0.31] {
+                let tire = SCNCylinder(radius: 0.39, height: 0.25)
+                tire.materials = [material(.init(white: 0.08, alpha: 1))]
+                let wheel = SCNNode(geometry: tire)
+                wheel.eulerAngles.x = .pi / 2
+                wheel.position = SCNVector3(Float(x), 0.42, Float(side * 0.85))
+                scene.rootNode.addChildNode(wheel)
+                let hub = SCNCylinder(radius: 0.25, height: 0.265)
+                hub.materials = [material(.lightGray, metal: 0.8)]
+                let rim = SCNNode(geometry: hub); wheel.addChildNode(rim)
+            }
+            box(0.09, roof - 1.08, 0.06, (front + rear) / 2, (roof + 1.08) / 2, side * 0.77, paint)
+            box(0.26, 0.04, 0.04, 0.5, 0.98, side * 0.89, .lightGray)
+            box(0.22, 0.15, 0.24, front + 0.1, 1.15, side * 0.95, paint)
+            box(0.06, 0.16, 0.45, -length / 2, 0.88, side * 0.56, .white)
+            box(0.06, 0.16, 0.38, length / 2, 0.88, side * 0.58, .systemRed)
+        }
+        box(0.06, 0.23, 0.85, -length / 2 - 0.01, 0.6, 0, .darkGray)
+        box(6, 0.08, 3.2, 0, -0.03, 0, UIColor(white: 0.88, alpha: 1))
+        let camera = SCNNode(); camera.camera = SCNCamera()
+        camera.camera?.usesOrthographicProjection = true; camera.camera?.orthographicScale = 3.25
+        camera.position = SCNVector3(-6, 3.5, 6)
+        camera.look(at: SCNVector3(0, 0.8, 0)); scene.rootNode.addChildNode(camera)
+        let light = SCNNode(); light.light = SCNLight(); light.light?.type = .omni
+        light.light?.intensity = 1300; light.position = SCNVector3(-3, 6, 5)
+        scene.rootNode.addChildNode(light)
+        let ambient = SCNNode(); ambient.light = SCNLight(); ambient.light?.type = .ambient
+        ambient.light?.intensity = 450; scene.rootNode.addChildNode(ambient)
+        return scene
+    }
+    var body: some View {
+        SceneView(scene: scene(), options: interactive ? [.allowsCameraControl] : [])
+            .allowsHitTesting(interactive)
+            .overlay(alignment: .bottomTrailing) {
+                Button { interactive.toggle() } label: {
+                    Label(interactive ? tr("完成", "Done", "Selesai") : tr("旋转 3D", "Rotate 3D", "Putar 3D"), systemImage: "rotate.3d")
+                        .font(.caption).padding(8).background(.regularMaterial, in: Capsule())
+                }.padding(8)
+            }
+    }
+}
 
 struct ParkingVehicle: Codable, Equatable {
     var brand = ""
@@ -13,11 +102,8 @@ struct ParkingVehicle: Codable, Equatable {
     var color = "silver"
     var body = "hatchback"
     var photo: Data?
-    var referenceAsset: String? {
-        let available = brand == "Perodua" ? ["Axia", "Alza", "Myvi", "Ativa", "Aruz", "Bezza"] :
-            brand == "Proton" ? ["Saga", "S70", "X50", "X70", "X90"] : []
-        return available.contains(model) ? "Vehicle_\(brand)_\(model)" : nil
-    }
+    var bodyOverride: String?
+    var displayBody: String { bodyOverride ?? VehicleChoices.bodyType(brand: brand, model: model) ?? body }
     var title: String { [brand, model, year].filter { !$0.isEmpty }.joined(separator: " · ") }
     var tint: Color {
         switch color {
@@ -106,19 +192,13 @@ private struct ParkingMapCard: View {
                 Group {
                     if let data = shownVehicle?.photo, let image = UIImage(data: data) {
                         Image(uiImage: image).resizable().scaledToFit()
-                    } else if let asset = shownVehicle?.referenceAsset {
-                        Image(asset).resizable().scaledToFit()
                     } else {
-                        VStack(spacing: 10) {
-                            Image(systemName: "photo").font(.largeTitle).foregroundStyle(.secondary)
-                            Text(tr("添加车辆实拍照片", "Add a photo of your car", "Tambah foto kereta anda"))
-                                .font(.subheadline).foregroundStyle(.secondary)
-                        }
+                        ParkingVehicleModel(vehicle: shownVehicle ?? ParkingVehicle())
                     }
                 }.frame(maxWidth: .infinity).frame(height: 170)
                     .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 20))
                     .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .accessibilityLabel(shownVehicle?.photo == nil ? tr("车型参考图片", "Model reference image", "Imej rujukan model") : tr("我的车辆照片", "My vehicle photo", "Foto kenderaan saya"))
+                    .accessibilityLabel(shownVehicle?.photo == nil ? tr("车身类型示意图", "Body-style illustration", "Ilustrasi jenis badan") : tr("我的车辆照片", "My vehicle photo", "Foto kenderaan saya"))
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(shownVehicle?.title.isEmpty == false ? shownVehicle!.title : tr("我的车辆", "My vehicle", "Kenderaan saya"))
@@ -135,16 +215,7 @@ private struct ParkingMapCard: View {
                     Label(name, systemImage: "mappin.and.ellipse").font(.subheadline).foregroundStyle(.secondary)
                 }
                 if shownVehicle?.photo == nil {
-                    Text(shownVehicle?.referenceAsset != nil
-                         ? tr("官方车型参考图 · 年份、配置与颜色可能不同", "Manufacturer reference · year, trim and colour may differ", "Rujukan pengeluar · tahun, varian dan warna mungkin berbeza")
-                         : tr("此车型暂无参考图，可添加自己的照片", "No reference image for this model; add your own photo", "Tiada imej rujukan model ini; tambah foto sendiri"))
-                        .font(.caption2).foregroundStyle(.secondary)
-                    if let vehicle = shownVehicle, vehicle.referenceAsset != nil,
-                       let url = URL(string: vehicle.brand == "Perodua"
-                           ? "https://www.perodua.com.my/our-models/choose-model" : "https://www.proton.com/") {
-                        Link(tr("图片来源：", "Image source: ", "Sumber imej: ") + vehicle.brand, destination: url)
-                            .font(.caption2)
-                    }
+                    Text(tr("车身类型示意图", "Body-style illustration", "Ilustrasi jenis badan")).font(.caption2).foregroundStyle(.secondary)
                 }
                 if let vehicle = shownVehicle {
                     HStack(spacing: 8) {
@@ -639,6 +710,22 @@ private struct ParkingHome: View {
 }
 
 private enum VehicleChoices {
+    static func bodyType(brand: String, model: String) -> String? {
+        let local: [String: [String: String]] = [
+            "Perodua": ["Myvi":"hatchback", "Axia":"hatchback", "Bezza":"sedan", "Ativa":"suv", "Alza":"mpv", "Aruz":"suv", "Viva":"hatchback", "Kancil":"hatchback", "Kelisa":"hatchback", "Kenari":"hatchback", "Kembara":"suv", "Nautica":"suv", "Rusa":"mpv"],
+            "Proton": ["Saga":"sedan", "Persona":"sedan", "Iriz":"hatchback", "S70":"sedan", "X50":"suv", "X70":"suv", "X90":"suv", "e.MAS 7":"suv", "Exora":"mpv", "Preve":"sedan", "Suprima S":"hatchback", "Inspira":"sedan", "Waja":"sedan", "Satria":"hatchback", "Putra":"coupe", "Perdana":"sedan", "Gen-2":"hatchback", "Savvy":"hatchback"]
+        ]
+        if let body = local[brand]?[model] { return body }
+        let groups: [(String, String)] = [
+            ("pickup", "Hilux|Triton|Navara|D-Max|Ranger|BT-50|F-150|Silverado|Cybertruck|Cannon|Gladiator|R1T|T60|T90|T8|T9"),
+            ("mpv", "Alphard|Vellfire|Veloz|Avanza|Innova|Innova Zenix|Hiace|Wish|Estima|Sienta|Odyssey|Freed|Stream|Stepwgn|Serena|Livina|Xpander|Grandis|Ertiga|Biante|Carnival|Staria|Starex|V-Class|Vito|Touran|Sharan|Traveller|M6|D9|009|X9|MIFA 9|G10|G50"),
+            ("suv", "HR-V|CR-V|WR-V|BR-V|ZR-V|Corolla Cross|Fortuner|Harrier|RAV4|Land Cruiser|C-HR|bZ4X|X-Trail|Kicks|Juke|Qashqai|Patrol|CX-3|CX-30|CX-5|CX-8|CX-9|CX-60|CX-80|CX-90|ASX|Outlander|Pajero|Pajero Sport|Eclipse Cross|Jimny|Vitara|S-Cross|XV|Crosstrek|Forester|Outback|MU-X|Terios|Rocky|UX|NX|RX|GX|LX|LBX|RZ|X1|X2|X3|X4|X5|X6|X7|iX|iX1|iX3|GLA|GLB|GLC|GLE|GLS|G-Class|EQA|EQB|EQC|Q2|Q3|Q5|Q7|Q8|Tiguan|Touareg|T-Cross|T-Roc|Countryman|XC40|XC60|XC90|EX30|EX90|2008|3008|5008|Koleos|Kona|Tucson|Santa Fe|Palisade|Seltos|Sportage|Sorento|Everest|Model Y|Model X|Atto 3|Sealion 7|Omoda 5|Tiggo 7 Pro|Tiggo 8 Pro|J7|J8|Haval H6|Haval Jolion|Tank 300|Tank 500|Cayenne|Macan|Defender|Discovery|Range Rover|Urus"),
+            ("hatchback", "Yaris|Jazz|Fit|Swift|Alto|March|Note|Leaf|Mirage|Mazda2|Polo|Golf|Picanto|Rio|i10|i20|i30|Fiesta|Focus|Dolphin|MG4|Ora Good Cat|Cooper|500|Clio|208|308|C3|C4"),
+            ("sedan", "Vios|Camry|Altis|City|Accord|Almera|Sylphy|Sentra|Teana|Attrage|ES|LS|IS|Model 3|Model S|Seal|Ora 07|S60|S90|Passat|Jetta|Arteon|Sonata|Elantra|Cerato|Optima|S70"),
+            ("coupe", "86|GR86|Supra|MX-5|BRZ|GT-R|370Z|Z|TT|R8|911|718 Cayman|718 Boxster|Z4|LC|RC|F-Type|Mustang|Camaro|Corvette|Artura|Emira")
+        ]
+        return groups.first { $0.1.components(separatedBy: "|").contains(model) }?.0
+    }
     // Includes older models for existing owners; not an assertion of current sales availability.
     static let brands: [(String, String)] = [
         ("Perodua", "Myvi|Axia|Bezza|Ativa|Alza|Aruz|Viva|Kancil|Kelisa|Kenari|Kembara|Nautica|Rusa"),
@@ -798,13 +885,14 @@ private struct ParkingVehicleEditor: View {
                     NavigationLink {
                         VehicleChoiceList(title: tr("选择品牌", "Choose brand", "Pilih jenama"), choices: VehicleChoices.brands.map { $0.0 },
                             selection: Binding(get: { vehicle.brand }, set: {
-                                if vehicle.brand != $0 { vehicle.brand = $0; vehicle.model = "" }
+                                if vehicle.brand != $0 { vehicle.brand = $0; vehicle.model = ""; vehicle.bodyOverride = nil }
                             }))
                     } label: {
                         LabeledContent(tr("品牌", "Brand", "Jenama"), value: vehicle.brand.isEmpty ? tr("请选择", "Choose", "Pilih") : vehicle.brand)
                     }
                     NavigationLink {
-                        VehicleChoiceList(title: tr("选择车型", "Choose model", "Pilih model"), choices: VehicleChoices.models(vehicle.brand), selection: $vehicle.model)
+                        VehicleChoiceList(title: tr("选择车型", "Choose model", "Pilih model"), choices: VehicleChoices.models(vehicle.brand),
+                            selection: Binding(get: { vehicle.model }, set: { vehicle.model = $0; vehicle.bodyOverride = nil }))
                     } label: {
                         LabeledContent(tr("车型", "Model", "Model"), value: vehicle.model.isEmpty ? tr("请选择", "Choose", "Pilih") : vehicle.model)
                     }.disabled(vehicle.brand.isEmpty)
@@ -817,13 +905,17 @@ private struct ParkingVehicleEditor: View {
                             Text(String(year)).tag(String(year))
                         }
                     }
-                    Picker(tr("车身类型", "Body type", "Jenis badan"), selection: $vehicle.body) {
+                    Picker(tr("车身类型", "Body type", "Jenis badan"), selection: Binding(get: { vehicle.displayBody }, set: { vehicle.body = $0; vehicle.bodyOverride = $0 })) {
                         Text(tr("通用车型（旧设置）", "Generic (legacy)", "Umum (lama)")).tag("car")
                         Text("Hatchback · 掀背车").tag("hatchback")
                         Text("Sedan · 三厢轿车").tag("sedan")
                         Text("SUV").tag("suv")
                         Text("MPV").tag("mpv")
+                        Text(tr("皮卡", "Pickup", "Pikap")).tag("pickup")
+                        Text(tr("跑车 / 双门轿跑", "Sports / coupe", "Sport / coupe")).tag("coupe")
                     }
+                    Text(tr("常见车型会自动匹配；不同年份或版本有差异时，可在这里调整车身类型。", "Common models match automatically. Adjust the body style here for a different year or variant.", "Model biasa dipadankan automatik. Laraskan jenis badan untuk tahun atau varian berbeza."))
+                        .font(.caption).foregroundStyle(.secondary)
                     Picker(tr("车身颜色", "Vehicle colour", "Warna kenderaan"), selection: $vehicle.color) {
                         ForEach(VehicleChoices.colours, id: \.self) { colour in
                             Text(VehicleChoices.colourName(colour)).tag(colour)
@@ -839,7 +931,7 @@ private struct ParkingVehicleEditor: View {
                     }
                     if loadingPhoto { ProgressView() }
                     ParkingMapCard(session: nil, vehicle: vehicle)
-                    Text(tr("资料和照片绑定车牌保存。车型库包含新旧车型；颜色用于记录实际车色，不代表原厂可选配置，也不会改变参考图。", "Saved against this plate. The catalogue includes older models. Colour records your car's paint; it does not indicate factory availability or recolour reference images.", "Disimpan mengikut plat. Katalog termasuk model lama. Warna merekod cat kereta, bukan pilihan kilang, dan tidak menukar imej rujukan."))
+                    Text(tr("示意图按车身类型和颜色显示，不是具体车型的精确复刻。上传自己的照片后优先显示照片。", "The illustration follows body style and colour, not an exact model replica. Your own photo takes priority.", "Ilustrasi mengikut jenis badan dan warna, bukan replika model tepat. Foto sendiri diutamakan."))
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if !error.isEmpty { Text(error).foregroundStyle(.red) }
