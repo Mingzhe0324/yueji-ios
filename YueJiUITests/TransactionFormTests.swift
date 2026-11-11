@@ -255,6 +255,9 @@ final class TransactionFormTests: XCTestCase {
         }, object: app)
         XCTAssertEqual(XCTWaiter.wait(for: [detailReady], timeout: 10), .completed,
                        "Detail did not become interactive after closing the item editor; \(app.debugDescription)")
+        let dock = app.descendants(matching: .any)["navigation.dock"].firstMatch
+        XCTAssertLessThanOrEqual(detailEdit.frame.maxY, dock.frame.minY,
+                                 "Detail actions must have their own space above navigation")
         back.tap()
         waitUntilGone(app.navigationBars["Entry details"])
         XCTAssertTrue(addEntry.waitForExistence(timeout: 5), "One Back tap must return to Overview")
@@ -414,7 +417,8 @@ final class TransactionFormTests: XCTestCase {
         }
 
         let category = app.descendants(matching: .any)["transaction.category"].firstMatch
-        reveal(category, in: app); category.tap()
+        // Location is below Category; offscreen Form rows may be unmounted.
+        reveal(category, in: app, above: !opening); category.tap()
         // Navigation-style Picker choices are buttons in the native iOS hierarchy.
         let food = app.buttons["Food"].firstMatch
         XCTAssertTrue(food.waitForExistence(timeout: 5), "Food category choice is absent from the native picker"); food.tap()

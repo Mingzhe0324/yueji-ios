@@ -429,20 +429,22 @@ struct MainView: View {
                 model.bannerInteraction == model.newTNGToken.uuidString)
     }
     private var tabs: some View {
-        TabView(selection: $selectedTab) {
-            DashboardView(openLedger: { month in
-                ledgerMonthRequest = LedgerMonthRequest(month: month)
-                selectedTab = 1
-            }).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 0).environment(\.ambientActive, selectedTab == 0).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
-            ExpensesView(isActive: selectedTab == 1, monthRequest: $ledgerMonthRequest).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 1).environment(\.ambientActive, selectedTab == 1).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle.fill") }
-            BankAccountsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 2).environment(\.ambientActive, selectedTab == 5).tag(5).tabItem { Label(tr("账户", "Accounts", "Akaun"), systemImage: "building.columns.fill") }
-            FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 3).environment(\.ambientActive, selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
-            SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 4).environment(\.ambientActive, selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
-        }.tint(ink).modifier(YueJiTabBarMotion())
-            .toolbar(.hidden, for: .tabBar)
-            .safeAreaInset(edge: .bottom, spacing: 0) {
-                YueJiNavigationDock(selection: $selectedTab)
-            }
+        // Reserve layout space so pushed detail actions cannot overlap the dock.
+        VStack(spacing: 0) {
+            TabView(selection: $selectedTab) {
+                DashboardView(openLedger: { month in
+                    ledgerMonthRequest = LedgerMonthRequest(month: month)
+                    selectedTab = 1
+                }).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 0).environment(\.ambientActive, selectedTab == 0).tag(0).tabItem { Label(tr("概览", "Overview", "Ringkasan"), systemImage: "chart.pie.fill") }
+                ExpensesView(isActive: selectedTab == 1, monthRequest: $ledgerMonthRequest).ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 1).environment(\.ambientActive, selectedTab == 1).tag(1).tabItem { Label(tr("账本", "Ledger", "Lejar"), systemImage: "list.bullet.rectangle.fill") }
+                BankAccountsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 2).environment(\.ambientActive, selectedTab == 5).tag(5).tabItem { Label(tr("账户", "Accounts", "Akaun"), systemImage: "building.columns.fill") }
+                FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 3).environment(\.ambientActive, selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
+                SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 4).environment(\.ambientActive, selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
+            }.tint(ink).modifier(YueJiTabBarMotion())
+                .toolbar(.hidden, for: .tabBar)
+            YueJiNavigationDock(selection: $selectedTab)
+        }
+        .background(IslandTheme.paper)
             .task(id: model.ledgerRevision) {
                 // Prepare the saved month while Overview is visible, before the
                 // first Ledger transition. The worker caches by revision/query.
