@@ -4419,6 +4419,38 @@ final class FeedbackPresentationTests: XCTestCase {
 }
 
 final class BankNotificationTests: XCTestCase {
+    func testOnlineBankingPaymentWithInlineDate() throws {
+        let title = "Payment Successful"
+        let body = "Your payment of MYR 7.00 to TEST RECIPIENT on 9/11/2026 was successful."
+        let expected = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-08T16:00:00Z"))
+        for source in [String?.none, "RHB"] {
+            let parsed = try XCTUnwrap(parseFinancialNotification(body, title: title, sourceApp: source))
+            XCTAssertEqual(parsed.kind, "payment")
+            XCTAssertEqual(parsed.cents, 700)
+            XCTAssertEqual(parsed.party, "TEST RECIPIENT")
+            XCTAssertEqual(parsed.transactionDate, expected)
+            XCTAssertEqual(parsed.sourceBank, source ?? "银行 / TNG")
+        }
+        for invalid in [
+            body.replacingOccurrences(of: "9/11/2026", with: "31/02/2026"),
+            body.replacingOccurrences(of: "successful", with: "failed"),
+            body.replacingOccurrences(of: "MYR", with: "USD"),
+            body.replacingOccurrences(of: "7.00", with: "7.001"),
+            body + " Balance MYR 100.00."
+        ] { XCTAssertNil(parseFinancialNotification(invalid, title: title, sourceApp: "RHB")) }
+        var ledger = Ledger()
+        let received = expected.addingTimeInterval(86400)
+        _ = try ledger.receiveTNG(body: body, title: title, date: received, eventID: "rhb-online-test", now: received, sourceApp: "RHB")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.cents, 700)
+        XCTAssertEqual(ledger.expenses.first?.merchant, "TEST RECIPIENT")
+        XCTAssertEqual(ledger.expenses.first?.source, "RHB")
+        XCTAssertEqual(ledger.expenses.first?.date, expected)
+        _ = try ledger.receiveTNG(body: body, title: title, date: received, eventID: "rhb-online-test", now: received, sourceApp: "RHB")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        _ = try ledger.validated()
+    }
+
     func testMaybankObservedDebitCardPurchase() throws {
         let title = "Maybank2u: Card Transaction"
         // Synthetic card suffix; preserve the observed wording and whitespace.

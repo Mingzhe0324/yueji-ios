@@ -1709,6 +1709,28 @@ func parseGenericBankNotification(_ body: String, title: String, provider: Strin
     }
     // Parse only unambiguous numeric date+time suffixes, in Malaysia time.
     var date: Date?
+    // Observed online-banking payment wording. The date is inside the sentence,
+    // not part of the recipient. No bank name is implied by this shared wording.
+    let datedPayment = #"\AYour payment of (?:RM|MYR)\s*[0-9]+\.[0-9]{2} to .{1,200}? on ([0-9]{1,2}/[0-9]{1,2}/[0-9]{4}) was successful\.\z"#
+    if let regex = try? NSRegularExpression(pattern: datedPayment, options: .caseInsensitive),
+       let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+       let range = Range(match.range(at: 1), in: text) {
+        let raw = String(text[range])
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.timeZone = TimeZone(identifier: "Asia/Kuala_Lumpur")
+        formatter.isLenient = false
+        for format in ["d/M/yyyy", "dd/MM/yyyy", "d/MM/yyyy", "dd/M/yyyy"] {
+            formatter.dateFormat = format
+            if let parsed = formatter.date(from: raw), formatter.string(from: parsed) == raw {
+                date = parsed; break
+            }
+        }
+        guard date != nil else { return nil }
+        // Date-only input uses the start of that Malaysian calendar day.
+        text.removeSubrange(text.index(range.lowerBound, offsetBy: -4)..<range.upperBound)
+    }
     let datePattern = #"\s+(?:on|at|date\s*:|pada)\s+(\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}(?::\d{2})?|\d{2}/\d{2}/\d{4} \d{2}:\d{2}(?::\d{2})?)\.?\z"#
     if let regex = try? NSRegularExpression(pattern: datePattern, options: .caseInsensitive),
        let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
