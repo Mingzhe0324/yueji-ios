@@ -209,7 +209,7 @@ struct PageIntroduction: View {
         let _ = uiLocale.identifier
         VStack(alignment: .leading, spacing: 7) {
             Text(title).font(.largeTitle.weight(.bold)).fixedSize(horizontal: false, vertical: true)
-            Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(subtitle).font(.footnote).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }.frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 8)
             .padding(.horizontal, 20)
     }
@@ -617,13 +617,7 @@ struct MonthPicker: View {
     }
     @ViewBuilder var body: some View {
         let _ = uiLocale.identifier
-        // Glass chevrons either side of the month; on iOS 26 and later they share one
-        // glass container, so they blend and morph like the system's own controls.
-        if #available(iOS 26.0, *) {
-            GlassEffectContainer(spacing: 12) { controls }
-        } else {
-            controls
-        }
+        controls
     }
     private var controls: some View {
         HStack(spacing: 0) {
@@ -1000,23 +994,22 @@ struct DashboardView: View {
     /// Shortcuts as round glass buttons, like the quick actions of the kit's Mobile Banking
     /// app, over the hairline that ends its header.
     private var quickActions: some View {
-        HStack(alignment: .top, spacing: 4) {
-            QuickActionButton(title: tr("扫描收据", "Scan receipt", "Imbas resit"), symbol: "doc.viewfinder", tint: IslandPalette.lagoon) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: 10)], spacing: 10) {
+            DashboardActionTile(title: tr("扫描收据", "Scan receipt", "Imbas resit"), symbol: "doc.viewfinder", tint: IslandPalette.lagoon) {
                 path.append(OverviewRoute.receipt)
             }.guideTarget("dashboard.receipt")
-            QuickActionButton(title: tr("自动记账", "Automation", "Automasi"), symbol: "bolt.fill", tint: IslandPalette.sky) {
+            DashboardActionTile(title: tr("自动记账", "Automation", "Automasi"), symbol: "bolt.fill", tint: IslandPalette.sky) {
                 path.append(OverviewRoute.automation)
             }
-            QuickActionButton(title: monthBudget.base > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"),
+            DashboardActionTile(title: monthBudget.base > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"),
                               symbol: "gauge.with.dots.needle.67percent", tint: IslandPalette.pumpkin) {
                 editBudget()
             }
-            QuickActionButton(title: tr("储蓄目标", "Savings", "Simpanan"), symbol: "target", tint: IslandPalette.berry) {
+            DashboardActionTile(title: tr("储蓄目标", "Savings", "Simpanan"), symbol: "target", tint: IslandPalette.berry) {
                 path.append(OverviewRoute.savings)
             }
         }
-        .padding(.bottom, 16)
-        .overlay(alignment: .bottom) { Divider().padding(.horizontal, 12).accessibilityHidden(true) }
+        .padding(.vertical, 4)
     }
     private func editBudget() {
         // Only the base is edited here; income added to the month stays as allocated.
@@ -1919,6 +1912,9 @@ private struct LedgerDayHeader: View {
                 TransactionAmount(cents: spent, direction: .outgoing)
             }
         }
+        .font(.caption.weight(.semibold))
+        .textCase(nil)
+        .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
     }
 }
@@ -1987,7 +1983,7 @@ struct ExpensesView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Text(String(timeline.count) + tr(" 笔记录", " entries", " rekod")).font(.footnote).foregroundStyle(.secondary)
-                    }.padding(.vertical, 6)
+                    }.elegantCard(padding: 20, radius: 22)
                     .modifier(MonthSummaryMotion(month: loadedQuery?.month))
                     .listRowSeparator(.hidden)
                     LedgerActiveFilters(filter: $filter, provider: $providerFilter)
@@ -3964,7 +3960,7 @@ struct SimpleSettingsRow: View {
     var body: some View {
         let _ = uiLocale.identifier
         HStack(spacing: 14) {
-            IslandIconTile(symbol: symbol, color: color, size: 36, filled: true)
+            IslandIconTile(symbol: symbol, color: color, size: 40, filled: false)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text(title).font(.body.weight(.semibold)).foregroundStyle(.primary)

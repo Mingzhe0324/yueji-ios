@@ -169,6 +169,28 @@ struct QuickActionButton: View {
     }
 }
 
+/// A single accessible tap target for the overview's frequently used tools.
+struct DashboardActionTile: View {
+    let title: String
+    let symbol: String
+    var tint: Color = IslandTheme.accent
+    let action: () -> Void
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 10) {
+                IslandIconTile(symbol: symbol, color: tint, size: 38)
+                    .accessibilityHidden(true)
+                Text(title).font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
+            }.padding(12).frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 18))
+                .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(IslandTheme.line, lineWidth: 0.7))
+                .contentShape(RoundedRectangle(cornerRadius: 18))
+        }.buttonStyle(ElegantPressStyle()).accessibilityLabel(title)
+    }
+}
+
 /// Subtle press feedback for tappable panels: a slight dip and dim that springs back.
 struct ElegantPressStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
@@ -315,8 +337,7 @@ struct CategoryShareChip: View {
 
 // MARK: - Empty and loading states
 
-/// An empty state, drawn by the system's own `ContentUnavailableView` exactly as in Apple's
-/// apps: a symbol, a title, a message and optional actions.
+/// Quiet guidance with the same spacing and surfaces as populated cards.
 struct IslandEmptyState<Actions: View>: View {
     let title: String
     let message: String?
@@ -335,13 +356,23 @@ struct IslandEmptyState<Actions: View>: View {
         }
     }
     var body: some View {
-        ContentUnavailableView {
-            Label(title, systemImage: symbol)
-        } description: {
-            if let message { Text(message) }
-        } actions: {
-            actions
+        VStack(spacing: 14) {
+            Image(systemName: symbol)
+                .font(.system(size: 28, weight: .medium))
+                .foregroundStyle(IslandTheme.accent)
+                .frame(width: 68, height: 68)
+                .background(IslandTheme.soft, in: RoundedRectangle(cornerRadius: 22))
+                .accessibilityHidden(true)
+            Text(title).font(.title3.weight(.semibold)).accessibilityAddTraits(.isHeader)
+            if let message {
+                Text(message).font(.subheadline).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            actions.padding(.top, 4)
         }
+        .multilineTextAlignment(.center)
+        .padding(.horizontal, 24).padding(.vertical, 32)
+        .frame(maxWidth: .infinity)
     }
 }
 extension IslandEmptyState where Actions == EmptyView {
