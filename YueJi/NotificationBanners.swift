@@ -342,7 +342,11 @@ struct NotificationBannerSurface: ViewModifier {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     private let shape = RoundedRectangle(cornerRadius: 24, style: .continuous)
     @ViewBuilder func body(content: Content) -> some View {
-        Group {
+        if #available(iOS 26.0, *), !reduceTransparency, contrast != .increased {
+            // One system Liquid Glass surface, exactly like iOS 26/27 notifications,
+            // without a second custom border/shadow or an extra interactive transform.
+            content.glassEffect(.regular, in: shape)
+        } else {
             content.background { shape.fill(IslandTheme.card) }
                 .overlay {
                     shape.strokeBorder(Color.primary.opacity(contrast == .increased ? 0.35 : 0.09), lineWidth: 0.5)

@@ -122,7 +122,7 @@ private struct ParkingMapCard: View {
                     }
                 }
             }.padding(18)
-        }.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 28))
+        }.background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
             .clipShape(RoundedRectangle(cornerRadius: 28))
             .shadow(color: .black.opacity(0.04), radius: 12, y: 5)
     }
@@ -509,7 +509,7 @@ private struct ParkingHome: View {
                             Label(tr("查看车位 · 结束停车", "Parking details · Finish", "Butiran parkir · Tamat"), systemImage: "arrow.right.circle.fill")
                         }.buttonStyle(ParkingActionStyle()).disabled(startingID != nil)
                     }.padding(24)
-                        .background(LinearGradient(colors: [parkingAccent.opacity(0.16), IslandTheme.card], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
+                        .background(LinearGradient(colors: [parkingAccent.opacity(0.16), Color(uiColor: .secondarySystemGroupedBackground)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
                         .overlay(RoundedRectangle(cornerRadius: 28).stroke(parkingAccent.opacity(0.2)))
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
@@ -566,7 +566,7 @@ private struct ParkingHome: View {
                                 Text(tr("楼层和车位号可稍后补充。", "Add floor and bay later if needed.", "Tambah tingkat dan petak kemudian jika perlu.")).font(.caption).foregroundStyle(.secondary)
                             }.padding(.top, 10)
                         }.font(.subheadline)
-                    }.padding(20).background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 28))
+                    }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
                 }
                 if startingID != nil {
                     VStack(spacing: 10) {
@@ -576,7 +576,7 @@ private struct ParkingHome: View {
                 }
                 DisclosureGroup(tr("查看车辆与地图", "Car & map", "Kereta dan peta")) {
                     ParkingMapCard(session: active ?? previewSession).padding(.top, 12)
-                }.padding(18).background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 24))
+                }.padding(18).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
                 if let message = locator.message { Text(message).font(.caption).foregroundStyle(.secondary) }
                 if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
                 DisclosureGroup(tr("停车历史", "Parking history", "Sejarah parkir")) {
@@ -597,11 +597,11 @@ private struct ParkingHome: View {
                             }.disabled(startingID != nil)
                         }
                     }.padding(.top, 16)
-                }.padding(20).background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 24))
+                }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
                 Text(tr("停车资料仅保存在此设备；付款后请返回核对。", "Parking details stay on this device. Return after paying to review.", "Butiran parkir kekal pada peranti ini. Kembali selepas bayar untuk semakan."))
                     .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
             }.padding(20)
-        }.background(IslandTheme.paper)
+        }.background(Color(uiColor: .systemGroupedBackground))
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: active?.id)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: plate)
     }

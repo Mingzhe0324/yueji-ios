@@ -760,7 +760,7 @@ private struct ResearchCompanyCards: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }.frame(maxWidth: .infinity, minHeight: 115, alignment: .topLeading).padding(16)
-                        .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 20))
+                        .background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 20))
                 }
             }
             Text(tr("每项满分 20 分，越高越好；五项资料齐全才计算总分。风险项高分代表已知风险较少。", "Each check is out of 20; higher is better. All five are needed for a total. A higher risk score means fewer evidenced risks.", "Setiap semakan daripada 20; lebih tinggi lebih baik. Lima semakan diperlukan untuk jumlah. Skor risiko tinggi bermakna risiko terbukti lebih rendah."))
