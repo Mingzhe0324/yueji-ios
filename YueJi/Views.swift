@@ -4,30 +4,35 @@ import UIKit
 
 private let ink = IslandTheme.accent
 
-/// The app's visual tokens: Apple's own system colours, so every screen matches iOS 26/27
-/// exactly, in light and dark mode. (The "Island" names are historical.)
+/// Shared brand colours with explicit light and dark variants.
 enum IslandTheme {
-    /// The app tint: the system blue, the accent of Apple's iOS 27 UI kit (#0088FF).
-    static let accent = Color(uiColor: .systemBlue)
-    /// Text/icons drawn on top of `accent` fills.
-    static let onAccent = Color.white
-    /// The system grouped background and its panels, as in Settings and Wallet.
-    static let paper = Color(uiColor: .systemGroupedBackground)
-    static let card = Color(uiColor: .secondarySystemGroupedBackground)
-    static let line = Color(uiColor: .separator)
+    static func adaptive(_ light: UInt32, _ dark: UInt32) -> Color {
+        Color(uiColor: UIColor { traits in
+            let hex = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat((hex >> 16) & 255) / 255,
+                           green: CGFloat((hex >> 8) & 255) / 255,
+                           blue: CGFloat(hex & 255) / 255, alpha: 1)
+        })
+    }
+    static let accent = adaptive(0x176B58, 0x80D5B5)
+    static let onAccent = adaptive(0xFFFFFF, 0x102B23)
+    static let paper = adaptive(0xF6F5F1, 0x111816)
+    static let card = adaptive(0xFFFFFF, 0x1C2622)
+    static let line = adaptive(0xE1E6DF, 0x34453D)
+    static let soft = adaptive(0xE8F0E9, 0x273B31)
 }
 
 /// Icon and category colours: the system palette, as in Settings and Apple Card.
 /// Financial meaning (income green, spending red) stays separate.
 enum IslandPalette {
-    static let leaf = Color(uiColor: .systemIndigo)
-    static let mint = Color(uiColor: .systemGreen)
-    static let lagoon = Color(uiColor: .systemTeal)
-    static let sky = Color(uiColor: .systemBlue)
-    static let lavender = Color(uiColor: .systemPurple)
-    static let berry = Color(uiColor: .systemPink)
+    static let leaf = IslandTheme.accent
+    static let mint = IslandTheme.adaptive(0x438567, 0x87CEAA)
+    static let lagoon = IslandTheme.adaptive(0x347F85, 0x88C8CB)
+    static let sky = IslandTheme.adaptive(0x497EA5, 0x94BDD9)
+    static let lavender = IslandTheme.adaptive(0x806AA8, 0xBCA6E1)
+    static let berry = IslandTheme.adaptive(0xAA627B, 0xE2A3B8)
     static let coral = Color(uiColor: .systemRed)
-    static let pumpkin = Color(uiColor: .systemOrange)
+    static let pumpkin = IslandTheme.adaptive(0xAB7035, 0xE5B16C)
     static let pebble = Color(uiColor: .systemGray)
 }
 
@@ -105,11 +110,11 @@ struct AmbientGlowBackdrop: View {
                     GeometryReader { proxy in
                         let width = proxy.size.width, height = proxy.size.height
                         let dark = scheme == .dark
-                        glow(daylight ? tone(date, layer: 0) : Color(uiColor: .systemRed), strength: dark ? 0.42 : 0.16, diameter: width)
+                        glow(daylight ? tone(date, layer: 0) : Color(uiColor: .systemRed), strength: dark ? 0.12 : 0.06, diameter: width)
                             .position(x: width * 0.92, y: height * 0.06)
-                        glow(daylight ? tone(date, layer: 1) : Color(uiColor: .systemGreen), strength: dark ? 0.26 : 0.12, diameter: width * 0.9)
+                        glow(daylight ? tone(date, layer: 1) : Color(uiColor: .systemGreen), strength: dark ? 0.08 : 0.04, diameter: width * 0.9)
                             .position(x: width * 0.02, y: height * 0.34)
-                        glow(daylight ? tone(date, layer: 2) : Color(uiColor: .systemYellow), strength: dark ? 0.24 : 0.14, diameter: width * 0.9)
+                        glow(daylight ? tone(date, layer: 2) : Color(uiColor: .systemYellow), strength: dark ? 0.06 : 0.03, diameter: width * 0.9)
                             .position(x: width, y: height * 0.7)
                     }
                 }
@@ -140,10 +145,10 @@ enum YueJiMotion {
     /// Button and control presses.
     static let press = Animation.spring(duration: 0.22, bounce: 0.15)
     /// Chips, badges and small reveals.
-    static let pop = Animation.spring(duration: 0.4, bounce: 0.15)
+    static let pop = Animation.spring(duration: 0.28, bounce: 0.08)
     /// Cards and empty states appearing.
-    static let entrance = Animation.spring(duration: 0.55, bounce: 0.1)
-    static let banner = Animation.spring(duration: 0.45, bounce: 0.12)
+    static let entrance = Animation.spring(duration: 0.32, bounce: 0.06)
+    static let banner = Animation.spring(duration: 0.32, bounce: 0.06)
     /// Gauges, bars and charts filling.
     static let meter = Animation.smooth(duration: 0.3)
 }
@@ -211,20 +216,11 @@ struct PageIntroduction: View {
 }
 private struct YueJiBarAppearance: ViewModifier {
     @Environment(\.colorScheme) private var scheme
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *) {
-            // Liquid Glass: the system draws floating glass bars over the content with
-            // its own scroll-edge effect, exactly as in iOS 26/27. MainView also sets the
-            // app's light/dark choice on the window, so the bars always follow it.
-            content.toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
-        } else {
-            content
-                // Keep native chrome in the same resolved theme as the page. A
-                // visible background keeps the requested bar scheme in effect at
-                // scroll edges as well as when content is beneath the bar.
-                .toolbarColorScheme(scheme, for: .navigationBar, .tabBar)
-                .toolbarBackground(.visible, for: .navigationBar, .tabBar)
-        }
+    func body(content: Content) -> some View {
+        content.toolbarColorScheme(scheme, for: .navigationBar)
+            .toolbarBackground(IslandTheme.paper, for: .navigationBar)
+            .toolbarBackground(.visible, for: .navigationBar)
+            .toolbar(.hidden, for: .tabBar)
     }
 }
 /// The subtitle under a large title, as in iOS 26/27 and Apple's iOS 27 UI kit.
@@ -245,6 +241,7 @@ private struct YueJiListSurface: ViewModifier {
     var glow = false
     func body(content: Content) -> some View {
         content.listStyle(.insetGrouped)
+            .listSectionSpacing(18)
             .scrollDismissesKeyboard(.interactively)
             .scrollContentBackground(.hidden)
             .background { if glow { AmbientGlowBackdrop() } else { IslandBackdrop() } }
@@ -442,6 +439,10 @@ struct MainView: View {
             FriendsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 3).environment(\.ambientActive, selectedTab == 3).tag(3).tabItem { Label(tr("分账", "Friends", "Rakan"), systemImage: "person.2.fill") }
             SettingsView().ledgerFeedback().modifier(YueJiBarAppearance()).environment(\.ambientTab, 4).environment(\.ambientActive, selectedTab == 4).tag(4).tabItem { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape.fill") }
         }.tint(ink).modifier(YueJiTabBarMotion())
+            .toolbar(.hidden, for: .tabBar)
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                YueJiNavigationDock(selection: $selectedTab)
+            }
             .task(id: model.ledgerRevision) {
                 // Prepare the saved month while Overview is visible, before the
                 // first Ledger transition. The worker caches by revision/query.
@@ -818,10 +819,11 @@ struct DashboardView: View {
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
                     overviewHero
+                        .elegantCard(padding: 22, radius: 24)
                         .modifier(MonthSummaryMotion(month: loadedSummary?.month))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 8, trailing: 0))
                     quickActions
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
@@ -1033,7 +1035,7 @@ struct DashboardView: View {
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         .textCase(.uppercase)
                     heroAmount
-                        .font(.system(size: heroSize, weight: .bold))
+                        .font(.system(size: heroSize, weight: .semibold, design: .rounded))
                         .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
                 }
                 Spacer(minLength: 8)
@@ -2473,7 +2475,7 @@ struct ExpenseDetailView: View {
                 }
             }
             // Retain tab navigation; reserve a separate row above it for transaction actions.
-            .toolbar(.visible, for: .tabBar)
+            .toolbar(.hidden, for: .tabBar)
             .toolbar(.hidden, for: .bottomBar)
             .safeAreaInset(edge: .bottom, spacing: 0) {
                 if let entry = detail?.entry {
@@ -4006,19 +4008,13 @@ struct AutomationSetupView: View {
 /// Apple's own Liquid Glass buttons on iOS 26 and later, so presses, highlights and
 /// morphing are exactly the system's; standard bordered buttons otherwise.
 private struct YueJiPrimaryButton: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glassProminent)
-        } else { content.buttonStyle(.borderedProminent) }
+    func body(content: Content) -> some View {
+        content.buttonStyle(YueJiBrandButtonStyle(prominent: true))
     }
 }
 private struct YueJiSecondaryButton: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glass)
-        } else { content.buttonStyle(.bordered) }
+    func body(content: Content) -> some View {
+        content.buttonStyle(YueJiBrandButtonStyle(prominent: false))
     }
 }
 extension View {
@@ -4028,15 +4024,9 @@ extension View {
 
 
 private struct YueJiGlassSurface: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if reduceTransparency {
-            content.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        } else if #available(iOS 26.0, *) {
-            content.glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        } else {
-            content.background(.regularMaterial, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
-        }
+    func body(content: Content) -> some View {
+        content.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 20))
+            .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(IslandTheme.line, lineWidth: 0.7))
     }
 }
 

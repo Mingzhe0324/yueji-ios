@@ -2,6 +2,77 @@ import SwiftUI
 import UIKit
 import Charts
 
+struct YueJiBrandButtonStyle: ButtonStyle {
+    var prominent = true
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.subheadline.weight(.semibold))
+            .padding(.horizontal, 18).padding(.vertical, 12)
+            .frame(minHeight: 44)
+            .foregroundStyle(prominent ? IslandTheme.onAccent : IslandTheme.accent)
+            .background(prominent ? IslandTheme.accent : IslandTheme.soft, in: RoundedRectangle(cornerRadius: 14))
+            .opacity(enabled ? (configuration.isPressed ? 0.82 : 1) : 0.45)
+            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.97 : 1)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
+    }
+}
+
+/// Keep the native tab containers alive so switching never discards a navigation stack.
+struct YueJiNavigationDock: View {
+    @Binding var selection: Int
+    @Namespace private var indicator
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var typeSize
+    private var items: [(Int, String, String)] { [
+        (0, tr("概览", "Overview", "Ringkasan"), "chart.pie"),
+        (1, tr("账本", "Ledger", "Lejar"), "text.book.closed"),
+        (5, tr("账户", "Accounts", "Akaun"), "creditcard"),
+        (3, tr("分账", "Friends", "Rakan"), "person.2"),
+        (4, tr("设置", "Settings", "Tetapan"), "slider.horizontal.3")
+    ] }
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(items, id: \.0) { item in
+                Button {
+                    guard selection != item.0 else { return }
+                    FeedbackHaptics.selection()
+                    withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.standard) { selection = item.0 }
+                } label: {
+                    VStack(spacing: 5) {
+                        ZStack {
+                            if selection == item.0 {
+                                RoundedRectangle(cornerRadius: 12).fill(IslandTheme.soft)
+                                    .matchedGeometryEffect(id: "selection", in: indicator)
+                            }
+                            Image(systemName: item.2).font(.system(size: 20, weight: selection == item.0 ? .semibold : .regular))
+                        }.frame(width: 48, height: 32)
+                        if !typeSize.isAccessibilitySize {
+                            Text(item.1).font(.caption2.weight(selection == item.0 ? .bold : .medium))
+                                .lineLimit(1).minimumScaleFactor(0.7)
+                        }
+                    }
+                    .foregroundStyle(selection == item.0 ? IslandTheme.accent : Color.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 54).contentShape(Rectangle())
+                }
+                .buttonStyle(ElegantPressStyle())
+                .accessibilityLabel(item.1)
+                .accessibilityIdentifier("navigation.tab.\(item.0)")
+                .accessibilityAddTraits(selection == item.0 ? .isSelected : [])
+            }
+        }
+        .padding(.horizontal, 8).padding(.vertical, 8)
+        .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 22))
+        .overlay(RoundedRectangle(cornerRadius: 22).strokeBorder(IslandTheme.line, lineWidth: 0.7))
+        .shadow(color: .black.opacity(0.06), radius: 16, y: 4)
+        .padding(.horizontal, 16).padding(.top, 8).padding(.bottom, 4)
+        .background(IslandTheme.paper)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("navigation.dock")
+    }
+}
+
 /// Shared presentation pieces in Apple's own style: flat grouped panels, glass icon buttons,
 /// icon tiles, row labels, avatars, dashboard section headers and share chips, empty and
 /// loading states, and the spending charts.
@@ -21,17 +92,19 @@ enum IslandMood: String { case happy, excited, worried, sad, sleepy }
 /// background with continuous corners, flat, with no outline or shadow.
 struct ElegantCard: ViewModifier {
     var padding: CGFloat = 16
-    var radius: CGFloat = 26
+    var radius: CGFloat = 20
     func body(content: Content) -> some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
+            .overlay(RoundedRectangle(cornerRadius: radius).strokeBorder(IslandTheme.line, lineWidth: 0.7))
+            .shadow(color: .black.opacity(0.025), radius: 12, y: 4)
     }
 }
 
 extension View {
-    func elegantCard(padding: CGFloat = 16, radius: CGFloat = 26) -> some View {
+    func elegantCard(padding: CGFloat = 18, radius: CGFloat = 20) -> some View {
         modifier(ElegantCard(padding: padding, radius: radius))
     }
 }
@@ -45,26 +118,13 @@ struct GlassIconButton: View {
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
     @Environment(\.colorScheme) private var scheme
     var body: some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            Button(action: action) {
-                Image(systemName: symbol).font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.primary)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 22, height: 22)
-            }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
-            .frame(minWidth: 44, minHeight: 44)
-        } else {
-            Button(action: action) {
-                Image(systemName: symbol).font(.subheadline.weight(.semibold))
-                    .foregroundStyle(IslandTheme.accent)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(IslandTheme.accent.opacity(scheme == .dark ? 0.16 : 0.08)))
-                    .frame(width: 44, height: 44).contentShape(Circle())
-            }
-            .buttonStyle(ElegantPressStyle())
-        }
+        Button(action: action) {
+            Image(systemName: symbol).font(.subheadline.weight(.semibold))
+                .foregroundStyle(IslandTheme.accent)
+                .frame(width: 44, height: 44)
+                .background(IslandTheme.soft, in: RoundedRectangle(cornerRadius: 14))
+                .contentShape(Rectangle())
+        }.buttonStyle(ElegantPressStyle())
     }
 }
 
@@ -99,21 +159,13 @@ struct QuickActionButton: View {
             .foregroundStyle(enabled ? tint : Color.secondary)
             .frame(width: 30, height: 30)
     }
-    @ViewBuilder private var circle: some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            Button(action: action) { icon }
-                .buttonStyle(.glass).buttonBorderShape(.circle)
-                .controlSize(.large)
-                .accessibilityLabel(title)
-        } else {
-            Button(action: action) {
-                icon.frame(width: 54, height: 54)
-                    .background(Circle().fill(tint.opacity(scheme == .dark ? 0.22 : 0.12)))
-                    .contentShape(Circle())
-            }
-            .buttonStyle(ElegantPressStyle())
-            .accessibilityLabel(title)
-        }
+    private var circle: some View {
+        Button(action: action) {
+            icon.frame(width: 54, height: 54)
+                .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 17))
+                .overlay(RoundedRectangle(cornerRadius: 17).strokeBorder(IslandTheme.line, lineWidth: 0.7))
+                .contentShape(Rectangle())
+        }.buttonStyle(ElegantPressStyle()).accessibilityLabel(title)
     }
 }
 
@@ -129,9 +181,9 @@ private struct ElegantPressBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.97 : 1)
             .opacity(configuration.isPressed ? 0.88 : 1)
-            .animation(reduceMotion ? nil : YueJiMotion.press, value: configuration.isPressed)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -173,7 +225,7 @@ struct IslandRowLabel: View {
     var color: Color = IslandPalette.leaf
     var body: some View {
         HStack(spacing: 12) {
-            IslandIconTile(symbol: symbol, color: color, size: 30, filled: true)
+            IslandIconTile(symbol: symbol, color: color, size: 34, filled: false)
                 .accessibilityHidden(true)
             Text(title).foregroundStyle(.primary)
         }

@@ -56,7 +56,7 @@ final class TransactionFormTests: XCTestCase {
                                "-openingAnimationEnabled", "YES", "-playfulAnimations", "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
-        let accounts = app.tabBars.buttons["Accounts"]
+        let accounts = app.buttons["navigation.tab.5"]
         XCTAssertTrue(accounts.waitForExistence(timeout: 20))
         for _ in 0..<3 {
             accounts.tap()
@@ -70,7 +70,7 @@ final class TransactionFormTests: XCTestCase {
             XCTAssertTrue(page.waitForExistence(timeout: 5))
             page.buttons.element(boundBy: 0).tap()
             XCTAssertTrue(app.navigationBars["Accounts"].waitForExistence(timeout: 5))
-            app.tabBars.buttons["Ledger"].tap()
+            app.buttons["navigation.tab.1"].tap()
         }
     }
 
@@ -81,11 +81,11 @@ final class TransactionFormTests: XCTestCase {
                                "-openingAnimationEnabled", "NO", "-playfulAnimations", "NO",
                                "-automaticSystemAlertsBuild65", "YES", "-automationNotifications", "NO"]
         app.launch()
-        XCTAssertTrue(app.tabBars.buttons["Accounts"].waitForExistence(timeout: 20))
-        app.tabBars.buttons["Accounts"].tap()
+        XCTAssertTrue(app.buttons["navigation.tab.5"].waitForExistence(timeout: 20))
+        app.buttons["navigation.tab.5"].tap()
         let accountsNavigation = app.navigationBars["Accounts"]
         XCTAssertTrue(accountsNavigation.waitForExistence(timeout: 10))
-        XCTAssertTrue(app.tabBars.buttons["Accounts"].isSelected)
+        XCTAssertTrue(app.buttons["navigation.tab.5"].isSelected)
         // iOS 26 exposes both a toolbar wrapper and its Button with this identifier.
         // Scope to the navigation bar and resolve the first Button. Do not poll
         // several application-wide queries in one predicate: on a busy runner
@@ -110,8 +110,8 @@ final class TransactionFormTests: XCTestCase {
         app.navigationBars["Bank / wallet account"].buttons["Save"].tap()
         waitUntilGone(app.navigationBars["Bank / wallet account"])
         app.terminate(); app.launch()
-        XCTAssertTrue(app.tabBars.buttons["Accounts"].waitForExistence(timeout: 20))
-        app.tabBars.buttons["Accounts"].tap()
+        XCTAssertTrue(app.buttons["navigation.tab.5"].waitForExistence(timeout: 20))
+        app.buttons["navigation.tab.5"].tap()
         let account = app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", name)).firstMatch
         reveal(account, in: app); account.tap()
         for _ in 0..<2 {
@@ -258,7 +258,7 @@ final class TransactionFormTests: XCTestCase {
         back.tap()
         waitUntilGone(app.navigationBars["Entry details"])
         XCTAssertTrue(addEntry.waitForExistence(timeout: 5), "One Back tap must return to Overview")
-        let ledger = app.tabBars.buttons["Ledger"]
+        let ledger = app.buttons["navigation.tab.1"]
         ledger.tap()
         reveal(purchase, in: app); purchase.tap()
         XCTAssertTrue(app.navigationBars["Entry details"].waitForExistence(timeout: 5))
@@ -336,7 +336,7 @@ final class TransactionFormTests: XCTestCase {
         waitUntilGone(app.navigationBars["Entry details"])
         XCTAssertTrue(app.navigationBars["Ledger"].waitForExistence(timeout: 10))
         waitUntilGone(purchase)
-        app.tabBars.buttons["Settings"].tap()
+        app.buttons["navigation.tab.4"].tap()
         let categories = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Spending categories")).firstMatch
         reveal(categories, in: app)
         XCTAssertFalse(app.buttons.matching(NSPredicate(format: "label CONTAINS %@", "Tags & projects")).firstMatch.exists)
@@ -369,7 +369,7 @@ final class TransactionFormTests: XCTestCase {
         let newEntry = app.buttons["overview.manualEntry"].firstMatch
         XCTAssertTrue(newEntry.waitForExistence(timeout: 20), "Overview Add Entry is absent after launch; app state = \(app.state)")
         XCTAssertTrue(newEntry.isHittable, "Overview Add Entry exists but cannot be tapped after launch")
-        let tabBar = app.tabBars.firstMatch
+        let tabBar = app.descendants(matching: .any)["navigation.dock"].firstMatch
         XCTAssertLessThanOrEqual(newEntry.frame.maxY, tabBar.frame.minY,
                                  "Add Entry's accessible target must not extend behind the tab bar")
         // No warm-up tap or delay after the launch screen becomes interactive.
@@ -591,7 +591,7 @@ final class TransactionFormTests: XCTestCase {
         for bar in app.navigationBars.allElementsBoundByIndex where bar.isHittable {
             top = max(top, bar.frame.maxY)
         }
-        let tabBar = app.tabBars.firstMatch
+        let tabBar = app.descendants(matching: .any)["navigation.dock"].firstMatch
         if tabBar.exists && tabBar.isHittable { bottom = min(bottom, tabBar.frame.minY) }
         // Overview Add Entry belongs to the top toolbar. Its frame must not
         // reduce the content viewport as a bottom floating action would.

@@ -3,97 +3,8 @@ import PhotosUI
 import MapKit
 import UserNotifications
 import CryptoKit
-import SceneKit
 
 private let parkingAccent = Color(red: 0.12, green: 0.65, blue: 0.39)
-
-/// Local, generic body-style models; never a claimed replica of a brand/model.
-private struct ParkingVehicleModel: View {
-    let vehicle: ParkingVehicle
-    @State private var interactive = false
-    private func scene() -> SCNScene {
-        let scene = SCNScene()
-        scene.background.contents = UIColor(white: 0.94, alpha: 1)
-        let mpv = vehicle.displayBody == "mpv"
-        let suv = vehicle.displayBody == "suv"
-        let pickup = vehicle.displayBody == "pickup"
-        let coupe = vehicle.displayBody == "coupe"
-        let sedan = vehicle.displayBody == "sedan" || coupe
-        let length: CGFloat = pickup ? 5.2 : mpv ? 4.8 : (sedan ? 4.6 : (suv ? 4.4 : 3.8))
-        let roof: CGFloat = pickup ? 1.85 : coupe ? 1.35 : mpv ? 1.95 : (suv ? 1.85 : 1.5)
-        let paint = UIColor(vehicle.tint)
-        func material(_ color: UIColor, metal: CGFloat = 0) -> SCNMaterial {
-            let m = SCNMaterial(); m.diffuse.contents = color
-            m.lightingModel = .physicallyBased; m.metalness.contents = metal; m.roughness.contents = 0.3
-            return m
-        }
-        func box(_ w: CGFloat, _ h: CGFloat, _ d: CGFloat, _ x: CGFloat, _ y: CGFloat, _ z: CGFloat, _ color: UIColor) {
-            let g = SCNBox(width: w, height: h, length: d, chamferRadius: min(0.1, h / 3))
-            g.materials = [material(color, metal: color == paint ? 0.45 : 0)]
-            let n = SCNNode(geometry: g); n.position = SCNVector3(Float(x), Float(y), Float(z))
-            scene.rootNode.addChildNode(n)
-        }
-        box(length, 0.65, 1.75, 0, 0.75, 0, paint)
-        if pickup {
-            box(1.8, 0.1, 1.45, 1.55, 1.1, 0, .darkGray)
-            box(1.8, 0.35, 0.12, 1.55, 1.22, -0.8, paint)
-            box(1.8, 0.35, 0.12, 1.55, 1.22, 0.8, paint)
-            box(0.12, 0.35, 1.6, 2.5, 1.22, 0, paint)
-        }
-        let front: CGFloat = mpv ? -1.65 : -0.9
-        let rear: CGFloat = pickup ? 0.2 : sedan ? 0.85 : length / 2 - 0.25
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: front - 0.35, y: 1.02))
-        path.addLine(to: CGPoint(x: front + 0.35, y: roof))
-        path.addLine(to: CGPoint(x: rear - 0.2, y: roof))
-        path.addLine(to: CGPoint(x: rear + 0.2, y: 1.02))
-        path.close()
-        let cabin = SCNShape(path: path, extrusionDepth: 1.5)
-        cabin.chamferRadius = 0.08; cabin.materials = [material(UIColor(red: 0.13, green: 0.2, blue: 0.24, alpha: 1), metal: 0.3)]
-        scene.rootNode.addChildNode(SCNNode(geometry: cabin))
-        box(rear - front - 0.45, 0.10, 1.48, (front + rear + 0.15) / 2, roof, 0, paint)
-        for side in [-1, 1] as [CGFloat] {
-            for x in [-length * 0.31, length * 0.31] {
-                let tire = SCNCylinder(radius: 0.39, height: 0.25)
-                tire.materials = [material(.init(white: 0.08, alpha: 1))]
-                let wheel = SCNNode(geometry: tire)
-                wheel.eulerAngles.x = .pi / 2
-                wheel.position = SCNVector3(Float(x), 0.42, Float(side * 0.85))
-                scene.rootNode.addChildNode(wheel)
-                let hub = SCNCylinder(radius: 0.25, height: 0.265)
-                hub.materials = [material(.lightGray, metal: 0.8)]
-                let rim = SCNNode(geometry: hub); wheel.addChildNode(rim)
-            }
-            box(0.09, roof - 1.08, 0.06, (front + rear) / 2, (roof + 1.08) / 2, side * 0.77, paint)
-            box(0.26, 0.04, 0.04, 0.5, 0.98, side * 0.89, .lightGray)
-            box(0.22, 0.15, 0.24, front + 0.1, 1.15, side * 0.95, paint)
-            box(0.06, 0.16, 0.45, -length / 2, 0.88, side * 0.56, .white)
-            box(0.06, 0.16, 0.38, length / 2, 0.88, side * 0.58, .systemRed)
-        }
-        box(0.06, 0.23, 0.85, -length / 2 - 0.01, 0.6, 0, .darkGray)
-        box(6, 0.08, 3.2, 0, -0.03, 0, UIColor(white: 0.88, alpha: 1))
-        let camera = SCNNode(); camera.camera = SCNCamera()
-        camera.camera?.usesOrthographicProjection = true; camera.camera?.orthographicScale = 3.25
-        camera.position = SCNVector3(-6, 3.5, 6)
-        camera.look(at: SCNVector3(0, 0.8, 0)); scene.rootNode.addChildNode(camera)
-        let light = SCNNode(); light.light = SCNLight(); light.light?.type = .omni
-        light.light?.intensity = 1300; light.position = SCNVector3(-3, 6, 5)
-        scene.rootNode.addChildNode(light)
-        let ambient = SCNNode(); ambient.light = SCNLight(); ambient.light?.type = .ambient
-        ambient.light?.intensity = 450; scene.rootNode.addChildNode(ambient)
-        return scene
-    }
-    var body: some View {
-        SceneView(scene: scene(), options: interactive ? [.allowsCameraControl] : [])
-            .allowsHitTesting(interactive)
-            .overlay(alignment: .bottomTrailing) {
-                Button { interactive.toggle() } label: {
-                    Label(interactive ? tr("完成", "Done", "Selesai") : tr("旋转 3D", "Rotate 3D", "Putar 3D"), systemImage: "rotate.3d")
-                        .font(.caption).padding(8).background(.regularMaterial, in: Capsule())
-                }.padding(8)
-            }
-    }
-}
 
 struct ParkingVehicle: Codable, Equatable {
     var brand = ""
@@ -189,16 +100,6 @@ private struct ParkingMapCard: View {
                 .accessibilityLabel(tr("停车位置地图", "Parking location map", "Peta lokasi parkir"))
             }
             VStack(alignment: .leading, spacing: 14) {
-                Group {
-                    if let data = shownVehicle?.photo, let image = UIImage(data: data) {
-                        Image(uiImage: image).resizable().scaledToFit()
-                    } else {
-                        ParkingVehicleModel(vehicle: shownVehicle ?? ParkingVehicle())
-                    }
-                }.frame(maxWidth: .infinity).frame(height: 170)
-                    .background(Color(white: 0.94), in: RoundedRectangle(cornerRadius: 20))
-                    .clipShape(RoundedRectangle(cornerRadius: 20))
-                    .accessibilityLabel(shownVehicle?.photo == nil ? tr("车身类型示意图", "Body-style illustration", "Ilustrasi jenis badan") : tr("我的车辆照片", "My vehicle photo", "Foto kenderaan saya"))
                 HStack(alignment: .top) {
                     VStack(alignment: .leading, spacing: 5) {
                         Text(shownVehicle?.title.isEmpty == false ? shownVehicle!.title : tr("我的车辆", "My vehicle", "Kenderaan saya"))
@@ -214,9 +115,6 @@ private struct ParkingMapCard: View {
                 if let name = session?.name, !name.isEmpty {
                     Label(name, systemImage: "mappin.and.ellipse").font(.subheadline).foregroundStyle(.secondary)
                 }
-                if shownVehicle?.photo == nil {
-                    Text(tr("车身类型示意图", "Body-style illustration", "Ilustrasi jenis badan")).font(.caption2).foregroundStyle(.secondary)
-                }
                 if let vehicle = shownVehicle {
                     HStack(spacing: 8) {
                         Circle().fill(vehicle.tint).frame(width: 16, height: 16).overlay(Circle().stroke(.gray.opacity(0.5)))
@@ -224,7 +122,7 @@ private struct ParkingMapCard: View {
                     }
                 }
             }.padding(18)
-        }.background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+        }.background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 28))
             .clipShape(RoundedRectangle(cornerRadius: 28))
             .shadow(color: .black.opacity(0.04), radius: 12, y: 5)
     }
@@ -346,7 +244,11 @@ struct ParkingSession: Codable, Identifiable {
         entry.note = paidCents == nil
             ? tr("停车助手自动记录：估算费用，RM0.60／小时，不足一小时按一小时；未核实 TNG 实付。", "Automatically recorded estimate: RM0.60 per started hour; TNG payment not verified.", "Anggaran direkod automatik: RM0.60 setiap jam bermula; bayaran TNG belum disahkan.")
             : tr("停车助手自动记录：使用你确认的累计付款金额。", "Automatically recorded using your confirmed total payment.", "Direkod automatik menggunakan jumlah bayaran yang anda sahkan.")
-        try ledger.validateScreenshotImport(entry, acknowledged: [], forceReview: true)
+        // Automated estimates have no verified payment account. Check duplicates without
+        // invoking the screenshot workflow, which requires an account and manual review.
+        guard ledger.screenshotMatches(cents: cents, date: startedAt).isEmpty else {
+            throw LedgerError.invalid(tr("已有可能对应的停车账目，请核对后关闭自动入账再结束停车。", "A possible parking entry exists. Review it and disable automatic recording before finishing.", "Rekod parkir mungkin sudah ada. Semak dan matikan rekod automatik sebelum tamat."))
+        }
         ledger.expenses.append(entry)
         return id
     }
@@ -607,7 +509,7 @@ private struct ParkingHome: View {
                             Label(tr("查看车位 · 结束停车", "Parking details · Finish", "Butiran parkir · Tamat"), systemImage: "arrow.right.circle.fill")
                         }.buttonStyle(ParkingActionStyle()).disabled(startingID != nil)
                     }.padding(24)
-                        .background(LinearGradient(colors: [parkingAccent.opacity(0.16), Color(uiColor: .secondarySystemGroupedBackground)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
+                        .background(LinearGradient(colors: [parkingAccent.opacity(0.16), IslandTheme.card], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 28))
                         .overlay(RoundedRectangle(cornerRadius: 28).stroke(parkingAccent.opacity(0.2)))
                 } else {
                     VStack(alignment: .leading, spacing: 16) {
@@ -628,7 +530,7 @@ private struct ParkingHome: View {
                                 .onSubmit { store.rememberPlate(plate) }
                             Button { store.rememberPlate(plate); addingVehicle = false; editingVehicle = true } label: {
                                 Image(systemName: "slider.horizontal.3").padding(10).background(.quaternary, in: Circle())
-                            }.accessibilityLabel(tr("编辑车辆和照片", "Edit vehicle and photo", "Ubah kenderaan dan foto"))
+                            }.accessibilityLabel(tr("编辑车辆", "Edit vehicle", "Ubah kenderaan"))
                                 .disabled(ParkingStore.plateKey(plate).isEmpty)
                         }
                         Button {
@@ -664,7 +566,7 @@ private struct ParkingHome: View {
                                 Text(tr("楼层和车位号可稍后补充。", "Add floor and bay later if needed.", "Tambah tingkat dan petak kemudian jika perlu.")).font(.caption).foregroundStyle(.secondary)
                             }.padding(.top, 10)
                         }.font(.subheadline)
-                    }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 28))
+                    }.padding(20).background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 28))
                 }
                 if startingID != nil {
                     VStack(spacing: 10) {
@@ -674,7 +576,7 @@ private struct ParkingHome: View {
                 }
                 DisclosureGroup(tr("查看车辆与地图", "Car & map", "Kereta dan peta")) {
                     ParkingMapCard(session: active ?? previewSession).padding(.top, 12)
-                }.padding(18).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
+                }.padding(18).background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 24))
                 if let message = locator.message { Text(message).font(.caption).foregroundStyle(.secondary) }
                 if !error.isEmpty { Text(error).font(.footnote).foregroundStyle(.red) }
                 DisclosureGroup(tr("停车历史", "Parking history", "Sejarah parkir")) {
@@ -695,11 +597,11 @@ private struct ParkingHome: View {
                             }.disabled(startingID != nil)
                         }
                     }.padding(.top, 16)
-                }.padding(20).background(Color(uiColor: .secondarySystemGroupedBackground), in: RoundedRectangle(cornerRadius: 24))
+                }.padding(20).background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 24))
                 Text(tr("停车资料仅保存在此设备；付款后请返回核对。", "Parking details stay on this device. Return after paying to review.", "Butiran parkir kekal pada peranti ini. Kembali selepas bayar untuk semakan."))
                     .font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity)
             }.padding(20)
-        }.background(Color(uiColor: .systemGroupedBackground))
+        }.background(IslandTheme.paper)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: active?.id)
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.25), value: plate)
     }
@@ -913,8 +815,6 @@ private struct ParkingVehicleEditor: View {
     @State private var newPlate = ""
     @Environment(\.dismiss) private var dismiss
     @State private var error = ""
-    @State private var selectedPhoto: PhotosPickerItem?
-    @State private var loadingPhoto = false
     var body: some View {
         NavigationStack {
             Form {
@@ -963,18 +863,6 @@ private struct ParkingVehicleEditor: View {
                         }
                     }
                 }
-                Section {
-                    PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                        Label(tr("选择自己的车辆照片", "Choose your vehicle photo", "Pilih foto kenderaan sendiri"), systemImage: "photo")
-                    }.disabled(loadingPhoto)
-                    if vehicle.photo != nil {
-                        Button(tr("移除车辆照片", "Remove vehicle photo", "Buang foto kenderaan")) { vehicle.photo = nil; selectedPhoto = nil }
-                    }
-                    if loadingPhoto { ProgressView() }
-                    ParkingMapCard(session: nil, vehicle: vehicle)
-                    Text(tr("示意图按车身类型和颜色显示，不是具体车型的精确复刻。上传自己的照片后优先显示照片。", "The illustration follows body style and colour, not an exact model replica. Your own photo takes priority.", "Ilustrasi mengikut jenis badan dan warna, bukan replika model tepat. Foto sendiri diutamakan."))
-                        .font(.caption).foregroundStyle(.secondary)
-                }
                 if !error.isEmpty { Text(error).foregroundStyle(.red) }
             }
             .navigationTitle(tr("我的车辆", "My vehicle", "Kenderaan saya"))
@@ -996,25 +884,10 @@ private struct ParkingVehicleEditor: View {
                         vehicle.year = String(vehicle.year.filter(\.isNumber).prefix(4))
                         do { try store.saveVehicle(vehicle, plate: savedPlate); onSaved(savedPlate); dismiss() }
                         catch { self.error = error.localizedDescription }
-                    }.disabled(loadingPhoto || (adding && ParkingStore.plateKey(newPlate).isEmpty))
+                    }.disabled(adding && ParkingStore.plateKey(newPlate).isEmpty)
                 }
             }
-            .task(id: selectedPhoto) {
-                guard let selectedPhoto else { return }
-                loadingPhoto = true; defer { loadingPhoto = false }
-                do {
-                    guard let data = try await selectedPhoto.loadTransferable(type: Data.self), data.count <= 20_000_000,
-                          let image = UIImage(data: data) else { throw CloudFailure.invalidResponse }
-                    let scale = min(1, 900 / max(image.size.width, image.size.height))
-                    let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
-                    let format = UIGraphicsImageRendererFormat(); format.scale = 1
-                    let resized = UIGraphicsImageRenderer(size: size, format: format).image { _ in image.draw(in: CGRect(origin: .zero, size: size)) }
-                    try Task.checkCancellation()
-                    vehicle.photo = resized.jpegData(compressionQuality: 0.75)
-                } catch is CancellationError {} catch {
-                    self.error = tr("无法读取照片", "Unable to read photo", "Tidak dapat membaca foto")
-                }
-            }
+
         }
     }
 }

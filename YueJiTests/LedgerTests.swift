@@ -19,6 +19,7 @@ final class EverydayFlowTests: XCTestCase {
         let id = try session.recordStreetFee(in: &ledger, at: end)
         XCTAssertEqual(ledger.expenses.count, 1)
         XCTAssertEqual(ledger.expenses.first?.cents, 120)
+        XCTAssertNil(ledger.expenses.first?.bankAccountID, "An estimate must not invent a payment account")
         XCTAssertEqual(try session.recordStreetFee(in: &ledger, at: end.addingTimeInterval(3600)), id)
         XCTAssertEqual(ledger.expenses.count, 1)
         var paid = ParkingSession()
@@ -30,6 +31,10 @@ final class EverydayFlowTests: XCTestCase {
         duplicate.expenses.append(Expense(merchant: "Parking payment", cents: 120, date: end, source: "TNG"))
         XCTAssertThrowsError(try session.recordStreetFee(in: &duplicate, at: end))
         XCTAssertEqual(duplicate.expenses.count, 1)
+        var sameAmount = Ledger()
+        sameAmount.expenses.append(Expense(merchant: "Council", cents: 120, date: session.startedAt, source: "TNG"))
+        XCTAssertThrowsError(try session.recordStreetFee(in: &sameAmount, at: end))
+        XCTAssertEqual(sameAmount.expenses.count, 1)
         session.automaticStreetFee = nil
         var legacy = Ledger()
         XCTAssertNil(try session.recordStreetFee(in: &legacy, at: end))

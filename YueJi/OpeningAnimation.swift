@@ -266,13 +266,8 @@ struct OpeningAnimationView: View {
 
     /// The icon's glass moon, rising into place. One glass circle on iOS 26 and later, so it
     /// takes the system's own Liquid Glass; a solid blue disc otherwise.
-    @ViewBuilder private var moonDisc: some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            Color.clear.frame(width: Self.moonSize, height: Self.moonSize)
-                .glassEffect(.regular.tint(IslandTheme.accent), in: Circle())
-        } else {
-            Circle().fill(IslandTheme.accent.gradient).frame(width: Self.moonSize, height: Self.moonSize)
-        }
+    private var moonDisc: some View {
+        Circle().fill(IslandTheme.accent.gradient).frame(width: Self.moonSize, height: Self.moonSize)
     }
 
     private var moon: some View {
