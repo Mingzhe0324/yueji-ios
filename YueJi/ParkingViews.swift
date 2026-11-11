@@ -318,6 +318,38 @@ struct ParkingSession: Codable, Identifiable {
     var floor: String?
     var zone: String?
     var awaitingPaymentReview: Bool?
+    var automaticStreetFee: Bool?
+    func streetFeeCents(at end: Date) -> Int? {
+        let seconds = end.timeIntervalSince(startedAt)
+        guard seconds.isFinite, seconds >= 0, seconds <= 31 * 86400 else { return nil }
+        return max(1, Int(ceil(seconds / 3600))) * 60
+    }
+    // Stable ID permits retry if the ledger write succeeds but session persistence fails.
+    func recordStreetFee(in ledger: inout Ledger, at end: Date) throws -> String? {
+        guard automaticStreetFee == true else { return expenseID }
+        if !ledgerIDs.isEmpty { return expenseID }
+        let id = "parking-fee-" + self.id
+        if ledger.expenses.contains(where: { $0.id == id }) { return id }
+        guard let cents = paidCents ?? streetFeeCents(at: end), cents > 0 else {
+            throw LedgerError.invalid(tr("停车时间或金额无效", "Invalid parking time or amount", "Masa atau amaun parkir tidak sah"))
+        }
+        // A payment already imported from TNG must not be silently counted again.
+        let possiblePayment = ledger.expenses.contains {
+            $0.date >= startedAt.addingTimeInterval(-300) && $0.date <= end.addingTimeInterval(300) &&
+            ($0.merchant.localizedCaseInsensitiveContains("parking") || (!name.isEmpty && friendKey($0.merchant) == friendKey(name)))
+        }
+        guard !possiblePayment else {
+            throw LedgerError.invalid(tr("已有可能对应的停车账目，请核对后关闭自动入账再结束停车。", "A possible parking entry exists. Review it and disable automatic recording before finishing.", "Rekod parkir mungkin sudah ada. Semak dan matikan rekod automatik sebelum tamat."))
+        }
+        var entry = Expense(merchant: name.isEmpty ? "Street Parking" : name, cents: cents, date: startedAt, category: "交通", source: "手动")
+        entry.id = id
+        entry.note = paidCents == nil
+            ? tr("停车助手自动记录：估算费用，RM0.60／小时，不足一小时按一小时；未核实 TNG 实付。", "Automatically recorded estimate: RM0.60 per started hour; TNG payment not verified.", "Anggaran direkod automatik: RM0.60 setiap jam bermula; bayaran TNG belum disahkan.")
+            : tr("停车助手自动记录：使用你确认的累计付款金额。", "Automatically recorded using your confirmed total payment.", "Direkod automatik menggunakan jumlah bayaran yang anda sahkan.")
+        try ledger.validateScreenshotImport(entry, acknowledged: [], forceReview: true)
+        ledger.expenses.append(entry)
+        return id
+    }
     var spotLabel: String { [floor ?? "", zone ?? "", bay].filter { !$0.isEmpty }.joined(separator: " · ") }
     var ledgerIDs: [String] { (expenseID.map { [$0] } ?? []) + (renewalExpenseIDs ?? []) }
     func renewalDifference(expenses: [Expense]) -> Int? {
@@ -511,6 +543,7 @@ private struct ParkingHome: View {
             var session = ParkingSession()
             session.plate = String(plate.trimmingCharacters(in: .whitespacesAndNewlines).uppercased().prefix(20)); session.name = String(name.prefix(200)); session.bay = String(bay.prefix(200))
             session.vehicle = store.vehicle(for: plate)
+            session.automaticStreetFee = tng
             if let locatedAt, Date().timeIntervalSince(locatedAt) < 60 { session.place = locator.result }
             if session.place == nil && session.name == automaticName { session.name = "" }
             try store.save(session)
@@ -676,6 +709,7 @@ private struct ParkingHome: View {
         .safeAreaInset(edge: .bottom) {
             if active == nil {
                 VStack(spacing: 10) {
+                    Text(tr("路边停车按 RM0.60／小时估算，点结束停车后自动入账；可在详情关闭。", "Street parking is estimated at RM0.60 per started hour and recorded when you finish; disable in details.", "Parkir tepi jalan dianggar RM0.60 setiap jam bermula dan direkod apabila tamat; boleh dimatikan dalam butiran.")).font(.caption).foregroundStyle(.secondary)
                     Button(tr("停好了 · 去 TNG 缴费", "Parked · Pay in TNG", "Sudah parkir · Bayar di TNG")) { start(tng: true) }
                         .buttonStyle(ParkingActionStyle()).disabled(!ready)
                     Button(tr("不用缴费，只帮我记住车位", "Just remember my spot", "Simpan tempat kereta sahaja")) { start(tng: false) }
@@ -1043,6 +1077,26 @@ private struct ParkingDetail: View {
         editingExpense = false
         expenseDraft = draft
     }
+    private func finishParking() {
+        guard !busy else { return }
+        busy = true
+        var updated = session
+        updated.endedAt = Date()
+        let finished = updated
+        Task { @MainActor in
+            defer { busy = false }
+            do {
+                let id = try await model.mutate { ledger in
+                    try finished.recordStreetFee(in: &ledger, at: finished.endedAt!)
+                }
+                updated.expenseID = id
+                try store.save(updated)
+                session = updated
+                store.cancelReminder(updated)
+                message = id == nil ? tr("已结束停车", "Parking ended", "Parkir ditamatkan") : tr("已结束停车并保存到账本", "Parking ended and saved to ledger", "Parkir ditamatkan dan disimpan dalam lejar")
+            } catch { message = error.localizedDescription }
+        }
+    }
     var body: some View {
         Form {
             Section {
@@ -1050,6 +1104,12 @@ private struct ParkingDetail: View {
             }.listRowBackground(Color.clear).listRowInsets(EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: 0))
             Section {
                 ParkingTimerDial(session: session)
+                if session.endedAt == nil {
+                    Toggle(tr("路边停车 · 结束时自动入账", "Street parking · Record on finish", "Parkir tepi jalan · Rekod apabila tamat"), isOn: Binding(get: { session.automaticStreetFee == true }, set: { session.automaticStreetFee = $0; save() }))
+                    if session.automaticStreetFee == true {
+                        Text(tr("RM0.60／小时，不足一小时按一小时。优先使用已确认付款金额，否则记为估算；未与 TNG 同步。", "RM0.60 per started hour. Uses confirmed payment when available, otherwise records an estimate; not synced with TNG.", "RM0.60 setiap jam bermula. Guna bayaran disahkan atau rekod anggaran; tidak disegerak dengan TNG.")).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if !session.spotLabel.isEmpty { Label(session.spotLabel, systemImage: "mappin.and.ellipse").font(.headline) }
                 DisclosureGroup(tr("停车时间详情", "Parking time details", "Butiran masa parkir")) {
                 LabeledContent(tr("开始时间", "Start time", "Masa mula")) {
@@ -1167,9 +1227,7 @@ private struct ParkingDetail: View {
         }
         .confirmationDialog(tr("确认结束停车？", "End this parking session?", "Tamatkan sesi parkir ini?"), isPresented: $ending, titleVisibility: .visible) {
             Button(tr("结束停车", "End parking", "Tamatkan parkir")) {
-                var updated = session; updated.endedAt = Date()
-                do { try store.save(updated); session = updated; store.cancelReminder(updated) }
-                catch { message = error.localizedDescription }
+                finishParking()
             }
         } message: {
             Text(tr("停止本机计时和提醒，不会取消或退款 TNG 的停车付款。", "Stops this timer and reminder. It does not cancel or refund parking in TNG.", "Menghentikan pemasa dan peringatan ini. Tidak membatalkan atau memulangkan bayaran TNG."))

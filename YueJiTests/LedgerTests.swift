@@ -6,6 +6,35 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testStreetParkingAutomaticallyRecordsRoundedHoursOnce() throws {
+        var session = ParkingSession()
+        session.startedAt = Date(timeIntervalSince1970: 1794355200)
+        session.automaticStreetFee = true
+        for (seconds, cents) in [(1, 60), (3599, 60), (3600, 60), (3601, 120), (7200, 120)] {
+            XCTAssertEqual(session.streetFeeCents(at: session.startedAt.addingTimeInterval(Double(seconds))), cents)
+        }
+        XCTAssertNil(session.streetFeeCents(at: session.startedAt.addingTimeInterval(-1)))
+        var ledger = Ledger()
+        let end = session.startedAt.addingTimeInterval(3601)
+        let id = try session.recordStreetFee(in: &ledger, at: end)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.cents, 120)
+        XCTAssertEqual(try session.recordStreetFee(in: &ledger, at: end.addingTimeInterval(3600)), id)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        var paid = ParkingSession()
+        paid.startedAt = session.startedAt; paid.automaticStreetFee = true; paid.paidCents = 180
+        var actual = Ledger()
+        _ = try paid.recordStreetFee(in: &actual, at: end)
+        XCTAssertEqual(actual.expenses.first?.cents, 180)
+        var duplicate = Ledger()
+        duplicate.expenses.append(Expense(merchant: "Parking payment", cents: 120, date: end, source: "TNG"))
+        XCTAssertThrowsError(try session.recordStreetFee(in: &duplicate, at: end))
+        XCTAssertEqual(duplicate.expenses.count, 1)
+        session.automaticStreetFee = nil
+        var legacy = Ledger()
+        XCTAssertNil(try session.recordStreetFee(in: &legacy, at: end))
+        XCTAssertTrue(legacy.expenses.isEmpty)
+    }
     func testApplePayRejectsInvalidInputsWithoutWritingMoney() throws {
         var ledger = Ledger()
         let date = Date()
