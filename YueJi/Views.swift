@@ -2941,6 +2941,25 @@ struct ExpenseEditor: View {
         guard chargesEnabled else { return nil }
         return try? ExpenseCharges.draft(currency: currency, subtotal: chargeSubtotal, sst: sstPercent, service: servicePercent, rounding: chargeRounding)
     }
+    private var suggestedTrips: [TravelBook] {
+        let calendar = Calendar.current
+        let day = calendar.startOfDay(for: date)
+        return model.ledger.trips.filter { trip in
+            day >= calendar.startOfDay(for: trip.start) && day <= calendar.startOfDay(for: trip.end)
+        }
+    }
+    @ViewBuilder private var suggestedTripSection: some View {
+                if original == nil && tripID == nil {
+                    let suggestions = suggestedTrips
+                    if !suggestions.isEmpty {
+                        Section(tr("可能属于这次旅行", "Possible travel book", "Mungkin buku perjalanan ini")) {
+                            ForEach(suggestions) { trip in
+                                Button(trip.name) { tripID = trip.id; moreDetails = true }
+                            }
+                        }
+                    }
+                }
+    }
     private var itemBase: Int { chargesDraft.flatMap { try? $0.myrSubtotal(foreign: try? foreign()) } ?? ((try? total()) ?? 0) }
     var body: some View {
         let _ = uiLocale.identifier
@@ -2970,19 +2989,7 @@ struct ExpenseEditor: View {
                     DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, displayedComponents: [.date, .hourAndMinute])
                         .disabled((original?.refunded ?? 0) > 0 || screenshotImport)
                 }
-                if original == nil && tripID.isEmpty {
-                    let suggestions = model.ledger.trips.filter {
-                        let day = Calendar.current.startOfDay(for: date)
-                        return day >= Calendar.current.startOfDay(for: $0.start) && day <= Calendar.current.startOfDay(for: $0.end)
-                    }
-                    if !suggestions.isEmpty {
-                        Section(tr("可能属于这次旅行", "Possible travel book", "Mungkin buku perjalanan ini")) {
-                            ForEach(suggestions) { trip in
-                                Button(trip.name) { tripID = trip.id; moreDetails = true }
-                            }
-                        }
-                    }
-                }
+                suggestedTripSection
                 if screenshotImport {
                     Section(tr("核对重复交易", "Review matching transactions", "Semak transaksi sepadan")) {
                         ForEach(model.ledger.expenses.filter { screenshotMatches.contains("expense:" + $0.id) }) { entry in

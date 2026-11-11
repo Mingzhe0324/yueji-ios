@@ -6,6 +6,20 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testApplePayRejectsInvalidInputsWithoutWritingMoney() throws {
+        var ledger = Ledger()
+        let date = Date()
+        for amount in [0.0, -2.0, 1.234] {
+            XCTAssertThrowsError(try ledger.addPayment(amount: amount, merchant: "Cafe", currency: "MYR", date: date, eventID: nil))
+        }
+        XCTAssertThrowsError(try ledger.addPayment(amount: 2.21, merchant: "Cafe", currency: "UNKNOWN", date: date, eventID: nil))
+        XCTAssertThrowsError(try ledger.addPayment(amount: 2.21, merchant: "Cafe", currency: "MYR", date: Date(timeIntervalSince1970: -1), eventID: nil))
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(try ledger.addPayment(amount: 2.21, merchant: "Cafe", currency: "MYR", date: date, eventID: "valid-payment"))
+        XCTAssertEqual(ledger.expenses.last?.cents, 221)
+        XCTAssertTrue(try ledger.addPayment(amount: 5.20, merchant: "Shop", currency: " rm ", date: Date(timeIntervalSince1970: 1794355200), eventID: "ringgit-alias"))
+        XCTAssertEqual(ledger.expenses.last?.cents, 520)
+    }
     func testAutomaticNoticeModesKeepExceptionsImmediate() {
         for mode in AutomaticNoticeMode.allCases {
             XCTAssertTrue(mode.deliversImmediately(recorded: false))

@@ -461,11 +461,13 @@ struct Ledger: Codable {
             throw LedgerError.invalid(tr("快捷指令的扣款账户不存在，请重新选择。", "Select the payment account again in Shortcuts.", "Pilih semula akaun bayaran dalam Pintasan."))
         }
         guard description.count <= 2000 else { throw LedgerError.invalid("交易描述过长。") }
-        let code = currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
-        guard Currency.codes.contains(code), amount.isFinite, amount > 0, amount <= 100_000_000,
-              date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        let suppliedCode = currency.uppercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = suppliedCode == "RM" ? "MYR" : suppliedCode
+        guard Currency.codes.contains(code) else { throw LedgerError.invalid(tr("快捷指令传入的币种不支持，请使用 MYR 等币种代码。", "Unsupported currency from Shortcuts. Use a currency code such as MYR.", "Mata wang Pintasan tidak disokong. Gunakan kod seperti MYR.")) }
+        guard amount.isFinite, amount > 0, amount <= 100_000_000 else { throw LedgerError.invalid(tr("快捷指令金额必须大于零且不超过一亿，请检查金额变量。", "Shortcuts amount must be positive and at most 100 million. Check the amount variable.", "Amaun Pintasan mesti positif dan tidak melebihi 100 juta. Semak pemboleh ubah amaun.")) }
+        guard date.timeIntervalSince1970 >= 0, date.timeIntervalSince1970 < 4_102_444_800 else { throw LedgerError.invalid(tr("快捷指令交易日期无效，请检查指定交易时间。", "Invalid Shortcuts transaction date. Check the supplied transaction time.", "Tarikh transaksi Pintasan tidak sah. Semak masa transaksi.")) }
         let scale = Currency.scale(code)
-        guard abs(amount * Double(scale) - (amount * Double(scale)).rounded()) < 0.00001 else { throw LedgerError.invalid("交易金额或日期无效。") }
+        guard abs(amount * Double(scale) - (amount * Double(scale)).rounded()) < 0.00001 else { throw LedgerError.invalid(tr("金额小数位超过币种精度，请检查快捷指令是否传入实际付款金额。", "Amount has too many decimal places for this currency. Check that Shortcuts supplies the actual payment amount.", "Amaun mempunyai terlalu banyak tempat perpuluhan. Semak amaun bayaran sebenar daripada Pintasan.")) }
         let minor = Int((amount * Double(scale)).rounded())
         let name = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty, name.count <= 200 else { throw LedgerError.invalid("未取得商户名称，请检查快捷指令的输入。") }

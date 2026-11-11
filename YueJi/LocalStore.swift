@@ -228,13 +228,15 @@ actor AutomationRecovery {
             let eligible = all.filter { delivery in
                 manual || (delivery.attempts < 3 && !(delivery.lastAttempt.map { Date().timeIntervalSince($0) < 30 } ?? false))
             }
+            var failure: String?
             for delivery in eligible.prefix(30) {
                 if delivery.kind == "applePay", delivery.currency.uppercased() != "MYR" {
                     _ = try? await AutomaticRates.shared.refresh(delivery.currency.uppercased())
                 }
-                _ = try? await process(delivery)
+                do { _ = try await process(delivery) }
+                catch { failure = error.localizedDescription }
             }
-            return nil
+            return manual ? failure : nil
         } catch { return tr("无法读取待重试交易：", "Unable to read transactions awaiting retry: ", "Tidak dapat membaca transaksi untuk cuba semula: ") + error.localizedDescription }
     }
 }

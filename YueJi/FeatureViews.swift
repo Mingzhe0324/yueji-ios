@@ -1418,6 +1418,12 @@ struct AutomationStatusView: View {
                                  : tr("资料已保留，等待保存。", "Details kept, waiting to save.", "Butiran disimpan, menunggu untuk direkod."))
                                 .font(.footnote).foregroundStyle(.secondary)
                             if let error = input.lastError { Text(localizedError(error)).font(.footnote).textSelection(.enabled) }
+                            if input.kind == "applePay" {
+                                LabeledContent(tr("收到的金额", "Received amount", "Amaun diterima"), value: input.amount.map { String($0) } ?? "—")
+                                LabeledContent(tr("收到的币种", "Received currency", "Mata wang diterima"), value: input.currency)
+                                LabeledContent(tr("商户", "Merchant", "Peniaga"), value: input.merchant)
+                                LabeledContent(tr("采用的日期", "Effective date", "Tarikh digunakan"), value: dateLabel(input.applePayDate, time: true))
+                            }
                         }
                     }
                 }
