@@ -1581,7 +1581,11 @@ func notificationChannel(_ body: String) -> (name: String, range: Range<String.I
     guard let regex = try? NSRegularExpression(pattern: pattern, options: .caseInsensitive),
           let match = regex.firstMatch(in: body, range: NSRange(body.startIndex..., in: body)),
           let name = Range(match.range(at: 1), in: body), let range = Range(match.range, in: body) else { return nil }
-    return (String(body[name]).trimmingCharacters(in: .whitespaces), range)
+    let channel = String(body[name]).trimmingCharacters(in: .whitespaces)
+    // RFID describes the toll payment method, not a trailing bank sender.
+    // Leave the complete sentence to the strict RFID amount/date parser.
+    if notificationMatches(channel, #"\ARFID for toll payment on\s"#) { return nil }
+    return (channel, range)
 }
 extension Ledger {
     var availableSources: [String] {

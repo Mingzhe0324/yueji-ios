@@ -4419,6 +4419,34 @@ final class FeedbackPresentationTests: XCTestCase {
 }
 
 final class BankNotificationTests: XCTestCase {
+    func testRFIDPassesThroughFinancialNotificationRouter() throws {
+        let body = "RM 2.21 was deducted via RFID for toll payment on 10-Nov-2026 16:35"
+        let expected = try XCTUnwrap(ISO8601DateFormatter().date(from: "2026-11-10T08:35:00Z"))
+        for title in ["", "Successful Toll Payment", "TNG eWallet"] {
+            let parsed = try XCTUnwrap(parseFinancialNotification(body, title: title))
+            XCTAssertEqual(parsed.kind, "payment")
+            XCTAssertEqual(parsed.cents, 221)
+            XCTAssertEqual(parsed.party, "RFID Toll")
+            XCTAssertEqual(parsed.sourceBank, "TNG")
+            XCTAssertEqual(parsed.transactionDate, expected)
+        }
+        XCTAssertNil(parseFinancialNotification(body.replacingOccurrences(of: "10-Nov", with: "31-Feb")))
+        XCTAssertNil(parseFinancialNotification(body + " Transaction failed."))
+        XCTAssertNil(parseFinancialNotification(body + " Balance RM 50.00."))
+        XCTAssertNil(parseFinancialNotification(body, sourceApp: "RHB"))
+        XCTAssertEqual(notificationChannel("You have paid RM 2.21 to SHOP via RHB")?.name, "RHB")
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: body, date: expected, eventID: "rfid-router-test", now: expected)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.cents, 221)
+        XCTAssertEqual(ledger.expenses.first?.date, expected)
+        XCTAssertEqual(ledger.expenses.first?.source, "TNG")
+        XCTAssertEqual(ledger.expenses.first?.merchant, "RFID Toll")
+        _ = try ledger.receiveTNG(body: body, date: expected, eventID: "rfid-router-test", now: expected)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        _ = try ledger.validated()
+    }
+
     func testOnlineBankingPaymentWithInlineDate() throws {
         let title = "Payment Successful"
         let body = "Your payment of MYR 7.00 to TEST RECIPIENT on 9/11/2026 was successful."
