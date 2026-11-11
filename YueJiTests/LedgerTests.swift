@@ -4419,6 +4419,45 @@ final class FeedbackPresentationTests: XCTestCase {
 }
 
 final class BankNotificationTests: XCTestCase {
+    func testMaybankObservedDebitCardPurchase() throws {
+        let title = "Maybank2u: Card Transaction"
+        // Synthetic card suffix; preserve the observed wording and whitespace.
+        let body = "You've just spent RM 5.20 at AEON BIG-JAYA  ONE with your Maybank Debit Card MasterCard ending 1234. View your receipt now."
+        for heading in [title, ""] {
+            for currency in ["RM", "MYR"] {
+                let input = body.replacingOccurrences(of: "RM", with: currency)
+                let parsed = try XCTUnwrap(parseFinancialNotification(input, title: heading))
+                XCTAssertEqual(parsed.kind, "payment")
+                XCTAssertEqual(parsed.cents, 520)
+                XCTAssertEqual(parsed.party, "AEON BIG-JAYA ONE")
+                XCTAssertEqual(parsed.sourceBank, "Maybank")
+                XCTAssertEqual(parsed.accountSuffix, "1234")
+                XCTAssertNil(parsed.transactionDate)
+            }
+        }
+        for invalid in [
+            body.replacingOccurrences(of: "spent", with: "received"),
+            body.replacingOccurrences(of: "5.20", with: "-5.20"),
+            body.replacingOccurrences(of: "5.20", with: "5.201"),
+            body.replacingOccurrences(of: "RM", with: "USD"),
+            body + " Transaction declined.",
+            body + " Balance RM 100.00."
+        ] {
+            XCTAssertNil(parseFinancialNotification(invalid, title: title))
+        }
+        XCTAssertNil(parseFinancialNotification(body, title: "Promotion"))
+        var ledger = Ledger()
+        let now = Date(timeIntervalSince1970: 1794371760)
+        _ = try ledger.receiveTNG(body: body, title: title, date: now, eventID: "maybank-card-test", now: now)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.cents, 520)
+        XCTAssertEqual(ledger.expenses.first?.merchant, "AEON BIG-JAYA ONE")
+        XCTAssertEqual(ledger.expenses.first?.source, "Maybank")
+        _ = try ledger.receiveTNG(body: body, title: title, date: now, eventID: "maybank-card-test", now: now)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        _ = try ledger.validated()
+    }
+
     private let samples: [(String, String, String, String, String, Bool)] = [
         ("Maybank", "Maybank2u: Funds Received", "You've just received RM 0.01 in your account ending ***1234. REF: TESTIN001", "incoming", "", true),
         ("Maybank", "Maybank2u: Transfer", "DuitNow of RM 0.01 to TEST PERSON. Mobile Number : ****5678. REF: TESTOUT001", "transfer", "TEST PERSON", true),

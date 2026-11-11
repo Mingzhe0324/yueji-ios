@@ -1070,6 +1070,7 @@ func parseBankNotification(_ body: String, title: String = "") -> TNGParsed? {
         var format = ""
     }
     let rules: [Rule] = [
+        Rule(bank: "Maybank", title: "Maybank2u: Card Transaction", kind: "payment", pattern: #"\AYou've just spent (?:RM|MYR)\s*([0-9]+(?:\.[0-9]{2})?) at (.{1,200}?) with your Maybank Debit Card MasterCard ending ([0-9]{4})\. View your receipt now\.\z"#, amount: 1, party: 2, account: 3),
         Rule(bank: "Maybank", title: "Maybank2u: Funds Received", kind: "incoming", pattern: #"\AYou've just received RM\s*([0-9]+(?:\.[0-9]{2})?) in your account ending \*{3}([0-9]{4})\. REF: ([A-Za-z0-9]+)\z"#, amount: 1, account: 2, reference: 3),
         Rule(bank: "Maybank", title: "Maybank2u: Transfer", kind: "transfer", pattern: #"\ADuitNow of RM\s*([0-9]+(?:\.[0-9]{2})?) to (.{1,200}?)\. Mobile Number : \*{4}[0-9]{4}\. REF: ([A-Za-z0-9]+)\z"#, amount: 1, party: 2, reference: 3),
         Rule(bank: "Hong Leong", title: "Transaction Notice", kind: "incoming", pattern: #"\AHLB: You have received a transfer of RM\s*([0-9]+(?:\.[0-9]{2})?) into your bank account ending ([0-9]{4}) @([0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2})\z"#, amount: 1, account: 2, date: 3, format: "dd/MM/yyyy HH:mm:ss"),
