@@ -1973,15 +1973,6 @@ struct ExpensesView: View {
                 Section {
                     MonthPicker(month: monthBinding)
                         .listRowSeparator(.hidden)
-                    NavigationLink { LedgerReviewQueue() } label: {
-                        Label(tr("待核对", "To review", "Untuk disemak") + " · " + String(model.readIndex.pendingNotices.count), systemImage: "checklist")
-                    }
-                    NavigationLink { LedgerMonthStory(month: month) } label: {
-                        Label(tr("这个月的钱花在哪里？", "Where did my money go?", "Ke mana wang saya pergi?"), systemImage: "chart.bar.doc.horizontal")
-                    }
-                    Button { sheet = .categories(timeline.expenses) } label: {
-                        Label(tr("批量修改分类", "Change categories together", "Ubah kategori bersama"), systemImage: "checkmark.circle")
-                    }.disabled(timeline.expenses.isEmpty || loadedQuery != query)
                     VStack(alignment: .leading, spacing: 6) {
                         Text(filtering || !search.isEmpty ? tr("筛选结果 · 我的消费", "Filtered · my spending", "Ditapis · belanja saya") : tr("本月 · 我的消费", "This month · my spending", "Bulan ini · belanja saya"))
                             .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
