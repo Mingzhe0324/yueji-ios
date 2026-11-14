@@ -11,9 +11,9 @@ permissions:
 jobs:
   build:
     runs-on: macos-26
-    # Simulator tests can take 32 minutes on the hosted runner; reserve time for
-    # the device build, packaging and artifact uploads after tests succeed.
-    timeout-minutes: 60
+    # The restored UI suite passed after 44 minutes on a hosted runner.
+    # Allow XCTest result finalization plus device packaging and uploads.
+    timeout-minutes: 100
     steps:
       - uses: actions/checkout@v4
       - name: Test service gateways
@@ -53,7 +53,7 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'],'a') as f: f.write('Test simulator: '+phone['name']+' ('+runtime+')\n')
           PY
       - name: Build and test
-        timeout-minutes: 45
+        timeout-minutes: 70
         env:
           STATEMENT_TESTS_ONLY: ${{ inputs.statement_tests_only }}
         run: |
@@ -165,8 +165,19 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: YueJi-diagnostics-run${{ github.run_number }}
+          path: build-test.log
+          if-no-files-found: ignore
+          retention-days: 7
+      # Staging holds live simulator logs that can disappear after a timeout.
+      # Upload the text log independently so bundle errors cannot hide it.
+      - name: Upload test result bundle
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: YueJi-test-results-run${{ github.run_number }}
           path: |
-            build-test.log
             TestResults.xcresult
+            !TestResults.xcresult/Staging/**
+          compression-level: 0
           if-no-files-found: ignore
           retention-days: 7
