@@ -156,8 +156,8 @@ extension Ledger {
             total += entry.cents
         }
         for notice in tngNotices where notice.bankAccountID == account.id && notice.date >= account.openingDate && notice.expenseID == nil {
-            let tngReceipt = (notice.provider == "TNG" || notice.verifiedIncomingBalance == true) && notice.kind == "incoming" &&
-                ((notice.status == "pending" && !notice.possibleDuplicate && notice.balanceHeldForReview != true) || ["income", "repayment", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
+            let tngReceipt = (notice.provider == "TNG" || notice.verifiedIncomingBalance == true || notice.status == "reimbursement") && notice.kind == "incoming" &&
+                ((notice.status == "pending" && !notice.possibleDuplicate && notice.balanceHeldForReview != true) || ["income", "repayment", "reimbursement", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
             if notice.isConfirmedIncome || tngReceipt { total += notice.cents ?? 0 }
         }
         return total

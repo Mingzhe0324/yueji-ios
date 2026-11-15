@@ -13,7 +13,7 @@ struct ReimbursementStatusBadge: View {
             .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background((complete ? Color.green : Color.orange).opacity(0.12), in: Capsule())
-            .animation(reduceMotion ? nil : YueJiMotion.month, value: complete)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.month, value: complete)
             .accessibilityIdentifier("reimbursement.status")
     }
 }
@@ -70,6 +70,7 @@ struct ReimbursementsView: View {
     @State private var entries: [Expense] = []
     @State private var loaded = false
     @State private var filter = "pending"
+    @State private var addingManual = false
     private var displayed: [Expense] {
         entries.filter { entry in
             filter == "all" || (filter == "pending" ? (entry.reimbursement?.outstanding ?? 0) > 0 : entry.reimbursement?.outstanding == 0)
@@ -79,11 +80,23 @@ struct ReimbursementsView: View {
         let _ = locale.identifier
         List {
             Section {
+                NavigationLink { ReimbursementEntryPicker() } label: {
+                    Label(tr("从已有账目申请报销", "Claim an existing entry", "Tuntut rekod sedia ada"), systemImage: "doc.text.magnifyingglass")
+                }
+                Button { addingManual = true } label: {
+                    Label(tr("手动新增报销账目", "Add a manual claim entry", "Tambah rekod tuntutan manual"), systemImage: "square.and.pencil")
+                }
+            } footer: {
+                Text(tr("自动记账的付款可直接选择，无需重复记账；尚未记录的付款可手动新增。", "Choose an automatically recorded payment without duplicating it, or add a payment not yet recorded.", "Pilih bayaran direkod automatik tanpa pendua, atau tambah bayaran yang belum direkod."))
+            }
+            Section {
                 LabeledContent(tr("待到账垫付款", "Outstanding advances", "Pendahuluan belum diterima")) {
-                    Text(money(entries.reduce(0) { $0 + ($1.reimbursement?.outstanding ?? 0) }))
+                    AnimatedMoney(cents: entries.reduce(0) { $0 + ($1.reimbursement?.outstanding ?? 0) })
                         .font(.title2.weight(.semibold)).monospacedDigit()
                 }
                 LabeledContent(tr("已到账", "Received", "Diterima"), value: money(entries.reduce(0) { $0 + ($1.reimbursement?.received ?? 0) }))
+                SpendingMeter(value: entries.reduce(0) { $0 + ($1.reimbursement?.received ?? 0) },
+                              total: entries.reduce(0) { $0 + ($1.reimbursement?.cents ?? 0) }, color: IslandTheme.accent)
                 Picker(tr("报销状态", "Reimbursement status", "Status tuntutan"), selection: $filter) {
                     Text(tr("待到账", "Pending", "Belum diterima")).tag("pending")
                     Text(tr("已收齐", "Received", "Diterima")).tag("received")
@@ -121,6 +134,9 @@ struct ReimbursementsView: View {
         }.yuejiListSurface()
             .navigationTitle(tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"))
             .navigationBarTitleDisplayMode(.inline)
+            .sheet(isPresented: $addingManual) {
+                ExpenseEditor(original: nil, startsReimbursement: true)
+            }
             .task(id: model.ledgerRevision) {
                 let ledger = model.ledger
                 let prepared = await ReimbursementProjection.shared.entries(in: ledger)
@@ -128,6 +144,48 @@ struct ReimbursementsView: View {
                 entries = prepared
                 loaded = true
             }
+    }
+}
+
+private struct ReimbursementEntryPicker: View {
+    @EnvironmentObject private var model: LedgerModel
+    @State private var search = ""
+    @State private var source = "all"
+    private var entries: [Expense] {
+        model.ledger.expenses.filter {
+            $0.reimbursement == nil && $0.paidByFriend == nil &&
+            (source == "all" || (source == "manual" ? $0.source == "手动" : $0.source != "手动")) &&
+            (search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search))
+        }.sorted { $0.date > $1.date }
+    }
+    var body: some View {
+        List {
+            Picker(tr("账目来源", "Entry source", "Sumber rekod"), selection: $source) {
+                Text(tr("全部", "All", "Semua")).tag("all")
+                Text(tr("自动／导入", "Auto / imported", "Auto / import")).tag("auto")
+                Text(tr("手动", "Manual", "Manual")).tag("manual")
+            }.pickerStyle(.segmented)
+            ForEach(entries) { entry in
+                NavigationLink { ReimbursementDetailView(expenseID: entry.id) } label: {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text(entry.displayName).fontWeight(.semibold)
+                            Spacer()
+                            Text(money(entry.cents)).monospacedDigit()
+                        }
+                        Text(dateLabel(entry.date) + " · " + entry.source)
+                            .font(.caption).foregroundStyle(.secondary)
+                    }.padding(.vertical, 4)
+                }
+            }
+            if entries.isEmpty {
+                Text(tr("没有符合条件的账目", "No matching entries", "Tiada rekod sepadan"))
+                    .foregroundStyle(.secondary)
+            }
+        }.yuejiListSurface()
+            .searchable(text: $search)
+            .navigationTitle(tr("选择报销账目", "Choose claim entry", "Pilih rekod tuntutan"))
+            .navigationBarTitleDisplayMode(.inline)
     }
 }
 

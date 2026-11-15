@@ -2225,6 +2225,7 @@ struct TNGTimelineRow: View {
     var repaymentPreview: RepaymentPurchasePreview? = nil
     @Environment(\.dynamicTypeSize) private var textSize
     private var movementLabel: String {
+        if notice.status == "reimbursement" { return tr("报销到账", "Reimbursement received", "Tuntutan diterima") }
         if notice.status == "repayment" { return tr("朋友还款", "Friend repayment", "Bayaran balik rakan") }
         if notice.status == "settlement" { return tr("还款／结算", "Repayment / settlement", "Bayaran balik / penyelesaian") }
         switch notice.accountDirection {
@@ -2847,6 +2848,7 @@ struct ExpenseEditor: View {
     let original: Expense?
     var initialDate: Date = Date()
     var initialDraft: Expense? = nil
+    var startsReimbursement = false
     var pendingNotice: TNGNotice? = nil
     var reviewDuplicates = false
     @State private var screenshotAcknowledged = Set<String>()
@@ -3353,7 +3355,10 @@ struct ExpenseEditor: View {
         defer { initialSnapshot = snapshot }
         draftSeed = initialDraft
         if !model.isPreview { recoverable = ExpenseDraftStorage.read(draftStorageID) }
-        if original == nil { date = initialDate; splitting = startWithSplit }
+        if original == nil {
+            date = initialDate; splitting = startWithSplit
+            reimbursementEnabled = startsReimbursement
+        }
         if let e = original ?? initialDraft {
             name = e.merchant; date = e.date; category = e.category; fuel = e.fuel
             entryDescription = e.entryDescription ?? ""

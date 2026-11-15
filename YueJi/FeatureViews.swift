@@ -4099,6 +4099,11 @@ struct TNGIncomingView: View {
     @State private var removingAllocation: BudgetAllocation?
     private var notice: TNGNotice? { model.notice(id: id) }
     private var friends: [FriendBalance] { model.friends.filter { $0.owed > 0 } }
+    @State private var reimbursementExpenseID = ""
+    private var reimbursementEntries: [Expense] {
+        model.ledger.expenses.filter { ($0.reimbursement?.outstanding ?? 0) > 0 && $0.date <= date }
+            .sorted { $0.date > $1.date }
+    }
     /// What undoing the confirmation takes out of budgets, said before the person confirms.
     private var reopenBudgetChange: [BudgetAdjustment] { model.ledger.allocationRemovals(source: IncomeSourceKey.notice(id)) }
     var body: some View {
@@ -4196,10 +4201,24 @@ struct TNGIncomingView: View {
             Picker(tr("用途", "Purpose", "Tujuan"), selection: $purpose) {
                 Text(tr("请选择", "Choose", "Pilih")).tag("")
                 Text(tr("朋友还款", "Friend repayment", "Bayaran balik rakan")).tag("repayment")
+                Text(tr("报销到账", "Reimbursement received", "Tuntutan diterima")).tag("reimbursement")
                 Text(IncomeKind.allowance.label).tag("allowance")
                 Text(tr("其他收入", "Other income", "Pendapatan lain")).tag("income")
                 Text(tr("自己账户转入", "Own-account transfer", "Pindahan akaun sendiri")).tag("ownTransfer")
                 Text(tr("忽略", "Ignore", "Abaikan")).tag("ignored")
+            }
+            if purpose == "reimbursement" {
+                Picker(tr("对应报销账目", "Reimbursement entry", "Rekod tuntutan"), selection: $reimbursementExpenseID) {
+                    Text(tr("请选择", "Choose", "Pilih")).tag("")
+                    ForEach(reimbursementEntries) { entry in
+                        Text(entry.displayName + " · " + money(entry.reimbursement?.outstanding ?? 0)).tag(entry.id)
+                    }
+                }
+                Text(tr("选择之前垫付的账目，只更新报销到账，不记为收入。可分次到账，每次不能超过该账目待报销金额。", "Select the original advance. This updates reimbursement without adding income. Partial receipts are allowed up to the outstanding amount.", "Pilih pendahuluan asal. Ini mengemas kini tuntutan tanpa pendapatan. Penerimaan separa dibenarkan sehingga baki tuntutan."))
+                    .font(.footnote).foregroundStyle(.secondary)
+                NavigationLink { ReimbursementsView() } label: {
+                    Text(tr("找不到？先为原账目设置报销", "Missing? Set up the original claim", "Tiada? Tetapkan tuntutan asal"))
+                }
             }
             if purpose == "repayment" {
                 Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
@@ -4252,14 +4271,14 @@ struct TNGIncomingView: View {
                     } catch { self.error = error.localizedDescription }
                 } else { confirm = true }
             }
-                .disabled(purpose.isEmpty || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedBalance < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && purpose != "ignored"))
+                .disabled(purpose.isEmpty || (purpose == "reimbursement" && !reimbursementEntries.contains { $0.id == reimbursementExpenseID && ($0.reimbursement?.outstanding ?? 0) >= (notice?.cents ?? 0) }) || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedBalance < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && purpose != "ignored"))
         }
     }
     private func save() {
         let percent = IncomeBudgetSettings.autoPercent
         let purpose = self.purpose == "allowance" ? "income" : self.purpose
         let incomeKind = self.purpose == "allowance" ? IncomeKind.allowance : self.incomeKind
-        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct, selectedDebts, repaymentPreview, previewRounding, incomeKind] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
+        model.perform(key: "notice-" + id, action: { [id, purpose, friend, date, distinct, selectedDebts, repaymentPreview, previewRounding, incomeKind, reimbursementExpenseID] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
             if purpose == "repayment" {
                 guard let notice = ledger.tngNotices.first(where: { $0.id == id }),
                       try ledger.previewIncomingRepayment(friend: friend, cents: (notice.cents ?? 0) - previewRounding, date: date, selected: selectedDebts) == repaymentPreview else {
@@ -4267,7 +4286,7 @@ struct TNGIncomingView: View {
                 }
             }
             try ledger.resolveTNGIncoming(id: id, purpose: purpose, friend: friend, date: date, distinctConfirmed: distinct, selectedExpenseIDs: purpose == "repayment" ? selectedDebts : nil,
-                                          incomeKind: purpose == "income" ? incomeKind : nil, roundingCents: purpose == "repayment" ? previewRounding : 0)
+                                          incomeKind: purpose == "income" ? incomeKind : nil, roundingCents: purpose == "repayment" ? previewRounding : 0, reimbursementExpenseID: purpose == "reimbursement" ? reimbursementExpenseID : nil)
             // Confirmed income can go into a budget: same write, same rules, prompt afterwards.
             return purpose == "income" ? try ledger.settleNewIncome(source: IncomeSourceKey.notice(id), autoPercent: percent) : nil
         }, completion: { outcome in

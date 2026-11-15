@@ -6,6 +6,40 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testIncomingReimbursementLinksOnceAndReopens() throws {
+        let date = Date().addingTimeInterval(-3600)
+        var ledger = Ledger()
+        var entry = Expense(merchant: "Parking Fee", cents: 500, date: date)
+        entry.reimbursement = ReimbursementClaim(recipient: "Company", cents: 500)
+        ledger.expenses = [entry]
+        let notice = TNGNotice(body: "Received RM 3.00", title: "Incoming", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 300, party: "Company")
+        ledger.tngNotices = [notice]
+        try ledger.resolveTNGIncoming(id: notice.id, purpose: "reimbursement", date: date, reimbursementExpenseID: entry.id)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 300)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 200)
+        XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: notice.id, purpose: "reimbursement", date: date, reimbursementExpenseID: entry.id))
+        let restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        XCTAssertEqual(restored.expenses[0].reimbursement?.receipts.first?.noticeID, notice.id)
+        try ledger.undoReimbursementReceipt(expense: ledger.expenses[0], receiptID: ledger.expenses[0].reimbursement!.receipts[0].id)
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 0)
+        ledger.tngNotices[0].cents = 600
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: notice.id, purpose: "reimbursement", date: date, reimbursementExpenseID: entry.id))
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+    }
+    func testPromotionalNotificationsDoNotEnterLedger() throws {
+        for body in ["Spend RM20 and get RM5. Shop now!", "Pay with TNG and win RM100!", "Tap to redeem your RM10 voucher"] {
+            var ledger = Ledger()
+            XCTAssertTrue(isNonTransactionNotification(body, title: "TNG eWallet"))
+            _ = try ledger.receiveTNG(body: body, title: "TNG eWallet", date: nil, eventID: nil, sourceApp: "TNG")
+            XCTAssertTrue(ledger.expenses.isEmpty)
+            XCTAssertTrue(ledger.tngNotices.isEmpty)
+        }
+        XCTAssertFalse(isNonTransactionNotification("RM 2.21 was deducted via RFID for toll payment on 10-Nov-2026 16:35", title: "Successful Toll Payment"))
+        XCTAssertFalse(isNonTransactionNotification("RM5 cashback has been credited to your wallet", title: "Cashback received"))
+    }
     func testStreetParkingAutomaticallyRecordsRoundedHoursOnce() throws {
         var session = ParkingSession()
         session.startedAt = Date(timeIntervalSince1970: 1794355200)
@@ -15,16 +49,20 @@ final class EverydayFlowTests: XCTestCase {
         }
         XCTAssertNil(session.streetFeeCents(at: session.startedAt.addingTimeInterval(-1)))
         var ledger = Ledger()
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: session.startedAt, institution: "TNG eWallet")
+        ledger.bankAccounts = [wallet]
         let end = session.startedAt.addingTimeInterval(3601)
         let id = try session.recordStreetFee(in: &ledger, at: end)
         XCTAssertEqual(ledger.expenses.count, 1)
         XCTAssertEqual(ledger.expenses.first?.cents, 120)
-        XCTAssertNil(ledger.expenses.first?.bankAccountID, "An estimate must not invent a payment account")
+        XCTAssertEqual(ledger.expenses.first?.bankAccountID, wallet.id)
+        XCTAssertEqual(ledger.expenses.first?.merchant, "Parking Fee")
         XCTAssertEqual(try session.recordStreetFee(in: &ledger, at: end.addingTimeInterval(3600)), id)
         XCTAssertEqual(ledger.expenses.count, 1)
         var paid = ParkingSession()
         paid.startedAt = session.startedAt; paid.automaticStreetFee = true; paid.paidCents = 180
         var actual = Ledger()
+        actual.bankAccounts = [wallet]
         _ = try paid.recordStreetFee(in: &actual, at: end)
         XCTAssertEqual(actual.expenses.first?.cents, 180)
         var duplicate = Ledger()
@@ -39,6 +77,27 @@ final class EverydayFlowTests: XCTestCase {
         var legacy = Ledger()
         XCTAssertNil(try session.recordStreetFee(in: &legacy, at: end))
         XCTAssertTrue(legacy.expenses.isEmpty)
+    }
+    func testParkingAccountAndFreshVehicleDraft() throws {
+        var ledger = Ledger()
+        XCTAssertThrowsError(try ledger.parkingTNGAccountID())
+        let date = Date()
+        let wallet = BankAccount(name: "Wallet", openingCents: 0, openingDate: date, institution: "TNG eWallet")
+        let card = BankAccount(name: "TNG Card", openingCents: 0, openingDate: date, institution: "TNG Card")
+        ledger.bankAccounts = [card, wallet]
+        XCTAssertEqual(try ledger.parkingTNGAccountID(), wallet.id)
+        ledger.bankAccounts.append(BankAccount(name: "Other wallet", openingCents: 0, openingDate: date, institution: "TNG eWallet"))
+        XCTAssertThrowsError(try ledger.parkingTNGAccountID())
+        ledger.bankAccounts[1].automaticSource = "TNG"
+        XCTAssertEqual(try ledger.parkingTNGAccountID(), wallet.id)
+        var old = ParkingVehicle(); old.brand = "Toyota"; old.model = "Corolla Altis"
+        let edit = ParkingVehicleEditorRoute(plate: "W9321A", vehicle: old, adding: false)
+        let add = ParkingVehicleEditorRoute()
+        XCTAssertTrue(add.adding)
+        XCTAssertEqual(add.plate, "")
+        XCTAssertEqual(add.vehicle.brand, "")
+        XCTAssertNotEqual(add.id, edit.id)
+        XCTAssertEqual(edit.vehicle.brand, "Toyota")
     }
     func testApplePayRejectsInvalidInputsWithoutWritingMoney() throws {
         var ledger = Ledger()

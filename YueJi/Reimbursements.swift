@@ -4,6 +4,7 @@ struct ReimbursementReceipt: Codable, Identifiable, Equatable {
     var id = UUID().uuidString
     var cents: Int
     var date: Date
+    var noticeID: String? = nil
 }
 
 struct ReimbursementClaim: Codable, Equatable {
@@ -66,6 +67,14 @@ extension Ledger {
         expenses[index] = entry
     }
     mutating func undoReimbursementReceipt(expense expected: Expense, receiptID: String) throws {
+        if let receipt = expected.reimbursement?.receipts.first(where: { $0.id == receiptID }),
+           let noticeID = receipt.noticeID {
+            guard expenses.contains(expected), tngNotices.contains(where: { $0.id == noticeID && $0.status == "reimbursement" }) else {
+                throw LedgerError.invalid("Receipt changed. Reopen it.")
+            }
+            try reopenTNGIncoming(id: noticeID)
+            return
+        }
         guard let index = expenses.firstIndex(where: { $0.id == expected.id }), expenses[index] == expected,
               var claim = expected.reimbursement,
               claim.receipts.contains(where: { $0.id == receiptID }) else {

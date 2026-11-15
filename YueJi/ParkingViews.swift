@@ -6,6 +6,20 @@ import CryptoKit
 
 private let parkingAccent = Color(red: 0.12, green: 0.65, blue: 0.39)
 
+extension Ledger {
+    func parkingTNGAccountID() throws -> String {
+        if let id = automaticBankAccount(source: "TNG", suffix: nil) { return id }
+        let wallets = bankAccounts.filter {
+            $0.institution == "TNG eWallet" ||
+                ($0.institution == nil && ["tng", "tng ewallet"].contains($0.name.lowercased()))
+        }
+        guard wallets.count == 1 else {
+            throw LedgerError.invalid(tr("请在账户中设置一个 TNG eWallet 账户；若有多个，请指定 TNG 自动分配账户。", "Set up a TNG eWallet account. If there are several, configure the TNG automatic account mapping.", "Sediakan akaun TNG eWallet. Jika lebih daripada satu, tetapkan pemetaan akaun automatik TNG."))
+        }
+        return wallets[0].id
+    }
+}
+
 struct ParkingVehicle: Codable, Equatable {
     var brand = ""
     var model = ""
@@ -239,13 +253,12 @@ struct ParkingSession: Codable, Identifiable {
         guard !possiblePayment else {
             throw LedgerError.invalid(tr("已有可能对应的停车账目，请核对后关闭自动入账再结束停车。", "A possible parking entry exists. Review it and disable automatic recording before finishing.", "Rekod parkir mungkin sudah ada. Semak dan matikan rekod automatik sebelum tamat."))
         }
-        var entry = Expense(merchant: name.isEmpty ? "Street Parking" : name, cents: cents, date: startedAt, category: "交通", source: "手动")
+        var entry = Expense(bankAccountID: try ledger.parkingTNGAccountID(), merchant: "Parking Fee", cents: cents, date: startedAt, category: "交通", source: "手动")
         entry.id = id
         entry.note = paidCents == nil
             ? tr("停车助手自动记录：估算费用，RM0.60／小时，不足一小时按一小时；未核实 TNG 实付。", "Automatically recorded estimate: RM0.60 per started hour; TNG payment not verified.", "Anggaran direkod automatik: RM0.60 setiap jam bermula; bayaran TNG belum disahkan.")
             : tr("停车助手自动记录：使用你确认的累计付款金额。", "Automatically recorded using your confirmed total payment.", "Direkod automatik menggunakan jumlah bayaran yang anda sahkan.")
-        // Automated estimates have no verified payment account. Check duplicates without
-        // invoking the screenshot workflow, which requires an account and manual review.
+        // TNG is the user's chosen parking account; the amount can still be an estimate.
         guard ledger.screenshotMatches(cents: cents, date: startedAt).isEmpty else {
             throw LedgerError.invalid(tr("已有可能对应的停车账目，请核对后关闭自动入账再结束停车。", "A possible parking entry exists. Review it and disable automatic recording before finishing.", "Rekod parkir mungkin sudah ada. Semak dan matikan rekod automatik sebelum tamat."))
         }
@@ -414,8 +427,7 @@ private struct ParkingHome: View {
     @State private var goToTNG = false
     @State private var search = ""
     @State private var openedSession: ParkingSession?
-    @State private var editingVehicle = false
-    @State private var addingVehicle = false
+    @State private var vehicleEditor: ParkingVehicleEditorRoute?
     private var active: ParkingSession? { store.sessions.first { $0.endedAt == nil } }
     private var previewSession: ParkingSession {
         var value = ParkingSession()
@@ -528,13 +540,16 @@ private struct ParkingHome: View {
                             TextField(tr("输入车牌，自动记住", "Plate — remembered automatically", "Plat — diingati automatik"), text: $plate)
                                 .textInputAutocapitalization(.characters).autocorrectionDisabled().font(.title3.bold())
                                 .onSubmit { store.rememberPlate(plate) }
-                            Button { store.rememberPlate(plate); addingVehicle = false; editingVehicle = true } label: {
+                            Button {
+                                store.rememberPlate(plate)
+                                vehicleEditor = ParkingVehicleEditorRoute(plate: plate, vehicle: store.vehicle(for: plate) ?? ParkingVehicle(), adding: false)
+                            } label: {
                                 Image(systemName: "slider.horizontal.3").padding(10).background(.quaternary, in: Circle())
                             }.accessibilityLabel(tr("编辑车辆", "Edit vehicle", "Ubah kenderaan"))
                                 .disabled(ParkingStore.plateKey(plate).isEmpty)
                         }
                         Button {
-                            addingVehicle = true; editingVehicle = true
+                            vehicleEditor = ParkingVehicleEditorRoute()
                         } label: {
                             Label(tr("添加车辆", "Add vehicle", "Tambah kenderaan"), systemImage: "plus.circle.fill")
                         }.buttonStyle(.bordered)
@@ -622,10 +637,10 @@ private struct ParkingHome: View {
         .modifier(ParkingPaymentReturn(store: store, sessionID: active?.id, enabled: openedSession == nil, review: {
             openedSession = active
         }))
-        .sheet(isPresented: $editingVehicle) {
-            ParkingVehicleEditor(store: store, plate: addingVehicle ? "" : plate,
-                vehicle: addingVehicle ? ParkingVehicle() : (store.vehicle(for: plate) ?? ParkingVehicle()),
-                adding: addingVehicle, onSaved: { plate = $0 })
+        .sheet(item: $vehicleEditor) { route in
+            ParkingVehicleEditor(store: store, plate: route.plate, vehicle: route.vehicle,
+                adding: route.adding, onSaved: { plate = $0 })
+                .id(route.id)
         }
         .navigationBarTitleDisplayMode(.inline)
         .navigationDestination(isPresented: Binding(get: { openedSession != nil }, set: { if !$0 { openedSession = nil } })) {
@@ -806,6 +821,13 @@ private struct VehicleChoiceList: View {
     }
 }
 
+struct ParkingVehicleEditorRoute: Identifiable {
+    let id = UUID()
+    var plate = ""
+    var vehicle = ParkingVehicle()
+    var adding = true
+}
+
 private struct ParkingVehicleEditor: View {
     @ObservedObject var store: ParkingStore
     let plate: String
@@ -921,7 +943,10 @@ private struct ParkingDetail: View {
             message = tr("累计费用没有增加，请核对已有账目。", "The total has not increased. Review existing entries.", "Jumlah tidak meningkat. Semak rekod sedia ada."); return
         }
         editingExpense = false
-        var draft = Expense(merchant: session.name.isEmpty ? "Parking" : session.name, cents: difference, date: Date(), category: "交通", source: "手动")
+        let accountID: String
+        do { accountID = try model.ledger.parkingTNGAccountID() }
+        catch { message = error.localizedDescription; return }
+        var draft = Expense(bankAccountID: accountID, merchant: "Parking Fee", cents: difference, date: Date(), category: "交通", source: "手动")
         draft.note = tr("停车续费差额；请核对本次付款金额和时间。", "Parking renewal difference; verify this payment amount and time.", "Perbezaan lanjutan parkir; semak amaun dan masa bayaran ini.")
         expenseDraft = draft
     }
@@ -944,7 +969,10 @@ private struct ParkingDetail: View {
     }
     private func prepareExpense() {
         guard let cents = session.paidCents, session.expenseID == nil else { return }
-        var draft = Expense(merchant: session.name.isEmpty ? "Parking" : session.name, cents: cents, date: session.startedAt, category: "交通", source: "手动")
+        let accountID: String
+        do { accountID = try model.ledger.parkingTNGAccountID() }
+        catch { message = error.localizedDescription; return }
+        var draft = Expense(bankAccountID: accountID, merchant: "Parking Fee", cents: cents, date: session.startedAt, category: "交通", source: "手动")
         draft.note = tr("停车费用；请核对付款时间、账户和已有记录。", "Parking fee; verify payment time, account and existing entries.", "Bayaran parkir; semak masa, akaun dan rekod sedia ada.")
         // Use the existing screenshot duplicate-review flow; no ledger entry is created here.
         editingExpense = false
