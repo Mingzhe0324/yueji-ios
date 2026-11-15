@@ -4809,6 +4809,7 @@ struct FinancialNoticeReviewView: View {
     private var candidates: [Expense] {
         let cents = (try? toCents(amount)) ?? 0
         return model.ledger.expenses.filter { entry in
+            if purpose == "reimbursement" { return cents > 0 && (entry.reimbursement?.outstanding ?? 0) >= cents && entry.date <= date }
             if purpose == "refund" { return entry.cents - entry.refunded >= cents && entry.date <= date }
             return entry.cents == cents
         }.sorted { $0.date > $1.date }
@@ -4830,6 +4831,7 @@ struct FinancialNoticeReviewView: View {
                         Text(IncomeKind.allowance.label).tag("allowance")
                         Text(tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")).tag("ownTransfer")
                         Text(tr("退款到账", "Refund received", "Bayaran balik diterima")).tag("refund")
+                        Text(tr("报销到账", "Reimbursement received", "Tuntutan diterima")).tag("reimbursement")
                         if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
                         Text(tr("忽略", "Ignore", "Abaikan")).tag("ignore")
                     }
@@ -4851,6 +4853,21 @@ struct FinancialNoticeReviewView: View {
                         Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                     }
                 }
+                if purpose == "reimbursement" {
+                    Section(tr("对应报销账目", "Reimbursement entry", "Rekod tuntutan")) {
+                        Picker(tr("关联账目", "Linked entry", "Rekod dipautkan"), selection: $relatedID) {
+                            Text(tr("请选择", "Choose", "Pilih")).tag("")
+                            ForEach(candidates) { entry in
+                                Text(entry.displayName + " · " + money(entry.reimbursement?.outstanding ?? 0) + " · " + dateLabel(entry.date)).tag(entry.id)
+                            }
+                        }.accessibilityIdentifier("notice.reimbursement.entry")
+                        Text(tr("选择之前垫付的账目，只更新报销到账，不记为收入。可分次到账，每次不能超过该账目待报销金额。", "Select the original advance. This updates reimbursement without adding income. Partial receipts are allowed up to the outstanding amount.", "Pilih pendahuluan asal. Ini mengemas kini tuntutan tanpa pendapatan. Penerimaan separa dibenarkan sehingga baki tuntutan."))
+                            .font(.footnote).foregroundStyle(.secondary)
+                        NavigationLink { ReimbursementsView() } label: {
+                            Text(tr("找不到？先为原账目设置报销", "Missing? Set up the original claim", "Tiada? Tetapkan tuntutan asal"))
+                        }
+                    }
+                }
                 if purpose == "refund" || purpose == "duplicate" {
                     Section(purpose == "refund" ? tr("选择原消费", "Choose original expense", "Pilih belanja asal") : tr("选择已有账目", "Choose existing entry", "Pilih rekod sedia ada")) {
                         Picker(tr("关联账目", "Linked entry", "Rekod dipautkan"), selection: $relatedID) {
@@ -4870,7 +4887,7 @@ struct FinancialNoticeReviewView: View {
                     }
                 }
                 Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { if purpose == "expense" { editingNotice = notice } else { confirm = true } }
-                    .disabled(purpose.isEmpty || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
+                    .disabled(purpose.isEmpty || (purpose == "reimbursement" && !candidates.contains { $0.id == relatedID }) || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
             } else { Text(tr("通知已删除或清理。", "The notification has been deleted or cleared.", "Notifikasi telah dipadam atau dikosongkan.")) }
         }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
@@ -4897,9 +4914,10 @@ struct FinancialNoticeReviewView: View {
                     let percent = IncomeBudgetSettings.autoPercent
                     let purpose = self.purpose == "allowance" ? "income" : self.purpose
                     let incomeKind = self.purpose == "allowance" ? IncomeKind.allowance : self.incomeKind
-                    model.perform(key: "notice-" + id, action: { [id, purpose, party, amount, date, category, remember, relatedID, incomeKind] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
+                    model.perform(key: "notice-" + id, action: { [id, purpose, party, amount, date, category, remember, relatedID, incomeKind, distinct] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
                         if purpose == "ignore" { try ledger.excludeTNG(id: id) }
                         else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
+                        else if purpose == "reimbursement" { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, relatedID: relatedID, distinctConfirmed: distinct) }
                         else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID, items: purpose == "expense" ? try drafts.map { try $0.savedItem() } : [], incomeKind: purpose == "income" ? incomeKind : nil) }
                         return purpose == "income" ? try ledger.settleNewIncome(source: IncomeSourceKey.notice(id), autoPercent: percent) : nil
                     }, completion: { outcome in

@@ -1214,7 +1214,7 @@ func notificationReference(_ body: String) -> String? {
 extension Ledger {
     /// Atomic user-confirmed resolution. Original notification text is retained.
     mutating func resolveNotice(id: String, purpose: String, party: String, cents: Int, date: Date,
-                                category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = [], incomeKind: IncomeKind? = nil) throws {
+                                category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = [], incomeKind: IncomeKind? = nil, distinctConfirmed: Bool = false) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }),
               ["pending", "transfer"].contains(tngNotices[i].status), tngNotices[i].expenseID == nil,
               cents > 0, cents <= 10_000_000_000, date.timeIntervalSince1970 >= 0, date <= Date(),
@@ -1226,6 +1226,12 @@ extension Ledger {
         copy.tngNotices[i].party = party
         copy.tngNotices[i].date = date
         switch purpose {
+        case "reimbursement":
+            // The review screen explicitly confirms the direction of unknown notices.
+            copy.tngNotices[i].kind = "incoming"
+            copy.tngNotices[i].status = "pending"
+            try copy.resolveTNGIncoming(id: id, purpose: "reimbursement", date: date,
+                                       distinctConfirmed: distinctConfirmed, reimbursementExpenseID: relatedID)
         case "expense":
             guard copy.tngNotices[i].kind != "incoming" else { throw LedgerError.invalid("收款不能记为支出。") }
             try copy.confirmTNGExpense(id: id, merchant: party, cents: cents, date: date, category: category, remember: remember, items: items)

@@ -6,6 +6,27 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testUnknownNotificationReviewCanResolveReimbursement() throws {
+        let date = Date().addingTimeInterval(-3600)
+        var ledger = Ledger()
+        var entry = Expense(merchant: "Advance", cents: 50000, date: date)
+        entry.reimbursement = ReimbursementClaim(recipient: "Dad", cents: 50000)
+        ledger.expenses = [entry]
+        let notice = TNGNotice(body: "Transfer RM350", title: "", date: date, usesReceivedDate: true, kind: "unknown", status: "pending", cents: 35000, party: "Dad", possibleDuplicate: true)
+        ledger.tngNotices = [notice]
+        XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "reimbursement", party: "Dad", cents: 35000, date: date, relatedID: entry.id))
+        XCTAssertEqual(ledger.tngNotices[0].kind, "unknown")
+        XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "reimbursement", party: "Dad", cents: 35000, date: date, distinctConfirmed: true))
+        try ledger.resolveNotice(id: notice.id, purpose: "reimbursement", party: "Dad", cents: 35000, date: date, relatedID: entry.id, distinctConfirmed: true)
+        XCTAssertEqual(ledger.tngNotices[0].status, "reimbursement")
+        XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 35000)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 15000)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        try ledger.reopenTNGIncoming(id: notice.id)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 0)
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+    }
     func testIncomingReimbursementLinksOnceAndReopens() throws {
         let date = Date().addingTimeInterval(-3600)
         var ledger = Ledger()
