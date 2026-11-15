@@ -1580,16 +1580,12 @@ struct OverviewToolsView: View {
                 NavigationLink { ReimbursementsView() } label: { IslandRowLabel(title: tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"), symbol: "doc.text.fill", color: IslandPalette.lavender) }
                 NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")
-                NavigationLink { AutomationSetupView() } label: { IslandRowLabel(title: tr("自动记账", "Automatic recording", "Rekod automatik"), symbol: "bolt.fill", color: IslandPalette.sky) }
             }
             Section(tr("分析", "Insights", "Analisis")) {
                 NavigationLink { YearReviewView(month: month) } label: { IslandRowLabel(title: tr("年度回顾", "Year in review", "Imbasan tahunan"), symbol: "calendar.badge.clock", color: IslandPalette.leaf) }
                 NavigationLink { SpendingComparisonView(month: month) } label: { IslandRowLabel(title: tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), symbol: "chart.bar.xaxis", color: IslandPalette.mint) }
                 NavigationLink { UpcomingView(initialMonth: month) } label: { IslandRowLabel(title: tr("固定消费预览", "Upcoming bills", "Bil akan datang"), symbol: "calendar", color: IslandPalette.pumpkin) }
                 NavigationLink { DuplicateReviewView() } label: { IslandRowLabel(title: tr("检查重复账目", "Review duplicates", "Semak pendua"), symbol: "doc.on.doc.fill", color: IslandPalette.berry) }
-            }
-            Section {
-                NavigationLink { NotificationSettingsView() } label: { IslandRowLabel(title: tr("预算与每日提醒", "Budget & daily reminders", "Peringatan bajet & harian"), symbol: "bell.fill", color: IslandPalette.coral) }
             }
         }.yuejiListSurface().navigationTitle(tr("更多工具", "More tools", "Alat lain")).navigationBarTitleDisplayMode(.inline)
     }
@@ -3733,9 +3729,6 @@ struct SettingsView: View {
                     NavigationLink { aboutPage } label: {
                         SimpleSettingsRow(title: tr("关于月记", "About YueJi", "Tentang YueJi"), subtitle: installedVersionLabel, symbol: "info.circle.fill", color: IslandPalette.pebble)
                     }
-                    NavigationLink { OverviewToolsView() } label: {
-                        SimpleSettingsRow(title: tr("更多工具", "More tools", "Alat lain"), subtitle: tr("月度对比、消费预览与查重", "Comparisons, upcoming bills & duplicates", "Perbandingan, bil & pendua"), symbol: "square.grid.2x2.fill", color: IslandPalette.sky)
-                    }
                     Button { showingUsageGuide = true } label: {
                         SimpleSettingsRow(title: tr("使用指南", "Getting started", "Panduan penggunaan"), subtitle: tr("一步步学会使用月记", "Learn YueJi step by step", "Belajar YueJi langkah demi langkah"), symbol: "book.fill", color: IslandPalette.mint)
                     }
@@ -3989,11 +3982,8 @@ struct AutomationSetupView: View {
                     LabeledContent(tr("需要核对", "Needs review", "Perlu semakan"), value: "\(model.readIndex.pendingNotices.count)")
                 }
                 NavigationLink(tr("账户与付款对应", "Accounts and payment links", "Akaun dan pautan bayaran")) { BankAccountsView() }
-                NavigationLink(tr("通知频率", "Notification frequency", "Kekerapan notifikasi")) { NotificationSettingsView() }
-                NavigationLink(tr("记住的商家分类", "Remembered merchant categories", "Kategori peniaga diingati")) { MerchantRulesView() }
             }
             IncomeAutoAllocationSection()
-            AutoBackupSection()
             Section {
                 NavigationLink { ShortcutHelpView() } label: {
                     SimpleSettingsRow(title: "Apple Pay", subtitle: tr("付款后记录消费", "Record after payment", "Rekod selepas bayaran"), symbol: "creditcard.fill", color: IslandPalette.sky)

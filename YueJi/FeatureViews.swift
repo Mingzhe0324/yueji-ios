@@ -1450,7 +1450,6 @@ struct AutomationStatusView: View {
             }
             Section {
                 NavigationLink(tr("查看设置步骤", "Setup instructions", "Langkah persediaan")) { AutomationSetupView() }
-                NavigationLink(tr("记账通知", "Recording notifications", "Notifikasi rekod")) { NotificationSettingsView() }
             }
         }.yuejiListSurface().navigationTitle(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")).navigationBarTitleDisplayMode(.inline)
             .task { loadRecoveryInputs() }
@@ -1694,7 +1693,6 @@ struct NotificationSettingsView: View {
                         "When a category is well above the same days of the last 3 months. At most one a day. Worth a look on the Overview always shows them.",
                         "Apabila sesuatu kategori jauh melebihi hari yang sama dalam 3 bulan lalu. Paling banyak sekali sehari. Perlu perhatian di Ringkasan sentiasa menunjukkannya."))
             }
-            IncomeAutoAllocationSection()
             Section {
                 LabeledContent(tr("通知状态", "Notifications", "Notifikasi"), value: permission)
                 if !notificationHint.isEmpty { Text(notificationHint).font(.footnote).foregroundStyle(.secondary) }
@@ -4937,12 +4935,6 @@ struct AIFeaturesSettingsView: View {
             Section {
                 NavigationLink { TNGSetupView() } label: {
                     Label(tr("银行通知 AI", "Bank notification AI", "AI notifikasi bank"), systemImage: "building.columns")
-                }
-                NavigationLink { ReceiptScanView() } label: {
-                    Label(tr("收据识别与分账", "Receipts and splitting", "Resit dan pembahagian"), systemImage: "doc.viewfinder")
-                }
-                NavigationLink { TransactionScreenshotBatchView() } label: {
-                    Label(tr("导入交易截图", "Import transaction screenshot", "Import tangkapan skrin transaksi"), systemImage: "photo.badge.plus")
                 }
             }
         }.yuejiListSurface()

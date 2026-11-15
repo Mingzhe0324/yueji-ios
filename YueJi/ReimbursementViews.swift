@@ -71,6 +71,7 @@ struct ReimbursementsView: View {
     @State private var loaded = false
     @State private var filter = "pending"
     @State private var addingManual = false
+    @State private var choosingEntry = false
     private var displayed: [Expense] {
         entries.filter { entry in
             filter == "all" || (filter == "pending" ? (entry.reimbursement?.outstanding ?? 0) > 0 : entry.reimbursement?.outstanding == 0)
@@ -79,16 +80,6 @@ struct ReimbursementsView: View {
     var body: some View {
         let _ = locale.identifier
         List {
-            Section {
-                NavigationLink { ReimbursementEntryPicker() } label: {
-                    Label(tr("从已有账目申请报销", "Claim an existing entry", "Tuntut rekod sedia ada"), systemImage: "doc.text.magnifyingglass")
-                }
-                Button { addingManual = true } label: {
-                    Label(tr("手动新增报销账目", "Add a manual claim entry", "Tambah rekod tuntutan manual"), systemImage: "square.and.pencil")
-                }
-            } footer: {
-                Text(tr("自动记账的付款可直接选择，无需重复记账；尚未记录的付款可手动新增。", "Choose an automatically recorded payment without duplicating it, or add a payment not yet recorded.", "Pilih bayaran direkod automatik tanpa pendua, atau tambah bayaran yang belum direkod."))
-            }
             Section {
                 LabeledContent(tr("待到账垫付款", "Outstanding advances", "Pendahuluan belum diterima")) {
                     AnimatedMoney(cents: entries.reduce(0) { $0 + ($1.reimbursement?.outstanding ?? 0) })
@@ -108,7 +99,7 @@ struct ReimbursementsView: View {
                     .accessibilityLabel(tr("正在加载报销", "Loading reimbursements", "Memuatkan tuntutan"))
             } else if displayed.isEmpty {
                 IslandEmptyState(title: tr("暂无报销记录", "No reimbursements", "Tiada tuntutan"),
-                    message: tr("在新增或编辑账目中打开“需要报销”，也可从账目详情设置。", "Mark an entry as reimbursable when adding or editing, or set it up in entry details.", "Tandakan rekod sebagai boleh dituntut ketika menambah atau mengedit, atau tetapkan dalam butiran rekod."),
+                    message: tr("点右上角“新增报销”，选择已有账目或手动新增。已自动记账的付款直接选择即可。", "Tap Add claim at the top right to choose an existing entry or add one manually. Reuse automatically recorded payments.", "Ketik Tambah tuntutan di kanan atas untuk memilih rekod sedia ada atau menambah secara manual. Gunakan bayaran yang telah direkod automatik."),
                     mood: .happy).listRowBackground(Color.clear)
             }
             ForEach(displayed) { entry in
@@ -134,6 +125,22 @@ struct ReimbursementsView: View {
         }.yuejiListSurface()
             .navigationTitle(tr("报销管理", "Reimbursements", "Tuntutan bayaran balik"))
             .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Menu {
+                        Button { choosingEntry = true } label: {
+                            Label(tr("从已有账目申请报销", "Claim an existing entry", "Tuntut rekod sedia ada"), systemImage: "doc.text.magnifyingglass")
+                        }
+                        Button { addingManual = true } label: {
+                            Label(tr("手动新增报销账目", "Add a manual claim entry", "Tambah rekod tuntutan manual"), systemImage: "square.and.pencil")
+                        }
+                    } label: {
+                        Label(tr("新增报销", "Add claim", "Tambah tuntutan"), systemImage: "plus")
+                    }
+                    .accessibilityIdentifier("reimbursement.add")
+                }
+            }
+            .navigationDestination(isPresented: $choosingEntry) { ReimbursementEntryPicker() }
             .sheet(isPresented: $addingManual) {
                 ExpenseEditor(original: nil, startsReimbursement: true)
             }
