@@ -12,8 +12,9 @@ final class EverydayFlowTests: XCTestCase {
         let wallet = BankAccount(name: "TNG", openingCents: 0, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")
         ledger.bankAccounts = [wallet]
         let mine = Expense(merchant: "I paid", cents: 10000, date: date, shares: [Share(name: "Amy", cents: 10000)])
-        let theirs = Expense(merchant: "Amy paid", cents: 4000, date: date, paidByFriend: "Amy")
+        let theirs = Expense(merchant: "Amy paid", cents: 4000, date: date, shares: [Share(name: "Amy", cents: 0)], paidByFriend: "Amy")
         ledger.expenses = [mine, theirs]
+        ledger = try ledger.validated()
         let notice = TNGNotice(bankAccountID: wallet.id, body: "Received RM60", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 6000, party: "Amy")
         ledger.tngNotices = [notice]
         let plan = try ledger.settlementPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 6000, date: date)
@@ -3917,19 +3918,32 @@ final class ReceiptCalculationTests: XCTestCase {
 }
 
 final class TNGAllowlistTests: XCTestCase {
-    func testAdsAndUnsupportedNoticesDoNotChangeLedgerOrConsumeIDs() throws {
+    func testAdsOnlyUpdateRecoveryArchiveWithoutPostingOrConsumingIDs() throws {
         var ledger = Ledger()
         let original = try LocalStore.encode(ledger)
         let notices = [
-            ("Promotion", "Get RM10 cashback when you spend RM50 today!"),
-            ("Payment", "Payment failed RM2.55"),
-            ("", "Offer: You have paid RM2.55 for Shop."),
-            ("Promo", "You have paid RM2.55 for Shop."),
-            ("", "No transaction information")
+            ("Promotion", "Get RM10 cashback when you spend RM50 today!", true),
+            ("Payment", "Payment failed RM2.55", false),
+            ("", "Offer: You have paid RM2.55 for Shop.", true),
+            ("Promo", "You have paid RM2.55 for Shop.", true),
+            ("", "No transaction information", false)
         ]
-        for (title, body) in notices {
+        var expectedArchived = 0
+        for (title, body, archived) in notices {
             _ = try ledger.receiveTNG(body: body, title: title, date: nil, eventID: "ignored-event")
-            XCTAssertEqual(try LocalStore.encode(ledger), original)
+            if archived { expectedArchived += 1 }
+            XCTAssertEqual(ledger.filteredNotifications.count, expectedArchived)
+            if archived {
+                XCTAssertEqual(ledger.filteredNotifications.last?.body, body)
+                XCTAssertEqual(ledger.filteredNotifications.last?.title, title)
+            }
+            // Recovery history is allowed; every financial field and event ID stays unchanged.
+            var financialState = ledger
+            financialState.filteredNotifications = []
+            XCTAssertEqual(try LocalStore.encode(financialState), original)
+            let archive = ledger.filteredNotifications
+            _ = try ledger.receiveTNG(body: body, title: title, date: nil, eventID: "ignored-event")
+            XCTAssertEqual(ledger.filteredNotifications, archive, "Repeated delivery must not duplicate recovery history")
         }
         _ = try ledger.receiveTNG(body: "You have paid RM2.55 for Shop.", title: "Payment", date: nil, eventID: "ignored-event")
         XCTAssertEqual(ledger.expenses.count, 1)
