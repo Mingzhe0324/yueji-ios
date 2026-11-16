@@ -1775,7 +1775,7 @@ struct ExpenseRow: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
-                if !entry.shares.isEmpty {
+                if !entry.shares.isEmpty && !entry.isLoan {
                     HStack {
                         Text(tr("我的份额：", "My share: ", "Bahagian saya: "))
                         TransactionAmount(cents: entry.personal, direction: .outgoing)
@@ -2958,7 +2958,10 @@ struct ExpenseEditor: View {
     var body: some View {
         let _ = uiLocale.identifier
         NavigationStack {
-            if original == nil && initialDraft == nil && entryType == "settlement" {
+            if original?.isLoan == true || initialDraft?.isLoan == true || (original == nil && initialDraft == nil && entryType == "loan") {
+                LendingEntryView(entryType: $entryType, initialDate: initialDate, original: original, seed: initialDraft, showsTypePicker: original == nil && initialDraft == nil,
+                                 onSaved: { finishDraft(); onSaved?() })
+            } else if original == nil && initialDraft == nil && entryType == "settlement" {
                 ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
             } else {
             Form {

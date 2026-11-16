@@ -2441,6 +2441,7 @@ struct SavedTransactionItemsSection: View {
     let onEdit: (String?) -> Void
     var body: some View {
         let _ = uiLocale.identifier
+        if !entry.isLoan {
         Section(tr("物品", "Items", "Item")) {
             if (entry.items ?? []).isEmpty {
                 Text(tr("交易已保存，可稍后补充物品。", "Transaction saved; add items whenever you are ready.", "Transaksi disimpan; tambah item apabila anda bersedia."))
@@ -2457,6 +2458,7 @@ struct SavedTransactionItemsSection: View {
                     .frame(minHeight: 44)
             }.buttonStyle(.borderless).disabled(!presentationAllowed)
                 .accessibilityIdentifier("transaction.items.edit")
+        }
         }
     }
 }
@@ -2607,6 +2609,7 @@ struct TNGNoticeView: View {
     @State private var excluding = false
     @State private var editing: TransactionEditorRoute?
     @State private var itemsEditorPresented = false
+    @State private var lendingNotice: TNGNotice?
     @State private var error: String?
     private var notice: TNGNotice? { model.notice(id: id) }
     var body: some View {
@@ -2615,7 +2618,7 @@ struct TNGNoticeView: View {
             if let notice {
                 SettlementNoticeSection(notice: notice)
                 NoticeAccountSection(notice: notice)
-                if let expenseID = notice.expenseID, let entry = model.expense(id: expenseID) {
+                if let expenseID = notice.expenseID, let entry = model.expense(id: expenseID), !entry.isLoan {
                     SavedTransactionItemsSection(entry: entry, presentationAllowed: editing == nil && !itemsEditorPresented) { selectedID in
                         guard editing == nil, !itemsEditorPresented else { return }
                         itemsEditorPresented = true
@@ -2662,8 +2665,12 @@ struct TNGNoticeView: View {
                     if notice.possibleDuplicate { Text(tr("请对照已有账目，确认是另一笔真实付款后再入账。", "Check existing entries and record only if this is a separate payment.", "Semak rekod sedia ada; rekod hanya jika bayaran berasingan.")).foregroundStyle(.orange) }
                 }
                 NoticeSourceSection(notice: notice)
+                if notice.kind != "incoming", notice.status == "recorded", notice.resolution == nil, notice.settlementID == nil,
+                   let expenseID = notice.expenseID, model.expense(id: expenseID)?.isLoan != true {
+                    Button(tr("借钱给人", "Lend money", "Pinjamkan wang")) { lendingNotice = notice }
+                }
                 if ["pending", "transfer"].contains(notice.status), notice.expenseID == nil {
-                    NavigationLink(tr("确认用途 / 收入 / 充值 / 退款", "Confirm purpose / income / top-up / refund", "Sahkan tujuan / pendapatan / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) }
+                    NavigationLink(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) { FinancialNoticeReviewView(id: id) }
                 }
                 if notice.resolution != nil { NoticeResolutionSection(notice: notice) }
                 if let expenseID = notice.expenseID {
@@ -2699,6 +2706,9 @@ struct TNGNoticeView: View {
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(sourceLabel(notice?.provider ?? "TNG"))
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
+            .sheet(item: $lendingNotice) { notice in
+                NavigationStack { LendingEntryView(entryType: .constant("loan"), notice: notice, showsTypePicker: false) }
+            }
             .sheet(item: $editing, onDismiss: { itemsEditorPresented = false }) { route in
                 switch route {
                 case .expense(let entry): ExpenseEditor(original: entry)
@@ -4940,7 +4950,10 @@ struct FinancialNoticeReviewView: View {
                 Section(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) {
                     Picker(tr("这是什么交易？", "What is this transaction?", "Apakah transaksi ini?"), selection: $purpose) {
                         Text(tr("请选择用途", "Select a purpose", "Pilih tujuan")).tag("")
-                        if notice.kind != "incoming" { Text(tr("消费支出", "Expense", "Perbelanjaan")).tag("expense") }
+                        if notice.kind != "incoming" {
+                            Text(tr("消费支出", "Expense", "Perbelanjaan")).tag("expense")
+                            Text(tr("借钱给人", "Lend money", "Pinjamkan wang")).tag("loan")
+                        }
                         Text(tr("收入", "Income", "Pendapatan")).tag("income")
                         Text(IncomeKind.allowance.label).tag("allowance")
                         Text(tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")).tag("ownTransfer")
@@ -4953,7 +4966,7 @@ struct FinancialNoticeReviewView: View {
                         Button(tr("编辑完整账目", "Edit full entry", "Edit rekod penuh")) { editingNotice = notice }
                             .disabled(notice.possibleDuplicate && !distinct)
                     } else {
-                        TextField(tr("商户 / 对方 / 用途", "Merchant / recipient / purpose", "Peniaga / pihak lain / tujuan"), text: $party)
+                        TextField(purpose == "loan" ? tr("借款人", "Borrower", "Peminjam") : tr("商户 / 对方 / 用途", "Merchant / recipient / purpose", "Peniaga / pihak lain / tujuan"), text: $party)
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date, in: ...Date())
                     }
@@ -5034,7 +5047,7 @@ struct FinancialNoticeReviewView: View {
                             guard try ledger.previewReimbursement(cents: toCents(amount), date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding) == reimbursementPreview else { throw LedgerError.invalid("Claims changed. Review again.") }
                             try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, distinctConfirmed: distinct, reimbursementExpenseIDs: reimbursementExpenseIDs, reimbursementRoundingCents: reimbursementRounding)
                         }
-                        else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID, items: purpose == "expense" ? try drafts.map { try $0.savedItem() } : [], incomeKind: purpose == "income" ? incomeKind : nil) }
+                        else { try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, category: category, remember: remember, relatedID: relatedID.isEmpty ? nil : relatedID, items: purpose == "expense" ? try drafts.map { try $0.savedItem() } : [], incomeKind: purpose == "income" ? incomeKind : nil, distinctConfirmed: distinct) }
                         return purpose == "income" ? try ledger.settleNewIncome(source: IncomeSourceKey.notice(id), autoPercent: percent) : nil
                     }, completion: { outcome in
                         if let outcome { model.presentIncomeOutcome(outcome) } else { model.showSaved() }

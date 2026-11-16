@@ -344,7 +344,7 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, @preconcurrency CLL
         guard manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways,
               let location = manager.location, location.horizontalAccuracy >= 0,
               location.horizontalAccuracy <= 100, abs(location.timestamp.timeIntervalSinceNow) < 30 else { return nil }
-        return ExpensePlace(name: tr("记录时的位置", "Location at recording", "Lokasi ketika direkod"),
+        return ExpensePlace(name: tr("当前位置", "Current location", "Lokasi semasa"),
             latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
             accuracyMeters: location.horizontalAccuracy, capturedAt: location.timestamp)
     }
@@ -521,7 +521,7 @@ struct ExpensePlaceMapSheet: View {
     }
     private var matchInput: MerchantMatchInput? {
         guard visible, initialized, draft.applePlaceID == nil else { return nil }
-        let generic = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
+        let generic = ExpensePlace.placeholderNames
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let hint = merchantHint.trimmingCharacters(in: .whitespacesAndNewlines)
         // Reverse-geocoded names often describe a street/building, not the merchant.
@@ -539,7 +539,7 @@ struct ExpensePlaceMapSheet: View {
     }
     private var googleMapsURL: URL? {
         let place = draft
-        var query = [place.name, place.address].filter { !$0.isEmpty }.joined(separator: " ")
+        var query = place.searchQuery(merchantHint: merchantHint)
         if query.isEmpty, let lat = place.latitude, let lon = place.longitude { query = "\(lat),\(lon)" }
         guard !query.isEmpty else { return nil }
         var components = URLComponents(string: "https://www.google.com/maps/search/")
@@ -651,7 +651,7 @@ struct ExpensePlaceMapSheet: View {
                 visible = true
                 guard !initialized else { return }
                 select(initial, animated: false)
-                query = [initial?.name, initial?.address].compactMap { $0 }.joined(separator: " ")
+                query = initial?.searchQuery(merchantHint: merchantHint) ?? merchantHint
                 initialized = true
             }
             .onDisappear { visible = false; cancelSearch(); merchantMatcher.cancel(); mapLocator.cancel(); movingMap = false }

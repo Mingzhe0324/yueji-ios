@@ -6,6 +6,95 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testLendingUsesOneDebtAndCreditsActualBankRepaymentsWithoutIncome() throws {
+        let date = Date().addingTimeInterval(-120)
+        for provider in ["TNG", "CIMB"] {
+            var ledger = Ledger()
+            let account = BankAccount(name: provider, openingCents: 100000, openingDate: date.addingTimeInterval(-60))
+            ledger.bankAccounts = [account]
+            let loanID = try ledger.recordLoan(borrower: "Amy", cents: 30000, date: date, accountID: account.id)
+            let loan = try XCTUnwrap(ledger.expenses.first)
+            XCTAssertTrue(loan.isLoan)
+            XCTAssertEqual(ledger.bankBalance(account), 70000)
+            XCTAssertEqual(ledger.spending(in: date), 0)
+            XCTAssertEqual(ledger.friendSpending(friend: "Amy").net, 0)
+            XCTAssertEqual(ledger.friendBalances.first?.owed, 30000)
+            let receipt = TNGNotice(bankAccountID: account.id, body: "Received RM100", title: "", date: date.addingTimeInterval(60), usesReceivedDate: false,
+                                    kind: "incoming", status: "pending", cents: 10000, party: "Amy", sourceBank: provider)
+            ledger.tngNotices = [receipt]
+            try ledger.resolveTNGIncoming(id: receipt.id, purpose: "repayment", friend: "Amy", date: receipt.date, selectedExpenseIDs: [loanID])
+            XCTAssertEqual(ledger.bankBalance(account), 80000)
+            XCTAssertEqual(ledger.friendBalances.first?.owed, 20000)
+            XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+            XCTAssertThrowsError(try ledger.deleteLedgerExpense(ledger.expenses[0]))
+            XCTAssertThrowsError(try ledger.recordLoan(borrower: "Bob", cents: 30000, date: date, accountID: account.id, replacing: ledger.expenses[0]))
+            var restored = try LocalStore.decode(LocalStore.encode(ledger))
+            XCTAssertTrue(restored.expenses[0].isLoan)
+            try restored.reopenTNGIncoming(id: receipt.id)
+            XCTAssertEqual(restored.friendBalances.first?.owed, 30000)
+        }
+    }
+
+    func testBankAndTNGLoanPurposesConvertExistingPaymentWithoutDoubleDeduction() throws {
+        let date = Date().addingTimeInterval(-60)
+        for provider in ["TNG", "CIMB"] {
+            for kind in ["payment", "transfer", "unknown"] {
+                var ledger = Ledger()
+                let account = BankAccount(name: provider, openingCents: 100000, openingDate: date.addingTimeInterval(-60))
+                ledger.bankAccounts = [account]
+                var notice = TNGNotice(bankAccountID: account.id, body: "Sent RM300", title: "", date: date, usesReceivedDate: false,
+                                       kind: kind, status: kind == "transfer" ? "transfer" : "pending", cents: 30000, party: "Amy", sourceBank: provider)
+                var oldID: String?
+                if kind == "payment" {
+                    let entry = Expense(bankAccountID: account.id, merchant: "Amy", cents: 30000, date: date, source: provider)
+                    ledger.expenses = [entry]; notice.status = "recorded"; notice.expenseID = entry.id; oldID = entry.id
+                }
+                ledger.tngNotices = [notice]
+                try ledger.resolveNotice(id: notice.id, purpose: "loan", party: "Amy", cents: 30000, date: date)
+                XCTAssertEqual(ledger.expenses.count, 1)
+                XCTAssertTrue(ledger.expenses[0].isLoan)
+                if let oldID { XCTAssertEqual(ledger.expenses[0].id, oldID) }
+                XCTAssertEqual(ledger.tngNotices[0].expenseID, ledger.expenses[0].id)
+                XCTAssertEqual(ledger.bankBalance(account), 70000)
+                XCTAssertEqual(ledger.spending(in: date), 0)
+                XCTAssertEqual(ledger.friendBalances.first?.owed, 30000)
+                XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "loan", party: "Amy", cents: 30000, date: date))
+                let plan = try ledger.settlementPlan(friend: "Amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 30000, date: date)
+                let settlement = try ledger.confirmSettlement(plan)
+                XCTAssertEqual(ledger.friendBalances.first?.owed, 0)
+                try ledger.undoSettlement(id: settlement)
+                XCTAssertEqual(ledger.friendBalances.first?.owed, 30000)
+            }
+        }
+    }
+
+    func testLendingRejectsIncomingDuplicateAndAlreadySplitNotificationsAtomically() throws {
+        let date = Date().addingTimeInterval(-60)
+        for kind in ["incoming", "transfer", "payment"] {
+            var ledger = Ledger()
+            var notice = TNGNotice(body: "RM100", title: "", date: date, usesReceivedDate: false, kind: kind, status: "pending", cents: 10000, party: "Amy")
+            if kind == "transfer" { notice.possibleDuplicate = true }
+            if kind == "payment" {
+                let entry = Expense(merchant: "Lunch", cents: 10000, date: date, shares: [Share(name: "Amy", cents: 5000)])
+                ledger.expenses = [entry]; notice.expenseID = entry.id; notice.status = "recorded"
+            }
+            ledger.tngNotices = [notice]
+            let before = try LocalStore.encode(ledger)
+            XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "loan", party: "Amy", cents: 10000, date: date))
+            XCTAssertEqual(try LocalStore.encode(ledger), before)
+        }
+    }
+
+    func testPlaceSearchNeverUsesRecordingLocationPlaceholder() {
+        for name in ExpensePlace.placeholderNames {
+            let place = ExpensePlace(name: name, address: "Kuala Lumpur")
+            XCTAssertEqual(place.searchQuery(merchantHint: "Cafe"), "Cafe Kuala Lumpur")
+            XCTAssertEqual(place.searchQuery(), "Kuala Lumpur")
+        }
+        XCTAssertEqual(ExpensePlace(name: "Location at recording").searchQuery(), "")
+        XCTAssertEqual(ExpensePlace(name: "Actual shop", address: "Street").searchQuery(merchantHint: "Other"), "Actual shop Street")
+    }
+
     func testIncomingNetSettlementConsumesOnlyNetPayment() throws {
         let date = Date().addingTimeInterval(-60)
         var ledger = Ledger()

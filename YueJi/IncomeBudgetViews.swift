@@ -407,7 +407,7 @@ private struct BankAccountDetail: View {
                                 Text(dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
                                 Text(notice.status == "pending" && (notice.possibleDuplicate || notice.balanceHeldForReview == true)
                                      ? tr("需复核，未自动加余额", "Review required; not automatically credited", "Perlu semakan; baki belum ditambah automatik")
-                                     : (notice.verifiedIncomingBalance == true || notice.provider == "TNG" || notice.isConfirmedIncome || ["reimbursement", "settlement"].contains(notice.status)
+                                     : (notice.verifiedIncomingBalance == true || notice.provider == "TNG" || notice.isConfirmedIncome || ["reimbursement", "repayment", "settlement"].contains(notice.status)
                                         ? tr("已计入余额，用途见详情", "Included in balance; see details for purpose", "Termasuk dalam baki; lihat tujuan dalam butiran")
                                         : tr("待确认，尚未计入余额", "Awaiting review; not included in balance", "Menunggu semakan; belum termasuk dalam baki")))
                                     .font(.caption).foregroundStyle(.secondary)

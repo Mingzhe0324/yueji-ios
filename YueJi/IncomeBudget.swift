@@ -190,7 +190,7 @@ extension Ledger {
                 total += notice.kind == "incoming" ? (notice.cents ?? 0) : -(notice.cents ?? 0)
                 continue
             }
-            let tngReceipt = (notice.provider == "TNG" || notice.verifiedIncomingBalance == true || notice.status == "reimbursement") && notice.kind == "incoming" &&
+            let tngReceipt = (notice.provider == "TNG" || notice.verifiedIncomingBalance == true || ["reimbursement", "repayment"].contains(notice.status)) && notice.kind == "incoming" &&
                 ((notice.status == "pending" && !notice.possibleDuplicate && notice.balanceHeldForReview != true) || ["income", "repayment", "reimbursement", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
             if notice.isConfirmedIncome || tngReceipt { total += notice.cents ?? 0 }
         }

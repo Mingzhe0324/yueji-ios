@@ -70,7 +70,7 @@ extension Expense {
         id == other.id && merchant == other.merchant && cents == other.cents && date == other.date
         && category == other.category && categoryAllocations == other.categoryAllocations && (items ?? []) == (other.items ?? [])
         && paidByFriend == other.paidByFriend && foreign == other.foreign
-        && charges == other.charges
+        && charges == other.charges && isLoan == other.isLoan
         && (refunds ?? []) == (other.refunds ?? []) && shares.count == other.shares.count
         && zip(shares, other.shares).allSatisfy { pair in
             pair.0.id == pair.1.id && pair.0.name == pair.1.name && pair.0.cents == pair.1.cents && pair.0.refunded == pair.1.refunded
@@ -79,6 +79,81 @@ extension Expense {
 }
 
 extension Ledger {
+    func requireUnpaidLoan(_ entry: Expense) throws {
+        guard !entry.isLoan || entry.shares.allSatisfy({ $0.repayments.isEmpty && ($0.returns ?? []).isEmpty }) else {
+            throw LedgerError.invalid(tr("请先撤销还款，再删除借款。", "Undo repayments before deleting the loan.", "Batalkan bayaran balik sebelum memadam pinjaman."))
+        }
+    }
+    /// Manual lending and all bank/TNG notices share one atomic write and one debt record.
+    @discardableResult
+    mutating func recordLoan(borrower: String, cents: Int, date: Date, accountID: String?,
+                             replacing original: Expense? = nil, noticeID: String? = nil,
+                             distinctConfirmed: Bool = false) throws -> String {
+        let borrower = borrower.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !borrower.isEmpty, borrower.count <= 200, cents > 0, cents <= 10_000_000_000,
+              date.timeIntervalSince1970.isFinite, date.timeIntervalSince1970 >= 0, date <= Date(),
+              accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {
+            throw LedgerError.invalid(tr("请核对借款人、金额、日期和付款账户。", "Review borrower, amount, date and payment account.", "Semak peminjam, amaun, tarikh dan akaun bayaran."))
+        }
+        var copy = self
+        var previous = original
+        var noticeIndex: Int?
+        if let noticeID {
+            guard let n = tngNotices.firstIndex(where: { $0.id == noticeID }),
+                  ["payment", "transfer", "unknown"].contains(tngNotices[n].kind),
+                  ["pending", "transfer", "recorded"].contains(tngNotices[n].status),
+                  tngNotices[n].resolution == nil, tngNotices[n].settlementID == nil,
+                  !tngNotices[n].possibleDuplicate || distinctConfirmed else {
+                throw LedgerError.invalid(tr("通知已处理或方向不符，请重新核对。", "Notification changed or has the wrong direction. Review it again.", "Notifikasi berubah atau arahnya salah. Semak semula."))
+            }
+            try requireUnusedPaymentReference(tngNotices[n])
+            if let expenseID = tngNotices[n].expenseID {
+                guard original == nil, let entry = expenses.first(where: { $0.id == expenseID }), !entry.isLoan else {
+                    throw LedgerError.invalid("Record changed. Reopen it.")
+                }
+                previous = entry
+            } else if original != nil { throw LedgerError.invalid("Record changed. Reopen it.") }
+            noticeIndex = n
+        }
+        if let previous {
+            guard expenses.first(where: { $0.id == previous.id }) == previous,
+                  previous.paidByFriend == nil, previous.refunded == 0, previous.reimbursement == nil,
+                  (previous.items ?? []).isEmpty, previous.charges == nil, previous.foreign == nil,
+                  previous.recurringKey == nil, !hasActiveSettlement(expenseID: previous.id),
+                  previous.isLoan || previous.shares.isEmpty else {
+                throw LedgerError.invalid(tr("账目已有分账或其他关联，请先处理原账目。", "This entry has splits or other links. Review the original entry first.", "Rekod mempunyai bahagian atau pautan lain. Semak rekod asal dahulu."))
+            }
+            if previous.shares.contains(where: { !$0.repayments.isEmpty || !($0.returns ?? []).isEmpty }) {
+                guard previous.cents == cents, previous.date == date, previous.shares.first?.name == borrower else {
+                    throw LedgerError.invalid(tr("请先撤销还款，再修改借款人、金额或日期。", "Undo repayments before changing borrower, amount or date.", "Batalkan bayaran balik sebelum menukar peminjam, amaun atau tarikh."))
+                }
+            }
+        }
+        var entry = previous ?? Expense(merchant: borrower, cents: cents, date: date)
+        entry.loan = true; entry.merchant = borrower; entry.cents = cents; entry.date = date
+        entry.bankAccountID = accountID
+        var share = (previous?.isLoan == true ? previous?.shares.first : nil) ?? Share(name: borrower, cents: cents)
+        share.name = borrower; share.cents = cents; entry.shares = [share]
+        if let n = noticeIndex {
+            entry.source = tngNotices[n].provider
+            entry.transactionReference = tngNotices[n].bankReference
+            entry.note = previous?.note ?? tngNotices[n].note
+            entry.place = previous?.place ?? tngNotices[n].place
+            copy.tngNotices[n].kind = "payment"; copy.tngNotices[n].status = "recorded"
+            copy.tngNotices[n].expenseID = entry.id; copy.tngNotices[n].bankAccountID = accountID
+            copy.tngNotices[n].cents = cents; copy.tngNotices[n].date = date; copy.tngNotices[n].party = borrower
+        }
+        if let index = copy.expenses.firstIndex(where: { $0.id == entry.id }) { copy.expenses[index] = entry }
+        else { copy.expenses.append(entry) }
+        // Editing an existing loan keeps its original notification/account in sync.
+        for n in copy.tngNotices.indices where copy.tngNotices[n].expenseID == entry.id {
+            copy.tngNotices[n].bankAccountID = accountID
+            copy.tngNotices[n].cents = cents; copy.tngNotices[n].date = date
+        }
+        self = try copy.validated()
+        return entry.id
+    }
+
     /// Offset both sides and consume the received bank payment in one write.
     mutating func confirmIncomingNetSettlement(noticeID: String, plan: SettlementPlan, distinctConfirmed: Bool = false) throws -> String {
         guard let notice = tngNotices.first(where: { $0.id == noticeID }), notice.kind == "incoming",

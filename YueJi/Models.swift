@@ -169,6 +169,14 @@ enum MerchantMatching {
 }
 
 struct ExpensePlace: Codable, Equatable {
+    static let placeholderNames = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
+    func searchQuery(merchantHint: String = "") -> String {
+        let hint = merchantHint.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        let placeholder = Self.placeholderNames.contains { $0.caseInsensitiveCompare(title) == .orderedSame }
+        let term = placeholder || (capturedAt != nil && !hint.isEmpty) ? hint : title
+        return [term, address].filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.joined(separator: " ")
+    }
     var name: String
     var address: String = ""
     var latitude: Double? = nil
@@ -222,9 +230,12 @@ struct Expense: Codable, Identifiable, Equatable {
     var tripID: String? = nil
     /// The schedule occurrence ("rule:index") a real payment renewed; nil when not matched.
     var renewalOf: String? = nil
+    var loan: Bool? = nil // Principal lent to one person; tracked by the existing debt/repayment system.
+    var isLoan: Bool { loan == true }
     var accountDirection: AccountDirection { paidByFriend == nil ? .outgoing : .neutral }
     var displayName: String {
         let merchantName = merchant.trimmingCharacters(in: .whitespacesAndNewlines)
+        if isLoan { return tr("借给 ", "Lent to ", "Dipinjamkan kepada ") + (shares.first?.name ?? merchantName) }
         if !merchantName.isEmpty { return merchantName }
         let description = entryDescription?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return description.isEmpty ? tr("未命名账目", "Untitled entry", "Rekod tanpa nama") : description
@@ -249,7 +260,7 @@ extension Expense {
         return Expense(merchant: merchant, entryDescription: entryDescription, cents: cents, date: date,
             category: category, fuel: fuel,
             shares: shares.map { Share(name: $0.name, cents: $0.cents) }, foreign: foreign,
-            note: note, paidByFriend: paidByFriend, items: copiedItems, charges: charges)
+            note: note, paidByFriend: paidByFriend, items: copiedItems, charges: charges, loan: loan)
     }
 }
 
@@ -418,6 +429,13 @@ struct Ledger: Codable {
         for rule in recurring { try rule.validate(allowedCategories: categoryNames) }
         guard automationEvents.count <= 100, automationEvents.allSatisfy({ $0.date.timeIntervalSince1970.isFinite && $0.detail.count <= 2000 }) else { throw LedgerError.invalid("账本格式或版本无效。") }
         for e in expenses {
+            if e.isLoan {
+                guard e.paidByFriend == nil, e.shares.count == 1, e.shares[0].cents == e.cents,
+                      e.refunded == 0, e.reimbursement == nil, (e.items ?? []).isEmpty,
+                      e.charges == nil, e.foreign == nil, e.recurringKey == nil else {
+                    throw LedgerError.invalid(tr("借款须全额关联一位借款人；还款请通过还款功能记录。", "Link the full loan to one borrower. Record repayments through the repayment flow.", "Pautkan seluruh pinjaman kepada seorang peminjam. Rekod bayaran balik melalui aliran bayaran balik."))
+                }
+            }
             if let payer = e.paidByFriend {
                 guard !friendKey(payer).isEmpty, payer.count <= 200, e.shares.count == 1,
                       friendKey(e.shares[0].name) == friendKey(payer), e.shares[0].repayments.isEmpty,
@@ -456,6 +474,7 @@ struct Ledger: Codable {
 
     /// Keep automation and recurring deduplication markers so deletion stays deleted.
     mutating func deleteExpense(_ expected: Expense) throws {
+        try requireUnpaidLoan(expected)
         try requireUnsettledExpense(expected.id)
         try requireUnlinkedReimbursement(expected)
         guard let index = expenses.firstIndex(where: { $0.id == expected.id }),
@@ -1190,6 +1209,7 @@ extension Ledger {
     }
     private mutating func deleteLedgerRecord(noticeIDs: Set<String>, expenseID: String?) throws -> DeletedLedgerRecord {
         if let expenseID, let entry = expenses.first(where: { $0.id == expenseID }) {
+            try requireUnpaidLoan(entry)
             try requireUnlinkedReimbursement(entry)
         }
         var copy = self
@@ -1263,6 +1283,11 @@ extension Ledger {
     /// Atomic user-confirmed resolution. Original notification text is retained.
     mutating func resolveNotice(id: String, purpose: String, party: String, cents: Int, date: Date,
                                 category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = [], incomeKind: IncomeKind? = nil, distinctConfirmed: Bool = false, reimbursementExpenseIDs: Set<String>? = nil, reimbursementRoundingCents: Int = 0) throws {
+        if purpose == "loan" {
+            _ = try recordLoan(borrower: party, cents: cents, date: date, accountID: tngNotices.first(where: { $0.id == id })?.bankAccountID,
+                               noticeID: id, distinctConfirmed: distinctConfirmed)
+            return
+        }
         guard let i = tngNotices.firstIndex(where: { $0.id == id }),
               ["pending", "transfer"].contains(tngNotices[i].status), tngNotices[i].expenseID == nil,
               cents > 0, cents <= 10_000_000_000, date.timeIntervalSince1970 >= 0, date <= Date(),

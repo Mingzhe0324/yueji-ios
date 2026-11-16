@@ -8,9 +8,80 @@ struct ManualEntryTypeSection: View {
         Section {
             Picker(tr("记录类型", "Entry type", "Jenis rekod"), selection: $selection) {
                 Text(tr("消费", "Expense", "Belanja")).tag("expense")
+                Text(tr("借钱给人", "Lend money", "Pinjamkan wang")).tag("loan")
                 Text(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).tag("settlement")
             }
         }
+    }
+}
+
+struct LendingEntryView: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    @Binding var entryType: String
+    var initialDate: Date = Date()
+    var original: Expense? = nil
+    var seed: Expense? = nil
+    var notice: TNGNotice? = nil
+    var showsTypePicker = true
+    var onSaved: (() -> Void)? = nil
+    @State private var borrower = ""
+    @State private var amount = ""
+    @State private var date = Date()
+    @State private var accountID: String?
+    @State private var distinct = false
+    @State private var initialized = false
+    @State private var error: String?
+    private var workKey: String { notice.map { "notice-" + $0.id } ?? original.map { "loan-" + $0.id } ?? "new-loan" }
+    var body: some View {
+        Form {
+            if showsTypePicker { ManualEntryTypeSection(selection: $entryType) }
+            Section {
+                TextField(tr("借款人", "Borrower", "Peminjam"), text: $borrower)
+                    .accessibilityIdentifier("loan.borrower")
+                if !model.friends.isEmpty {
+                    Menu(tr("选择已有朋友", "Choose existing friend", "Pilih rakan sedia ada")) {
+                        ForEach(model.friends) { friend in Button(friend.name) { borrower = friend.name } }
+                    }
+                }
+                TextField("MYR", text: $amount).keyboardType(.decimalPad).accessibilityIdentifier("loan.amount")
+                DatePicker(tr("日期", "Date", "Tarikh"), selection: $date, in: ...Date())
+                BankAccountPicker(selection: $accountID)
+            } footer: {
+                Text(tr("扣除付款账户余额，记为对方欠款，不计消费。", "Deducts from the payment account and tracks money owed to you, without counting as spending.", "Tolak daripada akaun bayaran dan rekod hutang kepada anda, bukan belanja."))
+            }
+            if notice?.possibleDuplicate == true {
+                Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
+            }
+        }.yuejiListSurface().navigationTitle(tr("借钱给人", "Lend money", "Pinjamkan wang"))
+            .navigationBarTitleDisplayMode(.inline)
+            .disabled(model.isWorking(workKey))
+            .onAppear {
+                guard !initialized else { return }; initialized = true
+                borrower = original?.shares.first?.name ?? seed?.shares.first?.name ?? notice?.party ?? ""
+                if let cents = original?.cents ?? seed?.cents ?? notice?.cents { amount = Currency.input(cents, "MYR") }
+                date = original?.date ?? seed?.date ?? notice?.date ?? initialDate
+                accountID = original?.bankAccountID ?? seed?.bankAccountID ?? notice?.bankAccountID
+            }
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(tr("保存", "Save", "Simpan")) { save() }
+                        .disabled(borrower.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (try? toCents(amount)) == nil || (notice?.possibleDuplicate == true && !distinct) || model.isWorking(workKey))
+                }
+            }
+            .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
+    }
+    private func save() {
+        let borrower = borrower, amount = amount, date = date, accountID = accountID, distinct = distinct
+        let original = original, notice = notice
+        model.perform(key: workKey, action: { ledger in
+            if let notice, ledger.tngNotices.first(where: { $0.id == notice.id }) != notice {
+                throw LedgerError.invalid("Record changed. Reopen it.")
+            }
+            return try ledger.recordLoan(borrower: borrower, cents: toCents(amount), date: date, accountID: accountID,
+                                         replacing: original, noticeID: notice?.id, distinctConfirmed: distinct)
+        }, completion: { id in model.highlightSavedExpense(id); onSaved?(); dismiss() }, failure: { error = $0.localizedDescription })
     }
 }
 

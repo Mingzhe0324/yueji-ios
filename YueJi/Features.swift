@@ -1077,12 +1077,14 @@ extension Ledger {
         for e in expenses where month == nil || monthKey(e.date) == monthKey(month!) {
             for s in e.shares where friendKey(s.name) == key {
                 let net = s.cents - s.refunded
-                result.net += net; result.refunds += s.refunded
+                if !e.isLoan { result.net += net; result.refunds += s.refunded }
                 if e.paidByFriend == nil {
                     let balance = outstanding(expense: e, share: s)
                     result.owed += max(0, balance); result.payable += max(0, -balance)
                 }
-                for (category, amount) in e.categoryDistribution(total: net, friend: s.name) { result.categories[category, default: 0] += amount }
+                if !e.isLoan {
+                    for (category, amount) in e.categoryDistribution(total: net, friend: s.name) { result.categories[category, default: 0] += amount }
+                }
             }
         }
         for item in friendDebtItems where item.shareID == nil && friendKey(item.friend) == key && (month == nil || monthKey(item.expense.date) == monthKey(month!)) {
