@@ -4,6 +4,175 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testSingleOwnTransferNotificationUpdatesBothAccountsForBankAndTNG() throws {
+        for provider in ["TNG", "CIMB"] {
+            for incoming in [true, false] {
+                let (base, from, to, date) = ownTransferFixture()
+                var ledger = base
+                let notice = ownTransferNotice(incoming: incoming, accountID: incoming ? to.id : from.id, date: date, provider: provider)
+                ledger.tngNotices = [notice]
+                try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id,
+                                                     cents: 1000, date: date, note: "Top-up")
+                XCTAssertEqual(ledger.bankBalance(from), 9000)
+                XCTAssertEqual(ledger.bankBalance(to), 3000)
+                XCTAssertEqual(ledger.bankTransfers.count, 1)
+                XCTAssertEqual(ledger.bankTransfers[0].noticeIDs, [notice.id])
+                XCTAssertEqual(ledger.bankTransfers[0].note, "Top-up")
+                XCTAssertTrue(ledger.incomes.isEmpty)
+                XCTAssertTrue(ledger.expenses.isEmpty)
+                XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+                XCTAssertEqual(ledger.tngNotices[0].resolution, "ownTransfer")
+                let restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+                XCTAssertEqual(restored.bankBalance(from) + restored.bankBalance(to), 12000)
+                XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id,
+                    toAccountID: to.id, cents: 1000, date: date))
+                XCTAssertEqual(ledger.bankTransfers.count, 1)
+            }
+        }
+    }
+
+    func testLaterOppositeNotificationLinksOriginalTransferInEitherArrivalOrder() throws {
+        for incomingFirst in [true, false] {
+            let (base, from, to, date) = ownTransferFixture()
+            var ledger = base
+            let first = ownTransferNotice(incoming: incomingFirst, accountID: incomingFirst ? to.id : from.id, date: date)
+            let later = ownTransferNotice(incoming: !incomingFirst, accountID: incomingFirst ? from.id : to.id, date: date.addingTimeInterval(20))
+            ledger.tngNotices = [first]
+            try ledger.resolveOwnAccountTransfer(noticeIDs: [first.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date)
+            let transferID = try XCTUnwrap(ledger.bankTransfers.first?.id)
+            ledger.tngNotices.append(later)
+            try ledger.resolveOwnAccountTransfer(noticeIDs: [later.id], fromAccountID: from.id, toAccountID: to.id,
+                                                 cents: 1000, date: date, existingTransferID: transferID)
+            XCTAssertEqual(ledger.bankTransfers.count, 1)
+            XCTAssertEqual(ledger.bankTransfers[0].noticeIDs?.count, 2)
+            XCTAssertEqual(ledger.bankBalance(from), 9000)
+            XCTAssertEqual(ledger.bankBalance(to), 3000)
+            ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+            try ledger.reopenResolvedNotice(id: later.id)
+            XCTAssertTrue(ledger.bankTransfers.isEmpty)
+            XCTAssertEqual(ledger.bankBalance(from), 10000)
+            XCTAssertEqual(ledger.bankBalance(to), 2000)
+            XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.status == "pending" && $0.resolution == nil && $0.balanceHeldForReview == true })
+            // Reconfirming after undo restores exactly one pair of balance movements.
+            try ledger.resolveOwnAccountTransfer(noticeIDs: [first.id, later.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date)
+            XCTAssertEqual(ledger.bankBalance(from), 9000)
+            XCTAssertEqual(ledger.bankBalance(to), 3000)
+        }
+    }
+
+    func testRecordedPaymentCanBecomeOwnTransferWithoutDoubleDebit() throws {
+        let (base, from, to, date) = ownTransferFixture()
+        var ledger = base
+        _ = try ledger.receiveTNG(body: "You have paid RM10.00 for WALLET.", title: "Payment", date: date, eventID: nil, sourceApp: "TNG")
+        let id = try XCTUnwrap(ledger.tngNotices.first?.id)
+        try ledger.assignNoticeAccount(id: id, accountID: from.id)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.bankBalance(from), 9000)
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date)
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertNil(ledger.tngNotices[0].expenseID)
+        XCTAssertEqual(ledger.bankBalance(from), 9000)
+        XCTAssertEqual(ledger.bankBalance(to), 3000)
+        let transfer = try XCTUnwrap(ledger.bankTransfers.first)
+        try ledger.deleteBankTransfer(transfer)
+        XCTAssertEqual(ledger.bankBalance(from), 10000)
+        XCTAssertEqual(ledger.bankBalance(to), 2000)
+    }
+
+    func testManualTransferCanAcquireReceiptAndKeepsLinkedAmountImmutable() throws {
+        let (base, from, to, date) = ownTransferFixture()
+        var ledger = base
+        let transfer = BankTransfer(fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date)
+        try ledger.saveBankTransfer(transfer, replacing: nil)
+        let notice = ownTransferNotice(incoming: true, accountID: to.id, date: date)
+        ledger.tngNotices = [notice]
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id,
+                                             cents: 1000, date: date, existingTransferID: transfer.id)
+        XCTAssertEqual(ledger.bankBalance(from), 9000)
+        XCTAssertEqual(ledger.bankBalance(to), 3000)
+        let linked = try XCTUnwrap(ledger.bankTransfers.first)
+        var changed = linked; changed.cents = 2000
+        XCTAssertThrowsError(try ledger.saveBankTransfer(changed, replacing: linked))
+        changed = linked; changed.date = date.addingTimeInterval(-1)
+        XCTAssertThrowsError(try ledger.saveBankTransfer(changed, replacing: linked))
+        XCTAssertThrowsError(try ledger.assignNoticeAccount(id: notice.id, accountID: from.id))
+        let third = BankAccount(name: "Other bank", openingCents: 5000, openingDate: from.openingDate)
+        ledger.bankAccounts.append(third)
+        changed = linked; changed.toAccountID = third.id
+        try ledger.saveBankTransfer(changed, replacing: linked)
+        XCTAssertEqual(ledger.tngNotices[0].bankAccountID, third.id)
+        XCTAssertEqual(ledger.bankBalance(to), 2000)
+        XCTAssertEqual(ledger.bankBalance(third), 6000)
+    }
+
+    func testOwnTransferRejectsWrongAccountsAmountsSameSideAndUsedReferencesAtomically() throws {
+        let (base, from, to, date) = ownTransferFixture()
+        var ledger = base
+        var notice = ownTransferNotice(incoming: true, accountID: to.id, date: date)
+        notice.bankReference = "REF-OWN-123"
+        ledger.tngNotices = [notice]
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: to.id, toAccountID: from.id, cents: 1000, date: date))
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id, cents: 999, date: date))
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: to.id, toAccountID: to.id, cents: 1000, date: date))
+        var sameSide = notice; sameSide.id = UUID().uuidString; sameSide.bankReference = nil
+        ledger.tngNotices.append(sameSide)
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id, sameSide.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date))
+        XCTAssertEqual(ledger.tngNotices, [notice, sameSide])
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        ledger.tngNotices.removeLast()
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date)
+        var replay = notice; replay.id = UUID().uuidString
+        ledger.tngNotices.append(replay)
+        let before = ledger.tngNotices
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [replay.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date))
+        XCTAssertThrowsError(try ledger.requireUnusedPaymentReference(replay))
+        XCTAssertEqual(ledger.tngNotices, before)
+        XCTAssertEqual(ledger.bankTransfers.count, 1)
+    }
+
+    func testOwnTransferRepairsLegacyOneSidedClassificationAndRespectsOpeningCutoff() throws {
+        let (base, from, originalTo, date) = ownTransferFixture()
+        var ledger = base
+        var to = originalTo; to.openingDate = date.addingTimeInterval(1)
+        ledger.bankAccounts = [from, to]
+        var notice = ownTransferNotice(incoming: true, accountID: to.id, date: date)
+        notice.status = "ownTransfer"
+        ledger.tngNotices = [notice]
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date)
+        XCTAssertEqual(ledger.bankBalance(from), 9000)
+        XCTAssertEqual(ledger.bankBalance(to), 2000) // Already included in the opening balance.
+    }
+
+    func testUnknownTransferRequiresExplicitDirectionAndDuplicateReview() throws {
+        let (base, from, to, date) = ownTransferFixture()
+        var ledger = base
+        var notice = ownTransferNotice(incoming: true, accountID: to.id, date: date)
+        notice.kind = "unknown"; notice.bankAccountID = nil; notice.possibleDuplicate = true
+        ledger.tngNotices = [notice]
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date, distinctConfirmed: true))
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date, unknownIsIncoming: true))
+        XCTAssertEqual(ledger.tngNotices, [notice])
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id], fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date,
+                                             distinctConfirmed: true, unknownIsIncoming: true)
+        XCTAssertEqual(ledger.tngNotices[0].kind, "incoming")
+        XCTAssertEqual(ledger.bankBalance(from), 9000)
+        XCTAssertEqual(ledger.bankBalance(to), 3000)
+    }
+
+    private func ownTransferFixture() -> (Ledger, BankAccount, BankAccount, Date) {
+        let date = Date().addingTimeInterval(-60)
+        let from = BankAccount(name: "Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        let to = BankAccount(name: "TNG", openingCents: 2000, openingDate: from.openingDate)
+        var ledger = Ledger(); ledger.bankAccounts = [from, to]
+        return (ledger, from, to, date)
+    }
+
+    private func ownTransferNotice(incoming: Bool, accountID: String, date: Date, provider: String = "TNG") -> TNGNotice {
+        TNGNotice(bankAccountID: accountID, body: incoming ? "Received RM10.00" : "Transferred RM10.00", title: "Transfer", date: date,
+                  usesReceivedDate: false, kind: incoming ? "incoming" : "transfer", status: incoming ? "pending" : "transfer",
+                  cents: 1000, party: "Me", sourceBank: provider)
+    }
+
     func testRepairMissingAccountsUsesRulesWithoutDoubleDeduction() throws {
         let date = Date().addingTimeInterval(-60)
         let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")

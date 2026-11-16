@@ -1346,6 +1346,10 @@ extension Ledger {
         tngNotices[i].relatedRecordID = expenseID
     }
     mutating func reopenResolvedNotice(id: String) throws {
+        if let transfer = bankTransfers.first(where: { ($0.noticeIDs ?? []).contains(id) }) {
+            try deleteBankTransfer(transfer)
+            return
+        }
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), let resolution = tngNotices[i].resolution else { throw LedgerError.invalid("通知已改变。") }
         var copy = self
         if resolution == "refund", let entryID = copy.tngNotices[i].relatedRecordID, let refundID = copy.tngNotices[i].relatedRefundID {

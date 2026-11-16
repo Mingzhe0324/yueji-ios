@@ -496,11 +496,49 @@ private struct BankTransfersView: View {
     }
 }
 
-private struct BankTransferEditor: View {
+enum OwnTransferRoute: Identifiable {
+    case notice(TNGNotice), existing(BankTransfer)
+    var id: String {
+        switch self { case .notice(let notice): return "notice-" + notice.id; case .existing(let transfer): return "transfer-" + transfer.id }
+    }
+}
+
+struct OwnTransferPresentation: ViewModifier {
+    @Binding var route: OwnTransferRoute?
+    func body(content: Content) -> some View {
+        content.sheet(item: $route) { route in
+            switch route {
+            case .notice(let notice): BankTransferEditor(notice: notice)
+            case .existing(let transfer): BankTransferEditor(original: transfer)
+            }
+        }
+    }
+}
+
+struct NoticeOwnTransferSection: View {
+    @EnvironmentObject private var model: LedgerModel
+    let notice: TNGNotice
+    var onOpen: (OwnTransferRoute) -> Void
+    private var transfer: BankTransfer? { model.ledger.bankTransfers.first { ($0.noticeIDs ?? []).contains(notice.id) } }
+    var body: some View {
+        if transfer != nil || notice.status == "ownTransfer" || notice.resolution == "ownTransfer" ||
+            (notice.status == "recorded" && notice.kind != "incoming" && notice.settlementID == nil && notice.resolution == nil) {
+            Section {
+                Button(transfer == nil ? tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai") : tr("查看两边账户", "View both accounts", "Lihat kedua-dua akaun")) {
+                    if let transfer { onOpen(.existing(transfer)) }
+                    else { onOpen(.notice(notice)) }
+                }
+            }
+        }
+    }
+}
+
+struct BankTransferEditor: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     var original: BankTransfer? = nil
     var initialAccountID: String? = nil
+    var notice: TNGNotice? = nil
     @State private var fromID = ""
     @State private var toID = ""
     @State private var amount = ""
@@ -510,6 +548,35 @@ private struct BankTransferEditor: View {
     @State private var initialized = false
     @State private var deleting = false
     @State private var error: String?
+    @State private var pairedID = ""
+    @State private var existingID = ""
+    @State private var distinct = false
+    @State private var unknownIsIncoming: Bool? = nil
+    private var noticeIncoming: Bool { notice?.kind == "incoming" || (notice?.kind == "unknown" && unknownIsIncoming == true) }
+    private var duplicateNeedsReview: Bool { notice?.possibleDuplicate == true || model.notice(id: pairedID)?.possibleDuplicate == true }
+    private var pairedNotices: [TNGNotice] {
+        guard let notice else { return [] }
+        return model.ledger.tngNotices.filter { other in
+            other.id != notice.id && other.cents == notice.cents && other.settlementID == nil &&
+            (other.resolution == nil || other.resolution == "ownTransfer") &&
+            other.kind != "unknown" && ((other.kind == "incoming") != noticeIncoming) &&
+            (["pending", "transfer", "recorded", "ownTransfer"].contains(other.status) || (other.status == "ignored" && other.resolution == "ownTransfer")) &&
+            !model.ledger.bankTransfers.contains(where: { ($0.noticeIDs ?? []).contains(other.id) })
+        }
+    }
+    private var existingTransfers: [BankTransfer] {
+        guard let notice else { return [] }
+        return model.ledger.bankTransfers.filter { transfer in
+            transfer.cents == notice.cents && (transfer.noticeIDs ?? []).count < 2 &&
+            !(transfer.noticeIDs ?? []).contains(notice.id) &&
+            !(transfer.noticeIDs ?? []).contains(where: { id in model.notice(id: id).map { ($0.kind == "incoming") == noticeIncoming } ?? false }) &&
+            (notice.bankAccountID == nil || notice.bankAccountID == (noticeIncoming ? transfer.toAccountID : transfer.fromAccountID))
+        }.sorted { $0.date > $1.date }
+    }
+    private func accountName(_ id: String) -> String { model.ledger.bankAccounts.first { $0.id == id }?.name ?? "—" }
+    private func transferTitle(_ transfer: BankTransfer) -> String {
+        accountName(transfer.fromAccountID) + " → " + accountName(transfer.toAccountID) + " · " + dateLabel(transfer.date)
+    }
     private var key: String { "bank-transfer-" + (original?.id ?? draftID) }
     private var saving: Bool { model.isWorking(key) }
     private var beforeOpening: Bool {
@@ -518,6 +585,25 @@ private struct BankTransferEditor: View {
     var body: some View {
         NavigationStack {
             Form {
+                if notice?.kind == "unknown" {
+                    Picker(tr("这边通知", "This notification", "Notifikasi ini"), selection: $unknownIsIncoming) {
+                        Text(tr("请选择", "Choose", "Pilih")).tag(nil as Bool?)
+                        Text(tr("转出", "Money out", "Wang keluar")).tag(false as Bool?)
+                        Text(tr("转入", "Money in", "Wang masuk")).tag(true as Bool?)
+                    }
+                }
+                if notice != nil, !existingTransfers.isEmpty {
+                    Section {
+                        Picker(tr("这笔转账", "This transfer", "Pindahan ini"), selection: $existingID) {
+                            Text(tr("新增转账", "New transfer", "Pindahan baharu")).tag("")
+                            ForEach(existingTransfers) { transfer in
+                                Text(transferTitle(transfer)).tag(transfer.id)
+                            }
+                        }
+                    } footer: {
+                        Text(tr("已记过请选择原转账，避免重复加减余额。", "Select the original transfer if already recorded to avoid duplicate balance changes.", "Pilih pindahan asal jika sudah direkod untuk mengelakkan perubahan baki berganda."))
+                    }
+                }
                 Section {
                     Picker(tr("转出账户", "From account", "Akaun asal"), selection: $fromID) {
                         Text(tr("请选择", "Choose", "Pilih")).tag("")
@@ -528,10 +614,32 @@ private struct BankTransferEditor: View {
                         ForEach(model.ledger.bankAccounts) { Text($0.name).tag($0.id) }
                     }
                     TextField(tr("转账金额 MYR", "Transfer amount MYR", "Amaun pindahan MYR"), text: $amount).keyboardType(.decimalPad)
+                        .disabled(!(original?.noticeIDs ?? []).isEmpty)
                     DatePicker(tr("转账时间", "Transfer date", "Tarikh pindahan"), selection: $date, in: ...Date())
+                        .disabled(!(original?.noticeIDs ?? []).isEmpty)
                     TextField(tr("备注（可选）", "Note (optional)", "Nota (pilihan)"), text: $note)
+                    if !fromID.isEmpty, !toID.isEmpty, let cents = try? toCents(amount) {
+                        LabeledContent(accountName(fromID), value: "−" + money(cents))
+                        LabeledContent(accountName(toID), value: "+" + money(cents))
+                    }
                 } footer: {
-                    Text(tr("仅记录已完成的转账，不会实际转钱。TNG 充值请选择银行转出、TNG 转入。本金不计收入或消费；如有手续费，请另外记一笔支出并选择转出账户。", "Records completed transfers; does not move real money. For TNG top-ups, select the bank as source and TNG as destination. Principal is neither income nor spending. Record any fee separately as an expense on the source account.", "Merekod pindahan selesai, bukan memindahkan wang sebenar. Untuk tambah nilai TNG, pilih bank sebagai asal dan TNG sebagai penerima. Prinsipal bukan pendapatan atau belanja. Rekod fi secara berasingan sebagai belanja akaun asal."))
+                    Text(tr("同步记下两边余额变化，不计收入或消费。", "Records both balance changes, not income or spending.", "Merekod perubahan kedua-dua baki, bukan pendapatan atau belanja."))
+                }.disabled(!existingID.isEmpty)
+                if model.ledger.bankAccounts.count < 2 {
+                    NavigationLink { BankAccountsView() } label: {
+                        Text(tr("添加账户", "Add account", "Tambah akaun"))
+                    }
+                }
+                if notice != nil, existingID.isEmpty, !pairedNotices.isEmpty {
+                    Section {
+                        Picker(tr("另一边通知（可选）", "Other notification (optional)", "Notifikasi sebelah lagi (pilihan)"), selection: $pairedID) {
+                            Text(tr("只有这边通知", "Only this notification", "Notifikasi ini sahaja")).tag("")
+                            ForEach(pairedNotices) { other in Text(sourceLabel(other.provider) + " · " + dateLabel(other.date, time: true)).tag(other.id) }
+                        }
+                    }
+                }
+                if duplicateNeedsReview {
+                    Toggle(tr("已核对，这是同一笔账户互转的通知", "Checked: these notices belong to this account transfer", "Disemak: notifikasi ini untuk pindahan akaun ini"), isOn: $distinct)
                 }
                 if beforeOpening {
                     Text(tr("转账早于部分账户的期初时间：该账户已包含这笔资金，不会再次增减。请核对时间和期初余额。", "This transfer predates an account's opening balance and will not change that account again. Check the date and opening balances.", "Pindahan mendahului baki awal sesetengah akaun dan tidak mengubahnya lagi. Semak tarikh dan baki awal."))
@@ -546,15 +654,20 @@ private struct BankTransferEditor: View {
                 ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() }.disabled(saving) }
                 ToolbarItem(placement: .confirmationAction) {
                     Button { save() } label: { EditorSaveLabel(saving: saving) }
-                        .disabled(saving || fromID.isEmpty || toID.isEmpty || fromID == toID || amount.isEmpty)
+                        .disabled(saving || fromID.isEmpty || toID.isEmpty || fromID == toID || amount.isEmpty || (duplicateNeedsReview && !distinct) || (notice?.kind == "unknown" && unknownIsIncoming == nil))
                 }
             }
             .interactiveDismissDisabled(saving)
-            .onAppear {
-                guard !initialized else { return }; initialized = true
-                fromID = original?.fromAccountID ?? initialAccountID ?? model.ledger.bankAccounts.first?.id ?? ""
-                toID = original?.toAccountID ?? model.ledger.bankAccounts.first(where: { $0.id != fromID })?.id ?? ""
-                if let original { amount = Currency.input(original.cents, "MYR"); date = original.date; note = original.note }
+            .onAppear { initialize() }
+            .onChange(of: unknownIsIncoming) { _, _ in
+                existingID = ""; pairedID = ""
+                fromID = noticeIncoming ? "" : (notice?.bankAccountID ?? "")
+                toID = noticeIncoming ? (notice?.bankAccountID ?? "") : ""
+            }
+            .onChange(of: existingID) { _, value in
+                guard let transfer = existingTransfers.first(where: { $0.id == value }) else { return }
+                fromID = transfer.fromAccountID; toID = transfer.toAccountID
+                amount = Currency.input(transfer.cents, "MYR"); date = transfer.date; pairedID = ""
             }
             .confirmationDialog(tr("删除后将重新计算两边余额。", "Deleting recalculates both balances.", "Memadam mengira semula kedua-dua baki."), isPresented: $deleting) {
                 Button(tr("删除转账", "Delete transfer", "Padam pindahan"), role: .destructive) {
@@ -567,12 +680,44 @@ private struct BankTransferEditor: View {
             } message: { Text(error ?? "") }
         }.ledgerFeedback(modal: true)
     }
+    private func initialize() {
+        guard !initialized else { return }; initialized = true
+        if let original {
+            fromID = original.fromAccountID; toID = original.toAccountID
+            amount = Currency.input(original.cents, "MYR"); date = original.date; note = original.note
+        } else if let notice {
+            fromID = notice.kind == "incoming" || notice.kind == "unknown" ? "" : (notice.bankAccountID ?? "")
+            toID = notice.kind == "incoming" ? (notice.bankAccountID ?? "") : ""
+            amount = notice.cents.map { Currency.input($0, "MYR") } ?? ""
+            date = min(notice.date, Date()); pairedID = notice.relatedRecordID ?? ""
+        } else {
+            fromID = initialAccountID ?? model.ledger.bankAccounts.first?.id ?? ""
+            toID = model.ledger.bankAccounts.first { $0.id != fromID }?.id ?? ""
+        }
+    }
     private func save() {
         do {
             let transfer = BankTransfer(id: original?.id ?? draftID, fromAccountID: fromID, toAccountID: toID,
                                         cents: try Currency.parse(amount, code: "MYR"), date: date,
                                         note: note.trimmingCharacters(in: .whitespacesAndNewlines), noticeIDs: original?.noticeIDs)
             let before = original
+            if let notice {
+                let pair = pairedID.isEmpty ? nil : model.notice(id: pairedID)
+                let existingID = existingID.isEmpty ? nil : existingID
+                let distinct = distinct
+                let direction = unknownIsIncoming
+                model.perform(key: key, action: { ledger in
+                    guard ledger.tngNotices.first(where: { $0.id == notice.id }) == notice,
+                          pair == nil || ledger.tngNotices.first(where: { $0.id == pair?.id }) == pair else {
+                        throw LedgerError.invalid("Record changed. Reopen it.")
+                    }
+                    try ledger.resolveOwnAccountTransfer(noticeIDs: [notice.id] + (pair.map { [$0.id] } ?? []),
+                        fromAccountID: transfer.fromAccountID, toAccountID: transfer.toAccountID,
+                        cents: transfer.cents, date: transfer.date, existingTransferID: existingID, distinctConfirmed: distinct,
+                        note: transfer.note, unknownIsIncoming: direction)
+                }, completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
+                return
+            }
             model.perform(key: key, action: { try $0.saveBankTransfer(transfer, replacing: before) },
                           completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
         } catch { self.error = error.localizedDescription }

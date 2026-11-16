@@ -47,6 +47,78 @@ struct BankTransfer: Codable, Identifiable, Equatable {
 }
 
 extension Ledger {
+    /// A single transfer owns both balance movements. Notifications are evidence,
+    /// never a second credit/debit after they have been linked.
+    mutating func resolveOwnAccountTransfer(noticeIDs: [String], fromAccountID: String, toAccountID: String,
+                                            cents: Int, date: Date, existingTransferID: String? = nil,
+                                            distinctConfirmed: Bool = false, note: String = "",
+                                            unknownIsIncoming: Bool? = nil) throws {
+        guard (1...2).contains(noticeIDs.count), Set(noticeIDs).count == noticeIDs.count,
+              fromAccountID != toAccountID, date <= Date() else { throw LedgerError.invalid("Choose different accounts and a valid amount.") }
+        var copy = self
+        var transfer = BankTransfer(fromAccountID: fromAccountID, toAccountID: toAccountID, cents: cents, date: date, note: note)
+        if let existingTransferID {
+            guard let existing = bankTransfers.first(where: { $0.id == existingTransferID }),
+                  existing.fromAccountID == fromAccountID, existing.toAccountID == toAccountID,
+                  existing.cents == cents, existing.date == date else { throw LedgerError.invalid("Transfer changed; reopen it.") }
+            transfer = existing
+        }
+        let merged = Array(Set((transfer.noticeIDs ?? []) + noticeIDs)).sorted()
+        guard merged.count <= 2 else { throw LedgerError.invalid("Transfer already has both notifications") }
+        var incoming = 0, outgoing = 0
+        for id in merged {
+            guard let n = copy.tngNotices.firstIndex(where: { $0.id == id }),
+                  !bankTransfers.contains(where: { $0.id != existingTransferID && ($0.noticeIDs ?? []).contains(id) }) else {
+                throw LedgerError.invalid("Notification is already linked or missing")
+            }
+            let notice = copy.tngNotices[n]
+            let isIncoming: Bool
+            if notice.kind == "unknown" {
+                guard let direction = unknownIsIncoming ?? notice.bankAccountID.map({ $0 == toAccountID }) else {
+                    throw LedgerError.invalid(tr("请选择通知是转入还是转出。", "Choose whether this notice is incoming or outgoing.", "Pilih sama ada notifikasi ini wang masuk atau keluar."))
+                }
+                isIncoming = direction
+            } else { isIncoming = notice.kind == "incoming" }
+            if isIncoming { incoming += 1 }
+            else { outgoing += 1 }
+            guard incoming <= 1, outgoing <= 1, notice.settlementID == nil,
+                  notice.resolution == nil || notice.resolution == "ownTransfer",
+                  ["pending", "transfer", "recorded", "ownTransfer"].contains(notice.status) || (notice.status == "ignored" && notice.resolution == "ownTransfer"),
+                  notice.cents == nil || notice.cents == cents,
+                  !notice.possibleDuplicate || distinctConfirmed || (transfer.noticeIDs ?? []).contains(id),
+                  notice.bankAccountID == nil || notice.bankAccountID == (isIncoming ? toAccountID : fromAccountID) else {
+                throw LedgerError.invalid(tr("请核对通知方向、金额、账户和重复记录。", "Review notification direction, amount, accounts and duplicates.", "Semak arah, amaun, akaun dan notifikasi pendua."))
+            }
+            if let identity = paymentIdentity(notice), tngNotices.contains(where: { other in
+                !merged.contains(other.id) && paymentIdentity(other) == identity &&
+                (["recorded", "income", "repayment", "reimbursement", "settlement"].contains(other.status) || bankTransfers.contains { ($0.noticeIDs ?? []).contains(other.id) })
+            }) { throw LedgerError.invalid("This bank reference is already recorded") }
+            if let peer = notice.relatedRecordID, notice.resolution == "ownTransfer", !merged.contains(peer) {
+                throw LedgerError.invalid(tr("请同时关联原来配对的另一侧通知。", "Include the previously paired notification too.", "Sertakan notifikasi pasangan terdahulu juga."))
+            }
+            if let expenseID = notice.expenseID {
+                guard let entry = copy.expenses.first(where: { $0.id == expenseID }), entry.shares.isEmpty,
+                      entry.paidByFriend == nil, entry.refunded == 0, entry.reimbursement == nil,
+                      (entry.items ?? []).isEmpty, entry.charges == nil, entry.foreign == nil, !entry.isLoan,
+                      entry.recurringKey == nil, entry.cents == cents, !copy.hasActiveSettlement(expenseID: expenseID),
+                      copy.tngNotices.filter({ $0.expenseID == expenseID }).count == 1 else {
+                    throw LedgerError.invalid(tr("这笔付款已有其他关联，请先处理原账目。", "This payment has other links. Review the original entry first.", "Bayaran mempunyai pautan lain. Semak rekod asal dahulu."))
+                }
+                copy.expenses.removeAll { $0.id == expenseID }
+            }
+            copy.tngNotices[n].expenseID = nil
+            copy.tngNotices[n].bankAccountID = isIncoming ? toAccountID : fromAccountID
+            if notice.kind == "unknown" { copy.tngNotices[n].kind = isIncoming ? "incoming" : "transfer" }
+            copy.tngNotices[n].cents = cents
+            if copy.tngNotices[n].party == nil { copy.tngNotices[n].party = "" }
+            copy.tngNotices[n].status = "ignored"; copy.tngNotices[n].resolution = "ownTransfer"
+            copy.tngNotices[n].relatedRecordID = merged.first { $0 != id }
+        }
+        transfer.noticeIDs = merged
+        try copy.saveBankTransfer(transfer, replacing: existingTransferID == nil ? nil : bankTransfers.first { $0.id == existingTransferID })
+        self = try copy.validated()
+    }
+
     mutating func saveBankTransfer(_ transfer: BankTransfer, replacing original: BankTransfer?) throws {
         var copy = self
         if let original {
@@ -54,6 +126,10 @@ extension Ledger {
                   let index = copy.bankTransfers.firstIndex(where: { $0.id == original.id }),
                   copy.bankTransfers[index] == original else {
                 throw LedgerError.invalid(tr("转账已变化，请重新打开。", "Transfer changed; reopen it.", "Pindahan berubah; buka semula."))
+            }
+            guard original.noticeIDs == transfer.noticeIDs || Set(original.noticeIDs ?? []).isSubset(of: Set(transfer.noticeIDs ?? [])),
+                  (original.noticeIDs ?? []).isEmpty || (original.cents == transfer.cents && original.date == transfer.date) else {
+                throw LedgerError.invalid(tr("请先撤销通知关联，再修改金额或日期。", "Undo notification links before changing amount or date.", "Batalkan pautan notifikasi sebelum menukar amaun atau tarikh."))
             }
             copy.bankTransfers[index] = transfer
         } else {
@@ -63,6 +139,9 @@ extension Ledger {
             copy.bankTransfers.append(transfer)
         }
         try copy.validateBankAccounts()
+        for n in copy.tngNotices.indices where (transfer.noticeIDs ?? []).contains(copy.tngNotices[n].id) {
+            copy.tngNotices[n].bankAccountID = copy.tngNotices[n].kind == "incoming" ? transfer.toAccountID : transfer.fromAccountID
+        }
         self = copy
     }
 
@@ -70,7 +149,13 @@ extension Ledger {
         guard let index = bankTransfers.firstIndex(where: { $0.id == original.id }), bankTransfers[index] == original else {
             throw LedgerError.invalid(tr("转账已变化，请重新打开。", "Transfer changed; reopen it.", "Pindahan berubah; buka semula."))
         }
-        bankTransfers.remove(at: index)
+        var copy = self
+        copy.bankTransfers.remove(at: index)
+        for n in copy.tngNotices.indices where (original.noticeIDs ?? []).contains(copy.tngNotices[n].id) {
+            copy.tngNotices[n].status = "pending"; copy.tngNotices[n].resolution = nil
+            copy.tngNotices[n].relatedRecordID = nil; copy.tngNotices[n].balanceHeldForReview = true
+        }
+        self = try copy.validated()
     }
     mutating func assignApplePayAccount(id: String, accountID: String?) throws {
         guard let index = expenses.firstIndex(where: { $0.id == id && $0.source == "Apple Pay" }),
@@ -158,6 +243,9 @@ extension Ledger {
     }
 
     mutating func assignNoticeAccount(id: String, accountID: String?) throws {
+        guard !bankTransfers.contains(where: { ($0.noticeIDs ?? []).contains(id) }) else {
+            throw LedgerError.invalid(tr("请在转账详情修改两边账户。", "Change both accounts in the transfer details.", "Ubah kedua-dua akaun dalam butiran pindahan."))
+        }
         guard let index = tngNotices.firstIndex(where: { $0.id == id }),
               accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {
             throw LedgerError.invalid("Account or notification no longer exists")
@@ -202,9 +290,11 @@ extension Ledger {
         guard bankTransfers.count <= 10000, Set(bankTransfers.map(\.id)).count == bankTransfers.count else {
             throw LedgerError.invalid("Invalid bank transfers")
         }
+        var linkedNotices = Set<String>()
         for transfer in bankTransfers {
             if let noticeIDs = transfer.noticeIDs {
-                guard noticeIDs.count == 2, Set(noticeIDs).count == 2,
+                guard (1...2).contains(noticeIDs.count), Set(noticeIDs).count == noticeIDs.count,
+                      noticeIDs.allSatisfy({ linkedNotices.insert($0).inserted }),
                       noticeIDs.allSatisfy({ id in tngNotices.contains(where: { $0.id == id }) }) else {
                     throw LedgerError.invalid("Invalid transfer notification links")
                 }

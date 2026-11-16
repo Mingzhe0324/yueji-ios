@@ -2610,6 +2610,7 @@ struct TNGNoticeView: View {
     @State private var editing: TransactionEditorRoute?
     @State private var itemsEditorPresented = false
     @State private var lendingNotice: TNGNotice?
+    @State private var ownTransferRoute: OwnTransferRoute?
     @State private var error: String?
     private var notice: TNGNotice? { model.notice(id: id) }
     var body: some View {
@@ -2617,6 +2618,7 @@ struct TNGNoticeView: View {
         Form {
             if let notice {
                 SettlementNoticeSection(notice: notice)
+                NoticeOwnTransferSection(notice: notice) { ownTransferRoute = $0 }
                 NoticeAccountSection(notice: notice)
                 if let expenseID = notice.expenseID, let entry = model.expense(id: expenseID), !entry.isLoan {
                     SavedTransactionItemsSection(entry: entry, presentationAllowed: editing == nil && !itemsEditorPresented) { selectedID in
@@ -2705,6 +2707,7 @@ struct TNGNoticeView: View {
         }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(sourceLabel(notice?.provider ?? "TNG"))
+            .modifier(OwnTransferPresentation(route: $ownTransferRoute))
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .sheet(item: $lendingNotice) { notice in
                 NavigationStack { LendingEntryView(entryType: .constant("loan"), notice: notice, showsTypePicker: false) }
@@ -4172,6 +4175,7 @@ struct ReceiptScanView: View {
 }
 
 struct TNGIncomingView: View {
+    @State private var ownTransferRoute: OwnTransferRoute?
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let id: String
@@ -4212,6 +4216,7 @@ struct TNGIncomingView: View {
         Form {
             if let n = notice {
                 SettlementNoticeSection(notice: n)
+                NoticeOwnTransferSection(notice: n) { ownTransferRoute = $0 }
                 if n.resolution != nil { NoticeResolutionSection(notice: n) }
                 Section {
                     TransactionAmount(cents: n.cents ?? 0, direction: n.accountDirection).font(.title.bold())
@@ -4238,7 +4243,7 @@ struct TNGIncomingView: View {
                     }
                 }
                 if n.status == "pending" { reviewSection }
-                else if n.settlementID == nil {
+                else if n.settlementID == nil && n.resolution == nil {
                     Section {
                         Text(dateLabel(n.date, time: true))
                         if let rounding = n.repaymentRoundingCents {
@@ -4254,6 +4259,7 @@ struct TNGIncomingView: View {
         }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(tr("待确认收款", "Incoming money", "Wang diterima")).navigationBarTitleDisplayMode(.inline)
+            .modifier(OwnTransferPresentation(route: $ownTransferRoute))
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .modifier(IncomeBudgetPresentation(request: $allocationRequest, removing: $removingAllocation))
             .onChange(of: reimbursementExpenseIDs) { _, _ in reimbursementRounding = 0 }
@@ -4368,12 +4374,15 @@ struct TNGIncomingView: View {
                 Text(tr("别人给你的生活费记为生活费收入；自己账户转来的钱请选择“自己账户转入”。", "Living allowance from someone else is recorded as allowance income. For money from your own account, choose own-account transfer.", "Wang sara hidup daripada orang lain direkod sebagai pendapatan sara hidup. Untuk wang daripada akaun sendiri, pilih pindahan akaun sendiri."))
                     .font(.caption).foregroundStyle(.secondary)
             }
-            DatePicker(tr("实际收到日期", "Date received", "Tarikh diterima"), selection: $date, in: ...Date())
-            if notice?.possibleDuplicate == true {
+            if purpose != "ownTransfer" {
+                DatePicker(tr("实际收到日期", "Date received", "Tarikh diterima"), selection: $date, in: ...Date())
+            }
+            if notice?.possibleDuplicate == true && purpose != "ownTransfer" {
                 Toggle(tr("已核对：这是另一笔真实收款", "Checked: this is a separate receipt", "Disemak: ini penerimaan berasingan"), isOn: $distinct)
             }
             Button(tr("确认用途", "Confirm purpose", "Sahkan tujuan")) {
-                if purpose == "repayment" {
+                if purpose == "ownTransfer", let notice { ownTransferRoute = .notice(notice) }
+                else if purpose == "repayment" {
                     do {
                         previewRounding = acceptRounding ? roundingCandidate : 0
                         repaymentPreview = try model.ledger.previewIncomingRepayment(friend: friend, cents: (notice?.cents ?? 0) - previewRounding, date: date, selected: selectedDebts)
@@ -4386,7 +4395,7 @@ struct TNGIncomingView: View {
                     } catch { self.error = error.localizedDescription }
                 } else { confirm = true }
             }
-                .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: notice?.cents ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedBalance < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && purpose != "ignored"))
+                .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: notice?.cents ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedBalance < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && !["ignored", "ownTransfer"].contains(purpose)))
         }
     }
     private func save() {
@@ -4908,6 +4917,7 @@ struct NoticeExpenseEditor: View {
 }
 
 struct FinancialNoticeReviewView: View {
+    @State private var transferNotice: TNGNotice?
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
@@ -4938,10 +4948,6 @@ struct FinancialNoticeReviewView: View {
             return entry.cents == cents
         }.sorted { $0.date > $1.date }
     }
-    private var transferCandidates: [TNGNotice] {
-        let cents = (try? toCents(amount)) ?? 0
-        return model.ledger.tngNotices.filter { $0.id != id && $0.cents == cents && $0.expenseID == nil && ["pending", "transfer"].contains($0.status) }.sorted { $0.date > $1.date }
-    }
     var body: some View {
         let _ = uiLocale.identifier
         Form {
@@ -4965,7 +4971,7 @@ struct FinancialNoticeReviewView: View {
                     if purpose == "expense" {
                         Button(tr("编辑完整账目", "Edit full entry", "Edit rekod penuh")) { editingNotice = notice }
                             .disabled(notice.possibleDuplicate && !distinct)
-                    } else {
+                    } else if purpose != "ownTransfer" {
                         TextField(purpose == "loan" ? tr("借款人", "Borrower", "Peminjam") : tr("商户 / 对方 / 用途", "Merchant / recipient / purpose", "Peniaga / pihak lain / tujuan"), text: $party)
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date, in: ...Date())
@@ -4995,15 +5001,9 @@ struct FinancialNoticeReviewView: View {
                     }
                 }
                 if purpose == "ownTransfer" {
-                    Section(tr("配对另一侧通知（可选）", "Pair the other notification (optional)", "Padankan notifikasi sebelah lagi (pilihan)")) {
-                        Picker(tr("转入 / 转出通知", "Incoming / outgoing notice", "Notifikasi masuk / keluar"), selection: $relatedID) {
-                            Text(tr("没有另一侧通知", "No matching notification", "Tiada notifikasi pasangan")).tag("")
-                            ForEach(transferCandidates) { other in Text(sourceLabel(other.provider) + " · " + (other.party ?? "") + " · " + dateLabel(other.date, time: true)).tag(other.id) }
-                        }
-                        Text(tr("确认后，两侧通知均不计入消费或收入。", "Once confirmed, neither notification counts as spending or income.", "Selepas disahkan, kedua-dua notifikasi tidak dikira sebagai belanja atau pendapatan.")).font(.caption)
-                    }
+                    Text(tr("下一步选择转出和转入账户，只有一边通知也可以。", "Next, choose both accounts. One notification is enough.", "Seterusnya pilih kedua-dua akaun. Satu notifikasi memadai.")).font(.caption).foregroundStyle(.secondary)
                 }
-                Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { if purpose == "expense" { editingNotice = notice } else if purpose == "reimbursement" {
+                Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { if purpose == "ownTransfer" { transferNotice = notice } else if purpose == "expense" { editingNotice = notice } else if purpose == "reimbursement" {
                     do {
                         reimbursementPreview = try model.ledger.previewReimbursement(cents: toCents(amount), date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)
                         confirm = true
@@ -5015,6 +5015,9 @@ struct FinancialNoticeReviewView: View {
         }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
             .overlay { if model.isWorking("notice-" + id) { ProgressView().accessibilityLabel(tr("正在保存", "Saving", "Menyimpan")) } }
             .navigationTitle(tr("确认通知", "Review notification", "Semak notifikasi"))
+            .sheet(item: $transferNotice, onDismiss: {
+                if notice?.resolution == "ownTransfer" { dismiss() }
+            }) { BankTransferEditor(notice: $0) }
             .sheet(item: $editingNotice) { notice in
                 NoticeExpenseEditor(notice: notice) { dismiss() }
                     .environmentObject(model)

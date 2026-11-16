@@ -315,7 +315,7 @@ extension Ledger {
     func requireUnusedPaymentReference(_ notice: TNGNotice) throws {
         guard let identity = paymentIdentity(notice) else { return }
         guard !tngNotices.contains(where: {
-            $0.id != notice.id && ["recorded", "repayment", "reimbursement", "income", "ownTransfer", "settlement"].contains($0.status)
+            $0.id != notice.id && (["recorded", "repayment", "reimbursement", "income", "ownTransfer", "settlement"].contains($0.status) || $0.resolution == "ownTransfer")
             && paymentIdentity($0) == identity
         }) else { throw settlementError("该银行交易参考编号已入账或用于还款、收入、转账或其他结算。请先撤销原确认。", "This bank reference is already recorded or used for a repayment, income, transfer or settlement. Undo the original confirmation first.", "Rujukan bank ini telah direkod atau digunakan untuk bayaran hutang, pendapatan, pindahan atau penyelesaian. Batalkan pengesahan asal dahulu.") }
     }
