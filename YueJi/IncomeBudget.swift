@@ -127,6 +127,36 @@ extension Ledger {
         return source + " · " + tr("账户尾号条件与通知不匹配。", "The account suffix rule does not match the notice.", "Peraturan digit akhir akaun tidak sepadan dengan notifikasi.")
     }
 
+    /// Repair missing links using explicit, unique rules only. Never reassign an
+    /// existing account or deduct a second transaction for the same notice.
+    @discardableResult
+    mutating func reconcileAutomaticAccounts() throws -> Int {
+        var copy = self
+        var count = 0
+        for notice in tngNotices where notice.bankAccountID == nil && notice.status != "ignored" && !notice.possibleDuplicate && notice.resolution == nil && notice.settlementID == nil {
+            guard let accountID = automaticBankAccount(source: notice.provider, suffix: notice.accountSuffix),
+                  let account = bankAccounts.first(where: { $0.id == accountID }), notice.date >= account.openingDate else { continue }
+            if let expenseID = notice.expenseID {
+                guard let entry = expenses.first(where: { $0.id == expenseID }), entry.bankAccountID == nil,
+                      entry.paidByFriend == nil, entry.date >= account.openingDate else { continue }
+            }
+            try copy.assignNoticeAccount(id: notice.id, accountID: accountID)
+            count += 1
+        }
+        let linked = Set(tngNotices.compactMap(\.expenseID))
+        for index in copy.expenses.indices {
+            let entry = copy.expenses[index]
+            guard entry.bankAccountID == nil, entry.paidByFriend == nil, !linked.contains(entry.id),
+                  !["手动", "固定消费", "Apple Pay"].contains(entry.source),
+                  let accountID = automaticBankAccount(source: entry.source, suffix: nil),
+                  let account = bankAccounts.first(where: { $0.id == accountID }), entry.date >= account.openingDate else { continue }
+            copy.expenses[index].bankAccountID = accountID
+            count += 1
+        }
+        self = try copy.validated()
+        return count
+    }
+
     mutating func assignNoticeAccount(id: String, accountID: String?) throws {
         guard let index = tngNotices.firstIndex(where: { $0.id == id }),
               accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {

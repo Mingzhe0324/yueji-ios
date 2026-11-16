@@ -6,6 +6,134 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testIncomingNetSettlementConsumesOnlyNetPayment() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let wallet = BankAccount(name: "TNG", openingCents: 0, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")
+        ledger.bankAccounts = [wallet]
+        let mine = Expense(merchant: "I paid", cents: 10000, date: date, shares: [Share(name: "Amy", cents: 10000)])
+        let theirs = Expense(merchant: "Amy paid", cents: 4000, date: date, paidByFriend: "Amy")
+        ledger.expenses = [mine, theirs]
+        let notice = TNGNotice(bankAccountID: wallet.id, body: "Received RM60", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 6000, party: "Amy")
+        ledger.tngNotices = [notice]
+        let plan = try ledger.settlementPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 6000, date: date)
+        XCTAssertEqual(plan.offset, 4000)
+        let id = try ledger.confirmIncomingNetSettlement(noticeID: notice.id, plan: plan)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        XCTAssertEqual(ledger.expenses, [mine, theirs])
+        XCTAssertEqual(ledger.tngNotices[0].settlementID, id)
+        XCTAssertEqual(ledger.bankBalance(wallet), 6000)
+        XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+        XCTAssertThrowsError(try ledger.confirmIncomingNetSettlement(noticeID: notice.id, plan: plan))
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, 6000)
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+    }
+
+    func testReimbursementSuggestionsDoNotGuessBetweenEqualClaims() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        var first = Expense(merchant: "Advance A", cents: 39900, date: date.addingTimeInterval(-3600))
+        first.reimbursement = ReimbursementClaim(recipient: "Dad", cents: 39900)
+        ledger.expenses = [first]
+        XCTAssertEqual(ledger.suggestedReimbursements(party: " DAD ", cents: 40000, date: date), [first.id])
+        XCTAssertTrue(ledger.suggestedReimbursements(party: "Other", cents: 39900, date: date).isEmpty)
+        var second = first; second.id = UUID().uuidString
+        ledger.expenses.append(second)
+        XCTAssertTrue(ledger.suggestedReimbursements(party: "Dad", cents: 39900, date: date).isEmpty)
+        XCTAssertEqual(ledger.suggestedReimbursements(party: "Dad", cents: 79800, date: date), [first.id, second.id])
+        XCTAssertTrue(ledger.suggestedReimbursements(party: "Dad", cents: 39900, date: first.date.addingTimeInterval(-1)).isEmpty)
+    }
+
+    func testReimbursementRoundingUsesActualBankReceiptAndCanUndo() throws {
+        let date = Date().addingTimeInterval(-60)
+        let account = BankAccount(name: "TNG", openingCents: 0, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        var entry = Expense(merchant: "Advance", cents: 39900, date: date)
+        entry.reimbursement = ReimbursementClaim(recipient: "Dad", cents: 39900)
+        ledger.expenses = [entry]
+        let notice = TNGNotice(bankAccountID: account.id, body: "Received RM400", title: "", date: date, usesReceivedDate: true, kind: "unknown", status: "pending", cents: 40000, party: "Dad")
+        ledger.tngNotices = [notice]
+        XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "reimbursement", party: "Dad", cents: 40000, date: date, reimbursementExpenseIDs: [entry.id]))
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 0)
+        XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "reimbursement", party: "Dad", cents: 40000, date: date, reimbursementExpenseIDs: [entry.id], reimbursementRoundingCents: 50))
+        try ledger.resolveNotice(id: notice.id, purpose: "reimbursement", party: "Dad", cents: 40000, date: date, reimbursementExpenseIDs: [entry.id], reimbursementRoundingCents: 100)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 39900)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 0)
+        XCTAssertEqual(ledger.bankBalance(account), 40000)
+        XCTAssertEqual(ledger.tngNotices[0].reimbursementRoundingCents, 100)
+        XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
+        var restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        XCTAssertEqual(restored.tngNotices[0].reimbursementRoundingCents, 100)
+        try restored.reopenTNGIncoming(id: notice.id)
+        XCTAssertNil(restored.tngNotices[0].reimbursementRoundingCents)
+        XCTAssertEqual(restored.expenses[0].reimbursement?.outstanding, 39900)
+    }
+
+    func testMultiClaimReceiptAllocatesOnceAndUndoRestoresAll() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        var first = Expense(merchant: "Older", cents: 20000, date: date.addingTimeInterval(-86400))
+        first.reimbursement = ReimbursementClaim(recipient: "Company", cents: 20000)
+        var second = Expense(merchant: "Newer", cents: 30000, date: date)
+        second.reimbursement = ReimbursementClaim(recipient: "Company", cents: 30000)
+        ledger.expenses = [second, first]
+        let notice = TNGNotice(body: "Received RM350", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 35000, party: "Company")
+        ledger.tngNotices = [notice]
+        let selected: Set<String> = [first.id, second.id]
+        let preview = try ledger.previewReimbursement(cents: 35000, date: date, selected: selected)
+        XCTAssertEqual(preview.map(\.expenseID), [first.id, second.id])
+        XCTAssertEqual(preview.map(\.cents), [20000, 15000])
+        XCTAssertThrowsError(try ledger.previewReimbursement(cents: 35000, date: date, selected: [first.id, "missing"]))
+        try ledger.resolveTNGIncoming(id: notice.id, purpose: "reimbursement", date: date, reimbursementExpenseIDs: selected)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 15000)
+        XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, 0)
+        XCTAssertThrowsError(try ledger.deleteLedgerExpense(ledger.expenses[0]))
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: notice.id, purpose: "reimbursement", date: date, reimbursementExpenseIDs: selected))
+        let removed = try ledger.deleteAutomaticRecord(ledger.tngNotices[0])
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 30000)
+        XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, 20000)
+        try ledger.restoreDeletedRecords([removed])
+        try ledger.undoReimbursementReceipt(expense: ledger.expenses[0], receiptID: ledger.expenses[0].reimbursement!.receipts[0].id)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 30000)
+        XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, 20000)
+    }
+
+    func testManualReimbursementRoundingPreservesClaimAmount() throws {
+        let date = Date().addingTimeInterval(-60)
+        var entry = Expense(merchant: "Advance", cents: 39900, date: date)
+        entry.reimbursement = ReimbursementClaim(recipient: "Company", cents: 39900)
+        var ledger = Ledger(expenses: [entry])
+        try ledger.receiveReimbursement(expense: entry, receipt: ReimbursementReceipt(cents: 39900, date: date, roundingCents: 100))
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.received, 39900)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.receipts[0].roundingCents, 100)
+        try ledger.undoReimbursementReceipt(expense: ledger.expenses[0], receiptID: ledger.expenses[0].reimbursement!.receipts[0].id)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 39900)
+    }
+
+    func testFilteredAdsAreQuietBoundedRecoverableAndExcludeOTP() throws {
+        var ledger = Ledger()
+        for i in 0..<55 {
+            let result = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: "Save RM10 with code DEAL\(i). Apply now!"))
+            XCTAssertFalse(result.shouldNotify)
+        }
+        XCTAssertTrue(ledger.expenses.isEmpty)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        XCTAssertEqual(ledger.filteredNotifications.count, 50)
+        _ = try ledger.receiveTNG(body: "Promo OTP: 123456. Pay RM50", title: "Promo", date: nil, eventID: nil)
+        XCTAssertEqual(ledger.filteredNotifications.count, 50)
+        let item = ledger.filteredNotifications[0]
+        var restored = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        try restored.restoreFilteredNotification(id: item.id)
+        XCTAssertEqual(restored.tngNotices[0].body, item.body)
+        XCTAssertEqual(restored.tngNotices[0].status, "pending")
+        XCTAssertTrue(restored.expenses.isEmpty)
+        XCTAssertEqual(restored.filteredNotifications.count, 49)
+        XCTAssertThrowsError(try restored.restoreFilteredNotification(id: item.id))
+        XCTAssertFalse(isNonTransactionNotification("You have paid RM25.00 to CAFE. Shop now for discounts!", title: "Payment successful"))
+        XCTAssertTrue(isNonTransactionNotification("You have received a RM10 voucher. Tap to redeem now", title: "TNG"))
+    }
+
     func testUnknownNotificationReviewCanResolveReimbursement() throws {
         let date = Date().addingTimeInterval(-3600)
         var ledger = Ledger()

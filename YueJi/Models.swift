@@ -325,6 +325,8 @@ struct Ledger: Codable {
     var tripDefaults: TripDefaults? = nil
     var savingsGoals: [SavingsGoal] = []
     var tngNotices: [TNGNotice] = []
+    /// Small recovery archive, separate from transactions and review badges.
+    var filteredNotifications: [FilteredNotification] = []
     var settlements: [FriendSettlement] = []
     /// Income recorded by hand. Bank/TNG income stays an incoming notice confirmed as income.
     var incomes: [IncomeEntry] = []
@@ -334,7 +336,7 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, filteredNotifications, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bankAccounts = try c.decodeIfPresent([BankAccount].self, forKey: .bankAccounts) ?? []
@@ -359,6 +361,7 @@ struct Ledger: Codable {
         trips = try c.decodeIfPresent([TravelBook].self, forKey: .trips) ?? []
         savingsGoals = try c.decodeIfPresent([SavingsGoal].self, forKey: .savingsGoals) ?? []
         tngNotices = try c.decodeIfPresent([TNGNotice].self, forKey: .tngNotices) ?? []
+        filteredNotifications = try c.decodeIfPresent([FilteredNotification].self, forKey: .filteredNotifications) ?? []
         settlements = try c.decodeIfPresent([FriendSettlement].self, forKey: .settlements) ?? []
         incomes = try c.decodeIfPresent([IncomeEntry].self, forKey: .incomes) ?? []
         budgetAllocations = try c.decodeIfPresent([BudgetAllocation].self, forKey: .budgetAllocations) ?? []
@@ -366,6 +369,8 @@ struct Ledger: Codable {
         self = reconcilingBudgetAllocations()
     }
     func validated() throws -> Ledger {
+        guard filteredNotifications.count <= 50, Set(filteredNotifications.map(\.id)).count == filteredNotifications.count,
+              filteredNotifications.allSatisfy({ !$0.id.isEmpty && $0.id.count <= 200 && !$0.body.isEmpty && $0.body.count <= 8000 && $0.title.count <= 500 && validFinancialSource($0.provider) && $0.date.timeIntervalSince1970 >= 0 && $0.date.timeIntervalSince1970 < 4_102_444_800 }) else { throw LedgerError.invalid("Invalid filtered notification archive") }
         try validateBankAccounts()
         guard coolingPurchases.count <= 500, Set(coolingPurchases.map(\.id)).count == coolingPurchases.count else { throw LedgerError.invalid("Invalid cooling list") }
         for purchase in coolingPurchases { try purchase.validate() }
@@ -375,6 +380,9 @@ struct Ledger: Codable {
         for goal in savingsGoals { try goal.validate() }
         guard tngNotices.count <= 5000, tngNotices.reduce(0, { $0 + $1.body.utf8.count + $1.title.utf8.count }) <= 8_000_000, Set(tngNotices.map(\.id)).count == tngNotices.count else { throw LedgerError.invalid("账本格式或版本无效。") }
         for n in tngNotices {
+            if let rounding = n.reimbursementRoundingCents {
+                guard rounding > 0, n.kind == "incoming", n.status == "reimbursement", rounding < (n.cents ?? 0) else { throw LedgerError.invalid("Invalid reimbursement rounding") }
+            }
             if let rounding = n.repaymentRoundingCents {
                 guard (1...2).contains(rounding), n.kind == "incoming", n.status == "repayment", (n.cents ?? 0) > rounding else { throw LedgerError.invalid("Invalid repayment rounding") }
             }
@@ -449,6 +457,7 @@ struct Ledger: Codable {
     /// Keep automation and recurring deduplication markers so deletion stays deleted.
     mutating func deleteExpense(_ expected: Expense) throws {
         try requireUnsettledExpense(expected.id)
+        try requireUnlinkedReimbursement(expected)
         guard let index = expenses.firstIndex(where: { $0.id == expected.id }),
               expenses[index] == expected else {
             throw LedgerError.invalid(tr("账目已改变或已删除，请重新打开后再试。", "Entry changed or was deleted. Reopen it and try again.", "Rekod berubah atau dipadam. Buka semula dan cuba lagi."))
@@ -532,6 +541,7 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var repaymentIDs: [String]? = nil
     /// Explicitly accepted excess receipt, in cents; never added to debt repayments.
     var repaymentRoundingCents: Int? = nil
+    var reimbursementRoundingCents: Int? = nil
     var resolution: String? = nil
     var relatedRecordID: String? = nil
     var relatedRefundID: String? = nil
@@ -552,6 +562,30 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var provider: String { sourceBank ?? "TNG" }
     var accountDirection: AccountDirection {
         switch kind { case "incoming": return .incoming; case "payment", "transfer": return .outgoing; default: return .neutral }
+    }
+}
+struct FilteredNotification: Codable, Identifiable, Equatable {
+    var id = UUID().uuidString
+    let body: String
+    let title: String
+    let provider: String
+    let date: Date
+}
+
+extension Ledger {
+    mutating func restoreFilteredNotification(id: String) throws {
+        guard let item = filteredNotifications.first(where: { $0.id == id }), tngNotices.count < 5000 else { throw LedgerError.invalid("Notification changed") }
+        var copy = self
+        // An explicit recovery goes to review; it never posts spending automatically.
+        if !copy.tngNotices.contains(where: { $0.id == id }) {
+            var notice = TNGNotice(body: item.body, title: item.title, date: item.date, usesReceivedDate: true, kind: "unknown", status: "pending", cents: singleNotificationAmount(item.body), party: nil)
+            notice.id = id
+            notice.sourceBank = item.provider
+            notice.possibleDuplicate = copy.tngNotices.contains { $0.provider == item.provider && $0.body == item.body }
+            copy.tngNotices.append(notice)
+        }
+        copy.filteredNotifications.removeAll { $0.id == id }
+        self = try copy.validated()
     }
 }
 struct TNGParsed {
@@ -690,6 +724,14 @@ extension Ledger {
         }
         // Supported templates can post transactions; unknown financial text stays pending.
         guard !isNonTransactionNotification(text, title: title) else {
+            if isPromotionalNotification(text, title: title), !isSensitiveNotification(text, title: title),
+               !filteredNotifications.contains(where: { $0.body == text && $0.title == title && $0.provider == notificationProvider(sourceApp: sourceApp, title: title, body: text) }) {
+                let timestamp = date ?? now
+                if timestamp.timeIntervalSince1970 >= 0 && timestamp.timeIntervalSince1970 < 4_102_444_800 {
+                    filteredNotifications.append(FilteredNotification(body: text, title: title, provider: notificationProvider(sourceApp: sourceApp, title: title, body: text), date: timestamp))
+                    filteredNotifications = Array(filteredNotifications.suffix(50))
+                }
+            }
             return tr("已忽略：推广、验证码、失败或非交易通知。", "Ignored: promotion, OTP, failure or non-transaction notice.", "Diabaikan: promosi, OTP, kegagalan atau bukan transaksi.")
         }
         let local = parseFinancialNotification(text, title: title, sourceApp: sourceApp)
@@ -873,8 +915,8 @@ extension Ledger {
         copy.tngNotices[i].bankAccountID = saved.bankAccountID
         self = try copy.validated()
     }
-    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil, incomeKind: IncomeKind? = nil, roundingCents: Int = 0, reimbursementExpenseID: String? = nil) throws {
-        guard (0...2).contains(roundingCents), roundingCents == 0 || purpose == "repayment" else { throw LedgerError.invalid("Invalid repayment rounding") }
+    mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil, incomeKind: IncomeKind? = nil, roundingCents: Int = 0, reimbursementExpenseID: String? = nil, reimbursementExpenseIDs: Set<String>? = nil) throws {
+        guard roundingCents >= 0, roundingCents == 0 || purpose == "reimbursement" || (purpose == "repayment" && roundingCents <= 2) else { throw LedgerError.invalid("Invalid receipt rounding") }
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].kind == "incoming",
               tngNotices[i].status == "pending", let cents = tngNotices[i].cents,
               ["repayment", "reimbursement", "income", "ownTransfer", "ignored"].contains(purpose),
@@ -898,12 +940,13 @@ extension Ledger {
             copy.tngNotices[i].resolvedFriend = key
         }
         if purpose == "reimbursement" {
-            guard let reimbursementExpenseID,
-                  let entry = copy.expenses.first(where: { $0.id == reimbursementExpenseID }),
-                  let claim = entry.reimbursement, claim.outstanding >= cents else {
-                throw LedgerError.invalid("Select a reimbursement with enough outstanding amount")
+            let selected = reimbursementExpenseIDs ?? Set([reimbursementExpenseID].compactMap { $0 })
+            let lines = try copy.previewReimbursement(cents: cents, date: date, selected: selected, roundingCents: roundingCents)
+            for line in lines {
+                guard let entry = copy.expenses.first(where: { $0.id == line.expenseID }) else { throw LedgerError.invalid("Entry changed") }
+                try copy.receiveReimbursement(expense: entry, receipt: ReimbursementReceipt(cents: line.cents, date: date, noticeID: id))
             }
-            try copy.receiveReimbursement(expense: entry, receipt: ReimbursementReceipt(cents: cents, date: date, noticeID: id))
+            copy.tngNotices[i].reimbursementRoundingCents = roundingCents > 0 ? roundingCents : nil
         }
         copy.tngNotices[i].date = date
         copy.tngNotices[i].status = purpose
@@ -931,6 +974,7 @@ extension Ledger {
         copy.tngNotices[i].repaymentIDs = nil; copy.tngNotices[i].resolvedFriend = nil; copy.tngNotices[i].status = "pending"
         copy.tngNotices[i].incomeKind = nil
         copy.tngNotices[i].repaymentRoundingCents = nil
+        copy.tngNotices[i].reimbursementRoundingCents = nil
         copy.budgetAllocations.removeAll { $0.source == IncomeSourceKey.notice(id) }
         self = try copy.validated()
     }
@@ -1140,6 +1184,7 @@ extension Ledger {
     }
     mutating func deleteLedgerExpense(_ expected: Expense) throws -> DeletedLedgerRecord {
         try requireUnsettledExpense(expected.id)
+        try requireUnlinkedReimbursement(expected)
         guard expenses.contains(expected) else { throw LedgerError.invalid("Record changed; reopen and try again.") }
         return try deleteLedgerRecord(noticeIDs: Set(tngNotices.filter { $0.expenseID == expected.id }.map(\.id)), expenseID: expected.id)
     }
@@ -1214,7 +1259,7 @@ func notificationReference(_ body: String) -> String? {
 extension Ledger {
     /// Atomic user-confirmed resolution. Original notification text is retained.
     mutating func resolveNotice(id: String, purpose: String, party: String, cents: Int, date: Date,
-                                category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = [], incomeKind: IncomeKind? = nil, distinctConfirmed: Bool = false) throws {
+                                category: String = "其他", remember: Bool = false, relatedID: String? = nil, items: [ExpenseItem] = [], incomeKind: IncomeKind? = nil, distinctConfirmed: Bool = false, reimbursementExpenseIDs: Set<String>? = nil, reimbursementRoundingCents: Int = 0) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }),
               ["pending", "transfer"].contains(tngNotices[i].status), tngNotices[i].expenseID == nil,
               cents > 0, cents <= 10_000_000_000, date.timeIntervalSince1970 >= 0, date <= Date(),
@@ -1231,7 +1276,7 @@ extension Ledger {
             copy.tngNotices[i].kind = "incoming"
             copy.tngNotices[i].status = "pending"
             try copy.resolveTNGIncoming(id: id, purpose: "reimbursement", date: date,
-                                       distinctConfirmed: distinctConfirmed, reimbursementExpenseID: relatedID)
+                                       distinctConfirmed: distinctConfirmed, roundingCents: reimbursementRoundingCents, reimbursementExpenseID: relatedID, reimbursementExpenseIDs: reimbursementExpenseIDs)
         case "expense":
             guard copy.tngNotices[i].kind != "incoming" else { throw LedgerError.invalid("收款不能记为支出。") }
             try copy.confirmTNGExpense(id: id, merchant: party, cents: cents, date: date, category: category, remember: remember, items: items)
@@ -1618,6 +1663,26 @@ extension Ledger {
 func notificationMatches(_ text: String, _ pattern: String) -> Bool {
     text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) != nil
 }
+func isSensitiveNotification(_ body: String, title: String) -> Bool {
+    let text = notificationText(title + " " + body)
+    if notificationMatches(text, #"\b(?:otp|tac|verification code|one[- ]time (?:password|code)|securetac|approve (?:this |the )?(?:payment|transaction)|payment request|request to pay)\b|验证码|动态密码|请求付款|批准交易|kod pengesahan"#) { return true }
+    return false
+}
+func isPromotionalNotification(_ body: String, title: String) -> Bool {
+    let text = notificationText(title + " " + body)
+    let completedMoney = notificationMatches(body, #"\b(?:(?:RM|MYR)\s*[\d,.]+(?:\s+cashback)?\s+(?:was deducted|has been (?:credited|debited))|you(?:'ve| have) (?:paid|received|spent)\s+(?:RM|MYR)\s*[\d,.]+|payment of (?:RM|MYR)[\s\d.,]+ (?:to [^.!?]+ )?was successful)\b|(?:已到账|已扣款|付款成功|转账成功)\s*(?:RM|MYR)\s*[\d,.]+"#)
+    // Explicit campaign titles are never payment evidence. Mixed payment receipts
+    // may contain a marketing footer, so require completed money movement first.
+    if notificationMatches(title, #"\b(?:promotion|promo|offer|sale)\b"#) { return true }
+    if notificationMatches(body, #"^\s*(?:offer|promo(?:tion)?)\s*:"#) { return true }
+    if completedMoney { return false }
+    if notificationMatches(text, #"\b(?:promotion|promo|cashback offer|reward points)\b|\boffer\s*:|限时优惠|促销|验证码|优惠活动|promosi"#) { return true }
+    let reward = notificationMatches(text, #"\b(?:cash\s?back|rewards?|discounts?|vouchers?|points)\b|返现|回扣|优惠券|pulangan tunai|ganjaran|diskaun"#)
+    let campaign = notificationMatches(text, #"\b(?:limited[- ]time|limited offer|offer ends|sale ends|shop now|claim now|tap to (?:claim|redeem|shop)|promo code|use code|minimum spend|spend (?:RM|MYR)\s*\d+.*(?:get|save|earn)|pay (?:with|using) .+ (?:and|to) (?:win|earn|save))\b|立即抢购|点击领取|限时抢购|满\s*\d+\s*减|立即兑换|限时折扣|belanja sekarang|tebus sekarang"#)
+    let invitation = notificationMatches(text, #"\b(?:earn|get|enjoy|win|unlock|up to|stand a chance|when you (?:spend|pay)|make\s+\d+\s+(?:qr\s+)?payments?|dapatkan|sehingga|nikmati)\b|最高|可获|有机会|消费满"#)
+    let solicitation = notificationMatches(text, #"\b(?:apply now|sign up|subscribe now|activate now|download now|exclusive deal|special offer|hurry|ends tonight|pay only|from (?:RM|MYR)\s*\d+|save (?:RM|MYR)\s*\d+)\b"#)
+    return campaign || solicitation || (reward && invitation)
+}
 func isNonTransactionNotification(_ body: String, title: String) -> Bool {
     let text = notificationText(title + " " + body)
     if notificationMatches(text, #"\b(?:currently on hold|pre[- ]authori[sz](?:ation|ed)|only be charged the final amount once)\b"#) { return true }
@@ -1626,15 +1691,9 @@ func isNonTransactionNotification(_ body: String, title: String) -> Bool {
     let pointsReceipt = notificationMatches(text, #"\b[0-9][0-9,]*(?:\.[0-9]+)?\s+(?:reward\s+)?points\b"#)
     let monetaryAmount = notificationMatches(text, #"(?:RM|MYR|USD|SGD|EUR|GBP|CNY|RMB|JPY|AUD|THB|IDR|INR|HKD)\s*[0-9]|[$€£¥]\s*[0-9]"#)
     if pointsReceipt && !monetaryAmount { return true }
-    if notificationMatches(text, #"\b(?:otp|tac|verification code|one[- ]time (?:password|code)|securetac|approve (?:this |the )?(?:payment|transaction)|payment request|request to pay)\b|验证码|动态密码|请求付款|批准交易|kod pengesahan"#) { return true }
     if notificationMatches(text, #"\b(?:(?:payment|transaction|purchase|transfer) (?:has |was |is )?(?:failed|declined|pending|rejected|cancelled)|unsuccessful|pending payment|not (?:paid|successful)|failed to (?:pay|transfer)|scheduled payment|payment (?:due|reminder))\b|付款失败|交易失败|交易取消|待付款|付款请求|交易待处理|pembayaran gagal|transaksi gagal|bayaran tertunggak"#) { return true }
-    if notificationMatches(text, #"\b(?:promotion|promo|cashback offer|reward points)\b|\boffer\s*:|限时优惠|促销|验证码|优惠活动|promosi"#) { return true }
-    let reward = notificationMatches(text, #"\b(?:cash\s?back|rewards?|discounts?|vouchers?|points)\b|返现|回扣|优惠券|pulangan tunai|ganjaran|diskaun"#)
-    let completedMoney = notificationMatches(text, #"\b(?:was deducted|has been (?:credited|debited)|you(?:'ve| have) (?:paid|received|spent)|payment of (?:RM|MYR)[\s\d.,]+ (?:to .+ )?was successful)\b|已到账|已扣款|付款成功|转账成功"#)
-    let campaign = notificationMatches(text, #"\b(?:limited[- ]time|limited offer|offer ends|sale ends|shop now|claim now|tap to (?:claim|redeem|shop)|promo code|use code|minimum spend|spend (?:RM|MYR)\s*\d+.*(?:get|save|earn)|pay (?:with|using) .+ (?:and|to) (?:win|earn|save))\b|立即抢购|点击领取|限时抢购|满\s*\d+\s*减|立即兑换|限时折扣|belanja sekarang|tebus sekarang"#)
-    if campaign && !completedMoney { return true }
-    let invitation = notificationMatches(text, #"\b(?:earn|get|enjoy|win|unlock|up to|stand a chance|when you (?:spend|pay)|make\s+\d+\s+(?:qr\s+)?payments?|dapatkan|sehingga|nikmati)\b|最高|可获|有机会|消费满"#)
-    return reward && invitation
+    if isSensitiveNotification(body, title: title) { return true }
+    return isPromotionalNotification(body, title: title)
 }
 func shouldReviewFinancialNotification(_ body: String, title: String) -> Bool {
     guard !isNonTransactionNotification(body, title: title) else { return false }

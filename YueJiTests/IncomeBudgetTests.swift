@@ -4,6 +4,46 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testRepairMissingAccountsUsesRulesWithoutDoubleDeduction() throws {
+        let date = Date().addingTimeInterval(-60)
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: "TNG eWallet", automaticSource: "TNG")
+        let other = BankAccount(name: "Other", openingCents: 20000, openingDate: wallet.openingDate)
+        var ledger = Ledger()
+        _ = try ledger.receiveTNG(body: "You have paid RM10.00 for CAFE.", title: "Payment", date: date, eventID: nil, sourceApp: "TNG")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertNil(ledger.expenses[0].bankAccountID)
+        ledger.bankAccounts = [wallet, other]
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 1)
+        XCTAssertEqual(ledger.expenses[0].bankAccountID, wallet.id)
+        XCTAssertEqual(ledger.bankBalance(wallet), 9000)
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 0)
+        XCTAssertEqual(ledger.bankBalance(wallet), 9000)
+        try ledger.assignNoticeAccount(id: ledger.tngNotices[0].id, accountID: other.id)
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 0)
+        XCTAssertEqual(ledger.bankBalance(other), 19000)
+        XCTAssertEqual(ledger.bankBalance(wallet), 10000)
+    }
+
+    func testAccountRepairSkipsAmbiguityOldDatesAndDuplicates() throws {
+        let date = Date().addingTimeInterval(-60)
+        let first = BankAccount(name: "CIMB", openingCents: 10000, openingDate: date, automaticSource: "CIMB", automaticSuffix: "1234")
+        var second = first; second.id = UUID().uuidString
+        var ledger = Ledger(); ledger.bankAccounts = [first, second]
+        let notice = TNGNotice(body: "Paid RM10", title: "", date: date, usesReceivedDate: false, kind: "payment", status: "pending", cents: 1000, party: "Cafe", sourceBank: "CIMB", accountSuffix: "1234")
+        ledger.tngNotices = [notice]
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 0)
+        ledger.bankAccounts = [first]
+        ledger.tngNotices[0].date = date.addingTimeInterval(-1)
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 0)
+        ledger.tngNotices[0].date = date; ledger.tngNotices[0].possibleDuplicate = true
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 0)
+        ledger.tngNotices[0].possibleDuplicate = false; ledger.tngNotices[0].accountSuffix = "5678"
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 0)
+        ledger.tngNotices[0].accountSuffix = "1234"
+        XCTAssertEqual(try ledger.reconcileAutomaticAccounts(), 1)
+        XCTAssertEqual(ledger.bankBalance(first), 10000) // Linking is not confirmation of an unclear payment.
+    }
+
     func testGrabVisaChargeRequiresCardBindingAndDeduplicatesBooking() throws {
         let date = Date()
         let body = "Your Visa 1234 has been charged MYR 38.74 for booking TEST001-ABC123."

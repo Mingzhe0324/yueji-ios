@@ -1769,6 +1769,11 @@ struct ExpenseRow: View {
                         .lineLimit(typeSize.isAccessibilitySize ? nil : 1)
                 }
                 if let payer = entry.paidByFriend { Text(tr("朋友付款：", "Paid by friend: ", "Dibayar oleh rakan: ") + payer).font(.footnote).foregroundStyle(.secondary) }
+                if let detail = model.readIndex.detail(id: entry.id), detail.settlements.contains(where: { $0.active }) {
+                    let remains = detail.payableToPayer + detail.shareBalances.values.reduce(0) { $0 + abs($1) }
+                    Label(remains == 0 ? tr("分账已结清", "Split settled", "Bahagian selesai") : tr("结算后尚欠：", "Outstanding after settlement: ", "Baki selepas penyelesaian: ") + money(remains), systemImage: remains == 0 ? "checkmark.circle" : "clock")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if entry.refunded > 0 { Text(tr("购买退款：", "Purchase refunded: ", "Pembelian dipulangkan: ") + money(entry.refunded)).font(.footnote).foregroundStyle(.secondary) }
                 if !entry.shares.isEmpty {
                     HStack {

@@ -143,6 +143,7 @@ private struct BankCardPressStyle: ButtonStyle {
 
 private struct AutomaticAccountLinksView: View {
     @EnvironmentObject var model: LedgerModel
+    @State private var missingOnly = true
     private enum Record: Identifiable {
         case notice(TNGNotice)
         case payment(Expense)
@@ -161,16 +162,28 @@ private struct AutomaticAccountLinksView: View {
     }
     private var records: [Record] {
         let linked = Set(model.ledger.tngNotices.compactMap(\.expenseID))
-        let payments = model.ledger.expenses.filter { $0.source == "Apple Pay" && !linked.contains($0.id) }
-        return (model.ledger.tngNotices.map(Record.notice) + payments.map(Record.payment))
+        let payments = model.ledger.expenses.filter { $0.source == "Apple Pay" && $0.paidByFriend == nil && !linked.contains($0.id) && (!missingOnly || $0.bankAccountID == nil) }
+        let notices = model.ledger.tngNotices.filter { notice in
+            guard notice.status != "ignored" else { return false }
+            let accountID = notice.expenseID.flatMap { id in model.expense(id: id)?.bankAccountID } ?? notice.bankAccountID
+            return !missingOnly || accountID == nil
+        }
+        return (notices.map(Record.notice) + payments.map(Record.payment))
             .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
     }
     var body: some View {
         List {
             Section {
-                Text(tr("TNG 收款匹配账户后先加账面余额，用途确认后才计收入或还款。疑似重复和已忽略通知不自动加余额。", "Matched TNG receipts increase the account balance before their purpose is confirmed. Suspected duplicates and ignored notices are excluded.", "Penerimaan TNG dipadankan menambah baki sebelum tujuan disahkan. Notifikasi disyaki pendua dan diabaikan dikecualikan."))
-                    .font(.footnote).foregroundStyle(.secondary)
+                Toggle(tr("只看未分配", "Unassigned only", "Belum ditetapkan sahaja"), isOn: $missingOnly)
+                Button(tr("按已设规则补齐账户", "Match accounts using saved rules", "Padankan akaun mengikut peraturan")) {
+                    model.perform(key: "repair-account-links", action: { (ledger: inout Ledger) throws -> Int in
+                        try ledger.reconcileAutomaticAccounts()
+                    }, completion: { count in
+                        model.showSaved(message: tr("已补齐账户：", "Accounts matched: ", "Akaun dipadankan: ") + String(count))
+                    })
+                }.disabled(model.isWorking("repair-account-links"))
             }
+            if records.isEmpty { Text(tr("账户已分配好", "Accounts are assigned", "Akaun sudah ditetapkan")) }
             ForEach(records) { record in
                 switch record {
                 case .payment(let entry):
@@ -608,6 +621,7 @@ private struct BankAccountEditor: View {
                     .onChange(of: institution) { old, new in
                         if name.isEmpty || name == old { name = new }
                         if new == "TNG Card" { automaticSource = ""; automaticSuffix = "" }
+                        else if original == nil { automaticSource = financialProvider(new) ?? ""; automaticSuffix = "" }
                     }
                 TextField(tr("例如 Maybank 储蓄账户", "e.g. Maybank savings", "cth. Simpanan Maybank"), text: $name)
                     .accessibilityIdentifier("bankAccount.name")
@@ -631,14 +645,11 @@ private struct BankAccountEditor: View {
                         if automaticSource == "Grab Card" {
                             Text(tr("Grab 扣卡：填写绑定 Visa 卡的尾号。只有来源和尾号唯一匹配才自动入账；不要绑定到 GrabPay 钱包。这里的尾号是卡号尾号。", "Grab card charges: enter the linked Visa card's last four digits. A unique source and suffix match is required. Do not link to the GrabPay wallet. These are card digits.", "Caj kad Grab: isi empat digit akhir kad Visa terpaut. Sumber dan digit mesti sepadan secara unik. Jangan pautkan ke dompet GrabPay. Ini digit kad.")).font(.footnote).foregroundStyle(.secondary)
                         }
-                        Text(tr("根据你导入的交易通知识别，不会直接连接银行或钱包。付款须明确完成；充值、退款及不明格式需要核对。Grab 和 Shopee 的订单通知不等于钱包付款。", "Uses transaction notices you import, without connecting to a bank or wallet. Payments must be explicitly completed; reloads, refunds and unfamiliar formats need review. Grab and Shopee order notices are not wallet payments.", "Menggunakan notis transaksi yang diimport, tanpa sambungan bank atau dompet. Bayaran mesti selesai; tambah nilai, bayaran balik dan format asing perlu disemak. Notis pesanan Grab dan Shopee bukan bayaran dompet.")).font(.footnote).foregroundStyle(.secondary)
                         TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
                             .keyboardType(.numberPad)
-                        Text(tr("填写尾号后，通知必须包含相同尾号才能自动匹配。如果同一来源只有一个账户，而通知没有尾号，请留空。", "If entered, notices must contain the same last four digits to match. Leave blank when this source has only one account and its notices contain no suffix.", "Jika diisi, notifikasi mesti mengandungi empat digit yang sama. Biarkan kosong jika sumber ini hanya mempunyai satu akaun dan notifikasi tiada digit akhir."))
-                            .font(.footnote).foregroundStyle(.secondary)
                     }
                 } footer: {
-                    Text(tr("仅影响保存后新导入的通知。来源和尾号匹配时自动关联；同一来源有多个账户而通知无法区分时，留待手动选择。付款扣余额，通知收入确认后加余额。", "Applies to newly imported notices only. Matching source and suffix link automatically; ambiguous accounts require selection. Payments reduce the balance; notification income increases it after confirmation.", "Untuk notifikasi baharu sahaja. Sumber dan digit sepadan dipaut automatik; akaun tidak jelas perlu dipilih. Bayaran mengurangkan baki; pendapatan menambahnya selepas pengesahan."))
+                    Text(tr("通知有尾号才填写。保存后，会补齐期初时间之后能唯一匹配的未分配记录。", "Enter digits only when notices include them. Saving also links unassigned records after the opening date when the match is unique.", "Isi digit hanya jika ada dalam notifikasi. Menyimpan turut memautkan rekod selepas tarikh awal jika padanan unik."))
                 }
                 Text(tr("填写这个时间点之前的余额，可填 0 或负数。修改期初余额或时间会重新计算账面余额。无需银行卡号或银行密码。", "Enter the balance just before this time, including zero or a negative amount. Changing the opening balance or date recalculates your recorded balance. No bank number or password needed.", "Masukkan baki sebelum masa ini, termasuk sifar atau negatif. Perubahan baki atau tarikh awal mengira semula baki. Tidak perlu nombor atau kata laluan bank."))
                     .font(.footnote).foregroundStyle(.secondary)
@@ -686,6 +697,7 @@ private struct BankAccountEditor: View {
                     ledger.bankAccounts[index] = savedAccount
                 } else { ledger.bankAccounts.append(savedAccount) }
                 try ledger.validateBankAccounts()
+                try ledger.reconcileAutomaticAccounts()
             }, completion: { _ in dismiss() }, failure: { error = $0.localizedDescription })
         } catch { self.error = error.localizedDescription }
     }

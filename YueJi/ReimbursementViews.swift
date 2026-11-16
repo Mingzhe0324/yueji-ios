@@ -1,5 +1,85 @@
 import SwiftUI
 
+/// One selection flow shared by both notification review screens.
+struct ReimbursementMatchFields: View {
+    @EnvironmentObject private var model: LedgerModel
+    let party: String
+    let cents: Int
+    let date: Date
+    @Binding var selected: Set<String>
+    @Binding var rounding: Int
+    private var suggested: Set<String> { model.ledger.suggestedReimbursements(party: party, cents: cents, date: date) }
+    private var difference: Int { model.ledger.reimbursementRounding(cents: cents, date: date, selected: selected) }
+    private var preview: [ReimbursementAllocation]? { try? model.ledger.previewReimbursement(cents: cents, date: date, selected: selected, roundingCents: difference) }
+    var body: some View {
+        if selected.isEmpty, !suggested.isEmpty {
+            Button {
+                selected = suggested
+            } label: {
+                Label(tr("使用推荐账目", "Use suggested claims", "Guna tuntutan dicadangkan"), systemImage: "sparkles")
+            }
+            Text(model.ledger.openReimbursements(on: date).filter { suggested.contains($0.id) }.map(\.displayName).joined(separator: " · "))
+                .font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        }
+        NavigationLink {
+            ReimbursementMatchPicker(cents: cents, date: date, selected: $selected)
+        } label: {
+            LabeledContent(tr("选择报销账目", "Choose claim entry", "Pilih rekod tuntutan"), value: selected.isEmpty ? tr("请选择", "Choose", "Pilih") : String(selected.count))
+        }.accessibilityIdentifier("notice.reimbursement.entry")
+        if let preview {
+            ForEach(preview) { line in
+                LabeledContent(model.expense(id: line.expenseID)?.displayName ?? "", value: money(line.cents))
+                    .font(.subheadline)
+            }
+            if difference > 0 {
+                Toggle(isOn: Binding(get: { rounding == difference }, set: { rounding = $0 ? difference : 0 })) {
+                    Text(tr("多收金额记为尾差", "Record extra as rounding", "Rekod lebihan sebagai pembundaran") + " · " + money(difference))
+                }.accessibilityIdentifier("reimbursement.rounding")
+            }
+        } else if !selected.isEmpty {
+            Text(tr("请调整所选账目，使本次到账金额可以分配。", "Adjust your selection to cover this receipt.", "Laraskan pilihan untuk meliputi penerimaan ini."))
+                .font(.caption).foregroundStyle(.orange)
+        }
+    }
+}
+
+private struct ReimbursementMatchPicker: View {
+    @EnvironmentObject private var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
+    let cents: Int
+    let date: Date
+    @Binding var selected: Set<String>
+    @State private var search = ""
+    private var entries: [Expense] { model.ledger.openReimbursements(on: date) }
+    var body: some View {
+        List {
+            Section {
+                LabeledContent(tr("本次到账", "Received now", "Diterima sekarang"), value: money(cents))
+            } footer: {
+                Text(tr("可选多笔，先报销较早的账目。", "Select one or more; earlier entries are reimbursed first.", "Pilih satu atau lebih; rekod terdahulu dibayar dahulu."))
+            }
+            ForEach(entries.filter { search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search) || ($0.reimbursement?.recipient.localizedCaseInsensitiveContains(search) ?? false) }) { entry in
+                Toggle(isOn: Binding(get: { selected.contains(entry.id) }, set: { if $0 { selected.insert(entry.id) } else { selected.remove(entry.id) } })) {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Text(entry.displayName)
+                        Text((entry.reimbursement?.recipient ?? "") + " · " + money(entry.reimbursement?.outstanding ?? 0) + " · " + dateLabel(entry.date))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+            NavigationLink { ReimbursementsView() } label: {
+                Text(tr("找不到？添加报销账目", "Missing a claim? Add it", "Tiada tuntutan? Tambah"))
+            }
+        }.yuejiListSurface().searchable(text: $search)
+            .navigationTitle(tr("选择报销账目", "Choose claim entry", "Pilih rekod tuntutan"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .confirmationAction) {
+                Button(tr("完成", "Done", "Selesai")) { dismiss() }
+                    .disabled((try? model.ledger.previewReimbursement(cents: cents, date: date, selected: selected, roundingCents: model.ledger.reimbursementRounding(cents: cents, date: date, selected: selected))) == nil)
+            } }
+    }
+}
+
 struct ReimbursementStatusBadge: View {
     @Environment(\.locale) private var locale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -243,7 +323,10 @@ struct ReimbursementDetailView: View {
                         ForEach(claim.receipts.sorted { $0.date > $1.date }) { receipt in
                             HStack {
                                 VStack(alignment: .leading, spacing: 4) {
-                                    Text(money(receipt.cents)).fontWeight(.medium).monospacedDigit()
+                                    Text(money(receipt.cents + (receipt.roundingCents ?? 0))).fontWeight(.medium).monospacedDigit()
+                                    if let rounding = receipt.roundingCents {
+                                        Text(tr("尾差", "Rounding", "Pembundaran") + " · " + money(rounding)).font(.caption).foregroundStyle(.secondary)
+                                    }
                                     Text(dateLabel(receipt.date, time: true)).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -278,7 +361,9 @@ struct ReimbursementDetailView: View {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) { undoReceipt() }
                 Button(tr("取消", "Cancel", "Batal"), role: .cancel) { undo = nil }
             } message: {
-                Text(tr("只修正报销记录，不会转移资金。", "This corrects the record; it does not transfer money.", "Ini membetulkan rekod; ia tidak memindahkan wang."))
+                Text(undo?.noticeID == nil
+                     ? tr("只修正记录，不会转移资金。", "Corrects records only; no money is moved.", "Membetulkan rekod sahaja; tiada wang dipindahkan.")
+                     : tr("同一笔收款关联的报销会一起撤销，恢复待核对。", "All claims linked to this receipt return to review together.", "Semua tuntutan dipautkan kepada penerimaan ini kembali untuk semakan bersama."))
             }
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                 Button("OK") {}
@@ -306,13 +391,15 @@ private struct ReimbursementEditor: View {
     @State private var enabled = true
     @State private var recipient = ""
     @State private var amount = ""
+    @State private var acceptRounding = false
+    private var rounding: Int { max(0, ((try? toCents(amount)) ?? 0) - (expense.reimbursement?.outstanding ?? 0)) }
     @State private var date = Date()
     @State private var initial: [String]?
     @State private var saving = false
     @State private var confirmingDiscard = false
     @State private var error: String?
     @FocusState private var focused: ExpenseInputField?
-    private var snapshot: [String] { [String(enabled), recipient, amount, String(date.timeIntervalSince1970)] }
+    private var snapshot: [String] { [String(enabled), recipient, amount, String(date.timeIntervalSince1970), String(acceptRounding)] }
     private var hasChanges: Bool { initial.map { $0 != snapshot } ?? false }
     var body: some View {
         let _ = locale.identifier
@@ -327,6 +414,9 @@ private struct ReimbursementEditor: View {
                         TextField(tr("到账金额 · MYR", "Received amount · MYR", "Amaun diterima · MYR"), text: $amount)
                             .keyboardType(.decimalPad).focused($focused, equals: .reimbursementAmount)
                             .accessibilityIdentifier("reimbursement.received.amount")
+                        if rounding > 0 {
+                            Toggle(tr("多收金额记为尾差", "Record extra as rounding", "Rekod lebihan sebagai pembundaran") + " · " + money(rounding), isOn: $acceptRounding)
+                        }
                         DatePicker(tr("到账日期", "Receipt date", "Tarikh diterima"), selection: $date, in: min(expense.date, Date())...Date(), displayedComponents: [.date, .hourAndMinute])
                         Button(tr("填入待到账金额", "Fill outstanding amount", "Isi baki belum diterima")) {
                             amount = Currency.input(expense.reimbursement?.outstanding ?? 0, "MYR")
@@ -355,7 +445,7 @@ private struct ReimbursementEditor: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button { save() } label: { EditorSaveLabel(saving: saving) }
-                            .yuejiPrimaryButton().disabled(saving || initial == nil)
+                            .yuejiPrimaryButton().disabled(saving || initial == nil || (receiptMode && rounding > 0 && !acceptRounding))
                     }
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
@@ -368,6 +458,7 @@ private struct ReimbursementEditor: View {
                     amount = Currency.input(receiptMode ? (expense.reimbursement?.outstanding ?? 0) : (expense.reimbursement?.cents ?? expense.personal), "MYR")
                     initial = snapshot
                 }
+                .onChange(of: amount) { _, _ in acceptRounding = false }
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) {
                     Button("OK") {}
                 } message: { Text(error ?? "") }
@@ -377,7 +468,8 @@ private struct ReimbursementEditor: View {
     private func save() {
         guard !saving, initial != nil else { return }
         do {
-            let receipt = receiptMode ? ReimbursementReceipt(cents: try toCents(amount), date: date) : nil
+            if receiptMode && rounding > 0 && !acceptRounding { return }
+            let receipt = receiptMode ? ReimbursementReceipt(cents: try toCents(amount) - rounding, date: date, roundingCents: rounding > 0 ? rounding : nil) : nil
             let claim = !receiptMode && enabled ? ReimbursementClaim(recipient: recipient.trimmingCharacters(in: .whitespacesAndNewlines),
                 cents: try toCents(amount), receipts: expense.reimbursement?.receipts ?? []) : nil
             focused = nil; saving = true

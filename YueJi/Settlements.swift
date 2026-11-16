@@ -79,6 +79,19 @@ extension Expense {
 }
 
 extension Ledger {
+    /// Offset both sides and consume the received bank payment in one write.
+    mutating func confirmIncomingNetSettlement(noticeID: String, plan: SettlementPlan, distinctConfirmed: Bool = false) throws -> String {
+        guard let notice = tngNotices.first(where: { $0.id == noticeID }), notice.kind == "incoming",
+              notice.status == "pending", plan.transfer > 0, plan.transfer == notice.cents else {
+            throw LedgerError.invalid("Receipt changed. Review the net settlement again.")
+        }
+        var copy = self
+        let id = try copy.confirmSettlement(plan)
+        try copy.linkSettlementPayment(settlementID: id, noticeID: noticeID, distinctConfirmed: distinctConfirmed)
+        self = copy
+        return id
+    }
+
     /// Normalize live expenses and audit snapshots together. Amounts, dates, debt
     /// applications, bank links and settlement identities are never changed.
     func migratingLegacyCategorySplits() throws -> Ledger {
