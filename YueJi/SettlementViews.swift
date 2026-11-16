@@ -587,8 +587,9 @@ struct IncomingNetSettlementView: View {
                             Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                         }
                         Button(tr("确认净结算", "Confirm net settlement", "Sahkan penyelesaian bersih")) {
+                            let distinctConfirmed = distinct
                             model.perform(key: "notice-" + noticeID, action: { ledger in
-                                try ledger.confirmIncomingNetSettlement(noticeID: noticeID, plan: plan, distinctConfirmed: distinct)
+                                try ledger.confirmIncomingNetSettlement(noticeID: noticeID, plan: plan, distinctConfirmed: distinctConfirmed)
                             }, completion: { savedID = $0 }, failure: { error = $0.localizedDescription })
                         }.disabled(model.isWorking("notice-" + noticeID) || (model.notice(id: noticeID)?.possibleDuplicate == true && !distinct))
                     } else {

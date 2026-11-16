@@ -51,6 +51,17 @@ private struct ReimbursementMatchPicker: View {
     @Binding var selected: Set<String>
     @State private var search = ""
     private var entries: [Expense] { model.ledger.openReimbursements(on: date) }
+    private var filteredEntries: [Expense] {
+        entries.filter { entry in
+            search.isEmpty || entry.displayName.localizedCaseInsensitiveContains(search)
+                || (entry.reimbursement?.recipient.localizedCaseInsensitiveContains(search) ?? false)
+        }
+    }
+    private func entrySubtitle(_ entry: Expense) -> String {
+        let recipient = entry.reimbursement?.recipient ?? ""
+        let outstanding = money(entry.reimbursement?.outstanding ?? 0)
+        return [recipient, outstanding, dateLabel(entry.date)].joined(separator: " · ")
+    }
     var body: some View {
         List {
             Section {
@@ -58,19 +69,23 @@ private struct ReimbursementMatchPicker: View {
             } footer: {
                 Text(tr("可选多笔，先报销较早的账目。", "Select one or more; earlier entries are reimbursed first.", "Pilih satu atau lebih; rekod terdahulu dibayar dahulu."))
             }
-            ForEach(entries.filter { search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search) || ($0.reimbursement?.recipient.localizedCaseInsensitiveContains(search) ?? false) }) { entry in
+            ForEach(filteredEntries) { entry in
                 Toggle(isOn: Binding(get: { selected.contains(entry.id) }, set: { if $0 { selected.insert(entry.id) } else { selected.remove(entry.id) } })) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text(entry.displayName)
-                        Text((entry.reimbursement?.recipient ?? "") + " · " + money(entry.reimbursement?.outstanding ?? 0) + " · " + dateLabel(entry.date))
+                        Text(entrySubtitle(entry))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
             }
-            NavigationLink { ReimbursementsView() } label: {
+            if entries.isEmpty {
+                Text(tr("没有待报销账目", "No outstanding claims", "Tiada tuntutan tertunggak")).foregroundStyle(.secondary)
+            }
+            NavigationLink { ReimbursementEntryPicker() } label: {
                 Text(tr("找不到？添加报销账目", "Missing a claim? Add it", "Tiada tuntutan? Tambah"))
             }
         }.yuejiListSurface().searchable(text: $search)
+            .onChange(of: model.ledgerRevision) { _, _ in selected.formIntersection(Set(entries.map(\.id))) }
             .navigationTitle(tr("选择报销账目", "Choose claim entry", "Pilih rekod tuntutan"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) {

@@ -1189,6 +1189,9 @@ extension Ledger {
         return try deleteLedgerRecord(noticeIDs: Set(tngNotices.filter { $0.expenseID == expected.id }.map(\.id)), expenseID: expected.id)
     }
     private mutating func deleteLedgerRecord(noticeIDs: Set<String>, expenseID: String?) throws -> DeletedLedgerRecord {
+        if let expenseID, let entry = expenses.first(where: { $0.id == expenseID }) {
+            try requireUnlinkedReimbursement(entry)
+        }
         var copy = self
         let notices = tngNotices.filter { noticeIDs.contains($0.id) || (expenseID != nil && $0.expenseID == expenseID) }
         let repayments = Set(notices.flatMap { $0.repaymentIDs ?? [] })
