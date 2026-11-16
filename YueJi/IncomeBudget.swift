@@ -186,6 +186,10 @@ extension Ledger {
             total += entry.cents
         }
         for notice in tngNotices where notice.bankAccountID == account.id && notice.date >= account.openingDate && notice.expenseID == nil {
+            if notice.status == "settlement", notice.settlementID != nil, notice.resolution == nil {
+                total += notice.kind == "incoming" ? (notice.cents ?? 0) : -(notice.cents ?? 0)
+                continue
+            }
             let tngReceipt = (notice.provider == "TNG" || notice.verifiedIncomingBalance == true || notice.status == "reimbursement") && notice.kind == "incoming" &&
                 ((notice.status == "pending" && !notice.possibleDuplicate && notice.balanceHeldForReview != true) || ["income", "repayment", "reimbursement", "settlement", "ownTransfer"].contains(notice.status)) && notice.resolution == nil
             if notice.isConfirmedIncome || tngReceipt { total += notice.cents ?? 0 }

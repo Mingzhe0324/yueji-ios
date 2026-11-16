@@ -23,6 +23,10 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(ledger.expenses, [mine, theirs])
         XCTAssertEqual(ledger.tngNotices[0].settlementID, id)
         XCTAssertEqual(ledger.bankBalance(wallet), 6000)
+        var bankReceipt = ledger
+        bankReceipt.tngNotices[0].sourceBank = "CIMB"
+        bankReceipt.tngNotices[0].verifiedIncomingBalance = false
+        XCTAssertEqual(bankReceipt.bankBalance(wallet), 6000, "Explicitly linked net receipt counts for bank notifications too")
         XCTAssertFalse(ledger.tngNotices[0].isConfirmedIncome)
         XCTAssertThrowsError(try ledger.confirmIncomingNetSettlement(noticeID: notice.id, plan: plan))
         try ledger.undoSettlement(id: id)
@@ -2184,19 +2188,25 @@ final class LedgerTests: XCTestCase {
 
     func testOutgoingSettlementConvertsAutomaticExpenseAndUndoNeverRecreatesIt() throws {
         var ledger = settlementExample()
+        let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: settlementDate.addingTimeInterval(-60))
+        ledger.bankAccounts = [account]
         ledger.expenses = [ledger.expenses[2]]
         let item = ledger.friendDebtItems[0]
         let plan = try ledger.settlementPlan(friend: "amy", selected: [item.id], payment: 1500, date: settlementDate)
         let id = try ledger.confirmSettlement(plan)
-        let automatic = Expense(id: "automatic-transfer", merchant: "Amy transfer", cents: 1500, date: settlementDate, source: "TNG")
+        var automatic = Expense(id: "automatic-transfer", merchant: "Amy transfer", cents: 1500, date: settlementDate, source: "TNG")
+        automatic.bankAccountID = account.id
         ledger.expenses.append(automatic)
         var notice = settlementNotice(cents: 1500, kind: "payment")
         notice.status = "recorded"; notice.expenseID = automatic.id
+        notice.bankAccountID = account.id
         ledger.tngNotices = [notice]
+        XCTAssertEqual(ledger.bankBalance(account), 8500)
         XCTAssertEqual(ledger.spending(in: settlementDate), 3000)
         try ledger.linkSettlementPayment(settlementID: id, noticeID: notice.id)
         XCTAssertEqual(ledger.spending(in: settlementDate), 1500)
         XCTAssertEqual(ledger.settlements[0].convertedPayment, automatic)
+        XCTAssertEqual(ledger.bankBalance(account), 8500, "Converting the automatic expense keeps exactly one net payment deduction")
         XCTAssertEqual(ledger.expenses.count, 1)
         XCTAssertEqual(ledger.friendBalances[0].payable, 0)
         try ledger.undoSettlement(id: id)
