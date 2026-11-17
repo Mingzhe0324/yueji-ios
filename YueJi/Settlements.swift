@@ -79,6 +79,42 @@ extension Expense {
 }
 
 extension Ledger {
+    mutating func confirmManualSettlement(_ plan: SettlementPlan, id: String, accountID: String?) throws -> String {
+        if plan.transfer == 0 { return try confirmSettlement(plan, id: id) }
+        guard let accountID, let account = bankAccounts.first(where: { $0.id == accountID }), plan.date >= account.openingDate,
+              !tngNotices.contains(where: { $0.id == id }), !settlements.contains(where: { $0.id == id }) else {
+            throw settlementError("请选择实际收付款账户，并核对日期。", "Choose the actual payment account and check the date.", "Pilih akaun bayaran sebenar dan semak tarikh.")
+        }
+        var copy = self
+        var notice = TNGNotice(bankAccountID: accountID, id: id, body: "Manual settlement", title: "", date: plan.date, usesReceivedDate: false, kind: plan.transfer > 0 ? "incoming" : "transfer", status: "pending", cents: abs(plan.transfer), party: plan.name)
+        notice.sourceBank = "手动"; notice.balanceHeldForReview = true
+        copy.tngNotices.append(notice)
+        let result = try copy.confirmNoticeNetSettlement(noticeID: id, plan: plan)
+        self = copy
+        return result
+    }
+
+    /// A manual receipt uses the same purpose/reimbursement/debt confirmation as a notification.
+    mutating func addManualReceipt(id: String, sender: String, cents: Int, date: Date, accountID: String) throws -> String {
+        let name = sender.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !id.isEmpty, id.count <= 200, !name.isEmpty, name.count <= 200,
+              (1...10_000_000_000).contains(cents), date.timeIntervalSince1970.isFinite,
+              date.timeIntervalSince1970 >= 0, date <= Date(),
+              let account = bankAccounts.first(where: { $0.id == accountID }), date >= account.openingDate else {
+            throw settlementError("请填写转账人、实际金额、日期和到账账户。", "Enter the sender, actual amount, date and receiving account.", "Isi pengirim, amaun sebenar, tarikh dan akaun penerima.")
+        }
+        if let existing = tngNotices.first(where: { $0.id == id }) {
+            guard existing.provider == "手动", existing.party == name, existing.cents == cents, existing.date == date, existing.bankAccountID == accountID else { throw LedgerError.invalid("Receipt changed") }
+            return id
+        }
+        var notice = TNGNotice(bankAccountID: accountID, id: id, body: "Manual receipt", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: cents, party: name)
+        notice.sourceBank = "手动"; notice.balanceHeldForReview = true
+        notice.possibleDuplicate = tngNotices.contains { $0.kind == "incoming" && $0.status != "ignored" && $0.bankAccountID == accountID && $0.cents == cents && abs($0.date.timeIntervalSince(date)) <= 86400 && friendKey($0.party ?? "") == friendKey(name) }
+        var copy = self; copy.tngNotices.append(notice)
+        self = try copy.validated()
+        return id
+    }
+
     func requireUnpaidLoan(_ entry: Expense) throws {
         guard !entry.isLoan || entry.shares.allSatisfy({ $0.repayments.isEmpty && ($0.returns ?? []).isEmpty }) else {
             throw LedgerError.invalid(tr("请先撤销还款，再删除借款。", "Undo repayments before deleting the loan.", "Batalkan bayaran balik sebelum memadam pinjaman."))
@@ -154,6 +190,36 @@ extension Ledger {
         return entry.id
     }
 
+    /// Debt entry timestamps may be later than the payment when entered afterwards.
+    /// Use the same calendar-day eligibility as settlementPlan, not minute order.
+    func noticeSettlementPlan(noticeID: String, friend: String, roundingCents: Int = 0) throws -> SettlementPlan {
+        guard let notice = tngNotices.first(where: { $0.id == noticeID }), let cents = notice.cents,
+              ["incoming", "payment", "transfer"].contains(notice.kind) else {
+            throw settlementError("请先核对转账金额与收付款方向。", "Review the payment amount and direction first.", "Semak amaun dan arah bayaran dahulu.")
+        }
+        let selected = Set(friendDebtItems.filter {
+            friendKey($0.friend) == friendKey(friend) && $0.balance != 0 &&
+            Calendar.current.startOfDay(for: $0.expense.date) <= notice.date
+        }.map(\.id))
+        guard (0...100).contains(roundingCents), cents > roundingCents else { throw LedgerError.invalid("Invalid settlement rounding") }
+        let plan = try settlementPlan(friend: friend, selected: selected, payment: cents - roundingCents, date: notice.date)
+        guard roundingCents == 0 || abs(plan.fullNet) == cents - roundingCents else { throw LedgerError.invalid("Rounding must settle the remaining net debt exactly.") }
+        guard plan.transfer == (notice.kind == "incoming" ? cents - roundingCents : -(cents - roundingCents)) else {
+            throw settlementError("转账方向与这位朋友的净欠款相反，请核对所选朋友。", "The payment direction is opposite to this friend's net debt. Check the selected friend.", "Arah bayaran bertentangan dengan hutang bersih rakan ini. Semak rakan dipilih.")
+        }
+        return plan
+    }
+
+    func noticeSettlementRounding(noticeID: String, friend: String) -> Int {
+        guard let notice = tngNotices.first(where: { $0.id == noticeID }), let cents = notice.cents else { return 0 }
+        let net = friendDebtItems.filter {
+            friendKey($0.friend) == friendKey(friend) && Calendar.current.startOfDay(for: $0.expense.date) <= notice.date
+        }.reduce(0) { $0 + $1.balance }
+        let difference = cents - abs(net)
+        guard (1...100).contains(difference), (try? noticeSettlementPlan(noticeID: noticeID, friend: friend, roundingCents: difference)) != nil else { return 0 }
+        return difference
+    }
+
     /// Offset both sides and consume the received bank payment in one write.
     mutating func confirmIncomingNetSettlement(noticeID: String, plan: SettlementPlan, distinctConfirmed: Bool = false) throws -> String {
         guard let notice = tngNotices.first(where: { $0.id == noticeID }), notice.kind == "incoming",
@@ -164,15 +230,18 @@ extension Ledger {
     }
 
     /// Apply both debt sides and the actual payment atomically, for either direction.
-    mutating func confirmNoticeNetSettlement(noticeID: String, plan: SettlementPlan, distinctConfirmed: Bool = false) throws -> String {
+    mutating func confirmNoticeNetSettlement(noticeID: String, plan: SettlementPlan, distinctConfirmed: Bool = false, roundingCents: Int = 0) throws -> String {
         guard let notice = tngNotices.first(where: { $0.id == noticeID }),
-              plan.transfer != 0, abs(plan.transfer) == notice.cents,
+              (0...100).contains(roundingCents),
+              roundingCents == 0 || (abs(plan.fullNet) == abs(plan.transfer) && noticeSettlementRounding(noticeID: noticeID, friend: plan.friend) == roundingCents),
+              plan.transfer != 0, abs(plan.transfer) + roundingCents == notice.cents,
               plan.transfer > 0 ? notice.kind == "incoming" : ["payment", "transfer"].contains(notice.kind),
               let accountID = notice.bankAccountID, bankAccounts.contains(where: { $0.id == accountID }) else {
             throw settlementError("请核对付款方向、金额并分配账户。", "Check the payment direction, amount and account.", "Semak arah bayaran, amaun dan akaun.")
         }
         var copy = self
         let id = try copy.confirmSettlement(plan)
+        if let n = copy.tngNotices.firstIndex(where: { $0.id == noticeID }) { copy.tngNotices[n].settlementRoundingCents = roundingCents > 0 ? roundingCents : nil }
         try copy.linkSettlementPayment(settlementID: id, noticeID: noticeID, distinctConfirmed: distinctConfirmed)
         self = copy
         return id
@@ -314,6 +383,7 @@ extension Ledger {
         if let noticeID = copy.settlements[i].paymentNoticeID,
            let n = copy.tngNotices.firstIndex(where: { $0.id == noticeID && $0.settlementID == id }) {
             copy.tngNotices[n].settlementID = nil
+            copy.tngNotices[n].settlementRoundingCents = nil
             copy.tngNotices[n].status = copy.tngNotices[n].kind == "incoming" ? "pending" : "transfer"
             // Keep the same bank record. Never recreate the misclassified expense or replay automation.
         }
@@ -336,7 +406,7 @@ extension Ledger {
             throw settlementError("此结算或付款已关联，请重新查看。", "Settlement or payment is already linked. Reopen it.", "Penyelesaian atau bayaran telah dipautkan. Buka semula.")
         }
         let record = settlements[s], notice = tngNotices[n]
-        guard record.transfer != 0, notice.cents == abs(record.transfer), notice.settlementID == nil,
+        guard record.transfer != 0, notice.cents == abs(record.transfer) + (notice.settlementRoundingCents ?? 0), notice.settlementID == nil,
               notice.resolution == nil, (notice.repaymentIDs ?? []).isEmpty,
               ["pending", "transfer", "recorded"].contains(notice.status),
               (record.transfer > 0 ? notice.kind == "incoming" : ["payment", "transfer"].contains(notice.kind)),
@@ -350,7 +420,7 @@ extension Ledger {
         if let expenseID = notice.expenseID, let expense = expenses.first(where: { $0.id == expenseID }) {
             guard notice.status == "recorded", expense.paidByFriend == nil, expense.shares.isEmpty,
                   (expense.items ?? []).isEmpty, expense.reimbursement == nil, expense.charges == nil,
-                  expense.refunded == 0, expense.recurringKey == nil, expense.cents == abs(record.transfer), expense.source == notice.provider,
+                  expense.refunded == 0, expense.recurringKey == nil, expense.cents == notice.cents, expense.source == notice.provider,
                   !hasActiveSettlement(expenseID: expenseID), tngNotices.filter({ $0.expenseID == expenseID }).count == 1 else {
                 throw settlementError("此自动付款已有物品、分账、退款、报销、税费或其他关联。请先处理原账目。", "This automatic payment has items, splits, refunds, reimbursement, charges or other links. Resolve the original entry first.", "Bayaran automatik ini mempunyai item, bahagian, pulangan, tuntutan, caj atau pautan lain. Selesaikan rekod asal dahulu.")
             }
@@ -415,7 +485,8 @@ extension Ledger {
                 guard paymentIDs.insert(payment).inserted, let notice = tngNotices.first(where: { $0.id == payment }),
                       notice.settlementID == record.id, notice.status == "settlement", notice.expenseID == nil,
                       notice.resolution == nil, (notice.repaymentIDs ?? []).isEmpty,
-                      record.transfer != 0, notice.cents == abs(record.transfer),
+                      record.transfer != 0, notice.cents == abs(record.transfer) + (notice.settlementRoundingCents ?? 0),
+                      notice.settlementRoundingCents == nil || abs(record.transfer) == abs(net),
                       notice.date >= Calendar.current.startOfDay(for: record.date),
                       (record.transfer > 0 ? notice.kind == "incoming" : ["payment", "transfer"].contains(notice.kind)) else { throw invalidSettlementData() }
                 if let identity = paymentIdentity(notice) { guard identities.insert(identity).inserted else { throw invalidSettlementData() } }

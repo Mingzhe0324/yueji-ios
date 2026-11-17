@@ -503,6 +503,23 @@ enum OwnTransferRoute: Identifiable {
     }
 }
 
+struct LedgerAccountTransferRow: View {
+    @EnvironmentObject private var model: LedgerModel
+    let transfer: BankTransfer
+    @State private var editing = false
+    private func name(_ id: String) -> String { model.ledger.bankAccounts.first { $0.id == id }?.name ?? "—" }
+    var body: some View {
+        Button { editing = true } label: {
+            VStack(alignment: .leading, spacing: 8) {
+                Label(tr("账户转账", "Account transfer", "Pindahan akaun"), systemImage: "arrow.left.arrow.right").font(.headline)
+                HStack { Text(name(transfer.fromAccountID)); Spacer(); TransactionAmount(cents: transfer.cents, direction: .outgoing) }
+                HStack { Text(name(transfer.toAccountID)); Spacer(); TransactionAmount(cents: transfer.cents, direction: .incoming) }
+                Text(tr("不计收入或消费", "Excluded from income and spending", "Tidak dikira sebagai pendapatan atau belanja")).font(.caption).foregroundStyle(.secondary)
+            }.foregroundStyle(.primary).padding(.vertical, 6)
+        }.sheet(isPresented: $editing) { BankTransferEditor(original: transfer) }
+    }
+}
+
 struct OwnTransferPresentation: ViewModifier {
     @Binding var route: OwnTransferRoute?
     func body(content: Content) -> some View {
@@ -1928,6 +1945,30 @@ private struct StatementImportView: View {
             }
             if account.openingDate > statement.start {
                 Text(tr("账户期初晚于月结单开始，较早记录已包含于期初余额，不会补录。请核对期初金额与时间。", "The account opens after this statement starts. Earlier entries are covered by the opening balance and will be skipped. Check that amount and time.", "Akaun bermula selepas penyata. Rekod terdahulu diliputi baki awal dan dilangkau. Semak amaun dan waktu awal.")).font(.caption).foregroundStyle(.secondary)
+            }
+            let review = model.ledger.statementReconciliation(statement, account: account)
+            DisclosureGroup(tr("查看差额线索", "Review balance differences", "Semak perbezaan baki")) {
+                if let difference = review.openingDifference, difference != 0 {
+                    LabeledContent(tr("期初已存在差额", "Opening balance difference", "Perbezaan baki awal"), value: money(difference))
+                }
+                ForEach(review.pending) { notice in
+                    NavigationLink { FinancialNoticeReviewView(id: notice.id) } label: {
+                        LabeledContent(notice.possibleDuplicate ? tr("疑似重复", "Possible duplicate", "Kemungkinan pendua") : tr("待确认", "Needs review", "Perlu semakan"), value: (notice.party ?? notice.provider) + " · " + money(notice.cents ?? 0))
+                    }
+                }
+                ForEach(review.unassigned) { notice in
+                    NavigationLink { FinancialNoticeReviewView(id: notice.id) } label: {
+                        LabeledContent(tr("未分配账户", "Unassigned account", "Akaun belum ditetapkan"), value: (notice.party ?? notice.provider) + " · " + money(notice.cents ?? 0))
+                    }
+                }
+                ForEach(review.missing) { row in
+                    LabeledContent(tr("月结单未关联", "Unlinked statement entry", "Rekod penyata belum dipautkan"), value: day(row.date) + " · " + money(row.cents))
+                }
+                if !review.possibleMatches.isEmpty {
+                    LabeledContent(tr("可能已记账，需核对", "May already be recorded", "Mungkin sudah direkod"), value: String(review.possibleMatches.count))
+                }
+                Text(tr("这些是核对线索，不会自动抵消差额；也请检查期初余额和记账日期。", "These are review clues, not automatic adjustments. Also check the opening balance and entry dates.", "Ini petunjuk semakan, bukan pelarasan automatik. Semak juga baki awal dan tarikh rekod."))
+                    .font(.caption).foregroundStyle(.secondary)
             }
         } footer: {
             Text(tr("差额不会直接覆盖账户余额。处理待确认记录后再核对。", "The difference never overwrites your balance. Review pending entries, then compare again.", "Perbezaan tidak menimpa baki. Semak rekod tertunda, kemudian banding semula."))

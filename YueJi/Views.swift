@@ -2021,6 +2021,8 @@ struct ExpensesView: View {
                         ForEach(day.entries) { item in
                             Group {
                             switch item {
+                            case .accountTransfer(let transfer):
+                                LedgerAccountTransferRow(transfer: transfer)
                             case .settlement(let record):
                                 NavigationLink { SettlementDetailView(id: record.id).yuejiZoom(id: item.id, namespace: expenseTransition) } label: {
                                     SettlementPaymentRow(record: record)
@@ -2963,6 +2965,8 @@ struct ExpenseEditor: View {
                                  onSaved: { finishDraft(); onSaved?() })
             } else if original == nil && initialDraft == nil && entryType == "settlement" {
                 ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
+            } else if original == nil && initialDraft == nil && entryType == "receipt" {
+                ManualReceiptEntryView(entryType: $entryType, initialDate: initialDate)
             } else {
             Form {
                 if let saved = recoverable {
@@ -3122,6 +3126,11 @@ struct ExpenseEditor: View {
                 .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button(tr("重试", "Retry", "Cuba lagi")) { beginSave() }; Button(tr("继续编辑", "Keep editing", "Terus edit"), role: .cancel) {} } message: { Text(error ?? "") }
             }
         }.ledgerFeedback(modal: true)
+            .onChange(of: entryType) { _, type in
+                guard original == nil, initialDraft == nil else { return }
+                if type == "friendPaid" { friendPays = true; friendPaidMode = "mine"; moreDetails = true }
+                else if type == "expense" { friendPays = false }
+            }
             .task(id: initialized && recoverable == nil) {
                 guard initialized, recoverable == nil, !startedLocation, original == nil,
                       !resumedDraft, !model.isPreview else { return }

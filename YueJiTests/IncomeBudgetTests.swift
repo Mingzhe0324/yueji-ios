@@ -1001,6 +1001,107 @@ extension IncomeBudgetTests {
         ]
         return (account, RHBStatement(accountHash: "sample", suffix: "1234", start: start, end: start.addingTimeInterval(30 * 86400), opening: 100000, closing: 100123, debitCount: 2, creditCount: 2, debitTotal: 3000, creditTotal: 3123, rows: rows))
     }
+    func testStatementFirstThenNotificationIsHeldAndReconciliationExplainsPending() throws {
+        var (account, statement) = statementFixture()
+        account.automaticSuffix = nil
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let firstReview = ledger.statementReconciliation(statement, account: account)
+        XCTAssertEqual(firstReview.missing.count, 4)
+        XCTAssertEqual(firstReview.openingDifference, 0)
+        _ = try ledger.importStatement(statement, account: account, categories: [:])
+        let before = ledger.bankBalance(account)
+        let parsed = TNGParsed(kind: "payment", cents: 1000, party: "Cafe", sourceBank: "RHB", accountSuffix: "1234")
+        XCTAssertTrue(ledger.hasCrossSourcePaymentCandidate(parsed, date: statement.start.addingTimeInterval(3600)))
+        _ = try ledger.receiveTNG(body: "You have paid RM10.00 to Cafe.", title: "Payment", date: statement.start.addingTimeInterval(3600), eventID: "later-card", sourceApp: "RHB")
+        XCTAssertEqual(ledger.bankBalance(account), before)
+        XCTAssertTrue(ledger.tngNotices.last?.possibleDuplicate == true)
+        let review = ledger.statementReconciliation(statement, account: account)
+        XCTAssertTrue(review.missing.isEmpty)
+        XCTAssertEqual(review.pending.count, 3)
+        let duplicate = try XCTUnwrap(ledger.tngNotices.last)
+        let entry = try XCTUnwrap(ledger.expenses.first)
+        try ledger.dismissDuplicateNotice(id: duplicate.id, expenseID: entry.id)
+        XCTAssertEqual(ledger.bankBalance(account), before)
+        XCTAssertEqual(ledger.tngNotices.last?.relatedRecordID, entry.id)
+        try ledger.reopenResolvedNotice(id: duplicate.id)
+        XCTAssertEqual(ledger.bankBalance(account), before)
+    }
+
+    func testDelayedCrossSourceCandidateUsesAccountAndNeverMergesOnAmountAlone() throws {
+        let now = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let account = BankAccount(name: "Bank", openingCents: 10000, openingDate: now.addingTimeInterval(-864000), automaticSource: "RHB")
+        let other = BankAccount(name: "Other", openingCents: 0, openingDate: account.openingDate)
+        ledger.bankAccounts = [account, other]
+        ledger.expenses = [Expense(bankAccountID: account.id, merchant: "Grab", cents: 4188, date: now.addingTimeInterval(-86400), source: "Grab Card")]
+        let payment = TNGParsed(kind: "payment", cents: 4188, party: "Grab", sourceBank: "RHB")
+        XCTAssertTrue(ledger.hasCrossSourcePaymentCandidate(payment, date: now))
+        ledger.expenses[0].bankAccountID = other.id
+        XCTAssertFalse(ledger.hasCrossSourcePaymentCandidate(payment, date: now))
+        ledger.expenses[0].bankAccountID = account.id; ledger.expenses[0].merchant = "Different shop"
+        XCTAssertFalse(ledger.hasCrossSourcePaymentCandidate(payment, date: now))
+        XCTAssertEqual(ledger.expenses.count, 1)
+    }
+
+    func testManualReceiptAndLaterNotificationCanBeLinkedWithoutSecondCredit() throws {
+        let now = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let account = BankAccount(name: "Bank", openingCents: 0, openingDate: now.addingTimeInterval(-86400), automaticSource: "RHB")
+        ledger.bankAccounts = [account]
+        let id = try ledger.addManualReceipt(id: "receipt", sender: "James", cents: 1000, date: now, accountID: account.id)
+        try ledger.resolveTNGIncoming(id: id, purpose: "income", date: now)
+        var later = TNGNotice(bankAccountID: account.id, body: "Received", title: "", date: now, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 1000, party: "James", possibleDuplicate: true)
+        later.sourceBank = "RHB"; ledger.tngNotices.append(later)
+        XCTAssertEqual(ledger.duplicateNoticeCandidates(later).map(\.id), [id])
+        try ledger.dismissDuplicateTransactionNotice(id: later.id, originalNoticeID: id)
+        XCTAssertEqual(ledger.bankBalance(account), 1000)
+        XCTAssertThrowsError(try ledger.dismissDuplicateTransactionNotice(id: later.id, originalNoticeID: id))
+        try ledger.reopenResolvedNotice(id: later.id)
+        XCTAssertEqual(ledger.bankBalance(account), 1000)
+    }
+
+    func testManualFriendPaymentThenBankNotificationDoesNotDebitTwice() throws {
+        let date = Date().addingTimeInterval(-120)
+        var ledger = Ledger()
+        let account = BankAccount(name: "Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-86400), automaticSource: "RHB")
+        ledger.bankAccounts = [account]
+        ledger.expenses = [Expense(merchant: "Utilities", cents: 4040, date: date, shares: [Share(name: "James", cents: 0)], paidByFriend: "James")]
+        let plan = try ledger.repaymentPlan(friend: "James", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 4040, date: date, direction: .outgoing)
+        _ = try ledger.confirmManualSettlement(plan, id: "manual-payment", accountID: account.id)
+        _ = try ledger.receiveTNG(body: "You have paid RM40.40 to CHA JING YUAN.", title: "Payment", date: date.addingTimeInterval(60), eventID: "bank-payment", sourceApp: "RHB")
+        let notification = try XCTUnwrap(ledger.tngNotices.last)
+        XCTAssertTrue(notification.possibleDuplicate)
+        XCTAssertEqual(notification.status, "pending")
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.bankBalance(account), 5960)
+        try ledger.dismissDuplicateTransactionNotice(id: notification.id, originalNoticeID: "manual-payment")
+        ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+        XCTAssertEqual(ledger.bankBalance(account), 5960)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        try ledger.reopenResolvedNotice(id: notification.id)
+        XCTAssertEqual(ledger.bankBalance(account), 5960)
+    }
+
+    func testAccountTransferTimelineShowsBothAccountsAsOneNonSpendingEntry() throws {
+        let now = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let from = BankAccount(name: "Bank", openingCents: 10000, openingDate: now.addingTimeInterval(-86400))
+        let to = BankAccount(name: "Wallet", openingCents: 0, openingDate: from.openingDate)
+        ledger.bankAccounts = [from, to]
+        let transfer = BankTransfer(fromAccountID: from.id, toAccountID: to.id, cents: 2000, date: now)
+        try ledger.saveBankTransfer(transfer, replacing: nil)
+        let query = LedgerTimelineQuery(revision: 1, month: now, search: "Wallet", filter: LedgerFilter(), provider: "all")
+        let timeline = try LedgerTimelineSnapshot(ledger: ledger, month: now, query: query)
+        XCTAssertEqual(timeline.count, 1)
+        XCTAssertEqual(timeline.days.first?.spending, 0)
+        XCTAssertEqual(timeline.days.first?.entries.first?.id, "account-transfer:" + transfer.id)
+        XCTAssertEqual(ledger.bankBalance(from), 8000)
+        XCTAssertEqual(ledger.bankBalance(to), 2000)
+        var linked = transfer; linked.noticeIDs = ["out", "in"]
+        let notices = ["out", "in"].map { TNGNotice(id: $0, body: "Transfer", title: "", date: now, usesReceivedDate: false, kind: "transfer", status: "transfer", cents: 2000) }
+        let days = LedgerTimelineItem.grouped(expenses: [], transfers: notices, accountTransfers: [linked])
+        XCTAssertEqual(days.flatMap(\.entries).count, 1)
+    }
     func testStatementImportAddsSafeEntriesHoldsTransfersAndCanUndoAfterReload() throws {
         let (account, statement) = statementFixture()
         var ledger = Ledger(); ledger.bankAccounts = [account]

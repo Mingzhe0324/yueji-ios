@@ -4261,7 +4261,9 @@ struct TNGIncomingView: View {
                         Button(tr("撤销确认 / 重新分类", "Undo confirmation / reclassify", "Batal pengesahan / klasifikasi semula"), role: .destructive) { reopen = true }
                     }
                 }
-                if n.status == "pending" { NavigationLink(tr("账户转账 / 充值 / 退款关联", "Link account transfer / top-up / refund", "Pautkan pindahan akaun / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) } }
+                if n.status == "pending" {
+                    NavigationLink(n.possibleDuplicate ? tr("核对重复收款", "Review duplicate receipt", "Semak penerimaan pendua") : tr("账户转账 / 充值 / 退款关联", "Link account transfer / top-up / refund", "Pautkan pindahan akaun / tambah nilai / bayaran balik")) { FinancialNoticeReviewView(id: id) }
+                }
                 NoticeSourceSection(notice: n)
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
         }.yuejiListSurface().disabled(model.isWorking("notice-" + id))
@@ -4361,7 +4363,7 @@ struct TNGIncomingView: View {
                 }
                 LabeledContent(tr("所选未还金额", "Selected outstanding", "Baki dipilih"), value: money(selectedBalance))
                 if roundingCandidate > 0 {
-                    Toggle(tr("确认多收 1–2 分为尾差", "Accept 1–2 extra cents as rounding", "Terima lebihan 1–2 sen sebagai pembundaran"), isOn: $acceptRounding)
+                    Toggle(tr("确认多收金额作为尾差", "Accept the extra amount as rounding", "Terima amaun tambahan sebagai pembundaran"), isOn: $acceptRounding)
                     Text(tr("实际收款保留，多收部分单独记录，不增加欠款或预算。", "The full receipt is retained. Excess is recorded separately, without increasing debt or budgets.", "Penerimaan penuh dikekalkan. Lebihan direkod berasingan tanpa menambah hutang atau bajet.")).font(.caption)
                     LabeledContent(tr("多收尾差", "Excess rounding", "Lebihan pembundaran"), value: money(roundingCandidate))
                 } else if let cents = notice?.cents, !selectedDebts.isEmpty, cents > selectedBalance {
@@ -4951,6 +4953,9 @@ struct FinancialNoticeReviewView: View {
     private var notice: TNGNotice? { model.notice(id: id) }
     private var candidates: [Expense] {
         let cents = (try? toCents(amount)) ?? 0
+        if purpose == "duplicate" {
+            return model.ledger.duplicateExpenseCandidates(cents: cents, date: date, accountID: notice?.bankAccountID)
+        }
         return model.ledger.expenses.filter { entry in
             if purpose == "reimbursement" { return cents > 0 && (entry.reimbursement?.outstanding ?? 0) >= cents && entry.date <= date }
             if purpose == "refund" { return entry.cents - entry.refunded >= cents && entry.date <= date }
@@ -4975,7 +4980,7 @@ struct FinancialNoticeReviewView: View {
                         Text(tr("退款到账", "Refund received", "Bayaran balik diterima")).tag("refund")
                         Text(tr("报销到账", "Reimbursement received", "Tuntutan diterima")).tag("reimbursement")
                         if ["incoming", "payment", "transfer"].contains(notice.kind) {
-                            Text(tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih")).tag("settlement")
+                            Text(notice.kind == "incoming" ? tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih") : tr("还款 / 报销给朋友", "Repay / reimburse a friend", "Bayar balik rakan")).tag("settlement")
                         }
                         if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
                         Text(tr("忽略", "Ignore", "Abaikan")).tag("ignore")
@@ -5007,7 +5012,14 @@ struct FinancialNoticeReviewView: View {
                     Section(purpose == "refund" ? tr("选择原消费", "Choose original expense", "Pilih belanja asal") : tr("选择已有账目", "Choose existing entry", "Pilih rekod sedia ada")) {
                         Picker(tr("关联账目", "Linked entry", "Rekod dipautkan"), selection: $relatedID) {
                             Text(tr("请选择", "Please select", "Sila pilih")).tag("")
-                            ForEach(candidates) { entry in Text(entry.displayName + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
+                            if purpose == "duplicate" {
+                                ForEach(model.ledger.duplicateNoticeCandidates(notice)) { candidate in
+                                    Text((candidate.party ?? candidate.provider) + " · " + money(candidate.cents ?? 0) + " · " + dateLabel(candidate.date)).tag(candidate.id)
+                                }
+                            }
+                            if notice.kind != "incoming" || purpose == "refund" {
+                                ForEach(candidates) { entry in Text(entry.displayName + " · " + money(entry.cents) + " · " + dateLabel(entry.date)).tag(entry.id) }
+                            }
                         }
                         Text(tr("金额相同不代表同一笔，请核对商户和日期。退款会减少原消费，不作为收入。", "Matching amounts do not prove a duplicate. Check the merchant and date. Refunds reduce the original expense and are not income.", "Amaun sama tidak semestinya pendua. Semak peniaga dan tarikh. Bayaran balik mengurangkan belanja asal dan bukan pendapatan.")).font(.caption)
                     }
@@ -5062,7 +5074,11 @@ struct FinancialNoticeReviewView: View {
                     let incomeKind = self.purpose == "allowance" ? IncomeKind.allowance : self.incomeKind
                     model.perform(key: "notice-" + id, action: { [id, purpose, party, amount, date, category, remember, relatedID, incomeKind, distinct, reimbursementExpenseIDs, reimbursementPreview, reimbursementRounding] (ledger: inout Ledger) throws -> IncomeBudgetOutcome? in
                         if purpose == "ignore" { try ledger.excludeTNG(id: id) }
-                        else if purpose == "duplicate" { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
+                        else if purpose == "duplicate" {
+                            if ledger.tngNotices.contains(where: { $0.id == relatedID }) {
+                                try ledger.dismissDuplicateTransactionNotice(id: id, originalNoticeID: relatedID)
+                            } else { try ledger.dismissDuplicateNotice(id: id, expenseID: relatedID) }
+                        }
                         else if purpose == "reimbursement" {
                             guard try ledger.previewReimbursement(cents: toCents(amount), date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding) == reimbursementPreview else { throw LedgerError.invalid("Claims changed. Review again.") }
                             try ledger.resolveNotice(id: id, purpose: purpose, party: party, cents: toCents(amount), date: date, distinctConfirmed: distinct, reimbursementExpenseIDs: reimbursementExpenseIDs, reimbursementRoundingCents: reimbursementRounding)

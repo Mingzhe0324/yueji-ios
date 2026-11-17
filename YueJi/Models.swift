@@ -395,7 +395,10 @@ struct Ledger: Codable {
                 guard rounding > 0, n.kind == "incoming", n.status == "reimbursement", rounding < (n.cents ?? 0) else { throw LedgerError.invalid("Invalid reimbursement rounding") }
             }
             if let rounding = n.repaymentRoundingCents {
-                guard (1...2).contains(rounding), n.kind == "incoming", n.status == "repayment", (n.cents ?? 0) > rounding else { throw LedgerError.invalid("Invalid repayment rounding") }
+                guard (1...100).contains(rounding), n.kind == "incoming", n.status == "repayment", (n.cents ?? 0) > rounding else { throw LedgerError.invalid("Invalid repayment rounding") }
+            }
+            if let rounding = n.settlementRoundingCents {
+                guard (1...100).contains(rounding), n.status == "settlement", n.settlementID != nil, (n.cents ?? 0) > rounding else { throw LedgerError.invalid("Invalid settlement rounding") }
             }
             guard n.place?.valid ?? true else { throw LedgerError.invalid("Invalid notification location") }
             guard n.verifiedIncomingBalance != true || n.kind == "incoming",
@@ -560,6 +563,7 @@ struct TNGNotice: Codable, Identifiable, Equatable {
     var repaymentIDs: [String]? = nil
     /// Explicitly accepted excess receipt, in cents; never added to debt repayments.
     var repaymentRoundingCents: Int? = nil
+    var settlementRoundingCents: Int? = nil
     var reimbursementRoundingCents: Int? = nil
     var resolution: String? = nil
     var relatedRecordID: String? = nil
@@ -808,12 +812,15 @@ extension Ledger {
         let parsed: TNGParsed? = verified
         let partyKey = merchantIdentity(verified.party)
         let suppliedReference = verified.reference ?? (explicit.isEmpty ? nil : explicit)
-        let crossSourceDuplicate = expenses.contains { old in
-            guard old.source != verified.sourceBank, old.source != "手动", old.source != "固定消费", old.cents == verified.cents else { return false }
-            let sameName = !partyKey.isEmpty && merchantIdentity(old.merchant) == partyKey
-            let sameReference = suppliedReference.map { $0.count >= 6 && old.transactionReference == $0 } ?? false
-            return (sameName || sameReference) && abs(old.date.timeIntervalSince(timestamp)) <= 120
+        var duplicateProbe = verified
+        duplicateProbe.reference = suppliedReference
+        let incomingAccount = automaticBankAccount(source: verified.sourceBank, suffix: verified.accountSuffix)
+        let incomingDuplicate = verified.kind == "incoming" && tngNotices.contains { old in
+            old.kind == "incoming" && old.status != "ignored" && old.provider != verified.sourceBank &&
+            old.cents == verified.cents && incomingAccount != nil && old.bankAccountID == incomingAccount &&
+            !partyKey.isEmpty && merchantIdentity(old.party ?? "") == partyKey && abs(old.date.timeIntervalSince(timestamp)) <= 3 * 86400
         }
+        let crossSourceDuplicate = hasCrossSourcePaymentCandidate(duplicateProbe, date: timestamp) || hasCrossSourceSettlementCandidate(duplicateProbe, date: timestamp) || incomingDuplicate
         let duplicate = tngNotices.contains { old in
             guard old.provider == verified.sourceBank, old.accountSuffix == verified.accountSuffix else { return false }
             if let previous = old.bankReference, let current = suppliedReference, previous != current { return false }
@@ -935,7 +942,7 @@ extension Ledger {
         self = try copy.validated()
     }
     mutating func resolveTNGIncoming(id: String, purpose: String, friend: String = "", date: Date, distinctConfirmed: Bool = false, selectedExpenseIDs: Set<String>? = nil, incomeKind: IncomeKind? = nil, roundingCents: Int = 0, reimbursementExpenseID: String? = nil, reimbursementExpenseIDs: Set<String>? = nil) throws {
-        guard roundingCents >= 0, roundingCents == 0 || purpose == "reimbursement" || (purpose == "repayment" && roundingCents <= 2) else { throw LedgerError.invalid("Invalid receipt rounding") }
+        guard roundingCents >= 0, roundingCents == 0 || purpose == "reimbursement" || (purpose == "repayment" && roundingCents <= 100) else { throw LedgerError.invalid("Invalid receipt rounding") }
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].kind == "incoming",
               tngNotices[i].status == "pending", let cents = tngNotices[i].cents,
               ["repayment", "reimbursement", "income", "ownTransfer", "ignored"].contains(purpose),
@@ -1069,9 +1076,9 @@ struct TNGReviewTracker {
 }
 
 enum LedgerTimelineItem: Identifiable {
-    case expense(Expense), transfer(TNGNotice), settlement(FriendSettlement), income(IncomeEntry)
-    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id; case .settlement(let s): return "settlement:" + s.id; case .income(let i): return "income:" + i.id } }
-    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date; case .settlement(let s): return s.date; case .income(let i): return i.date } }
+    case expense(Expense), transfer(TNGNotice), settlement(FriendSettlement), income(IncomeEntry), accountTransfer(BankTransfer)
+    var id: String { switch self { case .expense(let e): return "expense:" + e.id; case .transfer(let n): return "tng:" + n.id; case .settlement(let s): return "settlement:" + s.id; case .income(let i): return "income:" + i.id; case .accountTransfer(let t): return "account-transfer:" + t.id } }
+    var date: Date { switch self { case .expense(let e): return e.date; case .transfer(let n): return n.date; case .settlement(let s): return s.date; case .income(let i): return i.date; case .accountTransfer(let t): return t.date } }
 }
 struct LedgerDayGroup: Identifiable {
     let date: Date
@@ -1088,10 +1095,11 @@ struct LedgerDayGroup: Identifiable {
 }
 
 extension LedgerTimelineItem {
-    static func grouped(expenses: [Expense], transfers: [TNGNotice], settlements: [FriendSettlement] = [], incomes: [IncomeEntry] = []) -> [LedgerDayGroup] {
+    static func grouped(expenses: [Expense], transfers: [TNGNotice], settlements: [FriendSettlement] = [], incomes: [IncomeEntry] = [], accountTransfers: [BankTransfer] = []) -> [LedgerDayGroup] {
         // A linked bank receipt already represents the payment. Never show a second cash record.
         let manual = settlements.filter { $0.active && $0.paymentNoticeID == nil }
-        let items = expenses.map(Self.expense) + transfers.map(Self.transfer) + manual.map(Self.settlement) + incomes.map(Self.income)
+        let linked = Set(accountTransfers.flatMap { $0.noticeIDs ?? [] })
+        let items = expenses.map(Self.expense) + transfers.filter { !linked.contains($0.id) }.map(Self.transfer) + manual.map(Self.settlement) + incomes.map(Self.income) + accountTransfers.map(Self.accountTransfer)
         return Dictionary(grouping: items, by: { Calendar.current.startOfDay(for: $0.date) })
             .map { LedgerDayGroup(date: $0.key, entries: $0.value.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }) }
             .sorted { $0.date > $1.date }
@@ -1340,7 +1348,8 @@ extension Ledger {
     mutating func dismissDuplicateNotice(id: String, expenseID: String) throws {
         guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].status == "pending",
               tngNotices[i].expenseID == nil, let entry = expenses.first(where: { $0.id == expenseID }),
-              entry.cents == tngNotices[i].cents else { throw LedgerError.invalid("通知或账目已改变。") }
+              tngNotices[i].kind != "incoming",
+              duplicateExpenseCandidates(cents: tngNotices[i].cents ?? 0, date: tngNotices[i].date, accountID: tngNotices[i].bankAccountID).contains(where: { $0.id == entry.id }) else { throw LedgerError.invalid("通知或账目已改变。") }
         tngNotices[i].status = "ignored"
         tngNotices[i].resolution = "duplicate"
         tngNotices[i].relatedRecordID = expenseID

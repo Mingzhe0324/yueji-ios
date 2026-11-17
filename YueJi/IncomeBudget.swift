@@ -1166,13 +1166,97 @@ struct StatementImportResult: Sendable {
     var existingPending = 0
     var possibleDuplicates = 0
 }
+struct StatementReconciliation {
+    let openingDifference: Int?
+    let closingDifference: Int?
+    let pending: [TNGNotice]
+    let unassigned: [TNGNotice]
+    let missing: [StatementRow]
+    let possibleMatches: [StatementRow]
+}
 extension Ledger {
+    /// Read-only explanations, never an automatic balance correction.
+    func statementReconciliation(_ statement: RHBStatement, account: BankAccount) -> StatementReconciliation {
+        let cutoff = RHBStatement.calendar.date(byAdding: .day, value: 1, to: statement.end)!
+        let period = tngNotices.filter { $0.date >= statement.start && $0.date < cutoff && $0.status != "ignored" }
+        let missingRows = statement.rows.filter { row in
+            row.date >= account.openingDate && !seenEvents.contains(row.id) && !tngNotices.contains { $0.id == row.id }
+        }
+        return StatementReconciliation(
+            openingDifference: statementBalance(account, before: statement.start).map { statement.opening - $0 },
+            closingDifference: statementBalance(account, before: cutoff).map { statement.closing - $0 },
+            pending: period.filter { $0.bankAccountID == account.id && ["pending", "transfer"].contains($0.status) }.sorted { $0.date > $1.date },
+            unassigned: period.filter { $0.bankAccountID == nil && financialProvider($0.provider) == statement.provider }.sorted { $0.date > $1.date },
+            missing: missingRows.filter { !statementMayExist($0, accountID: account.id) },
+            possibleMatches: missingRows.filter { statementMayExist($0, accountID: account.id) })
+    }
+
+    /// Candidates only: equal amounts are never proof of a duplicate.
+    func duplicateExpenseCandidates(cents: Int, date: Date, accountID: String?) -> [Expense] {
+        expenses.filter {
+            $0.cents == cents && $0.paidByFriend == nil &&
+            (accountID == nil || $0.bankAccountID == nil || $0.bankAccountID == accountID) &&
+            abs(RHBStatement.calendar.startOfDay(for: $0.date).timeIntervalSince(RHBStatement.calendar.startOfDay(for: date))) <= 3 * 86400
+        }.sorted { abs($0.date.timeIntervalSince(date)) < abs($1.date.timeIntervalSince(date)) }
+    }
+
+    func hasCrossSourcePaymentCandidate(_ payment: TNGParsed, date: Date) -> Bool {
+        guard payment.kind == "payment" else { return false }
+        let accountID = automaticBankAccount(source: payment.sourceBank, suffix: payment.accountSuffix)
+        let name = merchantIdentity(payment.party)
+        return duplicateExpenseCandidates(cents: payment.cents, date: date, accountID: accountID).contains { entry in
+            let statementEntry = tngNotices.contains { $0.expenseID == entry.id && $0.statementImport != nil }
+            guard entry.source != payment.sourceBank || statementEntry else { return false }
+            let sameReference = payment.reference.map { $0.count >= 6 && $0 == entry.transactionReference } ?? false
+            let sameName = !name.isEmpty && merchantIdentity(entry.merchant) == name
+            // A statement has only a posting day and often a generic merchant.
+            // On the same account, keep a later notification pending for review.
+            if statementEntry, let accountID, entry.bankAccountID == accountID { return true }
+            if sameReference { return true }
+            return sameName && (accountID != nil && entry.bankAccountID == accountID || abs(entry.date.timeIntervalSince(date)) <= 120)
+        }
+    }
+
+    func hasCrossSourceSettlementCandidate(_ payment: TNGParsed, date: Date) -> Bool {
+        guard let accountID = automaticBankAccount(source: payment.sourceBank, suffix: payment.accountSuffix) else { return false }
+        return tngNotices.contains {
+            $0.status == "settlement" && $0.provider != payment.sourceBank &&
+            $0.bankAccountID == accountID && $0.cents == payment.cents &&
+            ($0.kind == "incoming") == (payment.kind == "incoming") &&
+            abs($0.date.timeIntervalSince(date)) <= 3 * 86400
+        }
+    }
+
+    func duplicateNoticeCandidates(_ notice: TNGNotice) -> [TNGNotice] {
+        tngNotices.filter {
+            $0.id != notice.id && $0.cents == notice.cents &&
+            ($0.kind == "incoming") == (notice.kind == "incoming") &&
+            ["recorded", "income", "repayment", "reimbursement", "settlement"].contains($0.status) &&
+            (notice.bankAccountID == nil || $0.bankAccountID == nil || $0.bankAccountID == notice.bankAccountID) &&
+            abs($0.date.timeIntervalSince(notice.date)) <= 3 * 86400
+        }.sorted { $0.date > $1.date }
+    }
+
+    mutating func dismissDuplicateTransactionNotice(id: String, originalNoticeID: String) throws {
+        guard let i = tngNotices.firstIndex(where: { $0.id == id }), tngNotices[i].status == "pending",
+              tngNotices[i].expenseID == nil,
+              duplicateNoticeCandidates(tngNotices[i]).contains(where: { $0.id == originalNoticeID }) else { throw LedgerError.invalid("Transaction changed; review again") }
+        var copy = self
+        copy.tngNotices[i].status = "ignored"; copy.tngNotices[i].resolution = "duplicate"
+        copy.tngNotices[i].relatedRecordID = originalNoticeID
+        self = try copy.validated()
+    }
+
     /// A same-amount posting within three days may be an existing notification,
     /// manual entry, refund or transfer. Ambiguity must never auto-create money.
     func statementMayExist(_ row: StatementRow, accountID: String) -> Bool {
         func near(_ date: Date) -> Bool { abs(RHBStatement.calendar.startOfDay(for: date).timeIntervalSince(row.date)) <= 3 * 86400 }
         func account(_ id: String?) -> Bool { id == nil || id == accountID }
-        if tngNotices.contains(where: { account($0.bankAccountID) && $0.cents == row.cents && near($0.date) }) { return true }
+        if tngNotices.contains(where: {
+            account($0.bankAccountID) && $0.cents == row.cents && near($0.date) &&
+            ($0.status != "ignored" || ["duplicate", "ownTransfer"].contains($0.resolution ?? "")) &&
+            ($0.kind == "unknown" || ($0.kind == "incoming") == (row.credit > 0))
+        }) { return true }
         if row.debit > 0 {
             return expenses.contains { $0.paidByFriend == nil && account($0.bankAccountID) && $0.cents == row.cents && near($0.date) } ||
                 bankTransfers.contains { $0.fromAccountID == accountID && $0.cents == row.cents && near($0.date) }

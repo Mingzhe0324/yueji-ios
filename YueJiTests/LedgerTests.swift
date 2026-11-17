@@ -6,6 +6,73 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testManualReceiptRepaymentRoundingAndUndoPreserveActualMoney() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let account = BankAccount(name: "TNG", openingCents: 0, openingDate: date.addingTimeInterval(-3600))
+        ledger.bankAccounts = [account]
+        let debt = Expense(merchant: "Advance", cents: 39900, date: date, shares: [Share(name: "James", cents: 39900)])
+        ledger.expenses = [debt]
+        let id = try ledger.addManualReceipt(id: "manual-receipt", sender: "James", cents: 40000, date: date, accountID: account.id)
+        XCTAssertEqual(ledger.bankBalance(account), 0, "A draft receipt waits for its purpose")
+        XCTAssertEqual(try ledger.addManualReceipt(id: id, sender: "James", cents: 40000, date: date, accountID: account.id), id)
+        XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "James", date: date, selectedExpenseIDs: [debt.id]))
+        try ledger.resolveTNGIncoming(id: id, purpose: "repayment", friend: "James", date: date, selectedExpenseIDs: [debt.id], roundingCents: 100)
+        XCTAssertEqual(ledger.bankBalance(account), 40000)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        XCTAssertEqual(ledger.tngNotices.first?.repaymentRoundingCents, 100)
+        try ledger.reopenTNGIncoming(id: id)
+        XCTAssertEqual(ledger.bankBalance(account), 0)
+        XCTAssertEqual(ledger.friendBalances.first?.owed, 39900)
+    }
+
+    func testNetSettlementRoundingNeedsConsentAndSurvivesReloadAndUndo() throws {
+        for incoming in [true, false] {
+            let date = Date().addingTimeInterval(-60)
+            var ledger = Ledger()
+            let account = BankAccount(name: "Wallet", openingCents: 50000, openingDate: date.addingTimeInterval(-3600))
+            ledger.bankAccounts = [account]
+            ledger.expenses = incoming
+                ? [Expense(merchant: "Advance", cents: 39900, date: date, shares: [Share(name: "James", cents: 39900)])]
+                : [Expense(merchant: "Friend paid", cents: 39900, date: date, shares: [Share(name: "James", cents: 0)], paidByFriend: "James")]
+            let notice = TNGNotice(bankAccountID: account.id, body: "Payment", title: "", date: date, usesReceivedDate: false, kind: incoming ? "incoming" : "transfer", status: "pending", cents: 40000, party: "James")
+            ledger.tngNotices = [notice]
+            XCTAssertEqual(ledger.noticeSettlementRounding(noticeID: notice.id, friend: "James"), 100)
+            XCTAssertThrowsError(try ledger.noticeSettlementPlan(noticeID: notice.id, friend: "James"))
+            let plan = try ledger.noticeSettlementPlan(noticeID: notice.id, friend: "James", roundingCents: 100)
+            XCTAssertThrowsError(try ledger.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan))
+            let id = try ledger.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan, roundingCents: 100)
+            ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+            XCTAssertEqual(ledger.bankBalance(account), incoming ? 90000 : 10000)
+            XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+            XCTAssertEqual(ledger.tngNotices[0].settlementRoundingCents, 100)
+            try ledger.undoSettlement(id: id)
+            XCTAssertNil(ledger.tngNotices[0].settlementRoundingCents)
+            XCTAssertEqual(abs(ledger.friendDebtItems[0].balance), 39900)
+        }
+    }
+
+    func testManualFriendReimbursementDebitsAccountWithoutSecondExpense() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        ledger.bankAccounts = [account]
+        let purchase = Expense(merchant: "Utilities", cents: 4040, date: date, shares: [Share(name: "James", cents: 0)], paidByFriend: "James")
+        ledger.expenses = [purchase]
+        let plan = try ledger.repaymentPlan(friend: "James", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 4040, date: date, direction: .outgoing)
+        XCTAssertThrowsError(try ledger.confirmManualSettlement(plan, id: "payment", accountID: nil))
+        let id = try ledger.confirmManualSettlement(plan, id: "payment", accountID: account.id)
+        XCTAssertEqual(ledger.bankBalance(account), 5960)
+        XCTAssertEqual(ledger.expenses, [purchase])
+        XCTAssertEqual(ledger.spending(in: date), 4040)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        XCTAssertThrowsError(try ledger.confirmManualSettlement(plan, id: "payment", accountID: account.id))
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+        XCTAssertEqual(ledger.payableToPayer(purchase), 4040)
+    }
+
     func testLendingUsesOneDebtAndCreditsActualBankRepaymentsWithoutIncome() throws {
         let date = Date().addingTimeInterval(-120)
         for provider in ["TNG", "CIMB"] {
@@ -150,6 +217,32 @@ final class EverydayFlowTests: XCTestCase {
             XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, -7000)
             XCTAssertNil(ledger.tngNotices[0].settlementID)
         }
+    }
+
+    func testJamesNetPaymentIncludesDebtEnteredTwoMinutesLaterOnSameDay() throws {
+        let start = Calendar.current.startOfDay(for: Date().addingTimeInterval(-86400))
+        let paymentDate = start.addingTimeInterval(21 * 3600 + 23 * 60)
+        var ledger = Ledger()
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: start)
+        ledger.bankAccounts = [wallet]
+        let mine = Expense(merchant: "Dinner", cents: 3098, date: start, shares: [Share(name: "James", cents: 3098)])
+        let theirs = Expense(merchant: "Utilities", cents: 4040, date: paymentDate.addingTimeInterval(120), shares: [Share(name: "James", cents: 0)], paidByFriend: "James")
+        ledger.expenses = [mine, theirs]
+        let notice = TNGNotice(bankAccountID: wallet.id, body: "Transferred RM9.42", title: "", date: paymentDate, usesReceivedDate: true, kind: "transfer", status: "transfer", cents: 942, party: "CHA JING YUAN")
+        ledger.tngNotices = [notice]
+        ledger = try ledger.validated()
+        let plan = try ledger.noticeSettlementPlan(noticeID: notice.id, friend: "james")
+        XCTAssertEqual(plan.receivable, 3098)
+        XCTAssertEqual(plan.payable, 4040)
+        XCTAssertEqual(plan.transfer, -942)
+        let id = try ledger.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        XCTAssertEqual(ledger.bankBalance(wallet), 9058)
+        XCTAssertEqual(ledger.expenses, [mine, theirs])
+        try ledger.undoSettlement(id: id)
+        XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, -942)
+        ledger.expenses[1].date = Calendar.current.date(byAdding: .day, value: 1, to: theirs.date)!
+        XCTAssertThrowsError(try ledger.noticeSettlementPlan(noticeID: notice.id, friend: "james"), "A different day's debt must not be pulled into an earlier payment")
     }
 
     func testNetPaymentRejectsWrongDirectionMissingAccountAndDuplicateAtomically() throws {
@@ -4156,7 +4249,7 @@ final class TNGIncomingTests: XCTestCase {
         let now = Date()
         var ledger = Ledger()
         ledger.expenses = [Expense(id: "debt", merchant: "Cafe", cents: 2000, date: now.addingTimeInterval(-86400), shares: [Share(name: "Amy", cents: 1000)])]
-        XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1003, date: now, selected: ["debt"]))
+        XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1101, date: now, selected: ["debt"]))
         XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1001, date: now, selected: ["debt", "missing"]))
         XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Other", cents: 1001, date: now, selected: ["debt"]))
         XCTAssertThrowsError(try ledger.incomingRepaymentRounding(friend: "Amy", cents: 1001, date: now.addingTimeInterval(-172800), selected: ["debt"]))

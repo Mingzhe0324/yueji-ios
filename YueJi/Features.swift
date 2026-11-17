@@ -868,7 +868,7 @@ extension Ledger {
             sum + entry.shares.filter { friendKey($0.name) == friendKey(friend) }.reduce(0) { $0 + outstanding(expense: entry, share: $1) }
         }
         let excess = cents - balance
-        guard balance > 0, (1...2).contains(excess) else { throw LedgerError.invalid("Only 1–2 cents of excess repayment can be rounded.") }
+        guard balance > 0, (1...100).contains(excess) else { throw LedgerError.invalid("Excess repayment rounding must be between RM0.01 and RM1.00.") }
         var preview = self
         try preview.batchRepay(friend: friend, cents: balance, date: date, selectedExpenseIDs: selected)
         return excess
@@ -1715,6 +1715,7 @@ struct LedgerTimelineQuery: Hashable {
     }
 }
 struct LedgerTimelineSnapshot {
+    var accountTransfers: [BankTransfer] = []
     var expenses: [Expense] = []
     var transfers: [TNGNotice] = []
     var settlements: [FriendSettlement] = []
@@ -1724,7 +1725,7 @@ struct LedgerTimelineSnapshot {
     var reimbursementOutstanding = 0
     var sources: [String] = []
     var repaymentPreviews: [String: RepaymentPurchasePreview] = [:]
-    var count: Int { expenses.count + transfers.count + settlements.count + incomes.count }
+    var count: Int { days.reduce(0) { $0 + $1.entries.count } }
 
     init() {}
     init(ledger: Ledger, month: Date, query: LedgerTimelineQuery) throws {
@@ -1763,7 +1764,21 @@ struct LedgerTimelineSnapshot {
                 }
             }
         }
-        days = LedgerTimelineItem.grouped(expenses: expenses, transfers: transfers, settlements: settlements, incomes: incomes)
+        if query.filter.category.isEmpty {
+            let low = try optionalMoney(query.filter.minimum), high = try optionalMoney(query.filter.maximum)
+            accountTransfers = ledger.bankTransfers.filter { transfer in
+                let linked = ledger.tngNotices.filter { (transfer.noticeIDs ?? []).contains($0.id) }
+                let sourceMatches = query.provider == "all" || (linked.isEmpty && query.provider == "手动") || linked.contains { $0.provider == query.provider }
+                let filterMatches = query.filter.source.isEmpty || (linked.isEmpty && query.filter.source == "手动") || linked.contains { $0.provider == query.filter.source }
+                let names = ledger.bankAccounts.filter { $0.id == transfer.fromAccountID || $0.id == transfer.toAccountID }.map(\.name).joined(separator: " ")
+                return monthKey(transfer.date) == monthKey(month) && sourceMatches && filterMatches &&
+                    (low.map { transfer.cents >= $0 } ?? true) && (high.map { transfer.cents <= $0 } ?? true) &&
+                    (query.search.isEmpty || (names + " " + transfer.note).localizedCaseInsensitiveContains(query.search))
+            }
+        }
+        let linkedTransferNotices = Set(ledger.bankTransfers.flatMap { $0.noticeIDs ?? [] })
+        transfers.removeAll { linkedTransferNotices.contains($0.id) }
+        days = LedgerTimelineItem.grouped(expenses: expenses, transfers: transfers, settlements: settlements, incomes: incomes, accountTransfers: accountTransfers)
         personal = expenses.reduce(0) { $0 + $1.personalSpending }
         reimbursementOutstanding = expenses.reduce(0) { $0 + ($1.reimbursement?.outstanding ?? 0) }
         sources = ledger.availableSources
