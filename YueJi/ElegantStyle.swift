@@ -129,9 +129,45 @@ private struct ElegantPressBody: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     var body: some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.98 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.88 : 1)
-            .animation(reduceMotion ? nil : YueJiMotion.press, value: configuration.isPressed)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
+    }
+}
+
+/// A single clear action for review workflows. Its footprint stays fixed while
+/// loading, with no looping decoration or layout animation on an entire Form.
+struct LedgerPrimaryActionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(.body.weight(.semibold))
+            .frame(maxWidth: .infinity, minHeight: 28)
+            .padding(.horizontal, 16).padding(.vertical, 12)
+            .foregroundStyle(enabled ? Color.white : Color.secondary)
+            .background(enabled ? Color.accentColor : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .opacity(configuration.isPressed ? 0.9 : 1)
+            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.985 : 1)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
+    }
+}
+
+struct LedgerWorkflowHeading: View {
+    let title: String
+    let subtitle: String
+    let symbol: String
+    var tint: Color = .accentColor
+    var body: some View {
+        HStack(alignment: .center, spacing: 14) {
+            IslandIconTile(symbol: symbol, color: tint, size: 46).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                Text(title).font(.headline).foregroundStyle(.primary)
+                Text(subtitle).font(.subheadline).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }.padding(.vertical, 8).accessibilityElement(children: .combine)
     }
 }
 

@@ -76,8 +76,8 @@ private struct BankWalletCard: View {
                 Text(bank).font(.caption).foregroundStyle(.white.opacity(0.85))
                 Text(money(appeared || reduceMotion ? balance : 0)).font(.system(.largeTitle, design: .rounded, weight: .semibold))
                     .monospacedDigit().contentTransition(.numericText())
-                    .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: balance)
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.7), value: appeared)
+                    .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.content, value: balance)
+                    .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.entrance, value: appeared)
                     .accessibilityLabel(money(balance))
                     .minimumScaleFactor(0.65).lineLimit(1)
                 Spacer(minLength: 20)
@@ -100,7 +100,7 @@ private struct BankWalletCard: View {
         .shadow(color: .black.opacity(0.16), radius: 5, y: -2)
         .opacity(appeared || reduceMotion ? 1 : 0)
         .offset(y: appeared || reduceMotion ? 0 : 14)
-        .animation(reduceMotion ? nil : .spring(response: 0.5, dampingFraction: 0.88), value: appeared)
+        .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.entrance, value: appeared)
         .accessibilityElement(children: .combine)
     }
 }
@@ -135,9 +135,9 @@ private struct BankBreathingBackground: View {
 private struct BankCardPressStyle: ButtonStyle {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.scaleEffect(configuration.isPressed && !reduceMotion ? 0.975 : 1)
+        configuration.label.scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.985 : 1)
             .opacity(configuration.isPressed ? 0.9 : 1)
-            .animation(reduceMotion ? nil : .spring(response: 0.3, dampingFraction: 0.8), value: configuration.isPressed)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
     }
 }
 
@@ -619,8 +619,7 @@ struct BankTransferEditor: View {
                         .disabled(!(original?.noticeIDs ?? []).isEmpty)
                     TextField(tr("备注（可选）", "Note (optional)", "Nota (pilihan)"), text: $note)
                     if !fromID.isEmpty, !toID.isEmpty, let cents = try? toCents(amount) {
-                        LabeledContent(accountName(fromID), value: "−" + money(cents))
-                        LabeledContent(accountName(toID), value: "+" + money(cents))
+                        TransferBalancePreview(from: accountName(fromID), to: accountName(toID), cents: cents)
                     }
                 } footer: {
                     Text(tr("同步记下两边余额变化，不计收入或消费。", "Records both balance changes, not income or spending.", "Merekod perubahan kedua-dua baki, bukan pendapatan atau belanja."))
@@ -724,6 +723,35 @@ struct BankTransferEditor: View {
     }
 }
 
+private struct TransferBalancePreview: View {
+    let from: String
+    let to: String
+    let cents: Int
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        VStack(spacing: 14) {
+            movement(from, symbol: "arrow.up.right", direction: .outgoing)
+            Rectangle().fill(Color.secondary.opacity(0.12)).frame(height: 1).padding(.leading, 42)
+            movement(to, symbol: "arrow.down.left", direction: .incoming)
+        }.padding(.vertical, 10)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.content, value: cents)
+            .accessibilityElement(children: .combine)
+    }
+    private func movement(_ account: String, symbol: String, direction: AccountDirection) -> some View {
+        HStack(spacing: 12) {
+            Image(systemName: symbol).font(.subheadline.weight(.semibold))
+                .foregroundStyle(direction == .incoming ? Color.green : Color.secondary)
+                .frame(width: 30, height: 30)
+                .background(Color.secondary.opacity(0.08), in: Circle())
+                .accessibilityHidden(true)
+            Text(account).font(.subheadline.weight(.medium)).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 12)
+            TransactionAmount(cents: cents, direction: direction).font(.headline).monospacedDigit()
+                .contentTransition(.numericText())
+        }
+    }
+}
+
 private struct BankAccountEditor: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
@@ -788,9 +816,9 @@ private struct BankAccountEditor: View {
                     }.pickerStyle(.navigationLink).disabled(institution == "TNG Card")
                     if !automaticSource.isEmpty {
                         if automaticSource == "Grab Card" {
-                            Text(tr("Grab 扣卡：填写绑定 Visa 卡的尾号。只有来源和尾号唯一匹配才自动入账；不要绑定到 GrabPay 钱包。这里的尾号是卡号尾号。", "Grab card charges: enter the linked Visa card's last four digits. A unique source and suffix match is required. Do not link to the GrabPay wallet. These are card digits.", "Caj kad Grab: isi empat digit akhir kad Visa terpaut. Sumber dan digit mesti sepadan secara unik. Jangan pautkan ke dompet GrabPay. Ini digit kad.")).font(.footnote).foregroundStyle(.secondary)
+                            Text(tr("选择实际扣款的银行卡，填入 Grab 通知中的卡尾号。", "Use the charged bank card and the last four digits shown by Grab.", "Gunakan kad bank yang dicaj dan empat digit akhir dalam notifikasi Grab.")).font(.footnote).foregroundStyle(.secondary)
                         }
-                        TextField(tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
+                        TextField(automaticSource == "Grab Card" ? tr("银行卡尾号（必填，4 位）", "Card's last four digits (required)", "Empat digit akhir kad (wajib)") : tr("账号尾号（可选，4 位）", "Last four digits (optional)", "Empat digit akhir (pilihan)"), text: $automaticSuffix)
                             .keyboardType(.numberPad)
                     }
                 } footer: {
@@ -1737,10 +1765,12 @@ private struct StatementImportView: View {
         Form {
             if let account {
                 Section {
-                    Label(account.name, systemImage: "building.columns")
+                    LedgerWorkflowHeading(title: account.name,
+                        subtitle: statement == nil ? tr("导入交易，核对余额", "Import entries, check balances", "Import rekod, semak baki") : tr("文件已读取，核对后保存", "File ready. Review, then save.", "Fail sedia. Semak, kemudian simpan."),
+                        symbol: statement == nil ? "doc.text" : "doc.text.magnifyingglass")
                     Button { picking = true } label: {
                         Label(tr("选择月结单 PDF", "Choose statement PDF", "Pilih PDF penyata"), systemImage: "doc.badge.plus")
-                    }.disabled(working)
+                    }.buttonStyle(LedgerPrimaryActionStyle()).disabled(working)
                 } footer: {
                     if isTNG {
                         Text(tr("选择完整的 TNG 交易历史 PDF，支持本机文字识别。", "Choose the complete TNG transaction-history PDF. Text recognition runs on device.", "Pilih PDF sejarah transaksi TNG lengkap. Pengecaman teks dijalankan setempat."))
@@ -1758,7 +1788,7 @@ private struct StatementImportView: View {
                         }
                         Button { importRows(statement, account: account) } label: {
                             Label(statement.reviewOnly ? tr("保存为待确认", "Save for review", "Simpan untuk semakan") : tr("补录明确交易，其余待确认", "Add clear entries; review the rest", "Tambah rekod jelas; semak selebihnya"), systemImage: "checkmark.circle")
-                        }.disabled(!confirmed || working)
+                        }.buttonStyle(LedgerPrimaryActionStyle()).disabled(!confirmed || working)
                     } footer: {
                         if statement.reviewOnly {
                             Text(tr("先保存待确认记录，不自动改变余额。重复导入会跳过已有记录。", "Saves entries for review without changing balances. Reimports skip existing entries.", "Simpan rekod untuk semakan tanpa mengubah baki. Import semula melangkau rekod sedia ada."))
@@ -1813,7 +1843,15 @@ private struct StatementImportView: View {
                     }.accessibilityIdentifier("statement.result")
                 }
                 if !message.isEmpty { Section { Text(message).foregroundStyle(.secondary) } }
-                if let error { Section { Text(error).foregroundStyle(.red).textSelection(.enabled) } }
+                if let error {
+                    Section {
+                        Label(tr("暂时无法完成核对", "Could not complete the check", "Semakan belum dapat diselesaikan"), systemImage: "exclamationmark.circle")
+                            .font(.subheadline.weight(.semibold)).foregroundStyle(.orange)
+                        DisclosureGroup(tr("查看原因", "View reason", "Lihat sebab")) {
+                            Text(error).font(.footnote).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                    }
+                }
                 ForEach(batches) { batch in
                     Section {
                         let pendingCount = batch.notices.filter { $0.status == "pending" }.count

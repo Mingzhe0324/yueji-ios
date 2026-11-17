@@ -124,6 +124,61 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(ledger.tngNotices[0].status, "pending")
     }
 
+    func testOutgoingNetSettlementDebitsOnlyActualPaymentForBankAndTNG() throws {
+        for source in ["TNG", "CIMB"] {
+            let date = Date().addingTimeInterval(-60)
+            var ledger = Ledger()
+            let account = BankAccount(name: source, openingCents: 20000, openingDate: date.addingTimeInterval(-3600))
+            ledger.bankAccounts = [account]
+            let mine = Expense(merchant: "I paid", cents: 3000, date: date, shares: [Share(name: "Amy", cents: 3000)])
+            let theirs = Expense(merchant: "Amy paid", cents: 10000, date: date, shares: [Share(name: "Amy", cents: 0)], paidByFriend: "Amy")
+            ledger.expenses = [mine, theirs]
+            var notice = TNGNotice(bankAccountID: account.id, body: "Paid RM70", title: "", date: date, usesReceivedDate: false, kind: "transfer", status: "pending", cents: 7000, party: "Amy")
+            if source != "TNG" { notice.sourceBank = source }
+            ledger.tngNotices = [notice]
+            ledger = try ledger.validated()
+            let plan = try ledger.settlementPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 7000, date: date)
+            XCTAssertEqual(plan.transfer, -7000)
+            XCTAssertEqual(plan.offset, 3000)
+            let id = try ledger.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan)
+            XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+            XCTAssertEqual(ledger.expenses, [mine, theirs])
+            XCTAssertEqual(ledger.bankBalance(account), 13000)
+            XCTAssertEqual(ledger.settlements.first?.paymentNoticeID, notice.id)
+            XCTAssertThrowsError(try ledger.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan))
+            try ledger.undoSettlement(id: id)
+            XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, -7000)
+            XCTAssertNil(ledger.tngNotices[0].settlementID)
+        }
+    }
+
+    func testNetPaymentRejectsWrongDirectionMissingAccountAndDuplicateAtomically() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let account = BankAccount(name: "TNG", openingCents: 20000, openingDate: date.addingTimeInterval(-3600))
+        ledger.bankAccounts = [account]
+        ledger.expenses = [Expense(merchant: "Amy paid", cents: 10000, date: date, shares: [Share(name: "Amy", cents: 0)], paidByFriend: "Amy")]
+        let notice = TNGNotice(bankAccountID: account.id, body: "Paid RM70", title: "", date: date, usesReceivedDate: false, kind: "transfer", status: "pending", cents: 7000, party: "Amy")
+        ledger.tngNotices = [notice]
+        ledger = try ledger.validated()
+        let plan = try ledger.settlementPlan(friend: "amy", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 7000, date: date)
+        for scenario in 0..<4 {
+            var changed = ledger
+            if scenario == 0 { changed.tngNotices[0].bankAccountID = nil }
+            if scenario == 1 { changed.tngNotices[0].kind = "incoming" }
+            if scenario == 2 { changed.tngNotices[0].cents = 6000 }
+            if scenario == 3 { changed.tngNotices[0].possibleDuplicate = true }
+            let before = try JSONEncoder().encode(changed)
+            XCTAssertThrowsError(try changed.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan))
+            // Compare models through a deterministic encoder, not JSON dictionary ordering.
+            let encoder = JSONEncoder(); encoder.outputFormatting = .sortedKeys
+            XCTAssertEqual(try encoder.encode(changed), try encoder.encode(JSONDecoder().decode(Ledger.self, from: before)))
+        }
+        _ = try ledger.confirmNoticeNetSettlement(noticeID: notice.id, plan: plan)
+        XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, -3000)
+        XCTAssertEqual(ledger.bankBalance(account), 13000)
+    }
+
     func testReimbursementSuggestionsDoNotGuessBetweenEqualClaims() throws {
         let date = Date().addingTimeInterval(-60)
         var ledger = Ledger()

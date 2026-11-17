@@ -350,6 +350,8 @@ final class IncomeBudgetTests: XCTestCase {
         XCTAssertEqual(parsed.accountSuffix, "1234")
         XCTAssertEqual(parsed.reference, "TEST001-ABC123")
         XCTAssertEqual(parsed.cents, 3874)
+        let wrapped = "Your Visa 1234 has been charged MYR 38.74\nfor booking TEST001-\nABC123."
+        XCTAssertEqual(parseFinancialNotification(wrapped, title: "Grab", sourceApp: "Grab")?.reference, parsed.reference)
         XCTAssertNil(parseFinancialNotification(body, title: "Grab", sourceApp: "GrabPay"))
         var ledger = Ledger()
         _ = try ledger.receiveTNG(body: body, title: "Grab", date: date, eventID: nil, sourceApp: "Grab")
@@ -364,6 +366,9 @@ final class IncomeBudgetTests: XCTestCase {
         XCTAssertEqual(ledger.expenses.count, 1)
         XCTAssertEqual(ledger.bankBalance(card), 6126)
         XCTAssertEqual(ledger.bankBalance(wallet), 5000)
+        _ = try ledger.receiveTNG(body: wrapped, title: "Grab", date: date, eventID: nil, sourceApp: "Grab")
+        XCTAssertEqual(ledger.expenses.count, 1, "Line wrapping must not duplicate a card charge")
+        XCTAssertEqual(ledger.bankBalance(card), 6126)
         XCTAssertNil(ledger.automaticBankAccount(source: "Grab Card", suffix: "9999"))
         var second = card; second.id = UUID().uuidString; ledger.bankAccounts.append(second)
         XCTAssertNil(ledger.automaticBankAccount(source: "Grab Card", suffix: "1234"))

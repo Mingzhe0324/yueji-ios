@@ -2331,6 +2331,10 @@ struct TNGInboxView: View {
     var body: some View {
         let _ = uiLocale.identifier
         List {
+            LedgerWorkflowHeading(title: tr("先处理需要确认的交易", "Review what needs you", "Semak transaksi yang perlukan anda"),
+                subtitle: tr("待确认 \(model.readIndex.pendingNotices.count) 笔", LocalizedPhrase("\(model.readIndex.pendingNotices.count) entries to review"), "\(model.readIndex.pendingNotices.count) rekod untuk disemak"),
+                symbol: "tray", tint: .accentColor)
+                .listRowBackground(Color.clear).listRowSeparator(.hidden)
             Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
             ForEach(pendingOnly ? model.readIndex.pendingNotices : model.readIndex.notices) { item in
                 NavigationLink {
@@ -2387,6 +2391,10 @@ struct NoticeAccountSection: View {
                 }))
                 .accessibilityIdentifier("notice.account")
                 .disabled(model.isWorking("notice-account-" + notice.id))
+                if notice.provider == "Grab Card", notice.bankAccountID == nil {
+                    Text(tr("请选择 Grab 实际扣款的银行卡。", "Choose the bank card charged by Grab.", "Pilih kad bank yang dicaj oleh Grab.") + (notice.accountSuffix.map { " · " + $0 } ?? ""))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 if model.ledger.bankAccounts.isEmpty {
                     NavigationLink { BankAccountsView() } label: {
                         Text(tr("添加账户", "Add account", "Tambah akaun"))
@@ -4338,7 +4346,7 @@ struct TNGIncomingView: View {
                     ForEach(friends) { f in Text(f.name + " · " + money(f.owed)).tag(f.id) }
                 }
                 if let selected = friends.first(where: { $0.id == friend }), selected.payable > 0 {
-                    NavigationLink { IncomingNetSettlementView(noticeID: id, friend: friend) } label: {
+                    NavigationLink { NoticeNetSettlementView(noticeID: id, friend: friend) } label: {
                         LabeledContent(tr("双方抵扣后还款", "Repay after offsetting", "Bayar selepas tolakan"), value: money(max(0, selected.owed - selected.payable)))
                     }
                 }
@@ -4395,6 +4403,7 @@ struct TNGIncomingView: View {
                     } catch { self.error = error.localizedDescription }
                 } else { confirm = true }
             }
+                .buttonStyle(LedgerPrimaryActionStyle())
                 .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: notice?.cents ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedBalance < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && !["ignored", "ownTransfer"].contains(purpose)))
         }
     }
@@ -4965,13 +4974,16 @@ struct FinancialNoticeReviewView: View {
                         Text(tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")).tag("ownTransfer")
                         Text(tr("退款到账", "Refund received", "Bayaran balik diterima")).tag("refund")
                         Text(tr("报销到账", "Reimbursement received", "Tuntutan diterima")).tag("reimbursement")
+                        if ["incoming", "payment", "transfer"].contains(notice.kind) {
+                            Text(tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih")).tag("settlement")
+                        }
                         if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
                         Text(tr("忽略", "Ignore", "Abaikan")).tag("ignore")
                     }
                     if purpose == "expense" {
                         Button(tr("编辑完整账目", "Edit full entry", "Edit rekod penuh")) { editingNotice = notice }
                             .disabled(notice.possibleDuplicate && !distinct)
-                    } else if purpose != "ownTransfer" {
+                    } else if !["ownTransfer", "settlement"].contains(purpose) {
                         TextField(purpose == "loan" ? tr("借款人", "Borrower", "Peminjam") : tr("商户 / 对方 / 用途", "Merchant / recipient / purpose", "Peniaga / pihak lain / tujuan"), text: $party)
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date, in: ...Date())
@@ -4982,7 +4994,7 @@ struct FinancialNoticeReviewView: View {
                         }
                         Text(tr("只选择真正的收入，例如工资、自由职业、兼职或奖金。确认后可选择是否加入预算。", "Choose this only for income you earned, such as salary, freelance, part-time work or a bonus. You can then choose whether to add it to a budget.", "Pilih ini hanya untuk pendapatan yang diperoleh, seperti gaji, kerja bebas, kerja sambilan atau bonus. Kemudian anda boleh memilih untuk menambahnya ke bajet.")).font(.caption)
                     }
-                    if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer"].contains(purpose) {
+                    if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer", "settlement"].contains(purpose) {
                         Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                     }
                 }
@@ -5003,13 +5015,18 @@ struct FinancialNoticeReviewView: View {
                 if purpose == "ownTransfer" {
                     Text(tr("下一步选择转出和转入账户，只有一边通知也可以。", "Next, choose both accounts. One notification is enough.", "Seterusnya pilih kedua-dua akaun. Satu notifikasi memadai.")).font(.caption).foregroundStyle(.secondary)
                 }
+                if purpose == "settlement" {
+                    NavigationLink(tr("选择朋友", "Choose a friend", "Pilih rakan")) { NoticeSettlementFriendView(noticeID: id) }
+                } else {
                 Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { if purpose == "ownTransfer" { transferNotice = notice } else if purpose == "expense" { editingNotice = notice } else if purpose == "reimbursement" {
                     do {
                         reimbursementPreview = try model.ledger.previewReimbursement(cents: toCents(amount), date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)
                         confirm = true
                     } catch { self.error = error.localizedDescription }
                 } else { confirm = true } }
+                    .buttonStyle(LedgerPrimaryActionStyle())
                     .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: (try? toCents(amount)) ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
+                }
                 NoticeSourceSection(notice: notice)
             } else { Text(tr("通知已删除或清理。", "The notification has been deleted or cleared.", "Notifikasi telah dipadam atau dikosongkan.")) }
         }.yuejiListSurface().disabled(model.isWorking("notice-" + id))

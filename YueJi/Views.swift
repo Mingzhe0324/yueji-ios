@@ -160,7 +160,7 @@ private struct MonthSummaryMotion: ViewModifier {
             .task(id: month) {
                 let previous = previousMonth
                 previousMonth = month
-                guard !reduceMotion, let previous, let month, previous != month else { return }
+                guard !reduceMotion, ElegantMotion.enabled, let previous, let month, previous != month else { return }
                 var immediate = Transaction(animation: nil)
                 immediate.disablesAnimations = true
                 withTransaction(immediate) {

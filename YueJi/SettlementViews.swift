@@ -631,7 +631,29 @@ struct SettlementPaymentLinkView: View {
     }
 }
 
-struct IncomingNetSettlementView: View {
+struct NoticeSettlementFriendView: View {
+    @EnvironmentObject private var model: LedgerModel
+    let noticeID: String
+    private var friends: [FriendBalance] {
+        let incoming = model.notice(id: noticeID)?.kind == "incoming"
+        return model.friends.filter { incoming ? $0.owed > $0.payable : $0.payable > $0.owed }
+    }
+    var body: some View {
+        List {
+            ForEach(friends) { friend in
+                NavigationLink { NoticeNetSettlementView(noticeID: noticeID, friend: friend.id) } label: {
+                    LabeledContent(friend.name, value: money(abs(friend.owed - friend.payable)))
+                }
+            }
+            if friends.isEmpty {
+                Text(tr("没有可结算的欠款，请先记录原账目及分账。", "No debts to settle. Record the original entries and shares first.", "Tiada hutang untuk diselesaikan. Rekod transaksi asal dan bahagian dahulu."))
+                    .foregroundStyle(.secondary)
+            }
+        }.yuejiListSurface().navigationTitle(tr("选择朋友", "Choose a friend", "Pilih rakan"))
+    }
+}
+
+struct NoticeNetSettlementView: View {
     @EnvironmentObject private var model: LedgerModel
     let noticeID: String
     let friend: String
@@ -641,7 +663,8 @@ struct IncomingNetSettlementView: View {
     private var plan: SettlementPlan? {
         guard let notice = model.notice(id: noticeID), let cents = notice.cents else { return nil }
         let selected = Set(model.ledger.friendDebtItems.filter { friendKey($0.friend) == friendKey(friend) && $0.balance != 0 && $0.expense.date <= notice.date }.map(\.id))
-        guard let value = try? model.ledger.settlementPlan(friend: friend, selected: selected, payment: cents, date: notice.date), value.transfer == cents else { return nil }
+        let signed = notice.kind == "incoming" ? cents : -cents
+        guard let value = try? model.ledger.settlementPlan(friend: friend, selected: selected, payment: cents, date: notice.date), value.transfer == signed else { return nil }
         return value
     }
     var body: some View {
@@ -649,22 +672,29 @@ struct IncomingNetSettlementView: View {
             if let savedID { SettlementDetailView(id: savedID) }
             else {
                 Form {
+                    if let notice = model.notice(id: noticeID) { NoticeAccountSection(notice: notice) }
                     if let plan {
                         LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
                         LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
-                        LabeledContent(tr("本次收到净额", "Net received now", "Bersih diterima sekarang"), value: money(plan.transfer))
-                        LabeledContent(tr("剩余净额", "Remaining net balance", "Baki bersih"), value: money(plan.fullNet - plan.transfer))
+                        LabeledContent(plan.transfer > 0 ? tr("本次收款", "Received now", "Diterima sekarang") : tr("本次付款", "Paid now", "Dibayar sekarang"), value: money(abs(plan.transfer)))
+                        LabeledContent(tr("剩余欠款", "Remaining debt", "Baki hutang"), value: money(abs(plan.fullNet - plan.transfer)))
+                        DisclosureGroup(tr("关联账目", "Linked entries", "Rekod dipautkan")) {
+                            ForEach(plan.lines) { line in
+                                LabeledContent(line.expense.displayName, value: money(abs(line.applied)))
+                            }
+                        }
                         if model.notice(id: noticeID)?.possibleDuplicate == true {
                             Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                         }
                         Button(tr("确认净结算", "Confirm net settlement", "Sahkan penyelesaian bersih")) {
                             let distinctConfirmed = distinct
                             model.perform(key: "notice-" + noticeID, action: { ledger in
-                                try ledger.confirmIncomingNetSettlement(noticeID: noticeID, plan: plan, distinctConfirmed: distinctConfirmed)
+                                try ledger.confirmNoticeNetSettlement(noticeID: noticeID, plan: plan, distinctConfirmed: distinctConfirmed)
                             }, completion: { savedID = $0 }, failure: { error = $0.localizedDescription })
-                        }.disabled(model.isWorking("notice-" + noticeID) || (model.notice(id: noticeID)?.possibleDuplicate == true && !distinct))
+                        }.buttonStyle(LedgerPrimaryActionStyle())
+                            .disabled(model.isWorking("notice-" + noticeID) || model.notice(id: noticeID)?.bankAccountID == nil || (model.notice(id: noticeID)?.possibleDuplicate == true && !distinct))
                     } else {
-                        Text(tr("这笔收款与当前净额不匹配，请核对账目。", "This receipt does not match the current net balance. Review the entries.", "Penerimaan tidak sepadan dengan baki bersih. Semak rekod."))
+                        Text(tr("这笔转账与欠款方向或金额不匹配，请核对原账目。", "The payment does not match the debt direction or amount. Review the original entries.", "Bayaran tidak sepadan dengan arah atau amaun hutang. Semak rekod asal."))
                     }
                 }.yuejiListSurface()
             }
@@ -684,6 +714,11 @@ struct SettlementNoticeSection: View {
             Section { NavigationLink(tr("查看结算与原账目", "View settlement and expenses", "Lihat penyelesaian dan belanja")) { SettlementDetailView(id: id) } }
         } else if ["pending", "transfer", "recorded"].contains(notice.status), notice.resolution == nil {
             Section {
+                if ["incoming", "payment", "transfer"].contains(notice.kind) {
+                    NavigationLink(tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih")) {
+                        NoticeSettlementFriendView(noticeID: notice.id)
+                    }
+                }
                 NavigationLink(tr("关联已有结算", "Link an existing settlement", "Pautkan penyelesaian sedia ada")) {
                     List {
                         ForEach(model.ledger.settlements.filter { $0.active && $0.paymentNoticeID == nil && $0.transfer != 0 && abs($0.transfer) == notice.cents && ($0.transfer > 0 ? notice.kind == "incoming" : ["payment", "transfer"].contains(notice.kind)) }) { record in

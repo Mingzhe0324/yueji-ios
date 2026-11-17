@@ -160,6 +160,17 @@ extension Ledger {
               notice.status == "pending", plan.transfer > 0, plan.transfer == notice.cents else {
             throw LedgerError.invalid("Receipt changed. Review the net settlement again.")
         }
+        return try confirmNoticeNetSettlement(noticeID: noticeID, plan: plan, distinctConfirmed: distinctConfirmed)
+    }
+
+    /// Apply both debt sides and the actual payment atomically, for either direction.
+    mutating func confirmNoticeNetSettlement(noticeID: String, plan: SettlementPlan, distinctConfirmed: Bool = false) throws -> String {
+        guard let notice = tngNotices.first(where: { $0.id == noticeID }),
+              plan.transfer != 0, abs(plan.transfer) == notice.cents,
+              plan.transfer > 0 ? notice.kind == "incoming" : ["payment", "transfer"].contains(notice.kind),
+              let accountID = notice.bankAccountID, bankAccounts.contains(where: { $0.id == accountID }) else {
+            throw settlementError("请核对付款方向、金额并分配账户。", "Check the payment direction, amount and account.", "Semak arah bayaran, amaun dan akaun.")
+        }
         var copy = self
         let id = try copy.confirmSettlement(plan)
         try copy.linkSettlementPayment(settlementID: id, noticeID: noticeID, distinctConfirmed: distinctConfirmed)
