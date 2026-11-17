@@ -4,6 +4,135 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testTNGOCRRowsValidateAcrossPagesAndSaveWithoutChangingBalances() throws {
+        let statement = try TNGStatementReader.parse(header: tngHeader(), pages: tngOCRPages())
+        XCTAssertEqual(statement.provider, "TNG")
+        XCTAssertTrue(statement.reviewOnly)
+        XCTAssertEqual(statement.opening, 10000)
+        XCTAssertEqual(statement.closing, 11000)
+        XCTAssertEqual(statement.rows.count, 3) // Zero-valued row is checked, not posted.
+        XCTAssertEqual(statement.debitTotal, 1000)
+        XCTAssertEqual(statement.creditTotal, 2000)
+        XCTAssertEqual(statement.suffix, "1234")
+        let account = BankAccount(name: "Wallet", openingCents: 10000, openingDate: statement.start, institution: "TNG eWallet")
+        var ledger = Ledger(); ledger.bankAccounts = [account]
+        let result = try ledger.importStatement(statement, account: account, categories: [:])
+        XCTAssertEqual(result.pending, 3)
+        XCTAssertEqual(result.added, 0)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+        XCTAssertTrue(ledger.tngNotices.allSatisfy { $0.balanceHeldForReview == true && $0.sourceBank == "TNG" })
+        ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger))
+        XCTAssertEqual(try ledger.importStatement(statement, account: account, categories: [:]).skipped, 3)
+        XCTAssertEqual(ledger.tngNotices.count, 3)
+        try ledger.undoStatementImport(batch: result.batch)
+        XCTAssertTrue(ledger.tngNotices.isEmpty)
+        XCTAssertEqual(ledger.bankBalance(account), 10000)
+        var card = account; card.institution = "TNG Card"; ledger.bankAccounts = [card]
+        XCTAssertThrowsError(try ledger.importStatement(statement, account: card, categories: [:]))
+    }
+
+    func testTNGOCRRejectsMissingRowsAmountsWrongTypesAndBrokenBalanceChain() throws {
+        let header = try tngHeader()
+        var pages = tngOCRPages()
+        pages[1][5][0] = .init(text: "RM109.99", top: 0.08)
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][4].removeLast()
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][0].removeLast()
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][2][1] = .init(text: "Receive from Wallet", top: 0.52)
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][1][1] = .init(text: "Failed", top: 0.52)
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][4][0] = .init(text: "RM20.00", top: 0.75)
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][0][0] = .init(text: "31/02/2026", top: 0.42)
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        pages = tngOCRPages(); pages[0][5][0] = .init(text: "RM120.00", top: 0.42, confidence: 0.1)
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: pages))
+        XCTAssertThrowsError(try TNGStatementReader.parse(header: header, pages: [tngOCRPages()[1], tngOCRPages()[0]]))
+    }
+
+    func testTNGOCRNumericNormalizationNeverGuessesMissingDigitsOrDecimals() throws {
+        XCTAssertEqual(try TNGStatementReader.amount("RM I,OOO.Ol"), 100001)
+        XCTAssertEqual(try TNGStatementReader.amount("RM0.00"), 0)
+        for bad in ["RM100", "RM1.0", "RM1,00.00", "RM-10.00", "10.00", "RM1S.00", "RM10.00 RM20.00"] {
+            XCTAssertThrowsError(try TNGStatementReader.amount(bad), bad)
+        }
+        XCTAssertTrue(try TNGStatementReader.incoming("DUITNOW_RECEI VEFROM"))
+        XCTAssertFalse(try TNGStatementReader.incoming("DUITNOW_TRANS FERTO"))
+        XCTAssertThrowsError(try TNGStatementReader.incoming("Refund pending"))
+    }
+
+    func testNativeTNGImagePDFRecognizesUprightAndSidewaysMultipageExport() throws {
+        for sideways in [false, true] {
+            let pdf = syntheticTNGPDF(sideways: sideways)
+            XCTAssertEqual(PDFDocument(data: pdf)?.page(at: 0)?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "", "")
+            let statement = try RHBStatement.read(pdf, expectedProvider: "TNG")
+            XCTAssertEqual(statement.provider, "TNG")
+            XCTAssertEqual(statement.suffix, "1234")
+            XCTAssertEqual(statement.rows.count, 3)
+            XCTAssertEqual(statement.opening, 10000)
+            XCTAssertEqual(statement.closing, 11000)
+            XCTAssertTrue(statement.reviewOnly)
+        }
+    }
+
+    private func tngHeader() throws -> TNGStatementReader.Header {
+        .init(wallet: "10000000001234", start: try TNGStatementReader.date("1 September 2026", format: "d MMMM yyyy"),
+              end: try TNGStatementReader.date("30 September 2026", format: "d MMMM yyyy"))
+    }
+    private func tngOCRPages() -> [[[TNGStatementReader.Line]]] {
+        func page(_ records: [(Double, [String])]) -> [[TNGStatementReader.Line]] {
+            (0..<6).map { column in records.map { .init(text: $0.1[column], top: $0.0) } }
+        }
+        return [page([
+            (0.42, ["01/09/2026", "Success", "Receive from Wallet", "Sender", "RM20.00", "RM120.00"]),
+            (0.52, ["02/09/2026", "Success", "Payment", "Cafe", "RM7.00", "RM113.00"])
+        ]), page([
+            (0.08, ["03/09/2026", "Success", "Transfer to Wallet", "Fund Transfer", "RM3.00", "RM110.00"]),
+            (0.18, ["04/09/2026", "Success", "PayDirect Payment", "Parking", "RM0.00", "RM110.00"])
+        ])]
+    }
+    /// Generated fictitious raster pages; never embed a user's financial PDF.
+    private func syntheticTNGPDF(sideways: Bool) -> Data {
+        let pageSize = CGSize(width: 792, height: 612)
+        let format = UIGraphicsImageRendererFormat(); format.scale = 3; format.opaque = true
+        let images = (0..<2).map { index in
+            UIGraphicsImageRenderer(size: pageSize, format: format).image { context in
+                UIColor.white.setFill(); context.fill(CGRect(origin: .zero, size: pageSize))
+                func text(_ value: String, _ x: Double, _ y: Double, size: CGFloat = 9) {
+                    (value as NSString).draw(at: CGPoint(x: x * 792, y: y * 612), withAttributes: [.font: UIFont.systemFont(ofSize: size), .foregroundColor: UIColor.black])
+                }
+                if index == 0 {
+                    text("TNG WALLET TRANSACTION HISTORY", 0.345, 0.204, size: 12)
+                    text("Registered Name", 0.024, 0.250); text("TEST USER", 0.225, 0.250)
+                    text("Wallet ID", 0.024, 0.274); text("10000000001234", 0.225, 0.274)
+                    text("Transaction Period", 0.024, 0.356)
+                    text("1 September 2026 - 30 September 2026", 0.225, 0.356)
+                    for (column, title) in ["Date", "Status", "Transaction Type", "Description", "Amount (RM)", "Wallet Balance"].enumerated() {
+                        text(title, TNGStatementReader.columns[column].0 + 0.002, 0.397)
+                    }
+                }
+                for column in 0..<6 {
+                    for line in tngOCRPages()[index][column] {
+                        text(line.text, TNGStatementReader.columns[column].0 + 0.002, line.top)
+                    }
+                }
+                text("This is a system generated email. Thank you.", 0.024, 0.89)
+            }
+        }
+        let bounds = CGRect(x: 0, y: 0, width: sideways ? 612 : 792, height: sideways ? 792 : 612)
+        return UIGraphicsPDFRenderer(bounds: bounds).pdfData { context in
+            for image in images {
+                context.beginPage(); context.cgContext.saveGState()
+                if sideways { context.cgContext.translateBy(x: 0, y: 792); context.cgContext.rotate(by: -.pi / 2) }
+                image.draw(in: CGRect(origin: .zero, size: pageSize))
+                context.cgContext.restoreGState()
+            }
+        }
+    }
+
     func testSingleOwnTransferNotificationUpdatesBothAccountsForBankAndTNG() throws {
         for provider in ["TNG", "CIMB"] {
             for incoming in [true, false] {

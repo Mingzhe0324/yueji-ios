@@ -1720,6 +1720,7 @@ private struct StatementImportView: View {
     @State private var classified = 0
     @State private var classificationTotal = 0
     private var account: BankAccount? { model.ledger.bankAccounts.first { $0.id == accountID } }
+    private var isTNG: Bool { financialProvider(account?.institution ?? account?.automaticSource ?? "") == "TNG" }
     private var key: String { "statement-" + accountID }
     private var working: Bool { busy || model.isWorking(key) }
     private var batches: [StatementBatch] {
@@ -1738,22 +1739,32 @@ private struct StatementImportView: View {
                 Section {
                     Label(account.name, systemImage: "building.columns")
                     Button { picking = true } label: {
-                        Label(tr("选择银行 PDF", "Choose bank PDF", "Pilih PDF bank"), systemImage: "doc.badge.plus")
+                        Label(tr("选择月结单 PDF", "Choose statement PDF", "Pilih PDF penyata"), systemImage: "doc.badge.plus")
                     }.disabled(working)
                 } footer: {
-                    Text(tr("支持已适配的 RHB、AmBank、HLB、Maybank、Ryt 主账户及 Wise MYR 文字版格式。PDF 在本机核对；扫描件、需密码的文件及其他版式暂不支持。Wise 推算期初的交易仅待确认。", "Supports adapted RHB, AmBank, HLB, Maybank, Ryt main account and Wise MYR text layouts. Checks run on device. Scans, password-locked PDFs and other layouts are unsupported. Wise entries with a derived opening await review.", "Menyokong format teks RHB, AmBank, HLB, Maybank, akaun utama Ryt dan Wise MYR yang disesuaikan. Semakan setempat; imbasan, PDF berkunci dan format lain belum disokong. Rekod Wise dengan baki awal dikira perlu disemak."))
+                    if isTNG {
+                        Text(tr("选择完整的 TNG 交易历史 PDF，支持本机文字识别。", "Choose the complete TNG transaction-history PDF. Text recognition runs on device.", "Pilih PDF sejarah transaksi TNG lengkap. Pengecaman teks dijalankan setempat."))
+                    } else {
+                        Text(tr("支持已适配的 RHB、AmBank、HLB、Maybank、Ryt 主账户和 Wise MYR 文字版 PDF。", "Supports adapted RHB, AmBank, HLB, Maybank, Ryt main account and Wise MYR text PDFs.", "Menyokong PDF teks RHB, AmBank, HLB, Maybank, akaun utama Ryt dan Wise MYR yang disesuaikan."))
+                    }
                 }
                 if let statement {
                     summary(statement, account: account)
                     Section {
                         Toggle(tr("确认尾号 \(statement.suffix) 是此账户", LocalizedPhrase("Confirm ••••\(statement.suffix) belongs to this account"), "Sahkan ••••\(statement.suffix) ialah akaun ini"), isOn: $confirmed)
-                        AIProviderPicker()
-                        Toggle(tr("使用 AI 建议支出分类", "Suggest expense categories with AI", "Cadangkan kategori dengan AI"), isOn: $useAI)
+                        if !statement.reviewOnly {
+                            AIProviderPicker()
+                            Toggle(tr("使用 AI 建议支出分类", "Suggest expense categories with AI", "Cadangkan kategori dengan AI"), isOn: $useAI)
+                        }
                         Button { importRows(statement, account: account) } label: {
-                            Label(tr("补录明确交易，其余待确认", "Add clear entries; review the rest", "Tambah rekod jelas; semak selebihnya"), systemImage: "checkmark.circle")
+                            Label(statement.reviewOnly ? tr("保存为待确认", "Save for review", "Simpan untuk semakan") : tr("补录明确交易，其余待确认", "Add clear entries; review the rest", "Tambah rekod jelas; semak selebihnya"), systemImage: "checkmark.circle")
                         }.disabled(!confirmed || working)
                     } footer: {
-                        Text(tr("所选 AI 仅分析交易描述和分类名称。金额、方向和余额由本机校验。AI 不可用时用“其他”分类。疑似重复、转账和不明收款待确认；早于账户期初时间的记录跳过。", "Selected AI analyzes descriptions and category names only. Amounts, direction and balances are checked locally. If AI is unavailable, entries use Other. Possible duplicates, transfers and unclear receipts await review; entries before opening are skipped.", "AI pilihan menganalisis penerangan dan kategori sahaja. Amaun, arah dan baki disemak setempat. Jika AI gagal, guna Lain-lain. Pendua, pindahan dan penerimaan tidak jelas menunggu semakan; rekod sebelum baki awal dilangkau."))
+                        if statement.reviewOnly {
+                            Text(tr("先保存待确认记录，不自动改变余额。重复导入会跳过已有记录。", "Saves entries for review without changing balances. Reimports skip existing entries.", "Simpan rekod untuk semakan tanpa mengubah baki. Import semula melangkau rekod sedia ada."))
+                        } else {
+                            Text(tr("AI 仅建议分类。疑似重复、转账和不明收款留待确认，期初前记录跳过。", "AI only suggests categories. Possible duplicates, transfers and unclear receipts await review; entries before opening are skipped.", "AI hanya mencadangkan kategori. Pendua, pindahan dan penerimaan tidak jelas menunggu semakan; rekod sebelum baki awal dilangkau."))
+                        }
                     }.disabled(working)
                     Section {
                         DisclosureGroup(tr("查看原始交易（\(statement.rows.count)）", LocalizedPhrase("Review source entries (\(statement.rows.count))"), "Semak rekod asal (\(statement.rows.count))")) {
@@ -1864,7 +1875,7 @@ private struct StatementImportView: View {
                 Text(statement.verificationNote).font(.footnote).foregroundStyle(.secondary)
             }
             LabeledContent(tr("期间", "Period", "Tempoh"), value: day(statement.start) + " – " + day(statement.end))
-            LabeledContent(tr("月结单期初", "Statement opening", "Baki awal penyata"), value: money(statement.opening))
+            LabeledContent(statement.reviewOnly ? tr("推算期初", "Derived opening", "Baki awal dikira") : tr("月结单期初", "Statement opening", "Baki awal penyata"), value: money(statement.opening))
             LabeledContent(tr("期间入账", "Period credits", "Kredit tempoh")) {
                 TransactionAmount(cents: statement.rows.reduce(0) { $0 + $1.credit }, direction: .incoming)
             }
@@ -1888,6 +1899,7 @@ private struct StatementImportView: View {
         task?.cancel(); statement = nil; confirmed = false; error = nil; message = ""; busy = true
         importResult = nil; classificationTotal = 0; classified = 0
         let store = LocalStore.shared
+        let expectedProvider = financialProvider(account?.institution ?? account?.automaticSource ?? "")
         task = Task {
             defer { busy = false }
             do {
@@ -1895,7 +1907,7 @@ private struct StatementImportView: View {
                     let access = url.startAccessingSecurityScopedResource()
                     defer { if access { url.stopAccessingSecurityScopedResource() } }
                     guard let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize, size <= 10_000_000 else { throw RHBStatement.failure() }
-                    return try RHBStatement.read(Data(contentsOf: url, options: .mappedIfSafe))
+                    return try RHBStatement.read(Data(contentsOf: url, options: .mappedIfSafe), expectedProvider: expectedProvider)
                 }
                 let parsed = try await withTaskCancellationHandler(operation: { try await worker.value }, onCancel: { worker.cancel() })
                 try Task.checkCancellation()
@@ -1913,7 +1925,7 @@ private struct StatementImportView: View {
         }
         busy = true; error = nil; message = ""
         importResult = nil; classified = 0; classificationTotal = 0
-        let store = LocalStore.shared, allowed = model.ledger.categoryNames, ai = useAI
+        let store = LocalStore.shared, allowed = model.ledger.categoryNames, ai = useAI && !statement.reviewOnly
         let selectedProvider = aiProvider
         let texts = Array(Set(statement.rows.filter { $0.isExpense && $0.date >= account.openingDate && !model.ledger.seenEvents.contains($0.id) && !model.ledger.statementMayExist($0, accountID: account.id) }.map(\.analysisText))).sorted().prefix(100)
         classificationTotal = ai ? texts.count : 0

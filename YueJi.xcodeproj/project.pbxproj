@@ -5,6 +5,8 @@
 	};
 	"objectVersion" = 56;
 	"objects" = {
+        "CF3100000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "TNGStatement.swift"; "sourceTree" = "<group>"; };
+        "CF3100000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CF3100000000000000000001"; };
         "CD7200000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "ParkingViews.swift"; "sourceTree" = "<group>"; };
         "CD7200000000000000000002" = { "isa" = "PBXBuildFile"; "fileRef" = "CD7200000000000000000001"; };
         "CD7100000000000000000001" = { "isa" = "PBXFileReference"; "lastKnownFileType" = "sourcecode.swift"; "path" = "InvestmentViews.swift"; "sourceTree" = "<group>"; };
@@ -176,6 +178,7 @@
                 "CE8000000000000000000001",
                 "CE8000000000000000000003",
                 "CF3000000000000000000001",
+                "CF3100000000000000000001",
                 "CF3000000000000000000003",
                 "CF4000000000000000000001",
                   "CF6000000000000000000001",
@@ -256,6 +259,7 @@
                 "CE8000000000000000000002",
                 "CE8000000000000000000004",
                 "CF3000000000000000000002",
+                "CF3100000000000000000002",
                 "CF3000000000000000000004",
                 "CF4000000000000000000002",
                   "CF6000000000000000000002",

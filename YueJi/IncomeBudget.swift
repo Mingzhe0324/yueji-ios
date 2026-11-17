@@ -861,10 +861,11 @@ struct RHBStatement: Sendable {
     }
     /// Reads only the sampled RHB six-column layout. Amounts and directions are
     /// obtained from column positions, never inferred by an LLM.
-    static func read(_ data: Data) throws -> RHBStatement {
+    static func read(_ data: Data, expectedProvider: String? = nil) throws -> RHBStatement {
         guard data.count <= 10_000_000, let document = PDFDocument(data: data), !document.isLocked,
               (1...20).contains(document.pageCount) else { throw failure() }
         let pages = (0..<document.pageCount).compactMap { document.page(at: $0) }
+        if expectedProvider == "TNG" { return try TNGStatementReader.read(pages) }
         guard pages.allSatisfy({ $0.numberOfCharacters <= 60_000 && $0.rotation == 0 }) else { throw failure() }
         let full = pages.compactMap(\.string).joined(separator: "\n")
         if !(full.contains("RHB") && full.contains("B/F BALANCE")) {
@@ -1194,7 +1195,8 @@ extension Ledger {
     }
     mutating func importStatement(_ statement: RHBStatement, account: BankAccount, categories: [String: String], now: Date = Date()) throws -> StatementImportResult {
         try statement.validate()
-        guard bankAccounts.contains(account), financialProvider(account.institution ?? account.automaticSource ?? "") == statement.provider,
+        guard bankAccounts.contains(account), account.institution != "TNG Card",
+              financialProvider(account.institution ?? account.automaticSource ?? "") == statement.provider,
               account.automaticSuffix == nil || account.automaticSuffix == statement.suffix else { throw RHBStatement.failure() }
         var copy = self, result = StatementImportResult(batch: UUID().uuidString)
         let count = statement.rows.filter { row in row.date >= account.openingDate && !seenEvents.contains(row.id) && !tngNotices.contains(where: { $0.id == row.id }) }.count
