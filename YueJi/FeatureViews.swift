@@ -1363,7 +1363,6 @@ struct AutomationStatusView: View {
     @State private var recoveryInputs: [AutomationDelivery] = []
     @State private var recoveryError: String?
     @State private var retrying = false
-    private var pendingCount: Int { model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.count }
     private func outcome(_ key: String, source: String) -> String {
         switch key {
         case "pending": return tr("等你确认", "Needs your review", "Perlu semakan anda")
@@ -1378,32 +1377,7 @@ struct AutomationStatusView: View {
     var body: some View {
         let _ = uiLocale.identifier
         List {
-            if pendingCount > 0 {
-                Section(tr("需要你确认", "Needs your review", "Perlu semakan anda")) {
-                    ForEach(model.ledger.tngNotices.filter { $0.status == "pending" || $0.status == "transfer" }.prefix(10)) { notice in
-                        NavigationLink {
-                            if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
-                            else { TNGNoticeView(id: notice.id) }
-                        } label: {
-                            VStack(alignment: .leading, spacing: 6) {
-                                Text(notice.party ?? sourceLabel(notice.provider)).font(.headline)
-                                Text(dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
-                                Text(notice.possibleDuplicate
-                                    ? tr("疑似重复，请先核对", "Possible duplicate — review first", "Mungkin pendua — semak dahulu")
-                                    : (notice.reviewReason.map(localizedError) ?? (notice.cents == nil
-                                        ? tr("金额未识别，点此补充", "Amount not recognised — add details", "Amaun tidak dikenal pasti — isi butiran")
-                                        : tr("用途待确认，点此处理", "Confirm the purpose", "Sahkan tujuan"))))
-                                    .font(.subheadline).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                    NavigationLink { TNGInboxView(pendingOnly: true) } label: {
-                        LabeledContent(tr("确认交易用途", "Review transactions", "Semak transaksi"), value: String(pendingCount))
-                    }
-                    Text(tr("有些交易需要你选择是消费、转账或其他用途。", "Some transactions need you to confirm their purpose.", "Sesetengah transaksi memerlukan pengesahan tujuan anda."))
-                        .font(.footnote).foregroundStyle(.secondary)
-                }
-            }
+            PendingBookkeepingCard()
             if !recoveryInputs.isEmpty || recoveryError != nil {
                 Section(tr("还没保存的账目", "Entries waiting to save", "Rekod menunggu untuk disimpan")) {
                     if !recoveryInputs.isEmpty {
