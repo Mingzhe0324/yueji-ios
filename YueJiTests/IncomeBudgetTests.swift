@@ -4,6 +4,89 @@ import PDFKit
 @testable import YueJi
 
 final class IncomeBudgetTests: XCTestCase {
+    func testRefundUsesActualReceivingAccountForManualAndNotificationFlows() throws {
+        let date = Date().addingTimeInterval(-120)
+        for friendPaid in [false, true] {
+            for automatic in [false, true] {
+                var ledger = Ledger()
+                let bank = BankAccount(name: "Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+                let wallet = BankAccount(name: "Wallet", openingCents: 2000, openingDate: bank.openingDate)
+                ledger.bankAccounts = [bank, wallet]
+                let entry = Expense(bankAccountID: friendPaid ? nil : bank.id, merchant: "Shop", cents: 4000, date: date,
+                                    shares: friendPaid ? [Share(name: "James", cents: 0)] : [], paidByFriend: friendPaid ? "James" : nil)
+                ledger.expenses = [entry]
+                let refundDate = date.addingTimeInterval(60)
+                if automatic {
+                    let notice = TNGNotice(bankAccountID: wallet.id, body: "Refund received", title: "", date: refundDate,
+                                          usesReceivedDate: false, kind: "incoming", status: "pending", cents: 1000, party: "Shop")
+                    ledger.tngNotices = [notice]
+                    try ledger.resolveNotice(id: notice.id, purpose: "refund", party: "Shop", cents: 1000, date: refundDate, relatedID: entry.id)
+                } else {
+                    try ledger.addRefund(expenseID: entry.id, cents: 1000, date: refundDate, receivedByMe: true, bankAccountID: wallet.id)
+                }
+                ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+                XCTAssertEqual(ledger.bankBalance(bank), friendPaid ? 10000 : 6000)
+                XCTAssertEqual(ledger.bankBalance(wallet), 3000, "Credit the actual receiver once, not the purchase account")
+                let statementRow = StatementRow(id: "refund-row", date: refundDate, description: "Refund", serial: "1", debit: 0, credit: 1000, balance: 3000)
+                XCTAssertTrue(ledger.statementMayExist(statementRow, accountID: wallet.id))
+                XCTAssertFalse(ledger.statementMayExist(statementRow, accountID: bank.id), "Do not hide a different bank's receipt as this wallet refund")
+                XCTAssertEqual(ledger.statementBalance(wallet, before: refundDate), 2000)
+                XCTAssertEqual(ledger.statementBalance(wallet, before: refundDate.addingTimeInterval(1)), 3000)
+                XCTAssertEqual(ledger.spending(in: date), 3000)
+                if friendPaid { XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 4000, "The friend has not received this refund") }
+                if automatic {
+                    try ledger.reopenResolvedNotice(id: ledger.tngNotices[0].id)
+                    // Reopened imported money awaits review and retains its original notification behavior.
+                    try ledger.resolveTNGIncoming(id: ledger.tngNotices[0].id, purpose: "ignored", date: refundDate)
+                } else {
+                    try ledger.removeRefund(expenseID: entry.id, refundID: try XCTUnwrap(ledger.expenses[0].refunds?.first?.id))
+                }
+                XCTAssertEqual(ledger.bankBalance(wallet), 2000)
+                XCTAssertEqual(ledger.bankBalance(bank), friendPaid ? 10000 : 6000)
+                XCTAssertEqual(ledger.spending(in: date), 4000)
+            }
+        }
+    }
+
+    func testRefundToFriendDoesNotCreditMeAndMissingRefundAccountRemainsReviewable() throws {
+        let date = Date().addingTimeInterval(-120)
+        let bank = BankAccount(name: "Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        var ledger = Ledger(); ledger.bankAccounts = [bank]
+        let entry = Expense(merchant: "Shop", cents: 4000, date: date, shares: [Share(name: "James", cents: 0)], paidByFriend: "James")
+        ledger.expenses = [entry]
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: entry.id, cents: 1000, date: date, receivedByMe: false, bankAccountID: bank.id))
+        XCTAssertNil(ledger.expenses[0].refunds)
+        try ledger.addRefund(expenseID: entry.id, cents: 1000, date: date, receivedByMe: false)
+        XCTAssertEqual(ledger.bankBalance(bank), 10000)
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 3000)
+        let notice = TNGNotice(body: "Refund to me", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 500, party: "Shop")
+        ledger.tngNotices = [notice]
+        try ledger.resolveNotice(id: notice.id, purpose: "refund", party: "Shop", cents: 500, date: date, relatedID: entry.id)
+        XCTAssertEqual(BookkeepingReviewItem.items(in: ledger).first?.reason, .account)
+        XCTAssertEqual(ledger.bankBalance(bank), 10000)
+        try ledger.assignNoticeAccount(id: notice.id, accountID: bank.id)
+        XCTAssertEqual(ledger.bankBalance(bank), 10500)
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 3000)
+        XCTAssertTrue(BookkeepingReviewItem.items(in: ledger).isEmpty)
+        _ = try ledger.validated()
+        var invalid = ledger; invalid.bankAccounts = []
+        XCTAssertThrowsError(try invalid.validated(), "A refund must not point to a deleted account")
+    }
+
+    func testLegacyRefundStillUsesOriginalAccountAndRejectsInvalidExplicitDestination() throws {
+        let date = Date().addingTimeInterval(-120)
+        let bank = BankAccount(name: "Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        var ledger = Ledger(); ledger.bankAccounts = [bank]
+        let entry = Expense(bankAccountID: bank.id, merchant: "Shop", cents: 4000, date: date)
+        ledger.expenses = [entry]
+        XCTAssertThrowsError(try ledger.addRefund(expenseID: entry.id, cents: 500, date: date, bankAccountID: "missing"))
+        XCTAssertNil(ledger.expenses[0].refunds)
+        try ledger.addRefund(expenseID: entry.id, cents: 1000, date: date)
+        ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+        XCTAssertNil(ledger.expenses[0].refunds?[0].bankAccountID)
+        XCTAssertEqual(ledger.bankBalance(bank), 7000)
+    }
+
     func testTNGOCRRowsValidateAcrossPagesAndSaveWithoutChangingBalances() throws {
         let statement = try TNGStatementReader.parse(header: tngHeader(), pages: tngOCRPages())
         XCTAssertEqual(statement.provider, "TNG")

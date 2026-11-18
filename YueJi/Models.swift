@@ -1334,7 +1334,7 @@ extension Ledger {
             }
         case "refund":
             guard let relatedID else { throw LedgerError.invalid("请选择原消费。") }
-            try copy.addRefund(expenseID: relatedID, cents: cents, date: date, receivedByMe: true)
+            try copy.addRefund(expenseID: relatedID, cents: cents, date: date, receivedByMe: true, bankAccountID: copy.tngNotices[i].bankAccountID)
             guard let entry = copy.expenses.first(where: { $0.id == relatedID }), let refund = entry.refunds?.last else { throw LedgerError.invalid("退款保存失败。") }
             copy.tngNotices[i].status = "ignored"
             copy.tngNotices[i].resolution = "refund"

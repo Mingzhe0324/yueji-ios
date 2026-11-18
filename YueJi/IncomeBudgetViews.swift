@@ -318,6 +318,18 @@ private struct BankAccountDetail: View {
                         }
                     }
                 }
+                let refunds = model.ledger.expenses.flatMap { entry in
+                    (entry.refunds ?? []).filter { entry.refundAccountID($0) == accountID }.map { (entry: entry, refund: $0) }
+                }.sorted { $0.refund.date > $1.refund.date }
+                if !refunds.isEmpty {
+                    Section(tr("退款到账", "Refunds received", "Bayaran balik diterima")) {
+                        ForEach(refunds, id: \.refund.id) { item in
+                            NavigationLink { RefundsView(expenseID: item.entry.id) } label: {
+                                LabeledContent(item.entry.displayName, value: "+" + money(item.refund.cents))
+                            }
+                        }
+                    }
+                }
                 Section {
                     ForEach(model.ledger.tngNotices.filter {
                         $0.bankAccountID == accountID && $0.kind == "incoming" && $0.status != "ignored" && $0.resolution == nil

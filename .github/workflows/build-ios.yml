@@ -6,6 +6,10 @@ on:
         description: 'Run statement/account unit tests only (diagnostics, no IPA)'
         type: boolean
         default: false
+      unit_tests_only:
+        description: 'Run all native model tests (diagnostics, no UI tests or IPA)'
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -56,10 +60,13 @@ jobs:
         timeout-minutes: 70
         env:
           STATEMENT_TESTS_ONLY: ${{ inputs.statement_tests_only }}
+          UNIT_TESTS_ONLY: ${{ inputs.unit_tests_only }}
         run: |
           set -o pipefail
           test_args=()
-          if [ "$STATEMENT_TESTS_ONLY" = "true" ]; then
+          if [ "$UNIT_TESTS_ONLY" = "true" ]; then
+            test_args+=("-only-testing:YueJiTests")
+          elif [ "$STATEMENT_TESTS_ONLY" = "true" ]; then
             test_args+=("-only-testing:YueJiTests/IncomeBudgetTests")
           fi
           xcodebuild test -project YueJi.xcodeproj -scheme YueJi -destination "platform=iOS Simulator,id=$SIMULATOR_ID" -derivedDataPath build-simulator -resultBundlePath TestResults.xcresult "${test_args[@]}" CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO 2>&1 | tee build-test.log
@@ -125,7 +132,7 @@ jobs:
               shown += 1
           PYCODE
       - name: Build unsigned device app
-        if: ${{ !inputs.statement_tests_only }}
+        if: ${{ !inputs.statement_tests_only && !inputs.unit_tests_only }}
         env:
           YUEJI_SUPABASE_URL: ${{ vars.YUEJI_SUPABASE_URL }}
           YUEJI_SUPABASE_PUBLIC_KEY: ${{ vars.YUEJI_SUPABASE_PUBLIC_KEY }}
@@ -135,7 +142,7 @@ jobs:
           python3 scripts/configure_cloud.py
           xcodebuild build -project YueJi.xcodeproj -scheme YueJi -configuration Release -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build-device CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO
       - name: Package for personal signing
-        if: ${{ !inputs.statement_tests_only }}
+        if: ${{ !inputs.statement_tests_only && !inputs.unit_tests_only }}
         run: |
           python3 - <<'PYCODE'
           import plistlib
@@ -154,7 +161,7 @@ jobs:
           cd package
           zip -qr ../YueJi-${{ steps.release.outputs.label }}-unsigned.ipa Payload
       - name: Upload unsigned IPA
-        if: ${{ !inputs.statement_tests_only }}
+        if: ${{ !inputs.statement_tests_only && !inputs.unit_tests_only }}
         uses: actions/upload-artifact@v4
         with:
           name: YueJi-${{ steps.release.outputs.label }}-run${{ github.run_number }}

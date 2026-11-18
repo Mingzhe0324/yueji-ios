@@ -1057,6 +1057,7 @@ struct RefundsView: View {
     @State private var amount = ""
     @State private var custom = false
     @State private var refundReceivedByMe = false
+    @State private var refundAccountID: String?
     @State private var allocations: [String: String] = [:]
     @State private var date = Date()
     @State private var undo: RefundRecord?
@@ -1080,6 +1081,10 @@ struct RefundsView: View {
                         Text(tr("退款减少个人消费。若退款进入我账户，仍需向代付朋友结清相应款项。", "Refunds reduce personal spending. A refund into my account still needs to be accounted for with the friend who paid.", "Bayaran balik mengurangkan belanja peribadi. Pulangan ke akaun saya masih perlu diambil kira dengan rakan pembayar.")).font(.footnote).foregroundStyle(.secondary)
                     }
                     TextField(tr("实际收到的退款 · MYR", "Refund received · MYR", "Bayaran balik diterima · MYR"), text: $amount).keyboardType(.decimalPad)
+                    if e.paidByFriend == nil || refundReceivedByMe {
+                        BankAccountPicker(selection: $refundAccountID)
+                            .accessibilityIdentifier("refund.receivingAccount")
+                    }
                     DatePicker(tr("退款日期", "Refund date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)
                     Button(tr("填入剩余全额", "Fill remaining amount", "Isi baki penuh")) { amount = Currency.input(e.cents - e.refunded, "MYR") }.disabled(e.cents == e.refunded)
                     Toggle(tr("指定退款分配", "Custom refund allocation", "Agihan bayaran balik sendiri"), isOn: $custom)
@@ -1093,11 +1098,12 @@ struct RefundsView: View {
                             if custom { distribution = try allocations.mapValues { try optionalMoney($0) ?? 0 } }
                             else { distribution = nil }
                             let receivedByMe = e.paidByFriend == nil ? nil : refundReceivedByMe
+                            let accountID = e.paidByFriend == nil || refundReceivedByMe ? refundAccountID : nil
                             model.perform(key: "refund-" + expenseID, action: { [expenseID, date] in
-                                try $0.addRefund(expenseID: expenseID, cents: n, date: date, custom: distribution, receivedByMe: receivedByMe)
+                                try $0.addRefund(expenseID: expenseID, cents: n, date: date, custom: distribution, receivedByMe: receivedByMe, bankAccountID: accountID)
                             }, completion: { _ in amount = ""; allocations = [:]; model.showSaved() }, failure: { self.error = $0.localizedDescription })
                         } catch { self.error = error.localizedDescription }
-                    }.disabled(e.cents == e.refunded)
+                    }.disabled(e.cents == e.refunded || (e.paidByFriend != nil && refundReceivedByMe && refundAccountID == nil) || model.isWorking("refund-" + expenseID))
                 } header: {
                     Text(tr("新增退款", "Add refund", "Tambah bayaran balik"))
                 } footer: { Text(tr("默认按各人剩余份额分配；开启指定分配后，填写每人的退款金额，合计须等于退款总额。退款回算原消费月份。朋友已经还款的部分会显示为你需退回的款项。外币退款按实际收到 MYR 填写，最多退至原入账额。", "Default allocation is proportional. Custom amounts must sum to the refund total. Refunds reduce the original spending month. Amounts already repaid by friends become payable back to them. Enter foreign refunds in actual MYR, capped at the original recorded amount.", "Agihan lalai mengikut baki bahagian. Amaun sendiri mesti berjumlah amaun pulangan. Pulangan mengurangkan bulan belanja asal. Amaun yang sudah dibayar rakan perlu dipulangkan kepada mereka. Isi bayaran balik asing dalam MYR sebenar, terhad kepada amaun asal.")) }
@@ -1111,6 +1117,9 @@ struct RefundsView: View {
                             }
                             Text(tr("我的退款：", "My refund: ", "Pulangan saya: ") + money(r.personalCents)).font(.caption)
                             Text(tr("退款收款人：", "Refund received by: ", "Bayaran balik diterima oleh: ") + (r.receivedByMe == true ? tr("我", "Me", "Saya") : e.payerLabel)).font(.caption)
+                            if let accountID = e.refundAccountID(r), let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
+                                Label(account.name, systemImage: "creditcard").font(.caption).foregroundStyle(.secondary)
+                            }
                             ForEach(e.shares) { share in
                                 if let cents = r.shares[share.id], cents > 0 { Text("\(share.name): \(money(cents))").font(.caption) }
                             }
@@ -1119,6 +1128,7 @@ struct RefundsView: View {
                 }
             } else { Text(tr("记录已删除", "Entry was deleted", "Rekod telah dipadam")) }
         }.yuejiListSurface().navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
+            .onAppear { if refundAccountID == nil { refundAccountID = expense?.bankAccountID } }
             .alert(tr("退款", "Refund", "Bayaran balik"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
             .confirmationDialog(tr("撤销退款？若已退钱给朋友，请先核对返款记录。", "Undo refund? Check any money already returned to friends first.", "Batalkan bayaran balik? Semak wang yang sudah dipulangkan kepada rakan dahulu."), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) { if let r = undo { model.perform(key: "refund-" + expenseID, action: { [expenseID, r] in try $0.removeRefund(expenseID: expenseID, refundID: r.id) }, completion: { _ in model.showSaved() }) }; undo = nil }
@@ -2413,9 +2423,11 @@ struct NoticeAccountSection: View {
     @EnvironmentObject private var model: LedgerModel
     let notice: TNGNotice
     var body: some View {
-        if notice.status != "ignored" && notice.resolution == nil {
+        if (notice.status != "ignored" && notice.resolution == nil) || notice.resolution == "refund" {
             Section {
                 BankAccountPicker(selection: Binding(get: {
+                    if notice.resolution == "refund", let entryID = notice.relatedRecordID, let entry = model.expense(id: entryID),
+                       let refund = entry.refunds?.first(where: { $0.id == notice.relatedRefundID }) { return entry.refundAccountID(refund) }
                     if let id = notice.expenseID, let entry = model.expense(id: id) { return entry.bankAccountID }
                     return model.notice(id: notice.id)?.bankAccountID
                 }, set: { accountID in

@@ -250,6 +250,14 @@ extension Ledger {
               accountID == nil || bankAccounts.contains(where: { $0.id == accountID }) else {
             throw LedgerError.invalid("Account or notification no longer exists")
         }
+        if tngNotices[index].resolution == "refund" {
+            guard let e = expenses.firstIndex(where: { $0.id == tngNotices[index].relatedRecordID }),
+                  let r = expenses[e].refunds?.firstIndex(where: { $0.id == tngNotices[index].relatedRefundID }) else {
+                throw LedgerError.invalid("Refund changed. Reopen it.")
+            }
+            try requireUnsettledExpense(expenses[e].id)
+            expenses[e].refunds?[r].bankAccountID = accountID
+        }
         tngNotices[index].bankAccountID = accountID
         if let expenseID = tngNotices[index].expenseID,
            let expenseIndex = expenses.firstIndex(where: { $0.id == expenseID }) {
@@ -263,10 +271,10 @@ extension Ledger {
             if transfer.fromAccountID == account.id { total -= transfer.cents }
             if transfer.toAccountID == account.id { total += transfer.cents }
         }
-        for entry in expenses where entry.bankAccountID == account.id && entry.paidByFriend == nil {
-            if entry.date >= account.openingDate { total -= entry.cents }
-            // A refund follows its original payment account, unless a friend received it.
-            for refund in entry.refunds ?? [] where refund.date >= account.openingDate && refund.receivedByMe != false {
+        for entry in expenses {
+            if entry.bankAccountID == account.id && entry.paidByFriend == nil && entry.date >= account.openingDate { total -= entry.cents }
+            // The actual refund destination may differ from the purchase account/payer.
+            for refund in entry.refunds ?? [] where refund.date >= account.openingDate && entry.refundAccountID(refund) == account.id {
                 total += refund.cents
             }
         }
@@ -334,7 +342,8 @@ extension Ledger {
                 throw LedgerError.invalid("Invalid bank account")
             }
         }
-        for id in expenses.compactMap(\.bankAccountID) + incomes.compactMap(\.bankAccountID) + tngNotices.compactMap(\.bankAccountID) {
+        let refundAccounts = expenses.flatMap { ($0.refunds ?? []).compactMap(\.bankAccountID) }
+        for id in expenses.compactMap(\.bankAccountID) + incomes.compactMap(\.bankAccountID) + tngNotices.compactMap(\.bankAccountID) + refundAccounts {
             guard ids.contains(id) else { throw LedgerError.invalid("Payment account no longer exists") }
         }
     }
@@ -1263,7 +1272,9 @@ extension Ledger {
         }
         return incomes.contains { account($0.bankAccountID) && $0.cents == row.cents && near($0.date) } ||
             bankTransfers.contains { $0.toAccountID == accountID && $0.cents == row.cents && near($0.date) } ||
-            expenses.contains { entry in account(entry.bankAccountID) && (entry.refunds ?? []).contains { $0.receivedByMe != false && $0.cents == row.cents && near($0.date) } }
+            expenses.contains { entry in (entry.refunds ?? []).contains { refund in
+                (entry.paidByFriend == nil || refund.receivedByMe == true) && account(entry.refundAccountID(refund)) && refund.cents == row.cents && near(refund.date)
+            } }
     }
     func statementBalance(_ account: BankAccount, before cutoff: Date) -> Int? {
         guard account.openingDate <= cutoff else { return nil }

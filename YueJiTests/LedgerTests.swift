@@ -6,6 +6,121 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testCombinedJamesSettlementCompanyClaimTransferAndLateNoticeConserveMoney() throws {
+        let date = Date().addingTimeInterval(-600)
+        var ledger = Ledger()
+        let bank = BankAccount(name: "Bank", openingCents: 100000, openingDate: date.addingTimeInterval(-3600))
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: bank.openingDate)
+        ledger.bankAccounts = [bank, wallet]
+        let dinner = Expense(bankAccountID: bank.id, merchant: "Dinner", cents: 4188, date: date,
+                             shares: [Share(name: "James", cents: 3098)])
+        let utilities = Expense(merchant: "Utilities", cents: 4040, date: date,
+                                shares: [Share(name: "James", cents: 0)], paidByFriend: "James")
+        ledger.expenses = [dinner, utilities]
+        try ledger.setReimbursement(expense: utilities, claim: ReimbursementClaim(recipient: "Company", cents: 4040))
+        XCTAssertEqual(ledger.spending(in: date), 1090)
+
+        // Only the receiving wallet's notification is available: both sides must move.
+        let topUp = TNGNotice(bankAccountID: wallet.id, body: "Reload", title: "", date: date,
+                             usesReceivedDate: false, kind: "incoming", status: "pending", cents: 2000, party: "Me")
+        ledger.tngNotices = [topUp]
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [topUp.id], fromAccountID: bank.id, toAccountID: wallet.id, cents: 2000, date: date)
+        XCTAssertEqual(ledger.bankBalance(bank), 93812)
+        XCTAssertEqual(ledger.bankBalance(wallet), 12000)
+
+        let payment = TNGNotice(bankAccountID: wallet.id, body: "Transferred RM9.42", title: "", date: date.addingTimeInterval(60),
+                               usesReceivedDate: false, kind: "transfer", status: "pending", cents: 942, party: "CHA JING YUAN")
+        ledger.tngNotices.append(payment)
+        let plan = try ledger.noticeSettlementPlan(noticeID: payment.id, friend: "James")
+        let settlementID = try ledger.confirmNoticeNetSettlement(noticeID: payment.id, plan: plan)
+        XCTAssertEqual(ledger.bankBalance(wallet), 11058)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, 4040)
+
+        try ledger.recordManualReimbursement(expense: ledger.expenses[1], cents: 4100, date: date.addingTimeInterval(120),
+                                              accountID: bank.id, roundingCents: 60, id: "company-receipt")
+        // A bank notification arrives after the manual receipt. Linking it must not add cash.
+        let late = TNGNotice(bankAccountID: bank.id, body: "Received RM41.00", title: "", date: date.addingTimeInterval(180),
+                            usesReceivedDate: false, kind: "incoming", status: "pending", cents: 4100, party: "Company", possibleDuplicate: true)
+        ledger.tngNotices.append(late)
+        try ledger.dismissDuplicateTransactionNotice(id: late.id, originalNoticeID: "company-receipt")
+        ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+        XCTAssertEqual(ledger.bankBalance(bank), 97912)
+        XCTAssertEqual(ledger.bankBalance(bank) + ledger.bankBalance(wallet), 110000 - 1090 + 60)
+        XCTAssertEqual(ledger.spending(in: date), 1090)
+        XCTAssertEqual(ledger.expenses.count, 2)
+        XCTAssertTrue(ledger.incomes.isEmpty)
+        XCTAssertTrue(LedgerNavigationIndex(ledger: ledger).reviewItems.isEmpty)
+
+        // Undo one operation at a time: other claims, debts and cash must stay intact.
+        let receipt = try XCTUnwrap(ledger.expenses[1].reimbursement?.receipts.first)
+        try ledger.undoReimbursementReceipt(expense: ledger.expenses[1], receiptID: receipt.id)
+        XCTAssertEqual(ledger.bankBalance(bank), 93812)
+        XCTAssertEqual(ledger.bankBalance(wallet), 11058)
+        XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 })
+        try ledger.undoSettlement(id: settlementID)
+        XCTAssertEqual(ledger.bankBalance(wallet), 12000)
+        XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, -942)
+        XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, 4040)
+        try ledger.reopenResolvedNotice(id: topUp.id)
+        XCTAssertEqual(ledger.bankBalance(bank), 95812)
+        XCTAssertEqual(ledger.bankBalance(wallet), 10000)
+        XCTAssertEqual(ledger.spending(in: date), 1090)
+        _ = try ledger.validated()
+    }
+
+    func testSettlementAndClaimScenarioMatrixPreservesCashSpendingAndIndependentUndo() throws {
+        let date = Date().addingTimeInterval(-300)
+        for receivable in [0, 1, 3098, 4040, 7777] {
+            for payable in [0, 1, 4040] where receivable + payable > 0 {
+                let label = "receivable=\(receivable), payable=\(payable)"
+                var ledger = Ledger()
+                let bank = BankAccount(name: "Payment account", openingCents: 100000, openingDate: date.addingTimeInterval(-3600))
+                let wallet = BankAccount(name: "Receipt account", openingCents: 5000, openingDate: bank.openingDate)
+                ledger.bankAccounts = [bank, wallet]
+                ledger.expenses = [Expense(bankAccountID: bank.id, merchant: "I paid", cents: receivable + 1000, date: date,
+                                           shares: receivable > 0 ? [Share(name: "James", cents: receivable)] : [])]
+                let claimed = payable > 0 ? max(1, payable / 2) : 0
+                if payable > 0 {
+                    let entry = Expense(merchant: "Friend paid", cents: payable, date: date,
+                                        shares: [Share(name: "James", cents: 0)], paidByFriend: "James")
+                    ledger.expenses.append(entry)
+                    try ledger.setReimbursement(expense: entry, claim: ReimbursementClaim(recipient: "Company", cents: claimed))
+                }
+                let net = receivable - payable
+                let spending = 1000 + payable - claimed
+                let plan = try ledger.settlementPlan(friend: "James", selected: Set(ledger.friendDebtItems.map(\.id)), payment: abs(net), date: date.addingTimeInterval(60))
+                let id = try ledger.confirmManualSettlement(plan, id: "settlement", accountID: net == 0 ? nil : bank.id)
+                XCTAssertEqual(ledger.bankBalance(bank), 100000 - 1000 - payable, label)
+                XCTAssertEqual(ledger.spending(in: date), spending, label)
+                XCTAssertTrue(ledger.friendDebtItems.allSatisfy { $0.balance == 0 }, label)
+                if claimed > 0 {
+                    try ledger.recordManualReimbursement(expense: ledger.expenses[1], cents: claimed, date: date.addingTimeInterval(120), accountID: wallet.id)
+                }
+                ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+                XCTAssertEqual(ledger.bankBalance(bank) + ledger.bankBalance(wallet), 105000 - spending, label)
+                XCTAssertEqual(ledger.spending(in: date), spending, label)
+                XCTAssertTrue(ledger.incomes.isEmpty, label)
+                XCTAssertEqual(ledger.tngNotices.filter { $0.status == "settlement" }.count, net == 0 ? 0 : 1, label)
+
+                // Reverse the debt settlement first this time; a company receipt survives.
+                try ledger.undoSettlement(id: id)
+                XCTAssertEqual(ledger.friendDebtItems.reduce(0) { $0 + $1.balance }, net, label)
+                XCTAssertEqual(ledger.bankBalance(bank), 100000 - receivable - 1000, label)
+                XCTAssertEqual(ledger.bankBalance(wallet), 5000 + claimed, label)
+                if claimed > 0 {
+                    XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, 0, label)
+                    let receipt = try XCTUnwrap(ledger.expenses[1].reimbursement?.receipts.first)
+                    try ledger.undoReimbursementReceipt(expense: ledger.expenses[1], receiptID: receipt.id)
+                    XCTAssertEqual(ledger.expenses[1].reimbursement?.outstanding, claimed, label)
+                }
+                XCTAssertEqual(ledger.bankBalance(wallet), 5000, label)
+                XCTAssertEqual(ledger.spending(in: date), spending, label)
+                _ = try ledger.validated()
+            }
+        }
+    }
+
     func testReviewQueueShowsOneNextStepAndDisappearsWhenResolved() throws {
         let date = Date().addingTimeInterval(-60)
         var ledger = Ledger()

@@ -818,6 +818,14 @@ struct RefundRecord: Codable, Identifiable, Equatable {
     var personalCents: Int
     var shares: [String: Int]
     var receivedByMe: Bool? = nil // Legacy/nil: refund returned to the original payer.
+    var bankAccountID: String? = nil // Explicit destination; nil retains the original-payer rule.
+}
+
+extension Expense {
+    func refundAccountID(_ refund: RefundRecord) -> String? {
+        guard paidByFriend == nil || refund.receivedByMe == true else { return nil }
+        return refund.bankAccountID ?? (paidByFriend == nil ? bankAccountID : nil)
+    }
 }
 struct AutomationEvent: Codable, Identifiable {
     var id = UUID().uuidString
@@ -908,6 +916,7 @@ func validateRefunds(_ e: Expense) throws {
     guard refunds.count <= 10_000, Set(refunds.map(\.id)).count == refunds.count else { throw LedgerError.invalid("账本格式或版本无效。") }
     for r in refunds {
         guard r.receivedByMe != false || e.paidByFriend != nil else { throw settlementError("请核对退款收款人。", "Check who received the refund.", "Semak penerima bayaran balik.") }
+        guard r.bankAccountID == nil || (e.paidByFriend == nil || r.receivedByMe == true) else { throw LedgerError.invalid("Refund account must belong to the recipient") }
         guard r.cents > 0, r.cents <= e.cents, r.personalCents >= 0, r.personalCents <= r.cents,
               r.shares.count <= e.shares.count, r.shares.allSatisfy({ key, value in value >= 0 && value <= r.cents && e.shares.contains(where: { $0.id == key }) }),
               r.personalCents + r.shares.values.reduce(0, +) == r.cents,
@@ -919,10 +928,13 @@ func validateRefunds(_ e: Expense) throws {
     }
 }
 extension Ledger {
-    mutating func addRefund(expenseID: String, cents: Int, date: Date, custom: [String: Int]? = nil, receivedByMe: Bool? = nil) throws {
+    mutating func addRefund(expenseID: String, cents: Int, date: Date, custom: [String: Int]? = nil, receivedByMe: Bool? = nil, bankAccountID: String? = nil) throws {
         try requireUnsettledExpense(expenseID)
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), date <= Date(), date >= Calendar.current.startOfDay(for: expenses[i].date) else { throw LedgerError.invalid("交易金额或日期无效。") }
         let e = expenses[i]
+        guard bankAccountID == nil || (bankAccounts.contains { $0.id == bankAccountID } && (e.paidByFriend == nil || receivedByMe == true)) else {
+            throw reviewError("请核对退款收款人和收款账户。", "Check the refund recipient and receiving account.", "Semak penerima dan akaun penerima bayaran balik.")
+        }
         let allocation: [Int]
         if let custom {
             let keys = ["owner"] + e.shares.map(\.id)
@@ -938,7 +950,7 @@ extension Ledger {
         }
         var amounts: [String: Int] = [:]
         for j in e.shares.indices { amounts[e.shares[j].id] = allocation[j + 1] }
-        let record = RefundRecord(cents: cents, date: date, personalCents: allocation[0], shares: amounts, receivedByMe: receivedByMe)
+        let record = RefundRecord(cents: cents, date: date, personalCents: allocation[0], shares: amounts, receivedByMe: receivedByMe, bankAccountID: bankAccountID)
         var next = e
         next.refunds = (e.refunds ?? []) + [record]
         for j in e.shares.indices { next.shares[j].refundCents = e.shares[j].refunded + allocation[j + 1] }
@@ -1836,6 +1848,10 @@ struct BookkeepingReviewItem: Identifiable {
         let linked = Set(ledger.tngNotices.compactMap(\.expenseID))
         let transferred = Set(ledger.bankTransfers.flatMap { $0.noticeIDs ?? [] })
         let notices: [Self] = ledger.tngNotices.compactMap { notice in
+            if notice.resolution == "refund", let entry = notice.relatedRecordID.flatMap({ expenses[$0] }),
+               let refund = entry.refunds?.first(where: { $0.id == notice.relatedRefundID }) {
+                return entry.refundAccountID(refund) == nil ? Self(record: .notice(notice), reason: .account) : nil
+            }
             guard notice.status != "ignored", notice.resolution == nil, !transferred.contains(notice.id) else { return nil }
             let expense = notice.expenseID.flatMap { expenses[$0] }
             // A friend's payment creates a liability, not a missing debit from my account.
