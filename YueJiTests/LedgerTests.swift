@@ -2979,8 +2979,11 @@ final class LedgerTests: XCTestCase {
         try ledger.undoSettlement(id: nextID)
         try ledger.undoSettlement(id: id)
         rows = LedgerTimelineItem.grouped(expenses: ledger.expenses, transfers: ledger.ledgerTNGTransfers(in: settlementDate), settlements: ledger.settlements).flatMap(\.entries)
-        XCTAssertEqual(rows.count, 4)
+        XCTAssertEqual(rows.count, 3, "Undo returns the payment to review; only the original purchases remain in the ledger")
+        XCTAssertFalse(rows.contains { $0.id == "tng:receipt" })
         XCTAssertEqual(ledger.tngNotices.count, 1)
+        XCTAssertEqual(ledger.tngNotices[0].status, "pending")
+        XCTAssertTrue(BookkeepingReviewItem.items(in: ledger).contains { $0.id == "notice:receipt" })
         XCTAssertEqual(ledger.friendBalances[0].owed, 3000)
         XCTAssertEqual(ledger.spending(in: settlementDate), 5500)
     }
