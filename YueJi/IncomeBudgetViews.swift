@@ -144,9 +144,10 @@ private struct BankCardPressStyle: ButtonStyle {
 struct BankAccountPicker: View {
     @EnvironmentObject var model: LedgerModel
     @Binding var selection: String?
+    var unassignedTitle: String? = nil
     var body: some View {
         Picker(tr("资金账户", "Money account", "Akaun wang"), selection: $selection) {
-            Text(tr("未分配账户", "Unassigned", "Belum ditetapkan")).tag(String?.none)
+            Text(unassignedTitle ?? tr("未分配账户", "Unassigned", "Belum ditetapkan")).tag(String?.none)
             ForEach(model.ledger.bankAccounts) { account in
                 Text(account.name).tag(Optional(account.id))
             }

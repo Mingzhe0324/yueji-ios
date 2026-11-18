@@ -823,7 +823,8 @@ struct RefundRecord: Codable, Identifiable, Equatable {
 
 extension Expense {
     func refundAccountID(_ refund: RefundRecord) -> String? {
-        guard paidByFriend == nil || refund.receivedByMe == true else { return nil }
+        guard refund.receivedByMe != false,
+              paidByFriend == nil || refund.receivedByMe == true else { return nil }
         return refund.bankAccountID ?? (paidByFriend == nil ? bankAccountID : nil)
     }
 }

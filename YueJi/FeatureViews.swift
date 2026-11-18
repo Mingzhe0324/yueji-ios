@@ -1082,7 +1082,8 @@ struct RefundsView: View {
                     }
                     TextField(tr("实际收到的退款 · MYR", "Refund received · MYR", "Bayaran balik diterima · MYR"), text: $amount).keyboardType(.decimalPad)
                     if e.paidByFriend == nil || refundReceivedByMe {
-                        BankAccountPicker(selection: $refundAccountID)
+                        BankAccountPicker(selection: $refundAccountID,
+                                          unassignedTitle: e.bankAccountID == nil ? nil : tr("退回原付款账户", "Original payment account", "Akaun bayaran asal"))
                             .accessibilityIdentifier("refund.receivingAccount")
                     }
                     DatePicker(tr("退款日期", "Refund date", "Tarikh bayaran balik"), selection: $date, displayedComponents: .date)

@@ -1273,7 +1273,7 @@ extension Ledger {
         return incomes.contains { account($0.bankAccountID) && $0.cents == row.cents && near($0.date) } ||
             bankTransfers.contains { $0.toAccountID == accountID && $0.cents == row.cents && near($0.date) } ||
             expenses.contains { entry in (entry.refunds ?? []).contains { refund in
-                (entry.paidByFriend == nil || refund.receivedByMe == true) && account(entry.refundAccountID(refund)) && refund.cents == row.cents && near(refund.date)
+                refund.receivedByMe != false && (entry.paidByFriend == nil || refund.receivedByMe == true) && account(entry.refundAccountID(refund)) && refund.cents == row.cents && near(refund.date)
             } }
     }
     func statementBalance(_ account: BankAccount, before cutoff: Date) -> Int? {
