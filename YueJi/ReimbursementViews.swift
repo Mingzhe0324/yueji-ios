@@ -125,7 +125,7 @@ struct ReimbursementDraftFields: View {
     var body: some View {
         Section {
             Toggle(tr("需要报销", "Reimbursable", "Boleh dituntut"), isOn: $enabled)
-                .disabled((friendPaid && !enabled) || !canRemove)
+                .disabled(!canRemove)
                 .accessibilityIdentifier("reimbursement.enabled")
             if enabled {
                 TextField(tr("公司／报销对象", "Company / reimbursed by", "Syarikat / pembayar balik"), text: $recipient)
@@ -141,7 +141,7 @@ struct ReimbursementDraftFields: View {
             Text(tr("报销 · 选填", "Reimbursement · optional", "Tuntutan · pilihan"))
         } footer: {
             if friendPaid {
-                Text(tr("报销用于我已垫付的部分；朋友代付请先处理付款人。", "Reimbursements track money you paid. Review the payer for friend-paid entries.", "Tuntutan menjejak wang yang anda bayar. Semak pembayar untuk rekod dibayar rakan."))
+                Text(tr("可报销我的份额；与代付朋友的欠款单独结算。", "Claim your own share; settle the debt to the friend separately.", "Tuntut bahagian anda; selesaikan hutang kepada rakan secara berasingan."))
             } else if !canRemove {
                 Text(tr("已有到账记录。取消报销前，请在报销详情中撤销这些记录。", "Undo receipts in reimbursement details before removing this claim.", "Batalkan penerimaan dalam butiran tuntutan sebelum membuang tuntutan."))
             } else {
@@ -255,7 +255,7 @@ private struct ReimbursementEntryPicker: View {
     @State private var source = "all"
     private var entries: [Expense] {
         model.ledger.expenses.filter {
-            $0.reimbursement == nil && $0.paidByFriend == nil &&
+            $0.reimbursement == nil && $0.personal > 0 && !$0.isLoan &&
             (source == "all" || (source == "manual" ? $0.source == "手动" : $0.source != "手动")) &&
             (search.isEmpty || $0.displayName.localizedCaseInsensitiveContains(search))
         }.sorted { $0.date > $1.date }
@@ -312,7 +312,11 @@ struct ReimbursementDetailView: View {
             if let entry = expense {
                 Section {
                     Text(entry.displayName).font(.headline)
-                    LabeledContent(tr("原付款", "Original payment", "Bayaran asal"), value: money(entry.paidFromMyAccount))
+                    LabeledContent(tr("我的净份额", "My net share", "Bahagian bersih saya"), value: money(entry.personal))
+                    if let payer = entry.paidByFriend {
+                        LabeledContent(tr("代付朋友", "Paid by friend", "Dibayar oleh rakan"), value: payer)
+                        LabeledContent(tr("仍欠朋友", "Still owed to friend", "Masih berhutang kepada rakan"), value: money(model.ledger.payableToPayer(entry)))
+                    }
                     LabeledContent(tr("个人消费", "Personal spending", "Belanja peribadi"), value: money(entry.personalSpending))
                 }
                 if let claim = entry.reimbursement {
@@ -324,7 +328,7 @@ struct ReimbursementDetailView: View {
                         LabeledContent(tr("待到账", "Outstanding", "Belum diterima")) { AnimatedMoney(cents: claim.outstanding) }
                         SpendingMeter(value: claim.received, total: claim.cents, color: .green)
                     } footer: {
-                        Text(tr("报销到账只更新进度，不记为收入，也不会再次减少个人消费。", "Receipts update progress without adding income or reducing personal spending again.", "Penerimaan mengemas kini kemajuan tanpa menambah pendapatan atau mengurangkan belanja sekali lagi."))
+                        Text(tr("到账计入收款账户，不算收入，也不会再次扣减消费。", "Receipts credit the receiving account without counting as income or reducing spending again.", "Penerimaan menambah akaun penerima tanpa dikira sebagai pendapatan atau mengurangkan belanja sekali lagi."))
                     }
                     Section {
                         Button { editing = ReimbursementEditorRoute(expense: entry, receiptMode: true) } label: {
@@ -342,6 +346,10 @@ struct ReimbursementDetailView: View {
                                     if let rounding = receipt.roundingCents {
                                         Text(tr("尾差", "Rounding", "Pembundaran") + " · " + money(rounding)).font(.caption).foregroundStyle(.secondary)
                                     }
+                                    if let noticeID = receipt.noticeID, let notice = model.notice(id: noticeID),
+                                       let rounding = notice.reimbursementRoundingCents, rounding > 0 {
+                                        Text(tr("该笔收款尾差", "Receipt rounding", "Pembundaran penerimaan") + " · " + money(rounding)).font(.caption).foregroundStyle(.secondary)
+                                    }
                                     Text(dateLabel(receipt.date, time: true)).font(.caption).foregroundStyle(.secondary)
                                 }
                                 Spacer()
@@ -357,9 +365,9 @@ struct ReimbursementDetailView: View {
                     Section {
                         Button { editing = ReimbursementEditorRoute(expense: entry, receiptMode: false) } label: {
                             Label(tr("设置报销", "Set up reimbursement", "Tetapkan tuntutan"), systemImage: "doc.text")
-                        }.disabled(entry.paidByFriend != nil)
+                        }.disabled(entry.personal <= 0 || entry.isLoan)
                     } footer: {
-                        Text(tr("报销用于我已垫付的部分；从标记起排除个人消费与预算。", "Claims track your paid share and exclude it from personal spending and budgets from the time you mark it.", "Tuntutan menjejak bahagian yang anda bayar dan mengecualikannya daripada belanja peribadi serta bajet selepas ditandakan."))
+                        Text(tr("报销我的费用；不改变原付款或朋友结算。", "Claim your own costs without changing the original payment or friend settlements.", "Tuntut kos anda tanpa mengubah bayaran asal atau penyelesaian rakan."))
                     }
                 }
             } else {
@@ -407,6 +415,7 @@ private struct ReimbursementEditor: View {
     @State private var recipient = ""
     @State private var amount = ""
     @State private var acceptRounding = false
+    @State private var accountID: String?
     private var rounding: Int { max(0, ((try? toCents(amount)) ?? 0) - (expense.reimbursement?.outstanding ?? 0)) }
     @State private var date = Date()
     @State private var initial: [String]?
@@ -414,7 +423,7 @@ private struct ReimbursementEditor: View {
     @State private var confirmingDiscard = false
     @State private var error: String?
     @FocusState private var focused: ExpenseInputField?
-    private var snapshot: [String] { [String(enabled), recipient, amount, String(date.timeIntervalSince1970), String(acceptRounding)] }
+    private var snapshot: [String] { [String(enabled), recipient, amount, String(date.timeIntervalSince1970), String(acceptRounding), accountID ?? ""] }
     private var hasChanges: Bool { initial.map { $0 != snapshot } ?? false }
     var body: some View {
         let _ = locale.identifier
@@ -433,13 +442,15 @@ private struct ReimbursementEditor: View {
                             Toggle(tr("多收金额记为尾差", "Record extra as rounding", "Rekod lebihan sebagai pembundaran") + " · " + money(rounding), isOn: $acceptRounding)
                         }
                         DatePicker(tr("到账日期", "Receipt date", "Tarikh diterima"), selection: $date, in: min(expense.date, Date())...Date(), displayedComponents: [.date, .hourAndMinute])
+                        BankAccountPicker(selection: $accountID)
+                            .accessibilityIdentifier("reimbursement.received.account")
                         Button(tr("填入待到账金额", "Fill outstanding amount", "Isi baki belum diterima")) {
                             amount = Currency.input(expense.reimbursement?.outstanding ?? 0, "MYR")
                         }
                     }
                 } else {
                     ReimbursementDraftFields(enabled: $enabled, recipient: $recipient, amount: $amount,
-                        canRemove: expense.reimbursement?.receipts.isEmpty ?? true, sharedFocus: $focused)
+                        canRemove: expense.reimbursement?.receipts.isEmpty ?? true, friendPaid: expense.paidByFriend != nil, sharedFocus: $focused)
                     if enabled {
                         Section {
                             Button(tr("填入我的净份额", "Fill my net share", "Isi bahagian bersih saya")) {
@@ -460,7 +471,7 @@ private struct ReimbursementEditor: View {
                     }
                     ToolbarItem(placement: .confirmationAction) {
                         Button { save() } label: { EditorSaveLabel(saving: saving) }
-                            .yuejiPrimaryButton().disabled(saving || initial == nil || (receiptMode && rounding > 0 && !acceptRounding))
+                            .yuejiPrimaryButton().disabled(saving || initial == nil || (receiptMode && (accountID == nil || (rounding > 0 && !acceptRounding))))
                     }
                     ToolbarItemGroup(placement: .keyboard) {
                         Spacer()
@@ -485,6 +496,7 @@ private struct ReimbursementEditor: View {
         do {
             if receiptMode && rounding > 0 && !acceptRounding { return }
             let receipt = receiptMode ? ReimbursementReceipt(cents: try toCents(amount) - rounding, date: date, roundingCents: rounding > 0 ? rounding : nil) : nil
+            let accountID = accountID
             let claim = !receiptMode && enabled ? ReimbursementClaim(recipient: recipient.trimmingCharacters(in: .whitespacesAndNewlines),
                 cents: try toCents(amount), receipts: expense.reimbursement?.receipts ?? []) : nil
             focused = nil; saving = true
@@ -493,7 +505,10 @@ private struct ReimbursementEditor: View {
                 do {
                     let expected = expense
                     try await model.mutate({ ledger in
-                        if let receipt { try ledger.receiveReimbursement(expense: expected, receipt: receipt) }
+                        if let receipt {
+                            guard let accountID else { throw LedgerError.invalid("Choose the receiving account") }
+                            try ledger.recordManualReimbursement(expense: expected, cents: receipt.cents + (receipt.roundingCents ?? 0), date: receipt.date, accountID: accountID, roundingCents: receipt.roundingCents ?? 0)
+                        }
                         else { try ledger.setReimbursement(expense: expected, claim: claim) }
                     }, postRecurring: false)
                     model.showSaved(message: receiptMode ? tr("到账已记录", "Receipt recorded", "Penerimaan direkod") : tr("报销已保存", "Reimbursement saved", "Tuntutan disimpan"))

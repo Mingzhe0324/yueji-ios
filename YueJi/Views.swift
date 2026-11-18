@@ -827,19 +827,8 @@ struct DashboardView: View {
                         .listRowSeparator(.hidden)
                         .listRowInsets(EdgeInsets(top: 10, leading: 8, bottom: 6, trailing: 8))
                 }
-                // The budget sits right under the actions; the latest entries and charts
-                // follow, each card under a bold heading with "View all" where there is
-                // more, as in the kit's Mobile Banking. Pending notices stay reachable from
-                // the automation settings.
+                PendingBookkeepingCard()
                 budgetSection
-                Section {
-                    NavigationLink {
-                        BudgetSavingsView(initialMonth: month, hidden: hideAmounts)
-                    } label: {
-                        Label(tr("每月与全年预算结余", "Monthly & annual budget savings", "Baki bajet bulanan & tahunan"), systemImage: "chart.bar.xaxis")
-                    }
-                    .accessibilityIdentifier("overview.budgetSavings")
-                }
                 // Only when something stands out; otherwise the card is absent.
                 UnusualSpendingSection(alerts: alertsMonth == monthKey(month) ? alerts : [], month: month, hidden: hideAmounts)
                 recentCard
@@ -853,10 +842,23 @@ struct DashboardView: View {
                     }
                 }
                 travelSection
-                categoriesCard
-                trendSection
-                savingsSection
-                balancesCard
+                Section {
+                    NavigationLink {
+                        List {
+                            categoriesCard
+                            trendSection
+                            savingsSection
+                            balancesCard
+                            Section {
+                                NavigationLink { BudgetSavingsView(initialMonth: month, hidden: hideAmounts) } label: {
+                                    Label(tr("每月与全年预算结余", "Monthly & annual budget savings", "Baki bajet bulanan & tahunan"), systemImage: "chart.bar.xaxis")
+                                }.accessibilityIdentifier("overview.budgetSavings")
+                            }
+                        }.yuejiDashboardSurface().navigationTitle(tr("分析与计划", "Insights & plans", "Analisis & rancangan"))
+                    } label: {
+                        SimpleSettingsRow(title: tr("分析与计划", "Insights & plans", "Analisis & rancangan"), subtitle: tr("分类、趋势与储蓄", "Categories, trends and savings", "Kategori, trend dan simpanan"), symbol: "chart.bar.xaxis", color: IslandPalette.leaf)
+                    }.accessibilityIdentifier("overview.insights")
+                }
             }.yuejiDashboardSurface()
             .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                 ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
@@ -1581,9 +1583,7 @@ struct OverviewToolsView: View {
                 NavigationLink { ReceiptScanView() } label: { IslandRowLabel(title: tr("拍收据分账", "Snap receipt & split", "Imbas resit & bahagi"), symbol: "doc.viewfinder", color: IslandPalette.lagoon) }
                     .guideTarget("dashboard.receipt")
             }
-            Section(tr("分析", "Insights", "Analisis")) {
-                NavigationLink { YearReviewView(month: month) } label: { IslandRowLabel(title: tr("年度回顾", "Year in review", "Imbasan tahunan"), symbol: "calendar.badge.clock", color: IslandPalette.leaf) }
-                NavigationLink { SpendingComparisonView(month: month) } label: { IslandRowLabel(title: tr("月度消费对比", "Monthly comparison", "Perbandingan bulanan"), symbol: "chart.bar.xaxis", color: IslandPalette.mint) }
+            Section(tr("核对与计划", "Review & plan", "Semakan & rancangan")) {
                 NavigationLink { UpcomingView(initialMonth: month) } label: { IslandRowLabel(title: tr("固定消费预览", "Upcoming bills", "Bil akan datang"), symbol: "calendar", color: IslandPalette.pumpkin) }
                 NavigationLink { DuplicateReviewView() } label: { IslandRowLabel(title: tr("检查重复账目", "Review duplicates", "Semak pendua"), symbol: "doc.on.doc.fill", color: IslandPalette.berry) }
             }
@@ -1998,6 +1998,7 @@ struct ExpensesView: View {
                         .listRowSeparator(.hidden)
                 }
                 .listRowBackground(Color.clear)
+                PendingBookkeepingCard()
                 if loadedQuery == nil {
                     ProgressView(tr("正在加载账本…", "Loading ledger…", "Memuatkan lejar…"))
                         .accessibilityIdentifier("ledger.loading")
@@ -2184,7 +2185,7 @@ struct ExpensesView: View {
                             Button { if sheet == nil { sheet = .income } } label: {
                                 Label(tr("记录收入", "Record income", "Rekod pendapatan"), systemImage: "plus.circle.fill")
                             }
-                            NavigationLink(tr("银行 / TNG 通知", "Bank / TNG inbox", "Peti bank / TNG")) { TNGInboxView() }
+                            NavigationLink(tr("通知记录", "Notification history", "Sejarah notifikasi")) { TNGInboxView(pendingOnly: false) }
                             NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
                         } label: { Image(systemName: "ellipsis.circle") }
                             .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))
@@ -2320,13 +2321,6 @@ struct ExpenseDetailView: View {
                     let entry = detail.entry
                     Section {
                         ExpenseDetailHero(entry: entry, compact: $compactTitle)
-                        Button {
-                            guard !editorPresented else { return }
-                            editorPresented = true
-                            editing = .expense(entry)
-                        } label: {
-                            Label(tr("修改金额、商家、分类或日期", "Change amount, merchant, category or date", "Ubah amaun, peniaga, kategori atau tarikh"), systemImage: "square.and.pencil")
-                        }.accessibilityIdentifier("transaction.quickEdit")
                     }
                     // Where a payment's notification about a subscription leads: the schedule it
                     // renewed, or the possible subscription it may be part of.
@@ -2418,13 +2412,12 @@ struct ExpenseDetailView: View {
                         NavigationLink { ReimbursementDetailView(expenseID: entry.id) } label: {
                             Label(entry.reimbursement?.status ?? tr("设置报销", "Set up reimbursement", "Tetapkan tuntutan"), systemImage: "doc.text")
                         }.accessibilityIdentifier("transaction.reimbursement.open")
-                            .disabled(entry.paidByFriend != nil)
                         if let claim = entry.reimbursement {
                             LabeledContent(tr("报销对象", "Reimbursed by", "Dibayar balik oleh"), value: claim.recipient)
                             LabeledContent(tr("待到账", "Outstanding", "Belum diterima"), value: money(claim.outstanding))
                         }
                     }
-                    if !entry.shares.isEmpty {
+                    if !entry.shares.isEmpty && entry.paidByFriend == nil {
                         Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
                             ForEach(entry.shares) { share in
                                 VStack(alignment: .leading, spacing: 8) {
@@ -3593,7 +3586,8 @@ struct FriendBalanceRow: View {
     private var status: String {
         if settled { return tr("已结清", "Settled", "Selesai") }
         if friend.owed > 0 && friend.payable > 0 {
-            return tr("待收 ", "To collect ", "Belum diterima ") + money(friend.owed) + " · " + tr("我欠 ", "I owe ", "Saya berhutang ") + money(friend.payable)
+            if net == 0 { return tr("双方欠款相同 · 可抵扣结清", "Equal debts · ready to offset", "Hutang sama · sedia ditolak") }
+            return net > 0 ? tr("抵扣后，朋友付给我", "After offset, they pay me", "Selepas tolakan, rakan bayar saya") : tr("抵扣后，我付给朋友", "After offset, I pay them", "Selepas tolakan, saya bayar rakan")
         }
         return settlementDirection(net, name: friend.name)
     }

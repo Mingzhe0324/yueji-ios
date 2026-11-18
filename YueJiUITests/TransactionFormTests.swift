@@ -255,6 +255,10 @@ final class TransactionFormTests: XCTestCase {
         }, object: app)
         XCTAssertEqual(XCTWaiter.wait(for: [detailReady], timeout: 10), .completed,
                        "Detail did not become interactive after closing the item editor; \(app.debugDescription)")
+        XCTAssertEqual(app.buttons.matching(identifier: "transaction.edit").count, 1,
+                       "The detail must expose a single entry-edit action")
+        XCTAssertFalse(app.buttons["transaction.quickEdit"].exists,
+                       "Do not duplicate Edit with a second amount/category shortcut")
         let dock = app.tabBars.firstMatch
         XCTAssertLessThanOrEqual(detailEdit.frame.maxY, dock.frame.minY,
                                  "Detail actions must have their own space above navigation")

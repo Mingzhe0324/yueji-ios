@@ -6,6 +6,98 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testReviewQueueShowsOneNextStepAndDisappearsWhenResolved() throws {
+        let date = Date().addingTimeInterval(-60)
+        var ledger = Ledger()
+        let account = BankAccount(name: "Wallet", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        ledger.bankAccounts = [account]
+        let purchase = Expense(merchant: "Shop", cents: 500, date: date, source: "Apple Pay")
+        let other = Expense(merchant: "Cafe", cents: 600, date: date, source: "Apple Pay")
+        let friendPaid = Expense(merchant: "Utilities", cents: 4040, date: date, source: "Bank", shares: [Share(name: "James", cents: 0)], paidByFriend: "James")
+        ledger.expenses = [purchase, other, friendPaid, Expense(merchant: "Cash", cents: 100, date: date)]
+        let payment = TNGNotice(body: "Payment", title: "", date: date, usesReceivedDate: false, kind: "payment", status: "recorded", cents: 500, party: "Shop", expenseID: purchase.id)
+        let incoming = TNGNotice(bankAccountID: account.id, body: "Received", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 700, party: "Company")
+        let duplicate = TNGNotice(body: "Similar receipt", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 700, party: "Company", possibleDuplicate: true)
+        let ignored = TNGNotice(body: "Promotion", title: "", date: date, usesReceivedDate: false, kind: "unknown", status: "ignored", cents: nil, party: nil)
+        let friendNotice = TNGNotice(body: "Friend paid", title: "", date: date, usesReceivedDate: false, kind: "payment", status: "recorded", cents: 4040, party: "James", expenseID: friendPaid.id)
+        ledger.tngNotices = [payment, incoming, duplicate, ignored, friendNotice]
+        let queue = LedgerNavigationIndex(ledger: ledger).reviewItems
+        XCTAssertEqual(queue.count, 4)
+        XCTAssertEqual(Set(queue.map(\.id)).count, queue.count)
+        XCTAssertEqual(queue.filter { $0.reason == .account }.count, 2)
+        XCTAssertEqual(queue.first { $0.id == "notice:" + duplicate.id }?.reason, .duplicate,
+                       "Review duplicates before asking for an account; never present two tasks for one receipt")
+        XCTAssertEqual(queue.first { $0.id == "notice:" + incoming.id }?.reason, .purpose)
+        XCTAssertFalse(queue.contains { $0.id == "expense:" + purchase.id }, "The linked notice owns this review task")
+        try ledger.assignNoticeAccount(id: payment.id, accountID: account.id)
+        try ledger.assignApplePayAccount(id: other.id, accountID: account.id)
+        ledger.tngNotices[1].status = "income"
+        ledger.tngNotices[2].status = "ignored"
+        XCTAssertTrue(LedgerNavigationIndex(ledger: ledger).reviewItems.isEmpty)
+    }
+
+    func testFriendPaidPartialReimbursementCreditsAccountBeforeRepayingFriend() throws {
+        let date = Date().addingTimeInterval(-180)
+        var ledger = Ledger()
+        let account = BankAccount(name: "Wallet", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        ledger.bankAccounts = [account]
+        ledger.expenses = [Expense(merchant: "Utilities", cents: 4040, date: date, shares: [Share(name: "James", cents: 0)], paidByFriend: "James")]
+        try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 4040))
+        try ledger.recordManualReimbursement(expense: ledger.expenses[0], cents: 2000, date: date.addingTimeInterval(60), accountID: account.id)
+        XCTAssertEqual(ledger.bankBalance(account), 12000)
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 4040)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 2040)
+        XCTAssertEqual(ledger.expenses[0].personalSpending, 0)
+        let expected = ledger.expenses[0]
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let before = try encoder.encode(ledger)
+        XCTAssertThrowsError(try ledger.recordManualReimbursement(expense: expected, cents: 2000, date: date.addingTimeInterval(60), accountID: account.id),
+                             "A second identical receipt must not silently credit the account again")
+        XCTAssertThrowsError(try ledger.recordManualReimbursement(expense: expected, cents: 2040, date: date.addingTimeInterval(120), accountID: "missing"))
+        XCTAssertEqual(try encoder.encode(ledger), before, "Rejected receipts must not leave a draft or change cash/debt")
+        try ledger.recordManualReimbursement(expense: expected, cents: 2040, date: date.addingTimeInterval(120), accountID: account.id)
+        ledger = try JSONDecoder().decode(Ledger.self, from: encoder.encode(ledger)).validated()
+        XCTAssertEqual(ledger.bankBalance(account), 14040)
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 0)
+        XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 4040)
+    }
+
+    func testFriendPaidCompanyClaimBeforeAndAfterSettlementKeepsDebtsIndependent() throws {
+        for claimFirst in [true, false] {
+            let date = Date().addingTimeInterval(-180)
+            var ledger = Ledger()
+            let account = BankAccount(name: "Wallet", openingCents: 50000, openingDate: date.addingTimeInterval(-86400))
+            ledger.bankAccounts = [account]
+            ledger.expenses = [Expense(merchant: "James", cents: 4040, date: date, shares: [Share(name: "James", cents: 0)], paidByFriend: "James")]
+            let claim = ReimbursementClaim(recipient: "Company", cents: 4040)
+            if claimFirst { try ledger.setReimbursement(expense: ledger.expenses[0], claim: claim) }
+            XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 4040)
+            let plan = try ledger.repaymentPlan(friend: "James", selected: Set(ledger.friendDebtItems.map(\.id)), payment: 4040, date: date.addingTimeInterval(60), direction: .outgoing)
+            let settlementID = try ledger.confirmManualSettlement(plan, id: "friend-payment", accountID: account.id)
+            if !claimFirst { try ledger.setReimbursement(expense: ledger.expenses[0], claim: claim) }
+            XCTAssertEqual(ledger.bankBalance(account), 45960)
+            XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 0)
+            XCTAssertEqual(ledger.spending(in: date), 0)
+            let expected = ledger.expenses[0]
+            try ledger.recordManualReimbursement(expense: expected, cents: 4100, date: date.addingTimeInterval(120), accountID: account.id, roundingCents: 60, id: "company-payment")
+            XCTAssertThrowsError(try ledger.recordManualReimbursement(expense: expected, cents: 4100, date: date.addingTimeInterval(120), accountID: account.id, roundingCents: 60, id: "company-payment"))
+            ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+            XCTAssertEqual(ledger.bankBalance(account), 50060)
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 0)
+            XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 0)
+            let receipt = try XCTUnwrap(ledger.expenses[0].reimbursement?.receipts.first)
+            try ledger.undoReimbursementReceipt(expense: ledger.expenses[0], receiptID: receipt.id)
+            XCTAssertEqual(ledger.bankBalance(account), 45960)
+            XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 4040)
+            XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 0)
+            try ledger.undoSettlement(id: settlementID)
+            XCTAssertEqual(ledger.payableToPayer(ledger.expenses[0]), 4040)
+            XCTAssertEqual(ledger.expenses[0].reimbursement?.outstanding, 4040)
+            XCTAssertEqual(ledger.bankBalance(account), 50000)
+        }
+    }
+
     func testManualReceiptRepaymentRoundingAndUndoPreserveActualMoney() throws {
         let date = Date().addingTimeInterval(-60)
         var ledger = Ledger()
@@ -1259,7 +1351,7 @@ final class ReimbursementTests: XCTestCase {
         XCTAssertEqual(ledger.expenses[0], updated)
     }
 
-    func testInvalidClaimsCannotUseFriendsShareOrFriendPaidMoney() throws {
+    func testClaimsCannotExceedMyShareRegardlessOfWhoPaid() throws {
         var ledger = Ledger(expenses: [purchase()])
         for claim in [ReimbursementClaim(recipient: "", cents: 100), ReimbursementClaim(recipient: "Company", cents: 3001),
                       ReimbursementClaim(recipient: "Company", cents: 0), ReimbursementClaim(recipient: "Company", cents: Int.max)] {
@@ -1267,7 +1359,9 @@ final class ReimbursementTests: XCTestCase {
             XCTAssertEqual(ledger.expenses[0], purchase())
         }
         ledger.expenses[0].paidByFriend = "Amy"
-        XCTAssertThrowsError(try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 100)))
+        XCTAssertThrowsError(try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 3001)))
+        try ledger.setReimbursement(expense: ledger.expenses[0], claim: ReimbursementClaim(recipient: "Company", cents: 100))
+        XCTAssertEqual(ledger.expenses[0].reimbursement?.cents, 100)
     }
 
     func testRefundMustLeaveEnoughNetShareForClaimAndCanBeAdjustedSafely() throws {

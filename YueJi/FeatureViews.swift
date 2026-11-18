@@ -2326,17 +2326,48 @@ struct TNGInboxView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @State var pendingOnly = true
+    @State var reviewFilter: BookkeepingReviewFilter = .all
     @State private var deletingNotice: TNGNotice?
     @State private var clearing = false
     var body: some View {
         let _ = uiLocale.identifier
         List {
-            LedgerWorkflowHeading(title: tr("先处理需要确认的交易", "Review what needs you", "Semak transaksi yang perlukan anda"),
-                subtitle: tr("待确认 \(model.readIndex.pendingNotices.count) 笔", LocalizedPhrase("\(model.readIndex.pendingNotices.count) entries to review"), "\(model.readIndex.pendingNotices.count) rekod untuk disemak"),
+            LedgerWorkflowHeading(title: tr("待处理", "Needs attention", "Perlu tindakan"),
+                subtitle: tr("\(model.readIndex.reviewItems.count) 笔需要你确认", LocalizedPhrase("\(model.readIndex.reviewItems.count) entries need your review"), "\(model.readIndex.reviewItems.count) rekod perlukan semakan anda"),
                 symbol: "tray", tint: .accentColor)
                 .listRowBackground(Color.clear).listRowSeparator(.hidden)
-            Toggle(tr("只看待确认", "Needs review only", "Perlu semakan sahaja"), isOn: $pendingOnly)
-            ForEach(pendingOnly ? model.readIndex.pendingNotices : model.readIndex.notices) { item in
+            Picker(tr("显示", "Show", "Papar"), selection: $pendingOnly) {
+                Text(tr("待处理", "Needs attention", "Perlu tindakan")).tag(true)
+                Text(tr("全部记录", "All records", "Semua rekod")).tag(false)
+            }.pickerStyle(.segmented)
+            if pendingOnly {
+                Picker(tr("处理事项", "Review task", "Tugas semakan"), selection: $reviewFilter) {
+                    ForEach(BookkeepingReviewFilter.allCases, id: \.self) { filter in
+                        Text(filter.title).tag(filter)
+                    }
+                }.accessibilityIdentifier("review.filter")
+                if reviewFilter == .account {
+                    Button(tr("按已设规则补齐账户", "Match accounts using saved rules", "Padankan akaun mengikut peraturan")) {
+                        model.perform(key: "repair-account-links", action: { (ledger: inout Ledger) throws -> Int in
+                            try ledger.reconcileAutomaticAccounts()
+                        }, completion: { count in
+                            model.showSaved(message: tr("已补齐账户：", "Accounts matched: ", "Akaun dipadankan: ") + String(count))
+                        })
+                    }.disabled(model.isWorking("repair-account-links"))
+                }
+                ForEach(model.readIndex.reviewItems.filter { reviewFilter == .all || $0.reason == reviewFilter }) { item in
+                    NavigationLink {
+                        switch item.record {
+                        case .expense(let entry): ExpenseDetailView(id: entry.id, embeddedInNavigation: true)
+                        case .notice(let notice):
+                            if item.reason == .account { TNGNoticeView(id: notice.id) }
+                            else if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+                            else { FinancialNoticeReviewView(id: notice.id) }
+                        }
+                    } label: { BookkeepingReviewRow(item: item) }
+                }
+            } else {
+            ForEach(model.readIndex.notices) { item in
                 NavigationLink {
                     if let id = item.expenseID, model.expense(id: id) != nil { TNGNoticeView(id: item.id) }
                     else if item.kind == "incoming" { TNGIncomingView(id: item.id) }
@@ -2347,11 +2378,14 @@ struct TNGInboxView: View {
                 }.guideTarget(item.kind == "incoming" ? "tng.incoming" : "tng.payment")
                     .modifier(AutomaticRecordDeleteActions { deletingNotice = item })
             }
-            if pendingOnly && model.readIndex.pendingNotices.isEmpty {
+            }
+            if pendingOnly && model.readIndex.reviewItems.isEmpty {
                 Label(tr("全部核对好了", "All caught up", "Semua sudah disemak"), systemImage: "checkmark.circle").foregroundStyle(.secondary)
+            } else if pendingOnly && reviewFilter != .all && !model.readIndex.reviewItems.contains(where: { $0.reason == reviewFilter }) {
+                Button(tr("此项已处理，查看其他待办", "Nothing in this group. View other tasks", "Tiada dalam kumpulan ini. Lihat tugas lain")) { reviewFilter = .all }
             } else if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入银行或 TNG 通知。", "Waiting for bank or TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
 
-        }.yuejiListSurface().navigationTitle(tr("银行与 TNG 通知", "Bank and TNG inbox", "Peti bank dan TNG")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("待处理与通知", "Review & notifications", "Semakan & notifikasi")).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     NavigationLink { TNGSetupView() } label: { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape") }
@@ -2379,7 +2413,7 @@ struct NoticeAccountSection: View {
     @EnvironmentObject private var model: LedgerModel
     let notice: TNGNotice
     var body: some View {
-        if notice.status != "ignored" && notice.resolution == nil && notice.settlementID == nil {
+        if notice.status != "ignored" && notice.resolution == nil {
             Section {
                 BankAccountPicker(selection: Binding(get: {
                     if let id = notice.expenseID, let entry = model.expense(id: id) { return entry.bankAccountID }
@@ -2688,17 +2722,7 @@ struct TNGNoticeView: View {
                         ExpenseRow(entry: entry)
                         ExpenseDescriptionDetails(entry: entry, identifier: "notice.description.detail")
                         NavigationLink(tr("查看消费及物品", "View expense and items", "Lihat belanja dan item")) { ExpenseDetailView(id: entry.id, embeddedInNavigation: true) }
-                        Button(tr("编辑消费 / 分账", "Edit expense / split", "Edit belanja / bahagian")) {
-                            guard !itemsEditorPresented, editing == nil else { return }
-                            editing = .expense(entry)
-                        }.disabled(itemsEditorPresented)
                     } else { Text(tr("关联消费已删除或排除，不会自动重新入账。", "Linked expense was deleted or excluded; it will not be recreated automatically.", "Belanja berkaitan dipadam atau dikecualikan; tidak dicipta semula secara automatik.")) }
-                } else if ["pending", "transfer"].contains(notice.status) {
-                    Section {
-                        NavigationLink(tr("编辑完整账目", "Edit full entry", "Edit rekod penuh")) {
-                            FinancialNoticeReviewView(id: notice.id)
-                        }
-                    }
                 }
                 if notice.status != "ignored" && notice.settlementID == nil {
                     Button(tr("不计消费 / 排除此通知", "Exclude from spending", "Kecualikan daripada belanja"), role: .destructive) { excluding = true }
@@ -5607,19 +5631,37 @@ struct ExpenseBookkeepingDetails: View {
 struct PendingBookkeepingCard: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
-    private var pending: Int { model.ledger.tngNotices.filter { ["pending", "transfer"].contains($0.status) }.count }
-    private var duplicates: Int { model.ledger.tngNotices.filter { $0.status == "pending" && $0.possibleDuplicate }.count }
+    private var pending: Int { model.readIndex.reviewItems.count }
     var body: some View {
         let _ = uiLocale.identifier
         if pending > 0 {
             Section {
                 NavigationLink { TNGInboxView(pendingOnly: true) } label: {
                     SimpleSettingsRow(title: tr("待处理", "Needs attention", "Perlu tindakan"),
-                        subtitle: duplicates > 0 ? tr("\(pending) 笔待确认 · \(duplicates) 笔疑似重复", LocalizedPhrase("\(pending) to review · \(duplicates) possible duplicates"), "\(pending) untuk semakan · \(duplicates) mungkin pendua") : tr("\(pending) 笔通知待确认", LocalizedPhrase("\(pending) notifications to review"), "\(pending) notifikasi untuk semakan"),
+                        subtitle: tr("\(pending) 笔 · 点此继续处理", LocalizedPhrase("\(pending) entries · continue review"), "\(pending) rekod · teruskan semakan"),
                         symbol: "tray.full.fill", color: IslandPalette.pumpkin)
-                }
-                NavigationLink(tr("最近自动记账", "Recent automatic entries", "Rekod automatik terkini")) { AutomationStatusView() }.font(.subheadline)
+                }.accessibilityIdentifier("bookkeeping.review")
             }
         }
+    }
+}
+
+private struct BookkeepingReviewRow: View {
+    @Environment(\.dynamicTypeSize) private var typeSize
+    let item: BookkeepingReviewItem
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            IslandIconTile(symbol: item.reason.symbol, color: IslandPalette.pumpkin, size: 38).accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 5) {
+                let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(alignment: .leading, spacing: 4)) : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: 12))
+                layout {
+                    Text(item.title).fontWeight(.semibold).lineLimit(typeSize.isAccessibilitySize ? nil : 2)
+                    if !typeSize.isAccessibilitySize { Spacer(minLength: 0) }
+                    Text(item.cents.map { money($0) } ?? "—").monospacedDigit().fixedSize()
+                }
+                Label(item.reason.title, systemImage: item.reason.symbol).font(.subheadline).foregroundStyle(.secondary)
+                Text(dateLabel(item.date)).font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 6).accessibilityElement(children: .combine)
     }
 }

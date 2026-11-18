@@ -34,7 +34,9 @@ extension Expense {
     var personalSpending: Int { personal - reimbursementExcluded }
     func validateReimbursement() throws {
         guard let claim = reimbursement else { return }
-        guard paidByFriend == nil, !claim.recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+        // A claim belongs to my personal share, regardless of who paid the merchant.
+        // It never changes the separate liability to the friend who advanced it.
+        guard !isLoan, !claim.recipient.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
               claim.recipient.count <= 200, claim.cents > 0, claim.cents <= 10_000_000_000,
               claim.cents <= personal, claim.receipts.count <= 500,
               Set(claim.receipts.map(\.id)).count == claim.receipts.count,
@@ -48,6 +50,17 @@ extension Expense {
 }
 
 extension Ledger {
+    /// Manual receipts use the same account movement and undo path as imported receipts.
+    mutating func recordManualReimbursement(expense expected: Expense, cents: Int, date: Date, accountID: String, roundingCents: Int = 0, id: String = UUID().uuidString) throws {
+        guard expenses.contains(expected), let claim = expected.reimbursement else { throw LedgerError.invalid("Entry changed. Reopen it.") }
+        var copy = self
+        let noticeID = try copy.addManualReceipt(id: id, sender: claim.recipient, cents: cents, date: date, accountID: accountID)
+        guard copy.tngNotices.first(where: { $0.id == noticeID })?.possibleDuplicate != true else {
+            throw reviewError("已有相似收款，请到待处理关联原收款，避免重复到账。", "A similar receipt exists. Review and link it in the inbox before recording another receipt.", "Penerimaan serupa wujud. Semak dan pautkan dalam peti sebelum merekod penerimaan lain.")
+        }
+        try copy.resolveTNGIncoming(id: noticeID, purpose: "reimbursement", date: date, roundingCents: roundingCents, reimbursementExpenseIDs: [expected.id])
+        self = try copy.validated()
+    }
     func requireUnlinkedReimbursement(_ expense: Expense) throws {
         guard !(expense.reimbursement?.receipts.contains { $0.noticeID != nil } ?? false) else {
             throw reviewError("请先撤销关联的报销收款，再删除原账目。", "Undo the linked reimbursement receipt before deleting this entry.", "Batalkan penerimaan tuntutan dipautkan sebelum memadam rekod ini.")

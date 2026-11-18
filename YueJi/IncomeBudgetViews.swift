@@ -141,85 +141,6 @@ private struct BankCardPressStyle: ButtonStyle {
     }
 }
 
-private struct AutomaticAccountLinksView: View {
-    @EnvironmentObject var model: LedgerModel
-    @State private var missingOnly = true
-    private enum Record: Identifiable {
-        case notice(TNGNotice)
-        case payment(Expense)
-        var id: String {
-            switch self {
-            case .notice(let entry): return "notice-" + entry.id
-            case .payment(let entry): return "payment-" + entry.id
-            }
-        }
-        var date: Date {
-            switch self {
-            case .notice(let entry): return entry.date
-            case .payment(let entry): return entry.date
-            }
-        }
-    }
-    private var records: [Record] {
-        let linked = Set(model.ledger.tngNotices.compactMap(\.expenseID))
-        let payments = model.ledger.expenses.filter { $0.source == "Apple Pay" && $0.paidByFriend == nil && !linked.contains($0.id) && (!missingOnly || $0.bankAccountID == nil) }
-        let notices = model.ledger.tngNotices.filter { notice in
-            guard notice.status != "ignored" else { return false }
-            let accountID = notice.expenseID.flatMap { id in model.expense(id: id)?.bankAccountID } ?? notice.bankAccountID
-            return !missingOnly || accountID == nil
-        }
-        return (notices.map(Record.notice) + payments.map(Record.payment))
-            .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }
-    }
-    var body: some View {
-        List {
-            Section {
-                Toggle(tr("只看未分配", "Unassigned only", "Belum ditetapkan sahaja"), isOn: $missingOnly)
-                Button(tr("按已设规则补齐账户", "Match accounts using saved rules", "Padankan akaun mengikut peraturan")) {
-                    model.perform(key: "repair-account-links", action: { (ledger: inout Ledger) throws -> Int in
-                        try ledger.reconcileAutomaticAccounts()
-                    }, completion: { count in
-                        model.showSaved(message: tr("已补齐账户：", "Accounts matched: ", "Akaun dipadankan: ") + String(count))
-                    })
-                }.disabled(model.isWorking("repair-account-links"))
-            }
-            if records.isEmpty { Text(tr("账户已分配好", "Accounts are assigned", "Akaun sudah ditetapkan")) }
-            ForEach(records) { record in
-                switch record {
-                case .payment(let entry):
-                    Section {
-                        LabeledContent(entry.merchant, value: money(entry.cents))
-                        Text("Apple Pay · " + dateLabel(entry.date, time: true)).font(.caption).foregroundStyle(.secondary)
-                        BankAccountPicker(selection: Binding(get: {
-                            model.ledger.expenses.first(where: { $0.id == entry.id })?.bankAccountID
-                        }, set: { accountID in
-                            model.perform(key: "payment-account-" + entry.id, action: { ledger in
-                                try ledger.assignApplePayAccount(id: entry.id, accountID: accountID)
-                            })
-                        }))
-                        .disabled(entry.paidByFriend != nil || model.isWorking("payment-account-" + entry.id))
-                    }
-                case .notice(let notice):
-                Section {
-                    LabeledContent(notice.party ?? notice.provider, value: notice.cents.map { money($0) } ?? "—")
-                    Text(notice.provider + " · " + dateLabel(notice.date, time: true)).font(.caption).foregroundStyle(.secondary)
-                    if let suffix = notice.accountSuffix { Text("•••• " + suffix).font(.caption).monospacedDigit() }
-                    BankAccountPicker(selection: Binding(get: {
-                        if let id = notice.expenseID, let entry = model.ledger.expenses.first(where: { $0.id == id }) { return entry.bankAccountID }
-                        return notice.bankAccountID
-                    }, set: { accountID in
-                        let id = notice.id
-                        model.perform(key: "notice-account-" + id, action: { ledger in
-                            try ledger.assignNoticeAccount(id: id, accountID: accountID)
-                        })
-                    })).disabled(model.isWorking("notice-account-" + notice.id))
-                }
-                }
-            }
-        }.yuejiListSurface().navigationTitle(tr("自动记录的账户", "Automatic entry accounts", "Akaun rekod automatik"))
-    }
-}
-
 struct BankAccountPicker: View {
     @EnvironmentObject var model: LedgerModel
     @Binding var selection: String?
@@ -307,7 +228,7 @@ struct BankAccountsView: View {
                     NavigationLink { BankTransfersView() } label: {
                         Label(tr("转账／TNG 充值", "Transfers / TNG top-ups", "Pindahan / tambah nilai TNG"), systemImage: "arrow.left.arrow.right")
                     }.accessibilityIdentifier("bankAccount.transfers")
-                    NavigationLink { AutomaticAccountLinksView() } label: {
+                    NavigationLink { TNGInboxView(reviewFilter: .account) } label: {
                         Label(tr("核对自动记录的账户", "Review automatic entry accounts", "Semak akaun rekod automatik"), systemImage: "arrow.triangle.branch")
                     }
                 }.font(.footnote).foregroundStyle(.secondary)

@@ -1803,7 +1803,58 @@ struct ExpenseCollectionSnapshot {
         personal = entries.reduce(0) { $0 + $1.personalSpending }
     }
 }
+enum BookkeepingReviewFilter: String, CaseIterable {
+    case all, account, purpose, duplicate
+    var title: String {
+        switch self {
+        case .all: return tr("全部待办", "All to review", "Semua untuk semakan")
+        case .account: return tr("分配账户", "Assign account", "Tetapkan akaun")
+        case .purpose: return tr("确认用途", "Choose purpose", "Pilih tujuan")
+        case .duplicate: return tr("核对重复", "Check duplicate", "Semak pendua")
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .all: return "tray"
+        case .account: return "creditcard"
+        case .purpose: return "arrow.left.arrow.right"
+        case .duplicate: return "doc.on.doc"
+        }
+    }
+}
+
+struct BookkeepingReviewItem: Identifiable {
+    enum Record { case notice(TNGNotice), expense(Expense) }
+    let record: Record
+    let reason: BookkeepingReviewFilter
+    var id: String { switch record { case .notice(let n): return "notice:" + n.id; case .expense(let e): return "expense:" + e.id } }
+    var date: Date { switch record { case .notice(let n): return n.date; case .expense(let e): return e.date } }
+    var title: String { switch record { case .notice(let n): return n.party ?? n.provider; case .expense(let e): return e.displayName } }
+    var cents: Int? { switch record { case .notice(let n): return n.cents; case .expense(let e): return e.cents } }
+    static func items(in ledger: Ledger) -> [Self] {
+        let expenses = Dictionary(ledger.expenses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        let linked = Set(ledger.tngNotices.compactMap(\.expenseID))
+        let transferred = Set(ledger.bankTransfers.flatMap { $0.noticeIDs ?? [] })
+        let notices: [Self] = ledger.tngNotices.compactMap { notice in
+            guard notice.status != "ignored", notice.resolution == nil, !transferred.contains(notice.id) else { return nil }
+            let expense = notice.expenseID.flatMap { expenses[$0] }
+            // A friend's payment creates a liability, not a missing debit from my account.
+            guard expense?.paidByFriend == nil else { return nil }
+            let pending = ["pending", "transfer"].contains(notice.status)
+            if pending && notice.possibleDuplicate { return Self(record: .notice(notice), reason: .duplicate) }
+            let accountID = expense.map(\.bankAccountID) ?? notice.bankAccountID
+            if accountID == nil { return Self(record: .notice(notice), reason: .account) }
+            return pending ? Self(record: .notice(notice), reason: .purpose) : nil
+        }
+        let payments = ledger.expenses.filter {
+            !linked.contains($0.id) && $0.paidByFriend == nil && $0.bankAccountID == nil && !["手动", "固定消费"].contains($0.source)
+        }.map { Self(record: .expense($0), reason: .account) }
+        return (notices + payments).sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+    }
+}
+
 struct LedgerNavigationIndex {
+    let reviewItems: [BookkeepingReviewItem]
     let friends: [FriendBalance]
     let debts: [FriendDebtItem]
     let notices: [TNGNotice]
@@ -1820,6 +1871,7 @@ struct LedgerNavigationIndex {
     private var applied: [String: Int] = [:]
 
     init(ledger: Ledger) {
+        reviewItems = BookkeepingReviewItem.items(in: ledger)
         let debtItems = ledger.friendDebtItems
         var groupedDebts: [String: [FriendDebtItem]] = [:]
         var balances: [String: FriendBalance] = [:]
