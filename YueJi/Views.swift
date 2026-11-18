@@ -1998,7 +1998,6 @@ struct ExpensesView: View {
                         .listRowSeparator(.hidden)
                 }
                 .listRowBackground(Color.clear)
-                PendingBookkeepingCard()
                 if loadedQuery == nil {
                     ProgressView(tr("正在加载账本…", "Loading ledger…", "Memuatkan lejar…"))
                         .accessibilityIdentifier("ledger.loading")
@@ -2185,7 +2184,6 @@ struct ExpensesView: View {
                             Button { if sheet == nil { sheet = .income } } label: {
                                 Label(tr("记录收入", "Record income", "Rekod pendapatan"), systemImage: "plus.circle.fill")
                             }
-                            NavigationLink(tr("通知记录", "Notification history", "Sejarah notifikasi")) { TNGInboxView(pendingOnly: false) }
                             NavigationLink(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua")) { DuplicateReviewView() }
                         } label: { Image(systemName: "ellipsis.circle") }
                             .accessibilityLabel(tr("更多工具", "More tools", "Alat lain"))

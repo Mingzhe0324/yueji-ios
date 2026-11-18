@@ -1844,7 +1844,14 @@ struct BookkeepingReviewItem: Identifiable {
     var date: Date { switch record { case .notice(let n): return n.date; case .expense(let e): return e.date } }
     var title: String { switch record { case .notice(let n): return n.party ?? n.provider; case .expense(let e): return e.displayName } }
     var cents: Int? { switch record { case .notice(let n): return n.cents; case .expense(let e): return e.cents } }
-    static func items(in ledger: Ledger) -> [Self] {
+    func isDismissed(in ledger: Ledger) -> Bool {
+        if ledger.dismissedReviewItems.contains(id) { return true }
+        if case .notice(let notice) = record, let expenseID = notice.expenseID {
+            return ledger.dismissedReviewItems.contains("expense:" + expenseID)
+        }
+        return false
+    }
+    static func items(in ledger: Ledger, includingDismissed: Bool = false) -> [Self] {
         let expenses = Dictionary(ledger.expenses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
         let linked = Set(ledger.tngNotices.compactMap(\.expenseID))
         let transferred = Set(ledger.bankTransfers.flatMap { $0.noticeIDs ?? [] })
@@ -1866,7 +1873,28 @@ struct BookkeepingReviewItem: Identifiable {
         let payments = ledger.expenses.filter {
             !linked.contains($0.id) && $0.paidByFriend == nil && $0.bankAccountID == nil && !["手动", "固定消费"].contains($0.source)
         }.map { Self(record: .expense($0), reason: .account) }
-        return (notices + payments).sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+        return (notices + payments).filter { includingDismissed || !$0.isDismissed(in: ledger) }
+            .sorted { $0.date == $1.date ? $0.id < $1.id : $0.date < $1.date }
+    }
+}
+
+extension Ledger {
+    mutating func setReviewDismissed(id: String, dismissed: Bool) throws {
+        guard let item = BookkeepingReviewItem.items(in: self, includingDismissed: true).first(where: { $0.id == id }) else {
+            throw LedgerError.invalid(tr("此事项已处理，请刷新列表。", "This item has been handled. Refresh the list.", "Item ini telah selesai. Muat semula senarai."))
+        }
+        var keys: Set<String> = [id]
+        let expenseID: String?
+        switch item.record {
+        case .expense(let entry): expenseID = entry.id
+        case .notice(let notice): expenseID = notice.expenseID
+        }
+        if let expenseID {
+            keys.insert("expense:" + expenseID)
+            keys.formUnion(tngNotices.filter { $0.expenseID == expenseID }.map { "notice:" + $0.id })
+        }
+        if dismissed { dismissedReviewItems.formUnion(keys) }
+        else { dismissedReviewItems.subtract(keys) }
     }
 }
 
@@ -1903,8 +1931,9 @@ struct LedgerNavigationIndex {
         debts = debtItems
         friends = balances.values.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         notices = orderedNotices
-        pendingNotices = orderedNotices.filter { $0.status == "pending" || $0.status == "transfer" }
-        incomingReviewCount = orderedNotices.filter { $0.kind == "incoming" && $0.status == "pending" }.count
+        pendingNotices = orderedNotices.filter { ($0.status == "pending" || $0.status == "transfer") &&
+            !BookkeepingReviewItem(record: .notice($0), reason: .purpose).isDismissed(in: ledger) }
+        incomingReviewCount = pendingNotices.filter { $0.kind == "incoming" && $0.status == "pending" }.count
         confirmedIncome = orderedNotices.filter { $0.kind == "incoming" && $0.status == "income" }.reduce(0) { $0 + ($1.cents ?? 0) }
         debtsByFriend = groupedDebts
         for notice in orderedNotices {

@@ -22,6 +22,8 @@ The acceptance rule is conservation of money and independent obligations: an ope
 | Advertisements / holds / failed payments | Do not silently post them as completed spending | TNGAllowlistTests, bank and Grab notification tests |
 | Statement import overlaps existing records | Hold ambiguous rows; avoid duplicate cash movement; preserve original import undo | IncomeBudgetTests statement tests |
 | Stale screens, repeat save, backup/reload, undo | Reject invalid changes without partial mutation; preserve links and amounts | Shared model/storage regressions |
+| Ignore a review reminder | Hide the reminder and its badge; retain all financial records and balances; allow restoration after backup/reload or notification cleanup | EverydayFlowTests review dismissal regression |
+| Unconfirmed notification in ledger | Keep it in review/history; show confirmed receipts, repayments and own-account transfers in the ledger without duplicate rows | TNGLedgerPresentationTests, EverydayFlowTests |
 
 ## Combined cases added
 

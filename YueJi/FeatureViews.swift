@@ -2366,16 +2366,22 @@ struct TNGInboxView: View {
                         })
                     }.disabled(model.isWorking("repair-account-links"))
                 }
+                Section {
                 ForEach(model.readIndex.reviewItems.filter { reviewFilter == .all || $0.reason == reviewFilter }) { item in
                     NavigationLink {
-                        switch item.record {
-                        case .expense(let entry): ExpenseDetailView(id: entry.id, embeddedInNavigation: true)
-                        case .notice(let notice):
-                            if item.reason == .account { TNGNoticeView(id: notice.id) }
-                            else if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
-                            else { FinancialNoticeReviewView(id: notice.id) }
-                        }
+                        BookkeepingReviewDestination(item: item)
                     } label: { BookkeepingReviewRow(item: item) }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: false) {
+                        Button { dismiss(item) } label: {
+                            Label(tr("忽略", "Ignore", "Abaikan"), systemImage: "eye.slash")
+                        }.tint(.gray)
+                    }
+                    .accessibilityAction(named: tr("忽略", "Ignore", "Abaikan")) { dismiss(item) }
+                }
+                } footer: {
+                    if !model.readIndex.reviewItems.isEmpty {
+                        Text(tr("左滑可忽略提醒，不更改账目或余额。", "Swipe left to ignore a reminder. Entries and balances stay unchanged.", "Leret kiri untuk abaikan peringatan. Rekod dan baki tidak berubah."))
+                    }
                 }
             } else {
             ForEach(model.readIndex.notices) { item in
@@ -2391,7 +2397,7 @@ struct TNGInboxView: View {
             }
             }
             if pendingOnly && model.readIndex.reviewItems.isEmpty {
-                Label(tr("全部核对好了", "All caught up", "Semua sudah disemak"), systemImage: "checkmark.circle").foregroundStyle(.secondary)
+                Label(tr("暂无待处理", "Nothing to review", "Tiada untuk disemak"), systemImage: "checkmark.circle").foregroundStyle(.secondary)
             } else if pendingOnly && reviewFilter != .all && !model.readIndex.reviewItems.contains(where: { $0.reason == reviewFilter }) {
                 Button(tr("此项已处理，查看其他待办", "Nothing in this group. View other tasks", "Tiada dalam kumpulan ini. Lihat tugas lain")) { reviewFilter = .all }
             } else if model.ledger.tngNotices.isEmpty { Text(tr("等待快捷指令传入银行或 TNG 通知。", "Waiting for bank or TNG notifications from Shortcuts.", "Menunggu notifikasi TNG daripada Pintasan.")) }
@@ -2399,6 +2405,7 @@ struct TNGInboxView: View {
         }.yuejiListSurface().navigationTitle(tr("待处理与通知", "Review & notifications", "Semakan & notifikasi")).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    NavigationLink { IgnoredBookkeepingView() } label: { Label(tr("已忽略的待办", "Ignored reminders", "Peringatan diabaikan"), systemImage: "eye.slash") }
                     NavigationLink { TNGSetupView() } label: { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape") }
                     NavigationLink { FilteredNotificationsView() } label: { Label(tr("已过滤", "Filtered", "Ditapis"), systemImage: "line.3.horizontal.decrease.circle") }
                     NavigationLink {
@@ -2418,6 +2425,43 @@ struct TNGInboxView: View {
             .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账、待确认及已关联退款／充值保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers, pending notices and linked refunds/top-ups remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
                 Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.resolution == nil && ($0.status == "recorded" || $0.status == "ignored") } } }
             }
+    }
+    private func dismiss(_ item: BookkeepingReviewItem) {
+        model.perform(key: "review-dismiss-" + item.id, postRecurring: false, action: { ledger in
+            try ledger.setReviewDismissed(id: item.id, dismissed: true)
+        }, completion: { _ in model.showSaved(message: tr("已忽略，可从更多菜单恢复。", "Ignored. Restore from the More menu.", "Diabaikan. Pulihkan melalui menu Lagi.")) })
+    }
+}
+private struct BookkeepingReviewDestination: View {
+    let item: BookkeepingReviewItem
+    var body: some View {
+        switch item.record {
+        case .expense(let entry): ExpenseDetailView(id: entry.id, embeddedInNavigation: true)
+        case .notice(let notice):
+            if item.reason == .account { TNGNoticeView(id: notice.id) }
+            else if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
+            else { FinancialNoticeReviewView(id: notice.id) }
+        }
+    }
+}
+private struct IgnoredBookkeepingView: View {
+    @EnvironmentObject private var model: LedgerModel
+    var body: some View {
+        let items = BookkeepingReviewItem.items(in: model.ledger, includingDismissed: true).filter { $0.isDismissed(in: model.ledger) }
+        List {
+            if items.isEmpty { Text(tr("没有已忽略的待办", "No ignored reminders", "Tiada peringatan diabaikan")).foregroundStyle(.secondary) }
+            ForEach(items) { item in
+                HStack {
+                    NavigationLink { BookkeepingReviewDestination(item: item) } label: { BookkeepingReviewRow(item: item) }
+                    Button(tr("恢复", "Restore", "Pulihkan")) {
+                        model.perform(key: "review-restore-" + item.id, postRecurring: false, action: { ledger in
+                            try ledger.setReviewDismissed(id: item.id, dismissed: false)
+                        })
+                    }.buttonStyle(.borderless)
+                    .disabled(model.isWorking("review-restore-" + item.id))
+                }
+            }
+        }.yuejiListSurface().navigationTitle(tr("已忽略的待办", "Ignored reminders", "Peringatan diabaikan")).navigationBarTitleDisplayMode(.inline)
     }
 }
 struct NoticeAccountSection: View {

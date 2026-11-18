@@ -6,6 +6,72 @@ import SwiftUI
 @testable import YueJi
 
 final class EverydayFlowTests: XCTestCase {
+    func testIgnoringReviewPreservesMoneyAndSurvivesReloadAndNoticeCleanup() throws {
+        let date = Date().addingTimeInterval(-120)
+        var ledger = Ledger()
+        let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        ledger.bankAccounts = [account]
+        let expense = Expense(merchant: "Shop", cents: 500, date: date, source: "Apple Pay")
+        let standalone = Expense(merchant: "Cafe", cents: 600, date: date, source: "Apple Pay")
+        ledger.expenses = [expense, standalone]
+        let payment = TNGNotice(body: "Payment", title: "", date: date, usesReceivedDate: false, kind: "payment", status: "recorded", cents: 500, party: "Shop", expenseID: expense.id)
+        let incoming = TNGNotice(bankAccountID: account.id, body: "Received", title: "", date: date, usesReceivedDate: false, kind: "incoming", status: "pending", cents: 700, party: "Friend")
+        ledger.tngNotices = [payment, incoming]
+        let before = ledger
+        let balance = ledger.bankBalance(account)
+        let items = BookkeepingReviewItem.items(in: ledger)
+        XCTAssertEqual(items.count, 3)
+        for item in items { try ledger.setReviewDismissed(id: item.id, dismissed: true) }
+        XCTAssertTrue(LedgerNavigationIndex(ledger: ledger).reviewItems.isEmpty)
+        XCTAssertTrue(LedgerNavigationIndex(ledger: ledger).pendingNotices.isEmpty)
+        XCTAssertEqual(LedgerNavigationIndex(ledger: ledger).incomingReviewCount, 0)
+        XCTAssertEqual(ledger.expenses, before.expenses)
+        XCTAssertEqual(ledger.tngNotices, before.tngNotices)
+        XCTAssertEqual(ledger.bankBalance(account), balance)
+        XCTAssertEqual(ledger.spending(in: date), before.spending(in: date))
+        ledger = try LocalStore.decode(LocalStore.encode(ledger))
+        XCTAssertTrue(BookkeepingReviewItem.items(in: ledger).isEmpty)
+        XCTAssertEqual(BookkeepingReviewItem.items(in: ledger, includingDismissed: true).count, 3)
+        // Clearing a processed notice must not bring back its ignored account reminder.
+        ledger.tngNotices.removeAll { $0.id == payment.id }
+        XCTAssertTrue(BookkeepingReviewItem.items(in: ledger).isEmpty)
+        try ledger.setReviewDismissed(id: "expense:" + expense.id, dismissed: false)
+        XCTAssertEqual(BookkeepingReviewItem.items(in: ledger).map(\.id), ["expense:" + expense.id])
+        try ledger.setReviewDismissed(id: "notice:" + incoming.id, dismissed: false)
+        XCTAssertEqual(LedgerNavigationIndex(ledger: ledger).pendingNotices.map(\.id), [incoming.id])
+        XCTAssertEqual(ledger.bankBalance(account), balance)
+        let dismissed = ledger.dismissedReviewItems
+        XCTAssertThrowsError(try ledger.setReviewDismissed(id: "notice:missing", dismissed: true))
+        XCTAssertEqual(ledger.dismissedReviewItems, dismissed)
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any])
+        object.removeValue(forKey: "dismissedReviewItems")
+        XCTAssertTrue(try LocalStore.decode(JSONSerialization.data(withJSONObject: object)).dismissedReviewItems.isEmpty)
+    }
+
+    func testLedgerSeparatesUnreviewedNoticesFromConfirmedMoneyAndAccountTransfers() throws {
+        let date = Date().addingTimeInterval(-120)
+        var ledger = Ledger()
+        let bank = BankAccount(name: "Bank", openingCents: 10000, openingDate: date.addingTimeInterval(-3600))
+        let wallet = BankAccount(name: "Wallet", openingCents: 0, openingDate: bank.openingDate)
+        ledger.bankAccounts = [bank, wallet]
+        _ = try ledger.receiveTNG(body: "FRIEND has transferred RM40.00 to you.", date: date, eventID: "received")
+        _ = try ledger.receiveTNG(body: "RM 20.00 has been successfully transferred to FRIEND.", date: date, eventID: "sent")
+        let query = LedgerTimelineQuery(revision: 1, month: date, search: "", filter: LedgerFilter(), provider: "all")
+        XCTAssertEqual(try LedgerTimelineSnapshot(ledger: ledger, month: date, query: query).count, 0)
+        XCTAssertEqual(BookkeepingReviewItem.items(in: ledger).count, 2)
+        let incoming = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "incoming" })
+        try ledger.resolveTNGIncoming(id: incoming.id, purpose: "income", date: date)
+        let outgoing = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "transfer" })
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [outgoing.id], fromAccountID: bank.id, toAccountID: wallet.id, cents: 2000, date: date)
+        let snapshot = try LedgerTimelineSnapshot(ledger: ledger, month: date, query: query)
+        XCTAssertEqual(snapshot.count, 2, "Confirmed receipt and own-account transfer each appear once")
+        XCTAssertEqual(snapshot.transfers.map(\.id), [incoming.id])
+        XCTAssertEqual(snapshot.accountTransfers.count, 1)
+        XCTAssertEqual(snapshot.personal, 0)
+        XCTAssertEqual(ledger.bankBalance(bank), 8000)
+        XCTAssertEqual(ledger.bankBalance(wallet), 2000)
+    }
+
     func testCombinedJamesSettlementCompanyClaimTransferAndLateNoticeConserveMoney() throws {
         let date = Date().addingTimeInterval(-600)
         var ledger = Ledger()
@@ -4978,13 +5044,13 @@ final class LocalSavingsDraftTests: XCTestCase {
 }
 
 final class TNGLedgerPresentationTests: XCTestCase {
-    func testExistingTransfersAppearWithoutChangingSpending() throws {
+    func testOnlyConfirmedTransfersAppearWithoutChangingSpending() throws {
         var ledger = Ledger()
         let now = Date()
         _ = try ledger.receiveTNG(body: "RM 20.00 has been successfully transferred to FRIEND.", date: now, eventID: "sent")
         _ = try ledger.receiveTNG(body: "FRIEND has transferred RM40.00 to you.", date: now, eventID: "received")
-        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).count, 2)
-        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now, search: "friend").count, 2)
+        XCTAssertTrue(ledger.ledgerTNGTransfers(in: now).isEmpty)
+        XCTAssertTrue(ledger.ledgerTNGTransfers(in: now, search: "friend").isEmpty)
         XCTAssertTrue(ledger.ledgerTNGTransfers(in: now, search: "unrelated").isEmpty)
         XCTAssertTrue(ledger.expenses.isEmpty)
         let previous = try XCTUnwrap(Calendar.current.date(byAdding: .month, value: -1, to: now))
@@ -4992,7 +5058,7 @@ final class TNGLedgerPresentationTests: XCTestCase {
         let outgoing = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "transfer" })
         try ledger.confirmTNGExpense(id: outgoing.id, merchant: "FRIEND", cents: 2000, date: now, category: "其他")
         XCTAssertEqual(ledger.expenses.count, 1)
-        XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).count, 1)
+        XCTAssertTrue(ledger.ledgerTNGTransfers(in: now).isEmpty)
         let incoming = try XCTUnwrap(ledger.tngNotices.first { $0.kind == "incoming" })
         try ledger.resolveTNGIncoming(id: incoming.id, purpose: "income", date: now)
         XCTAssertEqual(ledger.ledgerTNGTransfers(in: now).first?.status, "income")
@@ -5020,13 +5086,13 @@ final class DuitNowNotificationTests: XCTestCase {
             XCTAssertNil(parseTNG(text, title: title))
         }
     }
-    func testDeliveryAppearsInLedgerAndDeduplicates() throws {
+    func testDeliveryStaysInReviewUntilConfirmedAndDeduplicates() throws {
         var ledger = Ledger()
         let date = Date()
         let result = try ledger.processTNGNotification(body: body, title: title, date: date, eventID: "duitnow-test")
         XCTAssertTrue(result.accepted)
-        XCTAssertEqual(ledger.ledgerTNGTransfers(in: date).count, 1)
-        XCTAssertEqual(ledger.ledgerTNGTransfers(in: date).first?.status, "transfer")
+        XCTAssertTrue(ledger.ledgerTNGTransfers(in: date).isEmpty)
+        XCTAssertEqual(BookkeepingReviewItem.items(in: ledger).count, 1)
         XCTAssertTrue(ledger.expenses.isEmpty)
         _ = try ledger.processTNGNotification(body: body, title: title, date: date, eventID: "duitnow-test")
         XCTAssertEqual(ledger.tngNotices.count, 1)

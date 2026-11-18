@@ -329,6 +329,8 @@ struct Ledger: Codable {
     var dismissedDuplicates: Set<String> = []
     /// Merchants marked "not a subscription", by merchant key.
     var dismissedSubscriptions: Set<String> = []
+    /// Review reminders only; never changes financial records or balances.
+    var dismissedReviewItems: Set<String> = []
     var automationEvents: [AutomationEvent] = []
     var merchantCategories: [String: String] = [:]
     var backupCreatedAt: Date? = nil
@@ -347,7 +349,7 @@ struct Ledger: Codable {
         self.version = version; self.expenses = expenses; self.budgets = budgets; self.seenEvents = seenEvents
         self.rates = rates; self.recurring = recurring; self.postedRecurring = postedRecurring
     }
-    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, filteredNotifications, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers }
+    enum CodingKeys: String, CodingKey { case version, expenses, budgets, seenEvents, rates, recurring, postedRecurring, dismissedDuplicates, dismissedSubscriptions, dismissedReviewItems, automationEvents, merchantCategories, backupCreatedAt, customCategories, tripDefaults, tngNotices, filteredNotifications, savingsGoals, settlements, trips, incomes, budgetAllocations, coolingPurchases, bankAccounts, bankTransfers }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         bankAccounts = try c.decodeIfPresent([BankAccount].self, forKey: .bankAccounts) ?? []
@@ -364,6 +366,7 @@ struct Ledger: Codable {
         postedRecurring = try c.decodeIfPresent(Set<String>.self, forKey: .postedRecurring) ?? []
         dismissedDuplicates = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedDuplicates) ?? []
         dismissedSubscriptions = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedSubscriptions) ?? []
+        dismissedReviewItems = try c.decodeIfPresent(Set<String>.self, forKey: .dismissedReviewItems) ?? []
         automationEvents = try c.decodeIfPresent([AutomationEvent].self, forKey: .automationEvents) ?? []
         merchantCategories = try c.decodeIfPresent([String: String].self, forKey: .merchantCategories) ?? [:]
         backupCreatedAt = try c.decodeIfPresent(Date.self, forKey: .backupCreatedAt)
@@ -380,6 +383,9 @@ struct Ledger: Codable {
         self = reconcilingBudgetAllocations()
     }
     func validated() throws -> Ledger {
+        guard dismissedReviewItems.count <= 20000, dismissedReviewItems.allSatisfy({
+            $0.count <= 250 && (($0.hasPrefix("notice:") && $0.count > 7) || ($0.hasPrefix("expense:") && $0.count > 8))
+        }) else { throw LedgerError.invalid("Invalid dismissed review items") }
         guard filteredNotifications.count <= 50, Set(filteredNotifications.map(\.id)).count == filteredNotifications.count,
               filteredNotifications.allSatisfy({ !$0.id.isEmpty && $0.id.count <= 200 && !$0.body.isEmpty && $0.body.count <= 8000 && $0.title.count <= 500 && validFinancialSource($0.provider) && $0.date.timeIntervalSince1970 >= 0 && $0.date.timeIntervalSince1970 < 4_102_444_800 }) else { throw LedgerError.invalid("Invalid filtered notification archive") }
         try validateBankAccounts()
@@ -710,7 +716,7 @@ extension Ledger {
         let query = search.trimmingCharacters(in: .whitespacesAndNewlines)
         return tngNotices.filter { notice in
             (notice.kind == "incoming" || notice.kind == "transfer" || notice.settlementID != nil || notice.status == "transfer") &&
-            notice.status != "ignored" && notice.expenseID == nil &&
+            ["income", "repayment", "reimbursement", "settlement", "ownTransfer"].contains(notice.status) && notice.expenseID == nil &&
             Calendar.current.isDate(notice.date, equalTo: month, toGranularity: .month) &&
             (query.isEmpty || ((notice.party ?? "") + " " + (notice.recipient ?? "") + " " + notice.provider + " " + tngSignedAmount(notice)).localizedCaseInsensitiveContains(query))
         }.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }

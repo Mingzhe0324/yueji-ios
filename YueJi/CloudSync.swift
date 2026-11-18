@@ -213,7 +213,7 @@ enum CloudFingerprint {
     static func make(_ ledger: Ledger) throws -> String {
         guard var object = try JSONSerialization.jsonObject(with: LocalStore.encode(ledger)) as? [String: Any] else { throw CloudFailure.invalidResponse }
         // Set encoding order is not stable across reads or devices.
-        for key in ["seenEvents", "postedRecurring", "dismissedDuplicates", "dismissedSubscriptions"] {
+        for key in ["seenEvents", "postedRecurring", "dismissedDuplicates", "dismissedSubscriptions", "dismissedReviewItems"] {
             if let values = object[key] as? [String] { object[key] = values.sorted() }
         }
         let data = try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])

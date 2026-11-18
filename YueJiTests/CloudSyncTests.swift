@@ -192,6 +192,8 @@ final class CloudSyncTests: XCTestCase {
     func testCanonicalFingerprintAndConfigurationValidation() throws {
         var a = ledger("Lunch"); a.seenEvents = ["a", "b"]; a.dismissedSubscriptions = ["x", "y"]
         var b = a; b.seenEvents = ["b", "a"]; b.dismissedSubscriptions = ["y", "x"]
+        a.dismissedReviewItems = ["notice:a", "expense:b"]
+        b.dismissedReviewItems = ["expense:b", "notice:a"]
         XCTAssertEqual(try CloudFingerprint.make(a), try CloudFingerprint.make(b))
         XCTAssertThrowsError(try CloudConfiguration(url: "http://example.com", publicKey: "sb_publishable_example_key"))
         XCTAssertThrowsError(try CloudConfiguration(url: server, publicKey: "sb_secret_example_key"))
