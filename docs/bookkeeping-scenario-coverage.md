@@ -33,6 +33,8 @@ The acceptance rule is conservation of money and independent obligations: an ope
 
 Full build `e7b2c94` passed GitHub run [44219251453](https://github.com/Mingzhe0324/yueji-ios/actions/runs/44219251453), including native tests and IPA packaging. It predates the receiving-account refund fix and combined scenarios above.
 
-The workflow now optionally runs all `YueJiTests` with `unit_tests_only=true` for native model verification without the longer UI suite or IPA. Normal dispatch still runs all tests and produces the unsigned IPA only after success. The new changes require their own passing native run; Windows project/syntax checks are not a substitute.
+Native model verification of `e6ca041` passed GitHub run [44293941760](https://github.com/Mingzhe0324/yueji-ios/actions/runs/44293941760): **510 tests, zero failures**. This includes the receiving-account refund changes and combined scenarios above. An earlier run caught an explicit non-user refund being credited to the original account; the recipient exclusion is restored and its existing regression now passes.
+
+The workflow optionally runs all `YueJiTests` with `unit_tests_only=true` for native model verification without the longer UI suite or IPA. Normal dispatch still runs all tests and produces the unsigned IPA only after success. The model-only run does not replace full UI/device build verification; Windows project/syntax checks are not a substitute for either native run.
 
 Physical-device usability, accessibility, performance, notification automation delivery, unsupported statements and external service outages remain separate acceptance checks. Unknown or ambiguous inputs must stay reviewable instead of guessing a financial outcome.
