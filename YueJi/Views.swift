@@ -3988,7 +3988,7 @@ struct AutomationSetupView: View {
         List {
             Section(tr("日常自动处理", "Everyday automation", "Automasi harian")) {
                 NavigationLink { LedgerReviewQueue() } label: {
-                    LabeledContent(tr("需要核对", "Needs review", "Perlu semakan"), value: "\(model.readIndex.pendingNotices.count)")
+                    LabeledContent(tr("需要核对", "Needs review", "Perlu semakan"), value: "\(model.readIndex.reviewItems.count)")
                 }
                 NavigationLink(tr("账户与付款对应", "Accounts and payment links", "Akaun dan pautan bayaran")) { BankAccountsView() }
             }

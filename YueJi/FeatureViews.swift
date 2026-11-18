@@ -2110,59 +2110,8 @@ func tngStatus(_ notice: TNGNotice) -> String {
     }
 }
 struct LedgerReviewQueue: View {
-    @EnvironmentObject var model: LedgerModel
-    @State private var reviewing: TNGNotice?
-    @State private var lastReviewedID: String?
-    @State private var continueReview = false
-    var body: some View {
-        List {
-            Section {
-                if let first = model.readIndex.pendingNotices.first {
-                    Button(tr("连续核对", "Review one by one", "Semak satu demi satu")) {
-                        continueReview = true; lastReviewedID = first.id; reviewing = first
-                    }
-                }
-                NavigationLink { DuplicateReviewView() } label: {
-                    Label(tr("检查可能重复的账目", "Check possible duplicates", "Semak kemungkinan pendua"), systemImage: "doc.on.doc")
-                }
-            }
-            Section(tr("待确认 · 全部月份", "Needs review · all months", "Perlu semakan · semua bulan")) {
-                if model.readIndex.pendingNotices.isEmpty {
-                    Label(tr("全部核对好了", "All caught up", "Semua sudah disemak"), systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-                }
-                ForEach(model.readIndex.pendingNotices) { notice in
-                    NavigationLink {
-                        if let id = notice.expenseID, model.expense(id: id) != nil { ExpenseDetailView(id: id, embeddedInNavigation: true) }
-                        else if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
-                        else { FinancialNoticeReviewView(id: notice.id) }
-                    } label: {
-                        VStack(alignment: .leading, spacing: 8) {
-                            TNGTimelineRow(notice: notice)
-                            Label(notice.possibleDuplicate ? tr("核对是否重复", "Check for a duplicate", "Semak pendua") : notice.cents == nil ? tr("补充金额并确认用途", "Add amount and confirm purpose", "Isi amaun dan sahkan tujuan") : tr("确认这笔钱的用途", "Confirm what this payment was for", "Sahkan tujuan bayaran ini"), systemImage: "exclamationmark.circle")
-                                .font(.caption.weight(.medium)).foregroundStyle(.orange)
-                            if let reason = notice.reviewReason { Text(localizedError(reason)).font(.caption).foregroundStyle(.secondary) }
-                        }
-                    }
-                }
-            }
-        }.yuejiListSurface().navigationTitle(tr("待核对", "To review", "Untuk disemak"))
-            .sheet(item: $reviewing, onDismiss: {
-                guard continueReview, let id = lastReviewedID,
-                      !model.readIndex.pendingNotices.contains(where: { $0.id == id }),
-                      let next = model.readIndex.pendingNotices.first else { continueReview = false; return }
-                lastReviewedID = next.id; reviewing = next
-            }) { notice in
-                NavigationStack {
-                    Group {
-                        if notice.kind == "incoming" { TNGIncomingView(id: notice.id) }
-                        else { FinancialNoticeReviewView(id: notice.id) }
-                    }
-                    .toolbar { ToolbarItem(placement: .cancellationAction) {
-                        Button(tr("稍后继续", "Continue later", "Sambung kemudian")) { continueReview = false; reviewing = nil }
-                    } }
-                }.ledgerFeedback(modal: true)
-            }
-    }
+    // All entry points share the same queue and actions.
+    var body: some View { TNGInboxView() }
 }
 
 struct LedgerCategoryBatch: View {
@@ -2340,6 +2289,9 @@ struct TNGInboxView: View {
     @State var reviewFilter: BookkeepingReviewFilter = .all
     @State private var deletingNotice: TNGNotice?
     @State private var clearing = false
+    @State private var reviewing: BookkeepingReviewItem?
+    @State private var lastReviewedID: String?
+    @State private var continueReview = false
     var body: some View {
         let _ = uiLocale.identifier
         List {
@@ -2405,7 +2357,13 @@ struct TNGInboxView: View {
         }.yuejiListSurface().navigationTitle(tr("待处理与通知", "Review & notifications", "Semakan & notifikasi")).navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarTrailing) {
                 Menu {
+                    if let first = model.readIndex.reviewItems.first {
+                        Button(tr("连续核对", "Review one by one", "Semak satu demi satu")) {
+                            continueReview = true; lastReviewedID = first.id; reviewing = first
+                        }
+                    }
                     NavigationLink { IgnoredBookkeepingView() } label: { Label(tr("已忽略的待办", "Ignored reminders", "Peringatan diabaikan"), systemImage: "eye.slash") }
+                    NavigationLink { DuplicateReviewView() } label: { Label(tr("检查重复账目", "Review possible duplicates", "Semak rekod pendua"), systemImage: "doc.on.doc") }
                     NavigationLink { TNGSetupView() } label: { Label(tr("设置", "Settings", "Tetapan"), systemImage: "gearshape") }
                     NavigationLink { FilteredNotificationsView() } label: { Label(tr("已过滤", "Filtered", "Ditapis"), systemImage: "line.3.horizontal.decrease.circle") }
                     NavigationLink {
@@ -2421,6 +2379,28 @@ struct TNGInboxView: View {
                 } label: { Image(systemName: "ellipsis") }
                 .accessibilityLabel(tr("更多", "More", "Lagi"))
             } }
+            .sheet(item: $reviewing, onDismiss: {
+                guard continueReview, let id = lastReviewedID,
+                      !model.readIndex.reviewItems.contains(where: { $0.id == id }),
+                      let next = model.readIndex.reviewItems.first else { continueReview = false; return }
+                lastReviewedID = next.id; reviewing = next
+            }) { item in
+                NavigationStack {
+                    BookkeepingReviewDestination(item: item)
+                        .toolbar {
+                            ToolbarItem(placement: .cancellationAction) {
+                                Button(tr("稍后继续", "Continue later", "Sambung kemudian")) { continueReview = false; reviewing = nil }
+                            }
+                            ToolbarItem(placement: .primaryAction) {
+                                Button(tr("忽略", "Ignore", "Abaikan")) {
+                                    model.perform(key: "review-dismiss-" + item.id, postRecurring: false, action: { ledger in
+                                        try ledger.setReviewDismissed(id: item.id, dismissed: true)
+                                    }, completion: { _ in reviewing = nil })
+                                }.disabled(model.isWorking("review-dismiss-" + item.id))
+                            }
+                        }
+                }.ledgerFeedback(modal: true)
+            }
             .modifier(AutomaticRecordDeletionConfirmation(notice: $deletingNotice))
             .confirmationDialog(tr("清理已入账或已排除的通知原文？账本消费不删除；转账、待确认及已关联退款／充值保留。清理后无法用旧原文识别重复，请先导出备份。", "Clear recorded/excluded notices? Expenses stay; transfers, pending notices and linked refunds/top-ups remain. Old texts will no longer help detect duplicates. Export a backup first.", "Kosongkan notifikasi direkod/dikecualikan? Belanja kekal; pindahan dan semakan disimpan. Teks lama tidak lagi mengesan pendua. Eksport sandaran dahulu."), isPresented: $clearing, titleVisibility: .visible) {
                 Button(tr("确认清理", "Clear", "Kosongkan"), role: .destructive) { model.change { $0.tngNotices.removeAll { $0.resolution == nil && ($0.status == "recorded" || $0.status == "ignored") } } }
