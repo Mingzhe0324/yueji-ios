@@ -4,17 +4,25 @@ import UIKit
 
 private let ink = IslandTheme.accent
 
-/// The app's visual tokens: Apple's own system colours, so every screen matches iOS 26/27
-/// exactly, in light and dark mode. (The "Island" names are historical.)
+/// Moon Ledger tokens. System text and financial status colours retain their meaning.
+/// The historical Island names keep existing screens on a single shared theme.
 enum IslandTheme {
-    /// The app tint: the system blue, the accent of Apple's iOS 27 UI kit (#0088FF).
-    static let accent = Color(uiColor: .systemBlue)
-    /// Text/icons drawn on top of `accent` fills.
-    static let onAccent = Color.white
-    /// The system grouped background and its panels, as in Settings and Wallet.
-    static let paper = Color(uiColor: .systemGroupedBackground)
+    static let accent = adaptive(light: 0x216C66, dark: 0x79CEC5)
+    static let onAccent = adaptive(light: 0xFFFFFF, dark: 0x102A29)
+    static let paper = adaptive(light: 0xF5F4EF, dark: 0x111716)
     static let card = Color(uiColor: .secondarySystemGroupedBackground)
     static let line = Color(uiColor: .separator)
+    static let summary = adaptive(light: 0xE8EEEA, dark: 0x1C2C29)
+    static let moon = adaptive(light: 0xC4D6CE, dark: 0x354D47)
+    static let ink = adaptive(light: 0x193A36, dark: 0xE4EFEB)
+    static func adaptive(light: Int, dark: Int) -> Color {
+        Color(uiColor: UIColor { traits in
+            let value = traits.userInterfaceStyle == .dark ? dark : light
+            return UIColor(red: CGFloat((value >> 16) & 255) / 255,
+                           green: CGFloat((value >> 8) & 255) / 255,
+                           blue: CGFloat(value & 255) / 255, alpha: 1)
+        })
+    }
 }
 
 /// Icon and category colours: the system palette, as in Settings and Apple Card.
@@ -105,12 +113,8 @@ struct AmbientGlowBackdrop: View {
                     GeometryReader { proxy in
                         let width = proxy.size.width, height = proxy.size.height
                         let dark = scheme == .dark
-                        glow(daylight ? tone(date, layer: 0) : Color(uiColor: .systemRed), strength: dark ? 0.42 : 0.16, diameter: width)
+                        glow(daylight ? tone(date, layer: 0) : IslandTheme.accent, strength: dark ? 0.09 : 0.045, diameter: width)
                             .position(x: width * 0.92, y: height * 0.06)
-                        glow(daylight ? tone(date, layer: 1) : Color(uiColor: .systemGreen), strength: dark ? 0.26 : 0.12, diameter: width * 0.9)
-                            .position(x: width * 0.02, y: height * 0.34)
-                        glow(daylight ? tone(date, layer: 2) : Color(uiColor: .systemYellow), strength: dark ? 0.24 : 0.14, diameter: width * 0.9)
-                            .position(x: width, y: height * 0.7)
                     }
                 }
             }
@@ -138,12 +142,12 @@ enum YueJiMotion {
     /// Text and labels that change in place.
     static let content = Animation.smooth(duration: 0.24)
     /// Button and control presses.
-    static let press = Animation.spring(duration: 0.22, bounce: 0.15)
+    static let press = Animation.easeOut(duration: 0.15)
     /// Chips, badges and small reveals.
-    static let pop = Animation.spring(duration: 0.4, bounce: 0.15)
+    static let pop = Animation.spring(duration: 0.28, bounce: 0)
     /// Cards and empty states appearing.
-    static let entrance = Animation.spring(duration: 0.55, bounce: 0.1)
-    static let banner = Animation.spring(duration: 0.45, bounce: 0.12)
+    static let entrance = Animation.spring(duration: 0.3, bounce: 0)
+    static let banner = Animation.spring(duration: 0.3, bounce: 0)
     /// Gauges, bars and charts filling.
     static let meter = Animation.smooth(duration: 0.3)
 }
@@ -610,7 +614,7 @@ struct MonthPicker: View {
     @State private var selectedDate = Date()
     private var monthLabel: String { month.formatted(.dateTime.year().month(.wide).locale(Locale(identifier: AppLanguage.localeID))) }
     private var labelTransition: AnyTransition {
-        reduceMotion ? .identity : .asymmetric(
+        reduceMotion || !ElegantMotion.enabled ? .identity : .asymmetric(
             insertion: .opacity.combined(with: .offset(x: CGFloat(direction) * 16)),
             removal: .opacity.combined(with: .offset(x: CGFloat(direction) * -16)))
     }
@@ -633,7 +637,7 @@ struct MonthPicker: View {
                     .foregroundStyle(.primary)
                     .lineLimit(1).minimumScaleFactor(0.75)
                     .id(monthKey(month)).transition(labelTransition)
-            }.animation(reduceMotion ? nil : YueJiMotion.month, value: monthKey(month))
+            }.animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.month, value: monthKey(month))
                 .frame(maxWidth: .infinity, minHeight: 44).clipped().contentShape(Rectangle())
                 .accessibilityElement(children: .ignore).accessibilityLabel(monthLabel)
                 .onTapGesture { selectedDate = month; choosingMonth = true }
@@ -821,11 +825,11 @@ struct DashboardView: View {
                         .modifier(MonthSummaryMotion(month: loadedSummary?.month))
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                        .listRowInsets(EdgeInsets(top: 8, leading: 0, bottom: 4, trailing: 0))
                     quickActions
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
-                        .listRowInsets(EdgeInsets(top: 10, leading: 8, bottom: 6, trailing: 8))
+                        .listRowInsets(EdgeInsets(top: 12, leading: 0, bottom: 0, trailing: 0))
                 }
                 PendingBookkeepingCard()
                 budgetSection
@@ -997,26 +1001,23 @@ struct DashboardView: View {
         }
     }
     private var viewAllTitle: String { tr("查看全部", "View all", "Lihat semua") }
-    /// Shortcuts as round glass buttons, like the quick actions of the kit's Mobile Banking
-    /// app, over the hairline that ends its header.
+    /// Whole-tile actions; a single column keeps accessibility labels untruncated.
     private var quickActions: some View {
-        HStack(alignment: .top, spacing: 4) {
-            QuickActionButton(title: tr("扫描收据", "Scan receipt", "Imbas resit"), symbol: "doc.viewfinder", tint: IslandPalette.lagoon) {
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: typeSize.isAccessibilitySize ? 1 : 2), spacing: 8) {
+            QuickActionButton(title: tr("扫描收据", "Scan receipt", "Imbas resit"), symbol: "doc.viewfinder") {
                 path.append(OverviewRoute.receipt)
             }.guideTarget("dashboard.receipt")
-            QuickActionButton(title: tr("自动记账", "Automation", "Automasi"), symbol: "bolt.fill", tint: IslandPalette.sky) {
+            QuickActionButton(title: tr("自动记账", "Automation", "Automasi"), symbol: "bolt.fill") {
                 path.append(OverviewRoute.automation)
             }
             QuickActionButton(title: monthBudget.base > 0 ? tr("调整预算", "Edit budget", "Ubah bajet") : tr("设置预算", "Set budget", "Tetapkan bajet"),
-                              symbol: "gauge.with.dots.needle.67percent", tint: IslandPalette.pumpkin) {
+                              symbol: "gauge.with.dots.needle.67percent") {
                 editBudget()
             }
-            QuickActionButton(title: tr("储蓄目标", "Savings", "Simpanan"), symbol: "target", tint: IslandPalette.berry) {
+            QuickActionButton(title: tr("储蓄目标", "Savings", "Simpanan"), symbol: "target") {
                 path.append(OverviewRoute.savings)
             }
         }
-        .padding(.bottom, 16)
-        .overlay(alignment: .bottom) { Divider().padding(.horizontal, 12).accessibilityHidden(true) }
     }
     private func editBudget() {
         // Only the base is edited here; income added to the month stays as allocated.
@@ -1024,39 +1025,36 @@ struct DashboardView: View {
         budgetText = base > 0 ? Currency.input(base, "MYR") : ""
         budgeting = true
     }
-    /// The month's personal spending as a banking app shows a balance (the kit's Mobile
-    /// Banking): a caption, the amount in large type with the eye that hides it where the
-    /// kit keeps the account photo, and what the amount already leaves out.
+    /// Personal spending is the page's focal amount. The eye also masks today's total.
     private var overviewHero: some View {
-        VStack(alignment: .leading, spacing: 6) {
+        VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .center, spacing: 12) {
                 VStack(alignment: .leading, spacing: 4) {
                     Text(tr("本月个人消费", "Personal spending", "Belanja peribadi"))
                         .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                         .textCase(.uppercase)
                     heroAmount
-                        .font(.system(size: heroSize, weight: .bold))
-                        .foregroundStyle(.primary).minimumScaleFactor(0.5).lineLimit(1)
+                        .font(.system(size: heroSize, weight: .semibold, design: .rounded))
+                        .foregroundStyle(IslandTheme.ink).minimumScaleFactor(0.5).lineLimit(1)
                 }
                 Spacer(minLength: 8)
                 GlassIconButton(symbol: hideAmounts ? "eye.slash" : "eye") {
-                    withAnimation(reduceMotion ? nil : YueJiMotion.content) { hideAmounts.toggle() }
+                    withAnimation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.content) { hideAmounts.toggle() }
                     FeedbackHaptics.selection()
                 }
-                .modifier(AttentionBounce(trigger: hideAmounts))
                 .accessibilityLabel(hideAmounts ? tr("显示金额", "Show amounts", "Tunjuk amaun") : tr("隐藏金额", "Hide amounts", "Sembunyi amaun"))
             }
-            Text(summary.reimbursementClaimed > 0
-                 ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
-                 : tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
-                .font(.footnote).foregroundStyle(.secondary)
             Text(String(entries.count) + tr(" 笔消费", " expenses", " belanja"))
                 .font(.footnote.weight(.medium)).foregroundStyle(.secondary)
             if Calendar.current.isDate(month, equalTo: Date(), toGranularity: .month) {
-                TodaySpendingRow().padding(.top, 12)
+                TodaySpendingRow()
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .moonSummarySurface()
+        .accessibilityHint(summary.reimbursementClaimed > 0
+             ? tr("已扣除朋友份额、个人退款与报销金额", "After friends’ shares, your refunds and claims", "Selepas bahagian rakan, pulangan dan tuntutan anda")
+             : tr("已扣除朋友份额与个人退款", "After friends’ shares and your refunds", "Selepas bahagian rakan dan pulangan anda"))
     }
     /// The month's total; once a launch it counts up from zero as the opening hands over.
     @ViewBuilder private var heroAmount: some View {
@@ -3508,7 +3506,7 @@ struct FriendsView: View {
         let _ = uiLocale.identifier
         NavigationStack {
             List {
-                // What friends owe, on the page itself like a balance (the kit's Mobile Banking).
+                // Gross receivable and payable stay distinct; rows explain each friend's net.
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .center, spacing: 12) {
@@ -3527,7 +3525,7 @@ struct FriendsView: View {
                             }
                         }
                         AnimatedMoney(cents: balances.reduce(0) { $0 + $1.owed })
-                            .font(.largeTitle.bold()).foregroundStyle(.primary)
+                            .font(.system(.largeTitle, design: .rounded, weight: .semibold)).foregroundStyle(IslandTheme.ink)
                             .minimumScaleFactor(0.6).lineLimit(1)
                         let payable = balances.reduce(0) { $0 + $1.payable }
                         if payable > 0 {
@@ -3537,8 +3535,9 @@ struct FriendsView: View {
                         Text(tr("全部月份 · 点朋友查看明细和记录还款", "All months · tap a friend to settle up", "Semua bulan · ketik rakan untuk bayar balik"))
                             .font(.footnote).foregroundStyle(.secondary)
                     }
+                    .moonSummarySurface()
                     .listRowBackground(Color.clear)
-                    .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 4, trailing: 20))
+                    .listRowInsets(EdgeInsets())
                 }
                 Section {
                     Picker(tr("显示", "Show", "Papar"), selection: $settled) {
@@ -4010,19 +4009,13 @@ struct AutomationSetupView: View {
 /// Apple's own Liquid Glass buttons on iOS 26 and later, so presses, highlights and
 /// morphing are exactly the system's; standard bordered buttons otherwise.
 private struct YueJiPrimaryButton: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glassProminent)
-        } else { content.buttonStyle(.borderedProminent) }
+    func body(content: Content) -> some View {
+        content.buttonStyle(MoonActionButtonStyle(prominent: true))
     }
 }
 private struct YueJiSecondaryButton: ViewModifier {
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @ViewBuilder func body(content: Content) -> some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            content.buttonStyle(.glass)
-        } else { content.buttonStyle(.bordered) }
+    func body(content: Content) -> some View {
+        content.buttonStyle(MoonActionButtonStyle(prominent: false))
     }
 }
 extension View {

@@ -2,12 +2,8 @@ import SwiftUI
 import UIKit
 import Charts
 
-/// Shared presentation pieces in Apple's own style: flat grouped panels, glass icon buttons,
-/// icon tiles, row labels, avatars, dashboard section headers and share chips, empty and
-/// loading states, and the spending charts.
-/// Presentation only; no ledger behaviour lives here. Motion is the system's, and the few
-/// content animations honour Reduce Motion and the "playfulAnimations" setting (shown in
-/// Settings as "Animations").
+/// Shared Moon Ledger surfaces and controls. Presentation only; all money and
+/// navigation continue to use their existing models. Motion honours both preferences.
 enum ElegantMotion {
     static var enabled: Bool { UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true }
 }
@@ -36,84 +32,80 @@ extension View {
     }
 }
 
-/// A round icon button. On iOS 26 and later it is Apple's own Liquid Glass circle, so its
-/// press, glow and morphing are exactly the system's; otherwise a soft tinted circle. A
-/// changed symbol swaps with the system's replace effect.
-struct GlassIconButton: View {
-    let symbol: String
-    let action: () -> Void
+/// A cropped moon orbit gives the three root summaries a shared identity. It is
+/// deliberately static and decorative, never an amount or a budget-progress gauge.
+private struct MoonSummarySurface: ViewModifier {
+    @Environment(\.colorSchemeContrast) private var contrast
     @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var scheme
-    var body: some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            Button(action: action) {
-                Image(systemName: symbol).font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Color.primary)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 22, height: 22)
+    func body(content: Content) -> some View {
+        content.padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(alignment: .topTrailing) {
+                if contrast != .increased && !reduceTransparency {
+                    Circle().strokeBorder(IslandTheme.moon, lineWidth: 18)
+                        .frame(width: 116, height: 116).offset(x: 50, y: -54)
+                        .accessibilityHidden(true).allowsHitTesting(false)
+                }
             }
-            .buttonStyle(.glass).buttonBorderShape(.circle)
-            .frame(minWidth: 44, minHeight: 44)
-        } else {
-            Button(action: action) {
-                Image(systemName: symbol).font(.subheadline.weight(.semibold))
-                    .foregroundStyle(IslandTheme.accent)
-                    .contentTransition(.symbolEffect(.replace))
-                    .frame(width: 40, height: 40)
-                    .background(Circle().fill(IslandTheme.accent.opacity(scheme == .dark ? 0.16 : 0.08)))
-                    .frame(width: 44, height: 44).contentShape(Circle())
+            .background(IslandTheme.summary)
+            .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 24, style: .continuous)
+                    .strokeBorder(IslandTheme.ink.opacity(contrast == .increased ? 0.35 : 0.06), lineWidth: 1)
+                    .allowsHitTesting(false).accessibilityHidden(true)
             }
-            .buttonStyle(ElegantPressStyle())
-        }
     }
 }
 
-/// A round action with its name underneath, like the quick actions of the Mobile Banking
-/// app and the contact actions of Messages in the iOS 27 Builder kit: a Liquid Glass circle
-/// on iOS 26 and later, a soft tinted circle otherwise. VoiceOver reads it as one button
-/// named by its caption, and tapping the caption runs the action too.
+extension View {
+    func moonSummarySurface() -> some View { modifier(MoonSummarySurface()) }
+}
+
+/// A quiet, full-size icon target, sharing its press response with the action tiles.
+struct GlassIconButton: View {
+    let symbol: String
+    let action: () -> Void
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.subheadline.weight(.semibold))
+                .foregroundStyle(IslandTheme.accent)
+                .contentTransition(reduceMotion || !ElegantMotion.enabled ? .identity : .opacity)
+                .frame(width: 44, height: 44)
+                .background(IslandTheme.accent.opacity(0.08), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+                .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+        }
+        .buttonStyle(ElegantPressStyle())
+    }
+}
+
+/// The entire label is one native Button: icon and caption share one hit area,
+/// one VoiceOver element and one disabled state.
 struct QuickActionButton: View {
     let title: String
     let symbol: String
     var tint: Color = IslandTheme.accent
     let action: () -> Void
-    @Environment(\.accessibilityReduceTransparency) private var reduceTransparency
-    @Environment(\.colorScheme) private var scheme
     @Environment(\.isEnabled) private var enabled
     var body: some View {
-        VStack(spacing: 7) {
-            circle
-            Text(title)
-                .font(.caption.weight(.medium))
-                .foregroundStyle(enabled ? Color.primary : Color.secondary)
-                .multilineTextAlignment(.center)
-                .lineLimit(2).minimumScaleFactor(0.8)
-                .accessibilityHidden(true)
-                .onTapGesture { if enabled { action() } }
-        }
-        .frame(maxWidth: .infinity)
-    }
-    private var icon: some View {
-        Image(systemName: symbol)
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(enabled ? tint : Color.secondary)
-            .frame(width: 30, height: 30)
-    }
-    @ViewBuilder private var circle: some View {
-        if #available(iOS 26.0, *), !reduceTransparency {
-            Button(action: action) { icon }
-                .buttonStyle(.glass).buttonBorderShape(.circle)
-                .controlSize(.large)
-                .accessibilityLabel(title)
-        } else {
-            Button(action: action) {
-                icon.frame(width: 54, height: 54)
-                    .background(Circle().fill(tint.opacity(scheme == .dark ? 0.22 : 0.12)))
-                    .contentShape(Circle())
+        Button(action: action) {
+            HStack(spacing: 10) {
+                Image(systemName: symbol)
+                    .font(.body.weight(.medium))
+                    .foregroundStyle(enabled ? tint : Color.secondary)
+                    .frame(width: 24).accessibilityHidden(true)
+                Text(title).font(.subheadline.weight(.medium))
+                    .foregroundStyle(enabled ? Color.primary : Color.secondary)
+                    .multilineTextAlignment(.leading).fixedSize(horizontal: false, vertical: true)
+                Spacer(minLength: 0)
             }
-            .buttonStyle(ElegantPressStyle())
-            .accessibilityLabel(title)
+            .padding(.horizontal, 12).padding(.vertical, 14)
+            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .background(IslandTheme.card, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
         }
+        .buttonStyle(ElegantPressStyle())
+        .accessibilityLabel(title)
     }
 }
 
@@ -124,13 +116,37 @@ struct ElegantPressStyle: ButtonStyle {
     }
 }
 
+/// Solid, readable actions for transaction details and forms. Destructive actions
+/// retain their red role; disabled and loading labels keep the same footprint.
+struct MoonActionButtonStyle: ButtonStyle {
+    let prominent: Bool
+    @Environment(\.isEnabled) private var enabled
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        let destructive = configuration.role == .destructive
+        let fill = prominent ? (destructive ? Color.red : IslandTheme.accent) : IslandTheme.card
+        let text = prominent ? (destructive ? Color.white : IslandTheme.onAccent) : (destructive ? Color.red : IslandTheme.accent)
+        configuration.label
+            .font(.body.weight(.semibold))
+            .padding(.horizontal, 16).padding(.vertical, 8)
+            .frame(minHeight: 44)
+            .foregroundStyle(enabled ? text : Color.secondary)
+            .background(enabled ? fill : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+            .opacity(enabled && configuration.isPressed ? 0.88 : 1)
+            .scaleEffect(enabled && configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.96 : 1)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
+    }
+}
+
 private struct ElegantPressBody: View {
     let configuration: ButtonStyleConfiguration
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.isEnabled) private var enabled
     var body: some View {
         configuration.label
-            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.985 : 1)
-            .opacity(configuration.isPressed ? 0.88 : 1)
+            .scaleEffect(enabled && configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.96 : 1)
+            .opacity(enabled && configuration.isPressed ? 0.88 : 1)
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
     }
 }
@@ -145,11 +161,11 @@ struct LedgerPrimaryActionStyle: ButtonStyle {
             .font(.body.weight(.semibold))
             .frame(maxWidth: .infinity, minHeight: 28)
             .padding(.horizontal, 16).padding(.vertical, 12)
-            .foregroundStyle(enabled ? Color.white : Color.secondary)
+            .foregroundStyle(enabled ? IslandTheme.onAccent : Color.secondary)
             .background(enabled ? Color.accentColor : Color.secondary.opacity(0.12), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             .contentShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .opacity(configuration.isPressed ? 0.9 : 1)
-            .scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.985 : 1)
+            .opacity(enabled && configuration.isPressed ? 0.9 : 1)
+            .scaleEffect(enabled && configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.96 : 1)
             .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
     }
 }
@@ -257,13 +273,13 @@ struct DashboardSectionHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             Text(title)
-                .font(.title3.weight(.bold))
+                .font(.headline.weight(.semibold))
                 .foregroundStyle(.primary)
                 .accessibilityAddTraits(.isHeader)
             Spacer(minLength: 12)
             if let actionTitle {
                 Button(action: action) {
-                    Text(actionTitle).font(.body).foregroundStyle(.secondary)
+                    Text(actionTitle).font(.subheadline.weight(.medium)).foregroundStyle(IslandTheme.accent)
                         .frame(minHeight: 44).contentShape(Rectangle())
                 }
                 .buttonStyle(.borderless)

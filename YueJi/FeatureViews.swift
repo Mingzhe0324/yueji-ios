@@ -1966,8 +1966,8 @@ struct AnimatedMoney: View {
     var body: some View {
         let _ = uiLocale.identifier
         Text(money(cents)).monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
-            .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
+            .contentTransition(reduceMotion || !ElegantMotion.enabled ? .identity : .numericText(value: Double(cents)))
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.month, value: cents)
     }
 }
 struct LedgerFilterEditor: View {

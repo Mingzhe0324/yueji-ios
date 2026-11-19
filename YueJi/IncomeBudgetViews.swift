@@ -93,11 +93,10 @@ private struct BankWalletCard: View {
         .foregroundStyle(.white)
         .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, collapsed ? 26 : 20)
         .frame(maxWidth: .infinity, alignment: .leading)
-        .frame(height: collapsed ? nil : cardHeight)
+        .frame(minHeight: collapsed ? nil : cardHeight)
         .background(BankBreathingBackground(brand: brandColor))
         .clipShape(RoundedRectangle(cornerRadius: 20, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.25), lineWidth: 0.75))
-        .shadow(color: .black.opacity(0.16), radius: 5, y: -2)
+        .overlay(RoundedRectangle(cornerRadius: 20).strokeBorder(.white.opacity(0.12), lineWidth: 0.75))
         .opacity(appeared || reduceMotion ? 1 : 0)
         .offset(y: appeared || reduceMotion ? 0 : 14)
         .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.entrance, value: appeared)
@@ -133,11 +132,8 @@ private struct BankBreathingBackground: View {
 }
 
 private struct BankCardPressStyle: ButtonStyle {
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     func makeBody(configuration: Configuration) -> some View {
-        configuration.label.scaleEffect(configuration.isPressed && !reduceMotion && ElegantMotion.enabled ? 0.985 : 1)
-            .opacity(configuration.isPressed ? 0.9 : 1)
-            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.press, value: configuration.isPressed)
+        ElegantPressStyle().makeBody(configuration: configuration)
     }
 }
 
@@ -202,9 +198,16 @@ struct BankAccountsView: View {
         NavigationStack {
             List {
                 Section {
-                    LabeledContent(tr("账面总余额", "Recorded balance", "Baki direkod"),
-                                   value: money(balances.values.reduce(0, +)))
-                        .font(.headline).monospacedDigit()
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(tr("账面总余额", "Recorded balance", "Baki direkod"))
+                            .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
+                        AnimatedMoney(cents: balances.values.reduce(0, +))
+                            .font(.system(.largeTitle, design: .rounded, weight: .semibold))
+                            .foregroundStyle(IslandTheme.ink).lineLimit(1).minimumScaleFactor(0.5)
+                    }
+                    .moonSummarySurface()
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                    .accessibilityElement(children: .combine)
                 }
                 Section(tr("我的账户", "My accounts", "Akaun saya")) {
                     ForEach(model.ledger.bankAccounts) { account in

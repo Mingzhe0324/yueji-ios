@@ -241,14 +241,14 @@ struct FriendDetailView: View {
                         Text(friend.name).font(.title.bold())
                         Text(settled ? tr("已结清", "Settled", "Selesai") : settlementDirection(net, name: friend.name) + " · " + money(abs(net)))
                             .font(.subheadline).foregroundStyle(.secondary)
-                        HStack(alignment: .top, spacing: 8) {
+                        VStack(spacing: 8) {
                             QuickActionButton(title: tr("结算", "Settle", "Selesaikan"), symbol: "arrow.left.arrow.right") {
                                 route = .settle
                             }.disabled(settled).guideTarget("friend.repay")
-                            QuickActionButton(title: tr("记录还款", "Repayment", "Bayaran balik"), symbol: "checklist", tint: IslandPalette.mint) {
+                            QuickActionButton(title: tr("记录还款", "Repayment", "Bayaran balik"), symbol: "checklist") {
                                 route = .repayment
                             }.disabled(friend.owed == 0)
-                            QuickActionButton(title: tr("分享账单", "Statement", "Penyata"), symbol: "square.and.arrow.up", tint: IslandPalette.lavender) {
+                            QuickActionButton(title: tr("分享账单", "Statement", "Penyata"), symbol: "square.and.arrow.up") {
                                 route = .statement
                             }
                         }.padding(.top, 8)
