@@ -33,6 +33,8 @@ The acceptance rule is conservation of money and independent obligations: an ope
 
 ## Native verification
 
+Review/ledger separation and reversible reminder dismissal passed native model verification at `e21a4eb`: [run 44320578607](https://github.com/Mingzhe0324/yueji-ios/actions/runs/44320578607), **512 tests, zero failures**. This also compiles the shared review screen used by overview, settings, notification summaries and automation status. The reverted repayment presentation test now asserts that the retained notification returns to review while the ledger keeps only the original purchases. UI interaction tests and IPA packaging require a separate full run.
+
 Full build `e7b2c94` passed GitHub run [44219251453](https://github.com/Mingzhe0324/yueji-ios/actions/runs/44219251453), including native tests and IPA packaging. It predates the receiving-account refund fix and combined scenarios above.
 
 Native model verification of `e6ca041` passed GitHub run [44293941760](https://github.com/Mingzhe0324/yueji-ios/actions/runs/44293941760): **510 tests, zero failures**. This includes the receiving-account refund changes and combined scenarios above. An earlier run caught an explicit non-user refund being credited to the original account; the recipient exclusion is restored and its existing regression now passes.
