@@ -40,8 +40,19 @@ setup screen was visited.
   The end-of-parking phone position is not substituted for the parked vehicle.
 - Explicit place searches no longer use the old map pin as a region bias. They
   include addresses and places, display up to 12 results, and offer a keyless
-  Google Maps link for the typed query. External results must be entered/selected
-  manually; opening Google Maps does not import a verified location.
+  Google Maps link for the typed query. The editor's **Import Google place** action
+  accepts a Google Maps share link or explicit latitude/longitude. It previews the
+  result before selection; the enclosing editor still requires Done and saving
+  the transaction. Cancelling either editor leaves the ledger unchanged.
+- Google short links are expanded with bounded, cookie-free HEAD requests,
+  checking each redirect against supported Google Maps hosts. No Google API or
+  page scraping is used. Explicit destination coordinates are imported; camera
+  centres (`/@`, `ll`) and conflicting destination pins are never treated as a shop.
+  An opaque link is retained without inventing coordinates and opens the selected
+  Google destination later. Users can paste coordinates if they need a local pin.
+- Google-selected places retain their link in backups and must not be replaced
+  by the Apple merchant matcher. Existing records without this optional field
+  remain compatible. No Google place ID is stored as an Apple place ID.
 - Device checks still needed: precise location on/off, denied access, cold
   background automation, indoor GPS timeout, remote-city search, and parking
   renewal after leaving the car.

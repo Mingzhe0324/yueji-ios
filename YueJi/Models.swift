@@ -168,6 +168,60 @@ enum MerchantMatching {
     }
 }
 
+/// Only explicit destination coordinates are imported. The /@ map camera is not a place pin.
+enum GoogleMapsLocationLink {
+    static func allowedURL(_ text: String) -> URL? {
+        guard text.count <= 8192, let url = URL(string: text), url.scheme?.lowercased() == "https",
+              url.user == nil, url.password == nil, url.port == nil, let host = url.host?.lowercased() else { return nil }
+        let path = url.path
+        if host == "maps.app.goo.gl", path.count > 1 { return url }
+        if host == "goo.gl", path.hasPrefix("/maps/") { return url }
+        let hosts = ["google.com", "www.google.com", "maps.google.com", "google.com.my", "www.google.com.my", "maps.google.com.my"]
+        guard hosts.contains(host), (path == "/maps" || path.hasPrefix("/maps/") || (host.hasPrefix("maps.") && path == "/")),
+              !path.hasPrefix("/maps/dir"), !path.hasPrefix("/maps/d/") else { return nil }
+        return url
+    }
+    static func isShort(_ url: URL) -> Bool { ["maps.app.goo.gl", "goo.gl"].contains(url.host?.lowercased() ?? "") }
+    static func coordinates(_ text: String) -> (Double, Double)? {
+        let parts = text.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count == 2, let lat = Double(parts[0].trimmingCharacters(in: .whitespacesAndNewlines)),
+              let lon = Double(parts[1].trimmingCharacters(in: .whitespacesAndNewlines)),
+              lat.isFinite, lon.isFinite, (-90...90).contains(lat), (-180...180).contains(lon) else { return nil }
+        return (lat, lon)
+    }
+    static func place(_ text: String) -> ExpensePlace? {
+        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let (lat, lon) = coordinates(value) {
+            var link = URLComponents(string: "https://www.google.com/maps/search/")
+            link?.queryItems = [URLQueryItem(name: "api", value: "1"), URLQueryItem(name: "query", value: "\(lat),\(lon)")]
+            return ExpensePlace(name: "", latitude: lat, longitude: lon, userConfirmed: true, googleMapsURL: link?.url?.absoluteString)
+        }
+        guard let url = allowedURL(value) else { return nil }
+        let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
+        var title = ""
+        let path = url.path.components(separatedBy: "/")
+        if let index = path.firstIndex(of: "place"), path.indices.contains(index + 1) {
+            title = path[index + 1].replacingOccurrences(of: "+", with: " ")
+        }
+        var pin: (Double, Double)?
+        let decoded = url.absoluteString.removingPercentEncoding ?? url.absoluteString
+        let regex = try? NSRegularExpression(pattern: #"!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)"#)
+        let matches = regex?.matches(in: decoded, range: NSRange(decoded.startIndex..., in: decoded)) ?? []
+        if matches.count == 1, let latRange = Range(matches[0].range(at: 1), in: decoded),
+           let lonRange = Range(matches[0].range(at: 2), in: decoded) {
+            pin = coordinates(String(decoded[latRange]) + "," + String(decoded[lonRange]))
+        } else if matches.isEmpty {
+            let queries = items.filter { ["query", "q"].contains($0.name) }.compactMap(\.value)
+            if queries.count == 1 {
+                pin = coordinates(queries[0])
+                if title.isEmpty && pin == nil && !queries[0].hasPrefix("place_id:") { title = queries[0] }
+            }
+        }
+        return ExpensePlace(name: String(title.prefix(500)), latitude: pin?.0, longitude: pin?.1,
+            userConfirmed: true, googleMapsURL: url.absoluteString)
+    }
+}
+
 struct ExpensePlace: Codable, Equatable {
     // An automatic fix is evidence of the phone's position, not a verified shop.
     static func usableAutomaticFix(accuracy: Double, capturedAt: Date, now: Date) -> Bool {
@@ -198,6 +252,7 @@ struct ExpensePlace: Codable, Equatable {
     var capturedAt: Date? = nil
     var applePlaceID: String? = nil
     var userConfirmed: Bool? = nil
+    var googleMapsURL: String? = nil
     func belongsToRecordingTime(_ date: Date) -> Bool {
         guard let capturedAt else { return true }
         return abs(date.timeIntervalSince(capturedAt)) <= 300
@@ -205,6 +260,7 @@ struct ExpensePlace: Codable, Equatable {
     var valid: Bool {
         guard name.count <= 500, address.count <= 2000 else { return false }
         guard applePlaceID.map({ !$0.isEmpty && $0.count <= 500 }) ?? true else { return false }
+        guard googleMapsURL.map({ GoogleMapsLocationLink.allowedURL($0) != nil }) ?? true else { return false }
         guard accuracyMeters.map({ $0.isFinite && $0 >= 0 }) ?? true,
               capturedAt.map({ $0.timeIntervalSince1970.isFinite }) ?? true else { return false }
         if latitude == nil && longitude == nil { return true }

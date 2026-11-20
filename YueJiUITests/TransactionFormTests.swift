@@ -406,6 +406,28 @@ final class TransactionFormTests: XCTestCase {
             XCTAssertTrue(mapPage.waitForExistence(timeout: 5), "Location editor must stay presented")
             let placeName = app.textFields["place.name"]
             reveal(placeName, in: app); placeName.tap(); placeName.typeText("Location regression")
+            finishKeyboard(in: app)
+            let googleImport = app.buttons["place.googleImport"]
+            reveal(googleImport, in: app, above: true); googleImport.tap()
+            let importPage = app.navigationBars["Import Google place"]
+            XCTAssertTrue(importPage.waitForExistence(timeout: 5))
+            importPage.buttons["Cancel"].tap()
+            waitUntilGone(importPage)
+            XCTAssertEqual(placeName.value as? String, "Location regression", "Cancelling import must preserve the location draft")
+            googleImport.tap()
+            XCTAssertTrue(importPage.waitForExistence(timeout: 5))
+            let googleInput = app.descendants(matching: .any)["place.googleImport.input"].firstMatch
+            enterText("3.1390, 101.6869", into: googleInput, in: app)
+            finishKeyboard(in: app)
+            app.buttons["place.googleImport.read"].tap()
+            let googleName = app.textFields["place.googleImport.name"]
+            XCTAssertTrue(googleName.waitForExistence(timeout: 5))
+            enterText("Google location regression", into: googleName, in: app)
+            finishKeyboard(in: app)
+            let usePlace = app.buttons["place.googleImport.use"]
+            reveal(usePlace, in: app); usePlace.tap()
+            waitUntilGone(importPage)
+            XCTAssertEqual(placeName.value as? String, "Google location regression")
             app.buttons["place.save"].tap()
             waitUntilGone(mapPage)
             XCTAssertTrue(app.navigationBars["New entry"].exists, "Saving a place must not dismiss the transaction")

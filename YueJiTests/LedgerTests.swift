@@ -435,6 +435,57 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(ExpensePlace(name: "Actual shop", address: "Street").searchQuery(merchantHint: "Other"), "Actual shop Street")
     }
 
+    func testGooglePlaceImportUsesDestinationInsteadOfMapCamera() throws {
+        let link = "https://www.google.com/maps/place/Cafe+ABC/@4.1,102.2,15z/data=!4m2!3d3.139!4d101.6869"
+        let place = try XCTUnwrap(GoogleMapsLocationLink.place(link))
+        XCTAssertEqual(place.name, "Cafe ABC")
+        XCTAssertEqual(place.latitude, 3.139)
+        XCTAssertEqual(place.longitude, 101.6869)
+        XCTAssertEqual(place.googleMapsURL, link)
+        XCTAssertNil(place.applePlaceID)
+        XCTAssertEqual(place.userConfirmed, true)
+        XCTAssertTrue(place.valid)
+        XCTAssertEqual(try JSONDecoder().decode(ExpensePlace.self, from: JSONEncoder().encode(place)), place)
+        let cameraOnly = try XCTUnwrap(GoogleMapsLocationLink.place("https://www.google.com/maps/place/Cafe/@4.1,102.2,15z"))
+        XCTAssertNil(cameraOnly.latitude)
+        XCTAssertNotNil(cameraOnly.googleMapsURL)
+        let multiple = GoogleMapsLocationLink.place("https://www.google.com/maps/place/Cafe/data=!3d3.1!4d101.1!3d3.2!4d101.2")
+        XCTAssertNil(multiple?.latitude)
+    }
+
+    func testGooglePlaceImportSupportsCoordinatesAndOpaqueLinksWithoutInventingPins() throws {
+        for value in ["3.139, 101.6869", "https://www.google.com/maps/search/?api=1&query=3.139%2C101.6869",
+                      "https://maps.google.com/?q=3.139,101.6869"] {
+            let place = try XCTUnwrap(GoogleMapsLocationLink.place(value))
+            XCTAssertEqual(place.latitude, 3.139)
+            XCTAssertEqual(place.longitude, 101.6869)
+        }
+        for value in ["https://maps.app.goo.gl/example", "https://www.google.com/maps?cid=12345",
+                      "https://www.google.com/maps/search/?api=1&query=Cafe&ll=3.139,101.6869"] {
+            let place = try XCTUnwrap(GoogleMapsLocationLink.place(value))
+            XCTAssertNil(place.latitude)
+            XCTAssertNil(place.longitude)
+            XCTAssertEqual(place.googleMapsURL, value)
+        }
+        XCTAssertNil(GoogleMapsLocationLink.coordinates("91,101"))
+        XCTAssertNil(GoogleMapsLocationLink.coordinates("3,181"))
+        XCTAssertNil(GoogleMapsLocationLink.coordinates("nan,101"))
+        XCTAssertNil(GoogleMapsLocationLink.coordinates("3,101,15"))
+        XCTAssertNil(try JSONDecoder().decode(ExpensePlace.self, from: Data(#"{"name":"Legacy","address":""}"#.utf8)).googleMapsURL)
+    }
+
+    func testGooglePlaceImportRejectsUnsafeLinksAndDirections() {
+        for link in ["https://example.com/maps/place/Cafe", "http://www.google.com/maps",
+                     "https://www.google.com.evil.test/maps", "https://www.google.com@evil.test/maps",
+                     "https://user:password@www.google.com/maps", "https://www.google.com:8443/maps",
+                     "https://www.google.com/url?q=https://example.com", "https://goo.gl/not-maps",
+                     "https://www.google.com/maps/dir/Start/End", "file:///maps", "javascript:alert(1)"] {
+            XCTAssertNil(GoogleMapsLocationLink.allowedURL(link), link)
+            XCTAssertNil(GoogleMapsLocationLink.place(link), link)
+            XCTAssertFalse(ExpensePlace(name: "Unsafe", googleMapsURL: link).valid)
+        }
+    }
+
     func testIncomingNetSettlementConsumesOnlyNetPayment() throws {
         let date = Date().addingTimeInterval(-60)
         var ledger = Ledger()

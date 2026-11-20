@@ -493,6 +493,130 @@ struct ExpensePlaceDestination: Identifiable {
     var receiptPhone: String = ""
 }
 
+private final class GoogleMapsRedirectPolicy: NSObject, URLSessionTaskDelegate, @unchecked Sendable {
+    func urlSession(_ session: URLSession, task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse, newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        // Inspect every redirect before sending another request. Never fetch an arbitrary host.
+        completionHandler(nil)
+    }
+}
+
+enum GoogleMapsLocationImport {
+    static func resolve(_ input: String) async throws -> ExpensePlace {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let initial = GoogleMapsLocationLink.place(value) else { throw URLError(.badURL) }
+        guard var url = GoogleMapsLocationLink.allowedURL(value), GoogleMapsLocationLink.isShort(url) else { return initial }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.httpShouldSetCookies = false
+        configuration.urlCache = nil
+        configuration.timeoutIntervalForResource = 8
+        let session = URLSession(configuration: configuration, delegate: GoogleMapsRedirectPolicy(), delegateQueue: nil)
+        defer { session.invalidateAndCancel() }
+        let deadline = Date().addingTimeInterval(8)
+        for _ in 0..<5 {
+            try Task.checkCancellation()
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw URLError(.timedOut) }
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: remaining)
+            request.httpMethod = "HEAD"
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
+            if (300...399).contains(http.statusCode), let location = http.value(forHTTPHeaderField: "Location") {
+                guard let destination = URL(string: location, relativeTo: url)?.absoluteURL,
+                      let allowed = GoogleMapsLocationLink.allowedURL(destination.absoluteString) else { throw URLError(.badURL) }
+                url = allowed
+                if !GoogleMapsLocationLink.isShort(url), let place = GoogleMapsLocationLink.place(url.absoluteString) { return place }
+            } else if (200...299).contains(http.statusCode) {
+                // No page scraping: an opaque link remains usable in Google Maps without a local pin.
+                guard let place = GoogleMapsLocationLink.place(url.absoluteString) else { throw URLError(.badURL) }
+                return place
+            } else { throw URLError(.badServerResponse) }
+        }
+        throw URLError(.httpTooManyRedirects)
+    }
+}
+
+private struct GooglePlaceImportSheet: View {
+    private enum Field: Hashable { case input, name }
+    let onSelect: (ExpensePlace) -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var input = ""
+    @State private var name = ""
+    @State private var preview: ExpensePlace?
+    @State private var task: Task<Void, Never>?
+    @State private var generation = UUID()
+    @State private var loading = false
+    @State private var error: String?
+    @FocusState private var focused: Field?
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField(tr("Google Maps 分享链接或经纬度", "Google Maps share link or coordinates", "Pautan Google Maps atau koordinat"), text: $input, axis: .vertical)
+                        .autocorrectionDisabled().textInputAutocapitalization(.never)
+                        .focused($focused, equals: .input)
+                        .accessibilityIdentifier("place.googleImport.input")
+                    Button(action: read) {
+                        HStack {
+                            Text(tr("读取地点", "Read place", "Baca tempat"))
+                            Spacer()
+                            if loading { ProgressView() }
+                        }
+                    }.disabled(loading || input.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        .accessibilityIdentifier("place.googleImport.read")
+                } footer: {
+                    Text(tr("在 Google Maps 选择地点 → 分享 → 复制链接，再粘贴到这里。", "In Google Maps, choose a place → Share → Copy link, then paste it here.", "Di Google Maps, pilih tempat → Kongsi → Salin pautan, kemudian tampal di sini."))
+                }
+                if let preview {
+                    Section {
+                        TextField(tr("地点名称", "Place name", "Nama tempat"), text: $name)
+                            .focused($focused, equals: .name)
+                            .accessibilityIdentifier("place.googleImport.name")
+                        if let latitude = preview.latitude, let longitude = preview.longitude {
+                            Text("\(latitude.formatted(.number.precision(.fractionLength(6)))), \(longitude.formatted(.number.precision(.fractionLength(6))))")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text(tr("此链接没有坐标，将保存 Google 地点链接。需要地图标记时，可粘贴 Google Maps 的经纬度。", "This link has no coordinates. The Google place link will be saved. Paste coordinates from Google Maps if you need a map pin.", "Pautan ini tiada koordinat. Pautan tempat Google akan disimpan. Tampal koordinat Google Maps jika anda perlukan pin peta."))
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Button {
+                            var place = preview; place.name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+                            guard !place.name.isEmpty, place.valid else { return }
+                            onSelect(place); dismiss()
+                        } label: { Text(tr("使用这个地点", "Use this place", "Gunakan tempat ini")) }
+                            .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 500)
+                            .accessibilityIdentifier("place.googleImport.use")
+                    }
+                }
+                if let error { Text(error).font(.callout).foregroundStyle(.secondary) }
+            }
+            .navigationTitle(tr("导入 Google 地点", "Import Google place", "Import tempat Google"))
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+            .toolbar { ToolbarItemGroup(placement: .keyboard) { Spacer(); Button(tr("完成", "Done", "Selesai")) { focused = nil } } }
+            .onChange(of: input) { _, _ in cancel(); preview = nil; error = nil }
+            .onDisappear { cancel() }
+        }
+    }
+    private func cancel() { generation = UUID(); task?.cancel(); task = nil; loading = false }
+    private func read() {
+        cancel(); focused = nil; preview = nil; error = nil; loading = true
+        let token = generation, value = input
+        task = Task { @MainActor in
+            do {
+                let place = try await GoogleMapsLocationImport.resolve(value)
+                guard !Task.isCancelled, token == generation else { return }
+                preview = place; name = place.name; loading = false
+            } catch {
+                guard !Task.isCancelled, token == generation else { return }
+                loading = false
+                self.error = tr("无法读取。请复制完整的 Google Maps 地点链接，或粘贴经纬度，例如 3.1390, 101.6869。", "Unable to read. Copy a full Google Maps place link, or paste coordinates such as 3.1390, 101.6869.", "Tidak dapat dibaca. Salin pautan tempat Google Maps penuh, atau tampal koordinat seperti 3.1390, 101.6869.")
+            }
+        }
+    }
+}
+
 struct ExpensePlaceMapSheet: View {
     @EnvironmentObject private var model: LedgerModel
     let initial: ExpensePlace?
@@ -518,6 +642,7 @@ struct ExpensePlaceMapSheet: View {
     @FocusState private var searchFocused: Bool
     @State private var initialized = false
     @State private var confirmingDiscard = false
+    @State private var importingGooglePlace = false
     @StateObject private var mapLocator = ExpensePlaceLocator()
     @State private var movingMap = false
     @State private var visible = false
@@ -542,7 +667,8 @@ struct ExpensePlaceMapSheet: View {
         }
     }
     private var matchInput: MerchantMatchInput? {
-        guard visible, initialized, draft.applePlaceID == nil else { return nil }
+        guard visible, initialized, !importingGooglePlace, draft.applePlaceID == nil, draft.googleMapsURL == nil,
+              draft.userConfirmed != true else { return nil }
         let generic = ExpensePlace.placeholderNames
         let typedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let hint = merchantHint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -561,6 +687,7 @@ struct ExpensePlaceMapSheet: View {
     }
     private var googleMapsURL: URL? {
         let place = draft
+        if let link = place.googleMapsURL { return GoogleMapsLocationLink.allowedURL(link) }
         var query = place.searchQuery(merchantHint: merchantHint)
         if query.isEmpty, let lat = place.latitude, let lon = place.longitude { query = "\(lat),\(lon)" }
         guard !query.isEmpty else { return nil }
@@ -584,13 +711,14 @@ struct ExpensePlaceMapSheet: View {
     private var draft: ExpensePlace {
         let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
         let a = address.trimmingCharacters(in: .whitespacesAndNewlines)
-        let unchanged = n == selected?.name && a == selected?.address
+        let unchanged = (n == selected?.name || selected?.googleMapsURL != nil) && a == selected?.address
         return ExpensePlace(name: n.isEmpty ? a : n, address: a,
             latitude: unchanged ? selected?.latitude : nil, longitude: unchanged ? selected?.longitude : nil,
             accuracyMeters: unchanged ? selected?.accuracyMeters : nil,
             capturedAt: unchanged ? selected?.capturedAt : nil,
             applePlaceID: unchanged ? selected?.applePlaceID : nil,
-            userConfirmed: unchanged ? selected?.userConfirmed : nil)
+            userConfirmed: unchanged ? selected?.userConfirmed : nil,
+            googleMapsURL: unchanged ? selected?.googleMapsURL : nil)
     }
     var body: some View {
         NavigationStack {
@@ -601,7 +729,7 @@ struct ExpensePlaceMapSheet: View {
                         if !draft.address.isEmpty { Text(draft.address).font(.subheadline).foregroundStyle(.secondary) }
                     }.frame(maxWidth: .infinity, alignment: .leading)
                     matchStatus
-                    if editing || coordinate != nil {
+                    if (editing && draft.googleMapsURL == nil) || coordinate != nil {
                         mapCard.transition(.opacity)
                     } else if merchantMatcher.loading {
                         VStack(spacing: 14) {
@@ -620,16 +748,14 @@ struct ExpensePlaceMapSheet: View {
                             if !receiptPhone.isEmpty { Text(receiptPhone) }
                         }.font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(18)
                     }
-                    if #available(iOS 18.0, *) {
+                    if #available(iOS 18.0, *), draft.googleMapsURL == nil {
                         AppleMerchantCard(placeID: draft.applePlaceID, automaticallyPresent: false)
                     }
                     if let url = googleMapsURL {
                         Link(destination: url) {
-                            Label(tr("去 Google Maps 看照片", "View photos on Google Maps", "Lihat foto di Google Maps"), systemImage: "arrow.up.right.square")
+                            Label(tr("在 Google Maps 打开", "Open in Google Maps", "Buka dalam Google Maps"), systemImage: "arrow.up.right.square")
                                 .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 10)
                         }.accessibilityIdentifier("place.googleMaps")
-                        Text(tr("打开 Google Maps 搜索此店铺，照片以店铺收录情况为准。", "Opens Google Maps to search this place; photos depend on availability.", "Membuka Google Maps untuk mencari tempat ini; foto bergantung pada ketersediaan."))
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                     if editing || draft.applePlaceID == nil { searchPanel }
                     if editing {
@@ -703,12 +829,18 @@ struct ExpensePlaceMapSheet: View {
             .onChange(of: address) { _, _ in if mapLocator.busy { mapLocator.cancel() } }
             .editorDismissal(hasChanges: hasChanges, saving: false, confirming: $confirmingDiscard) { dismiss() }
         }.presentationDragIndicator(.visible)
+            .sheet(isPresented: $importingGooglePlace) {
+                GooglePlaceImportSheet { place in
+                    merchantMatcher.cancel(); cancelSearch(); mapLocator.cancel(); results = []
+                    select(place, animated: true)
+                }
+            }
     }
     private var matchStatus: some View {
-        let confirmed = draft.userConfirmed == true && draft.applePlaceID != nil
+        let confirmed = draft.userConfirmed == true
         let matched = draft.applePlaceID != nil
         let title = merchantMatcher.loading ? tr("正在匹配", "Matching", "Memadankan")
-            : confirmed ? tr("已确认分店", "Confirmed branch", "Cawangan disahkan")
+            : confirmed ? tr("已选择地点", "Place selected", "Tempat dipilih")
             : matched ? tr("已匹配 · 可核对", "Matched · review details", "Sepadan · semak butiran")
             : !receiptAddress.isEmpty ? tr("地址待核对", "Address needs review", "Alamat perlu disemak")
             : tr("待选分店", "Choose a branch", "Pilih cawangan")
@@ -818,6 +950,12 @@ struct ExpensePlaceMapSheet: View {
                     Label(tr("在 Google Maps 搜索", "Search Google Maps", "Cari di Google Maps"), systemImage: "arrow.up.right.square")
                         .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
                 }.accessibilityIdentifier("place.searchGoogleMaps")
+            }
+            if editing {
+                Button { importingGooglePlace = true } label: {
+                    Label(tr("导入 Google 地点", "Import Google place", "Import tempat Google"), systemImage: "link")
+                        .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
+                }.accessibilityIdentifier("place.googleImport")
             }
             ForEach(results.indices, id: \.self) { index in
                 let item = results[index]

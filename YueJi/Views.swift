@@ -3158,7 +3158,7 @@ struct ExpenseEditor: View {
                     placeNotice = nil
                     var chosen = value
                     chosen.capturedAt = nil // An explicit map choice is not an automatic recording-time guess.
-                    chosen.userConfirmed = chosen.applePlaceID != nil
+                    chosen.userConfirmed = chosen.userConfirmed == true || chosen.applePlaceID != nil
                     withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.25)) { place = chosen }
                 }
             }
