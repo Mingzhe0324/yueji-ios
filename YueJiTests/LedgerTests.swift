@@ -746,6 +746,32 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertNil(try session.recordStreetFee(in: &legacy, at: end))
         XCTAssertTrue(legacy.expenses.isEmpty)
     }
+    func testParkingFeeRetainsStartLocationAndDoesNotGuessMissingLocation() throws {
+        var session = ParkingSession()
+        session.startedAt = Date(timeIntervalSince1970: 1_794_355_200)
+        session.automaticStreetFee = true
+        session.place = ExpensePlace(name: "Jalan SS 2/61", address: "Petaling Jaya",
+            latitude: 3.12, longitude: 101.62, accuracyMeters: 12, capturedAt: session.startedAt)
+        var ledger = Ledger()
+        ledger.bankAccounts = [BankAccount(name: "TNG", openingCents: 10000,
+            openingDate: session.startedAt, institution: "TNG eWallet")]
+        let id = try session.recordStreetFee(in: &ledger, at: session.startedAt.addingTimeInterval(7200))
+        XCTAssertEqual(ledger.expenses.first?.merchant, "Parking Fee · Jalan SS 2/61")
+        XCTAssertEqual(ledger.expenses.first?.place, session.place)
+        XCTAssertEqual(ledger.expenses.first?.cents, 120)
+        XCTAssertEqual(try session.recordStreetFee(in: &ledger, at: session.startedAt.addingTimeInterval(8000)), id)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        session.place?.accuracyMeters = 400
+        XCTAssertEqual(session.expenseMerchant, "Parking Fee")
+        XCTAssertNil(session.expensePlace)
+        session.place?.accuracyMeters = 12
+        session.place?.capturedAt = session.startedAt.addingTimeInterval(-3600)
+        XCTAssertNil(session.expensePlace)
+        session.place = ExpensePlace(name: "Current location", latitude: 3, longitude: 101)
+        XCTAssertEqual(session.expenseMerchant, "Parking Fee")
+        session.place = nil
+        XCTAssertEqual(session.expenseMerchant, "Parking Fee")
+    }
     func testParkingAccountAndFreshVehicleDraft() throws {
         var ledger = Ledger()
         XCTAssertThrowsError(try ledger.parkingTNGAccountID())
@@ -1095,6 +1121,27 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertTrue(legacy.belongsToRecordingTime(now.addingTimeInterval(-86400)))
         XCTAssertNil(legacy.accuracyMeters)
         XCTAssertFalse(ExpensePlace(name: "Invalid", accuracyMeters: -1).valid)
+    }
+    func testAutomaticLocationRejectsCoarseStaleAndFutureFixes() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        XCTAssertTrue(ExpensePlace.usableAutomaticFix(accuracy: 15, capturedAt: now, now: now))
+        for accuracy in [-1.0, 51, Double.nan, Double.infinity] {
+            XCTAssertFalse(ExpensePlace.usableAutomaticFix(accuracy: accuracy, capturedAt: now, now: now))
+        }
+        for offset in [-31.0, -3600, 10, Double.infinity] {
+            XCTAssertFalse(ExpensePlace.usableAutomaticFix(accuracy: 15, capturedAt: now.addingTimeInterval(offset), now: now))
+        }
+    }
+    func testDelayedAutomationDoesNotAttachTodaysLocationToOldPurchase() throws {
+        var delivery = AutomationDelivery(kind: "applePay", date: Date().addingTimeInterval(-86400), amount: 12, merchant: "Cafe")
+        delivery.useTransactionDate = true
+        delivery.place = ExpensePlace(name: "Current location", latitude: 3, longitude: 101,
+            accuracyMeters: 15, capturedAt: Date())
+        var ledger = Ledger()
+        _ = try ledger.applyDelivery(delivery)
+        XCTAssertEqual(ledger.expenses.count, 1)
+        XCTAssertEqual(ledger.expenses.first?.cents, 1200)
+        XCTAssertNil(ledger.expenses.first?.place)
     }
 
     func testMerchantAnchorRequiresAccurateTransactionTimeLocation() {

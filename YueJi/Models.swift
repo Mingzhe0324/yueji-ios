@@ -169,6 +169,19 @@ enum MerchantMatching {
 }
 
 struct ExpensePlace: Codable, Equatable {
+    // An automatic fix is evidence of the phone's position, not a verified shop.
+    static func usableAutomaticFix(accuracy: Double, capturedAt: Date, now: Date) -> Bool {
+        let age = now.timeIntervalSince(capturedAt)
+        return accuracy.isFinite && accuracy >= 0 && accuracy <= 50 &&
+            age.isFinite && age >= -2 && age <= 30
+    }
+    var parkingLocationName: String? {
+        guard valid else { return nil }
+        if capturedAt != nil && (accuracyMeters == nil || accuracyMeters! > 50) { return nil }
+        let title = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, !Self.placeholderNames.contains(where: { $0.caseInsensitiveCompare(title) == .orderedSame }) else { return nil }
+        return String(title.prefix(180))
+    }
     static let placeholderNames = ["地图选点", "Selected on map", "Dipilih pada peta", "当前位置", "Current location", "Lokasi semasa", "记录时的位置", "Location at recording", "Lokasi ketika direkod"]
     func searchQuery(merchantHint: String = "") -> String {
         let hint = merchantHint.trimmingCharacters(in: .whitespacesAndNewlines)

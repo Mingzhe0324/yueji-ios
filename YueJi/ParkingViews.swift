@@ -231,6 +231,16 @@ struct ParkingSession: Codable, Identifiable {
     var zone: String?
     var awaitingPaymentReview: Bool?
     var automaticStreetFee: Bool?
+    var expensePlace: ExpensePlace? {
+        guard let place, place.valid, place.belongsToRecordingTime(startedAt),
+              place.capturedAt == nil || (place.accuracyMeters.map { $0 <= 50 } ?? false) else { return nil }
+        return place
+    }
+    var expenseMerchant: String {
+        // Retain the start-of-parking location for renewals and payments made later.
+        if let title = expensePlace?.parkingLocationName { return "Parking Fee · " + title }
+        return "Parking Fee"
+    }
     func streetFeeCents(at end: Date) -> Int? {
         let seconds = end.timeIntervalSince(startedAt)
         guard seconds.isFinite, seconds >= 0, seconds <= 31 * 86400 else { return nil }
@@ -253,7 +263,8 @@ struct ParkingSession: Codable, Identifiable {
         guard !possiblePayment else {
             throw LedgerError.invalid(tr("已有可能对应的停车账目，请核对后关闭自动入账再结束停车。", "A possible parking entry exists. Review it and disable automatic recording before finishing.", "Rekod parkir mungkin sudah ada. Semak dan matikan rekod automatik sebelum tamat."))
         }
-        var entry = Expense(bankAccountID: try ledger.parkingTNGAccountID(), merchant: "Parking Fee", cents: cents, date: startedAt, category: "交通", source: "手动")
+        var entry = Expense(bankAccountID: try ledger.parkingTNGAccountID(), merchant: expenseMerchant, cents: cents, date: startedAt, category: "交通", source: "手动")
+        entry.place = expensePlace
         entry.id = id
         entry.note = paidCents == nil
             ? tr("停车助手自动记录：估算费用，RM0.60／小时，不足一小时按一小时；未核实 TNG 实付。", "Automatically recorded estimate: RM0.60 per started hour; TNG payment not verified.", "Anggaran direkod automatik: RM0.60 setiap jam bermula; bayaran TNG belum disahkan.")
@@ -946,7 +957,8 @@ private struct ParkingDetail: View {
         let accountID: String
         do { accountID = try model.ledger.parkingTNGAccountID() }
         catch { message = error.localizedDescription; return }
-        var draft = Expense(bankAccountID: accountID, merchant: "Parking Fee", cents: difference, date: Date(), category: "交通", source: "手动")
+        var draft = Expense(bankAccountID: accountID, merchant: session.expenseMerchant, cents: difference, date: Date(), category: "交通", source: "手动")
+        draft.place = session.expensePlace
         draft.note = tr("停车续费差额；请核对本次付款金额和时间。", "Parking renewal difference; verify this payment amount and time.", "Perbezaan lanjutan parkir; semak amaun dan masa bayaran ini.")
         expenseDraft = draft
     }
@@ -972,7 +984,8 @@ private struct ParkingDetail: View {
         let accountID: String
         do { accountID = try model.ledger.parkingTNGAccountID() }
         catch { message = error.localizedDescription; return }
-        var draft = Expense(bankAccountID: accountID, merchant: "Parking Fee", cents: cents, date: session.startedAt, category: "交通", source: "手动")
+        var draft = Expense(bankAccountID: accountID, merchant: session.expenseMerchant, cents: cents, date: session.startedAt, category: "交通", source: "手动")
+        draft.place = session.expensePlace
         draft.note = tr("停车费用；请核对付款时间、账户和已有记录。", "Parking fee; verify payment time, account and existing entries.", "Bayaran parkir; semak masa, akaun dan rekod sedia ada.")
         // Use the existing screenshot duplicate-review flow; no ledger entry is created here.
         editingExpense = false

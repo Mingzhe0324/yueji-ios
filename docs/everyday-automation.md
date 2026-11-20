@@ -24,6 +24,28 @@ setup screen was visited.
 
 ## Verification
 
+### Free location capture and parking
+
+- Automatic capture uses Core Location, with no Google API key or billing. A fix
+  must be at most 30 seconds old and have reported accuracy of 50 metres or better.
+  This is the phone's estimated position, not proof of a merchant or parking bay.
+- Existing location permission is required. A fresh request is attempted only
+  while the app is active with When In Use permission, or with existing Always
+  permission. No background tracking mode or Always permission prompt is added.
+  Enrichment waits at most four seconds; failed location never blocks bookkeeping.
+- Late notifications cannot attach a current fix to a transaction more than five
+  minutes away. Delivery retries retain the original saved location.
+- Parking entries and renewals copy the session's start location and use
+  `Parking Fee · <location>` when a usable name is available, otherwise `Parking Fee`.
+  The end-of-parking phone position is not substituted for the parked vehicle.
+- Explicit place searches no longer use the old map pin as a region bias. They
+  include addresses and places, display up to 12 results, and offer a keyless
+  Google Maps link for the typed query. External results must be entered/selected
+  manually; opening Google Maps does not import a verified location.
+- Device checks still needed: precise location on/off, denied access, cold
+  background automation, indoor GPS timeout, remote-city search, and parking
+  renewal after leaving the car.
+
 - Swift syntax parsing and project/resource validation run on Windows.
 - Unit coverage adds notification policy and foreground-summary routing checks.
 - Existing renewal, income-allocation, stale-write, duplicate and transaction UI

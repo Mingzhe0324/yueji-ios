@@ -342,11 +342,31 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, @preconcurrency CLL
         // Background automations never prompt, wait for GPS, or reuse an old fix.
         let manager = CLLocationManager()
         guard manager.authorizationStatus == .authorizedWhenInUse || manager.authorizationStatus == .authorizedAlways,
-              let location = manager.location, location.horizontalAccuracy >= 0,
-              location.horizontalAccuracy <= 100, abs(location.timestamp.timeIntervalSinceNow) < 30 else { return nil }
+              let location = manager.location,
+              CLLocationCoordinate2DIsValid(location.coordinate),
+              ExpensePlace.usableAutomaticFix(accuracy: location.horizontalAccuracy, capturedAt: location.timestamp, now: Date()) else { return nil }
         return ExpensePlace(name: tr("当前位置", "Current location", "Lokasi semasa"),
             latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
             accuracyMeters: location.horizontalAccuracy, capturedAt: location.timestamp)
+    }
+    static func automaticPlace() async -> ExpensePlace? {
+        if Task.isCancelled { return nil }
+        if let cached = recentPlace() { return cached }
+        let locator = ExpensePlaceLocator()
+        let authorization = locator.manager.authorizationStatus
+        // Never prompt from a Shortcut or start unsupported background tracking.
+        guard authorization == .authorizedAlways ||
+                (authorization == .authorizedWhenInUse && UIApplication.shared.applicationState == .active) else { return nil }
+        locator.start(automatic: true)
+        defer { locator.cancel() }
+        // Location enrichment must not keep a payment waiting for a GPS/geocoder timeout.
+        for _ in 0..<40 {
+            if Task.isCancelled { return nil }
+            if let result = locator.result { return result }
+            if !locator.busy { return nil }
+            do { try await Task.sleep(for: .milliseconds(100)) } catch { return nil }
+        }
+        return recentPlace()
     }
     func start(automatic: Bool = false) {
         // New-entry presentation requests permission once through the system.
@@ -365,7 +385,7 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, @preconcurrency CLL
         guard busy else { return }
         switch manager.authorizationStatus {
         case .authorizedWhenInUse, .authorizedAlways:
-            manager.requestLocation()
+            manager.startUpdatingLocation()
             timeout?.cancel()
             timeout = Task { [weak self] in
                 do { try await Task.sleep(for: .seconds(20)) } catch { return }
@@ -386,14 +406,16 @@ final class ExpensePlaceLocator: NSObject, ObservableObject, @preconcurrency CLL
         message = tr("暂时无法定位，可重试或手动填写。", "Location unavailable. Retry or enter a place.", "Lokasi tidak tersedia. Cuba lagi atau isi tempat.")
     }
     func locationManager(_ manager: CLLocationManager, didUpdateLocations locations: [CLLocation]) {
-        guard busy, let location = locations.last, location.horizontalAccuracy >= 0,
-              abs(location.timestamp.timeIntervalSinceNow) < 60 else { return }
+        guard busy, let location = locations.last,
+              CLLocationCoordinate2DIsValid(location.coordinate),
+              ExpensePlace.usableAutomaticFix(accuracy: location.horizontalAccuracy, capturedAt: location.timestamp, now: Date()) else { return }
+        manager.stopUpdatingLocation()
         let token = requestID
         geocoder.reverseGeocodeLocation(location) { [weak self] marks, _ in
             Task { @MainActor in
                 guard let self, self.busy, self.requestID == token else { return }
                 let mark = marks?.first
-                let address = [mark?.thoroughfare, mark?.locality, mark?.administrativeArea, mark?.country]
+                let address = [mark?.subThoroughfare, mark?.thoroughfare, mark?.locality, mark?.administrativeArea, mark?.country]
                     .compactMap { $0 }.joined(separator: ", ")
                 let place = ExpensePlace(name: mark?.name ?? tr("当前位置", "Current location", "Lokasi semasa"), address: address,
                     latitude: location.coordinate.latitude, longitude: location.coordinate.longitude,
@@ -546,6 +568,13 @@ struct ExpensePlaceMapSheet: View {
         components?.queryItems = [URLQueryItem(name: "api", value: "1"), URLQueryItem(name: "query", value: query)]
         return components?.url
     }
+    private var searchGoogleMapsURL: URL? {
+        let term = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !term.isEmpty else { return nil }
+        var components = URLComponents(string: "https://www.google.com/maps/search/")
+        components?.queryItems = [URLQueryItem(name: "api", value: "1"), URLQueryItem(name: "query", value: term)]
+        return components?.url
+    }
     private var editing: Bool { onSave != nil }
     private var hasChanges: Bool { editing && initialized && draft != (initial ?? ExpensePlace(name: "")) }
     private var coordinate: CLLocationCoordinate2D? {
@@ -651,7 +680,9 @@ struct ExpensePlaceMapSheet: View {
                 visible = true
                 guard !initialized else { return }
                 select(initial, animated: false)
-                query = initial?.searchQuery(merchantHint: merchantHint) ?? merchantHint
+                // A phone's reverse-geocoded street must not constrain a merchant search.
+                query = merchantHint.trimmingCharacters(in: .whitespacesAndNewlines)
+                if query.isEmpty, initial?.capturedAt == nil { query = initial?.searchQuery() ?? "" }
                 initialized = true
             }
             .onDisappear { visible = false; cancelSearch(); merchantMatcher.cancel(); mapLocator.cancel(); movingMap = false }
@@ -782,6 +813,12 @@ struct ExpensePlaceMapSheet: View {
                     .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || searching)
             }
             if let message { Text(message).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading) }
+            if let url = searchGoogleMapsURL {
+                Link(destination: url) {
+                    Label(tr("在 Google Maps 搜索", "Search Google Maps", "Cari di Google Maps"), systemImage: "arrow.up.right.square")
+                        .font(.subheadline).frame(maxWidth: .infinity, alignment: .leading)
+                }.accessibilityIdentifier("place.searchGoogleMaps")
+            }
             ForEach(results.indices, id: \.self) { index in
                 let item = results[index]
                 Divider()
@@ -819,14 +856,15 @@ struct ExpensePlaceMapSheet: View {
         merchantMatcher.cancel(); cancelSearch(); mapLocator.cancel(); searchFocused = false; message = nil; searching = true
         let token = searchID
         let request = MKLocalSearch.Request(); request.naturalLanguageQuery = text
-        if let center { request.region = MKCoordinateRegion(center: center, latitudinalMeters: 10_000, longitudinalMeters: 10_000) }
+        // Explicit searches can target any city; do not bias them to the old map pin.
+        request.resultTypes = [.address, .pointOfInterest]
         let operation = MKLocalSearch(request: request); search = operation
         searchTask = Task { @MainActor in
             do {
                 let response = try await operation.start()
                 guard visible, !Task.isCancelled, token == searchID else { return }
-                results = Array(response.mapItems.prefix(6)); searching = false
-                if results.isEmpty { message = tr("没有找到地点，可修改搜索或手动填写。", "No places found. Try another search or enter the address.", "Tiada tempat ditemui. Cuba carian lain atau isi alamat.") }
+                results = Array(response.mapItems.prefix(12)); searching = false
+                if results.isEmpty { message = tr("试试店名加城市，或在 Google Maps 查找后手动填写。", "Try the place name and city, or find it on Google Maps and enter it manually.", "Cuba nama tempat dan bandar, atau cari di Google Maps dan isi sendiri.") }
             } catch {
                 guard visible, !Task.isCancelled, token == searchID else { return }
                 searching = false

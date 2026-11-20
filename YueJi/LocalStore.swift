@@ -113,9 +113,11 @@ extension Ledger {
         // The marker and money are committed in the same atomic ledger file replacement.
         if let place = delivery.place {
             if let id = result.expenseID, !expenses.contains(where: { $0.id == id }),
-               let index = copy.expenses.firstIndex(where: { $0.id == id }) { copy.expenses[index].place = place }
+               let index = copy.expenses.firstIndex(where: { $0.id == id }),
+               place.belongsToRecordingTime(copy.expenses[index].date) { copy.expenses[index].place = place }
             if let id = result.noticeID, !tngNotices.contains(where: { $0.id == id }),
-               let index = copy.tngNotices.firstIndex(where: { $0.id == id }) { copy.tngNotices[index].place = place }
+               let index = copy.tngNotices.firstIndex(where: { $0.id == id }),
+               place.belongsToRecordingTime(copy.tngNotices[index].date) { copy.tngNotices[index].place = place }
         }
         copy.seenEvents.insert(delivery.marker)
         self = try copy.validated()
