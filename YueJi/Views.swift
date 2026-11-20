@@ -177,6 +177,7 @@ private struct MonthSummaryMotion: ViewModifier {
 }
 
 struct EditorSaveLabel: View {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let saving: Bool
     var body: some View {
         // A checkmark, as sheets confirm in iOS 27 (Apple's UI kit); the accessibility
@@ -184,9 +185,11 @@ struct EditorSaveLabel: View {
         Image(systemName: "checkmark").fontWeight(.semibold)
             // Preserve the label's layout while the async save is running.
             .opacity(saving ? 0 : 1)
+            .scaleEffect(saving && !reduceMotion && ElegantMotion.enabled ? 0.88 : 1)
             .overlay {
-                if saving { ProgressView().controlSize(.small).allowsHitTesting(false) }
+                if saving { ProgressView().controlSize(.small).allowsHitTesting(false).transition(.opacity) }
             }
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : .easeInOut(duration: 0.18), value: saving)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(saving ? tr("正在保存", "Saving", "Menyimpan") : tr("保存", "Save", "Simpan"))
     }
@@ -1687,14 +1690,12 @@ extension AccountDirection {
 /// Use the same signs and colors for manual entries, bank notices and settlements.
 struct TransactionAmount: View {
     @Environment(\.locale) private var uiLocale
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let cents: Int
     let direction: AccountDirection
     var body: some View {
         let _ = uiLocale.identifier
         Text(direction.formattedAmount(cents)).foregroundStyle(direction.amountColor).monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText(value: direction == .outgoing ? -Double(cents) : Double(cents)))
-            .animation(reduceMotion ? nil : YueJiMotion.standard, value: cents)
+            .ledgerAmountMotion(direction == .outgoing ? -cents : cents)
     }
 }
 /// Source symbols describe how a record arrived, independently of its category.

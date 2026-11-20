@@ -241,6 +241,7 @@ struct FriendDetailView: View {
                         Text(friend.name).font(.title.bold())
                         Text(settled ? tr("已结清", "Settled", "Selesai") : settlementDirection(net, name: friend.name) + " · " + money(abs(net)))
                             .font(.subheadline).foregroundStyle(.secondary)
+                            .ledgerAmountMotion(net)
                         HStack(alignment: .top, spacing: 8) {
                             QuickActionButton(title: tr("结算", "Settle", "Selesaikan"), symbol: "arrow.left.arrow.right") {
                                 route = .settle
@@ -415,7 +416,9 @@ struct SettlementSelectionView: View {
                 Text(tr("选择未结清账目", "Select outstanding items", "Pilih rekod belum selesai"))
             } footer: { Text(tr("只结算选中的账目。未选中的余额保持不变。", "Only selected items are settled. Unselected balances stay outstanding.", "Hanya rekod dipilih diselesaikan. Baki tidak dipilih kekal tertunggak.")) }
             Section(tr("转账", "Transfer", "Pindahan")) {
-                LabeledContent(tr("所选净额", "Selected net balance", "Baki bersih dipilih"), value: money(abs(net)))
+                LabeledContent(tr("所选净额", "Selected net balance", "Baki bersih dipilih")) {
+                    Text(money(abs(net))).ledgerAmountMotion(net)
+                }
                 if let name = items.first?.friend { Text(settlementDirection(net, name: name)) }
                 if net != 0 {
                     if repaymentDirection == .neutral { Toggle(tr("部分付款", "Partial payment", "Bayaran separa"), isOn: $partial) }

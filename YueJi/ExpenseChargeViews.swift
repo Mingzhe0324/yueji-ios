@@ -541,6 +541,7 @@ private struct GooglePlaceImportSheet: View {
     private enum Field: Hashable { case input, name }
     let onSelect: (ExpensePlace) -> Void
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var input = ""
     @State private var name = ""
     @State private var preview: ExpensePlace?
@@ -588,9 +589,11 @@ private struct GooglePlaceImportSheet: View {
                             .disabled(name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || name.count > 500)
                             .accessibilityIdentifier("place.googleImport.use")
                     }
+                    .transition(reduceMotion || !ElegantMotion.enabled ? .identity : .opacity)
                 }
                 if let error { Text(error).font(.callout).foregroundStyle(.secondary) }
             }
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.content, value: preview != nil)
             .navigationTitle(tr("导入 Google 地点", "Import Google place", "Import tempat Google"))
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
@@ -982,7 +985,7 @@ struct ExpensePlaceMapSheet: View {
         selected = place; name = place?.name ?? ""; address = place?.address ?? ""
         if let coordinate {
             let region = MKCoordinateRegion(center: coordinate, latitudinalMeters: 800, longitudinalMeters: 800)
-            withAnimation(animated && !reduceMotion ? .easeInOut(duration: 0.35) : nil) { position = .region(region) }
+            withAnimation(animated && !reduceMotion && ElegantMotion.enabled ? .easeInOut(duration: 0.35) : nil) { position = .region(region) }
         }
     }
     private func cancelSearch() {

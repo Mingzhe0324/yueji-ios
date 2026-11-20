@@ -759,6 +759,61 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertFalse(isNonTransactionNotification("RM 2.21 was deducted via RFID for toll payment on 10-Nov-2026 16:35", title: "Successful Toll Payment"))
         XCTAssertFalse(isNonTransactionNotification("RM5 cashback has been credited to your wallet", title: "Cashback received"))
     }
+    func testCampaignRewardsAreFilteredWithoutPostingOrRequestingReview() throws {
+        let campaigns = [
+            ("TNG eWallet", "You have received RM10 voucher. Use it today!"),
+            ("TNG eWallet", "You have received RM10 cashback voucher. Redeem now!"),
+            ("Rewards", "RM5 cashback is waiting for you. Claim your reward!"),
+            ("Bank", "You are eligible for RM50 cashback on your next payment."),
+            ("Grab", "Pay just RM1 for your next ride. Free delivery today!"),
+            ("TNG", "Get RM5 off your next payment"),
+            ("TNG", "RM5 cashback has been credited when you spend RM50. Claim now!"),
+            ("TNG", "When you've paid RM20 you can receive RM5 cashback. Tap to claim."),
+            ("TNG", "Cashback will be credited after your next purchase of RM50"),
+            ("TNG", "您已收到RM10优惠券，点击领取"),
+            ("TNG", "您的返现资格已解锁，消费满RM50可获RM5"),
+            ("Grab", "车费低至RM1，立即下单，限时免运费"),
+            ("TNG", "Anda telah menerima RM5 baucar. Tebus sekarang!"),
+            ("Bank", "Anda layak mendapat pulangan tunai RM10. Tuntut sekarang"),
+            ("Grab", "Bayar hanya RM1. Penghantaran percuma hari ini"),
+            ("TNG", "You have received ＲＭ１０ voucher. Claim now!"),
+            ("TNG", "RM5 cash\u{2060}back available. Claim now!")
+        ]
+        for (title, body) in campaigns {
+            var ledger = Ledger()
+            let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: Date().addingTimeInterval(-3600), institution: "TNG eWallet")
+            ledger.bankAccounts = [account]
+            XCTAssertTrue(isNonTransactionNotification(body, title: title), body)
+            XCTAssertFalse(shouldReviewFinancialNotification(body, title: title), body)
+            XCTAssertNil(parseFinancialNotification(body, title: title), body)
+            let result = try ledger.applyDelivery(AutomationDelivery(kind: "notification", body: body, title: title, eventID: "ad-reference"))
+            XCTAssertFalse(result.shouldNotify, body)
+            XCTAssertTrue(ledger.expenses.isEmpty, body)
+            XCTAssertTrue(ledger.tngNotices.isEmpty, body)
+            XCTAssertEqual(ledger.bankAccounts, [account])
+            XCTAssertEqual(ledger.filteredNotifications.count, 1, body)
+        }
+    }
+    func testCompletedReceiptsKeepMoneyDespiteMarketingFooters() {
+        for body in [
+            "You have paid RM25.50 to Cafe. Claim your reward now!",
+            "RM5.25 cashback has been credited to your wallet. Tap to redeem a voucher.",
+            "Cashback of RM10.00 credited to your account. Free delivery today!",
+            "Your Visa 5785 has been charged MYR 41.88 for booking ABC. Get RM5 off your next ride.",
+            "You have paid SGD25.50 to Cafe. Claim your reward now!",
+            "You have paid RM25.50 to IF Cafe. Shop now!",
+            "Payment successful\nYou have paid RM25.50 to Cafe. Shop now!",
+            "已到账RM5.25。立即领取优惠券",
+            "Anda telah membayar RM25.50. Tebus sekarang!"
+        ] {
+            XCTAssertFalse(isNonTransactionNotification(body, title: ""), body)
+        }
+        for body in ["Payment RM18.50 at Cafe. Tap to view your receipt.",
+                     "Refund RM20.00 to your card. Click here to see details."] {
+            XCTAssertFalse(isNonTransactionNotification(body, title: ""), body)
+            XCTAssertTrue(shouldReviewFinancialNotification(body, title: ""), body)
+        }
+    }
     func testStreetParkingAutomaticallyRecordsRoundedHoursOnce() throws {
         var session = ParkingSession()
         session.startedAt = Date(timeIntervalSince1970: 1794355200)

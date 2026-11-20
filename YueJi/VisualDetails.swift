@@ -222,7 +222,7 @@ struct DrawnCheckmark: View {
             .onAppear {
                 guard progress == 0 else { return }
                 guard !reduceMotion, ElegantMotion.enabled else { progress = 1; return }
-                withAnimation(.easeOut(duration: 0.32).delay(0.14)) { progress = 1 }
+                withAnimation(.easeOut(duration: 0.28)) { progress = 1 }
             }
             .accessibilityHidden(true)
     }

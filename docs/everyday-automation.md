@@ -24,6 +24,28 @@ setup screen was visited.
 
 ## Verification
 
+### Advertisement filtering and functional motion
+
+- Promotional reward eligibility, voucher receipts, discounts and delivery/ride
+  offers are filtered locally in English, Chinese and Malay before parsing or AI
+  confirmation. Full-width text and common invisible characters are normalized
+  for detection; original notification text is retained in the recovery archive.
+- An unconditional completed money-movement sentence protects genuine receipts
+  with advertising footers. Conditional cashback promises and voucher amounts do
+  not qualify as cash receipts. Foreign-currency receipts remain eligible for
+  review; this filter does not grant automatic posting permission.
+- Ads do not create expenses, review items, account movements or user alerts.
+  The existing bounded filtered-notification archive remains available to restore
+  a misclassified notice for review. No classifier can guarantee every template.
+- Added regression cases cover campaigns, reward receipts, conditional wording,
+  real payment/refund/cashback receipts and notices with benign detail links.
+- Save controls cross-fade without changing size; review rows fade and shift six
+  points as their identities change; monetary values interpolate in place,
+  including friend balances and settlement selection. Google import previews
+  fade in and map movement follows the animation preference. Saved checkmarks
+  draw without the previous delay. Reduce Motion and the app animation setting
+  disable these effects; persistence never waits for an animation.
+
 ### Free location capture and parking
 
 - Automatic capture uses Core Location, with no Google API key or billing. A fix

@@ -1785,19 +1785,52 @@ func isSensitiveNotification(_ body: String, title: String) -> Bool {
     return false
 }
 func isPromotionalNotification(_ body: String, title: String) -> Bool {
-    let text = notificationText(title + " " + body)
-    let completedMoney = notificationMatches(body, #"\b(?:(?:RM|MYR)\s*[\d,.]+(?:\s+cashback)?\s+(?:was deducted|has been (?:credited|debited))|you(?:'ve| have) (?:paid|received|spent)\s+(?:RM|MYR)\s*[\d,.]+|payment of (?:RM|MYR)[\s\d.,]+ (?:to [^.!?]+ )?was successful)\b|(?:已到账|已扣款|付款成功|转账成功)\s*(?:RM|MYR)\s*[\d,.]+"#)
+    // Normalize campaign typography, without altering the original archived notice.
+    func normalized(_ value: String) -> String {
+        notificationText(value.precomposedStringWithCompatibilityMapping)
+            .replacingOccurrences(of: "’", with: "'")
+            .replacingOccurrences(of: "\u{2060}", with: "")
+            .replacingOccurrences(of: "\u{200D}", with: "")
+    }
+    let heading = normalized(title), content = normalized(body)
+    let text = heading + " " + content
+    // A completed receipt may contain a marketing footer. Only a standalone,
+    // unconditional money-movement sentence protects it from campaign filtering.
+    let sentences = body.components(separatedBy: .newlines).flatMap {
+        normalized($0).replacingOccurrences(of: #"(?<=[.!?])\s+|(?<=[。！])\s*"#, with: "\n", options: .regularExpression)
+            .split(separator: "\n").map(String.init)
+    }
+    let amount = #"(?:RM|MYR|USD|SGD|EUR|GBP|CNY|RMB|JPY|AUD|THB|IDR|INR|HKD)\s*[\d,.]+"#
+    let receiptPatterns = [
+        #"you(?:'ve| have)? (?:paid|received|spent|sent)\s+\#(amount)"#,
+        #"\#(amount)(?:\s+cashback)?\s+(?:(?:has been|was|is)\s+)?(?:successfully\s+)?(?:credited|debited|deducted|refunded|transferred)"#,
+        #"(?:your )?(?:cashback|refund|payment|transfer|purchase) (?:of )?\#(amount)\s+(?:(?:has been|was|is)\s+)?(?:credited|received|successful|completed)"#,
+        #"(?:your )?payment of \#(amount) to .+ was successful"#,
+        #"your (?:visa|mastercard|card|account).{0,70}(?:has been|was) (?:charged|debited|credited)\s+\#(amount)"#,
+        #"(?:您|你)?(?:已支付|已付款|已收到|已到账|已扣款|付款成功|转账成功)\s*\#(amount)"#,
+        #"anda (?:telah )?(?:membayar|menerima)\s+\#(amount)"#,
+        #"\#(amount)\s+(?:telah )?(?:dikreditkan|didebitkan|dibayar)"#
+    ]
+    let completedMoney = sentences.contains { sentence in
+        guard !notificationMatches(sentence, #"\b(?:if you|when you|when using|will be|could be|eligible for|qualify for|for example|jika anda|apabila anda|layak mendapat)\b|即可|可获|有机会|满足条件"#) else { return false }
+        guard !notificationMatches(sentence, amount + #"\s*(?:worth of\s+|cashback\s+)?(?:vouchers?|coupons?|points|baucar|kupon|优惠券|现金券|积分)"#) else { return false }
+        return notificationMatches(sentence, #"^\s*(?:"# + receiptPatterns.joined(separator: "|") + ")")
+    }
     // Explicit campaign titles are never payment evidence. Mixed payment receipts
     // may contain a marketing footer, so require completed money movement first.
-    if notificationMatches(title, #"\b(?:promotion|promo|offer|sale)\b"#) { return true }
-    if notificationMatches(body, #"^\s*(?:offer|promo(?:tion)?)\s*:"#) { return true }
+    if notificationMatches(heading, #"\b(?:promotion|promo|offer|sale)\b"#) { return true }
+    if notificationMatches(content, #"^\s*(?:offer|promo(?:tion)?)\s*:"#) { return true }
     if completedMoney { return false }
     if notificationMatches(text, #"\b(?:promotion|promo|cashback offer|reward points)\b|\boffer\s*:|限时优惠|促销|验证码|优惠活动|promosi"#) { return true }
-    let reward = notificationMatches(text, #"\b(?:cash\s?back|rewards?|discounts?|vouchers?|points)\b|返现|回扣|优惠券|pulangan tunai|ganjaran|diskaun"#)
+    let reward = notificationMatches(text, #"\b(?:cash\s?back|rewards?|discounts?|vouchers?|coupons?|points)\b|返现|回扣|优惠券|现金券|折扣|pulangan tunai|ganjaran|diskaun|baucar|kupon"#)
     let campaign = notificationMatches(text, #"\b(?:limited[- ]time|limited offer|offer ends|sale ends|shop now|claim now|tap to (?:claim|redeem|shop)|promo code|use code|minimum spend|spend (?:RM|MYR)\s*\d+.*(?:get|save|earn)|pay (?:with|using) .+ (?:and|to) (?:win|earn|save))\b|立即抢购|点击领取|限时抢购|满\s*\d+\s*减|立即兑换|限时折扣|belanja sekarang|tebus sekarang"#)
     let invitation = notificationMatches(text, #"\b(?:earn|get|enjoy|win|unlock|up to|stand a chance|when you (?:spend|pay)|make\s+\d+\s+(?:qr\s+)?payments?|dapatkan|sehingga|nikmati)\b|最高|可获|有机会|消费满"#)
     let solicitation = notificationMatches(text, #"\b(?:apply now|sign up|subscribe now|activate now|download now|exclusive deal|special offer|hurry|ends tonight|pay only|from (?:RM|MYR)\s*\d+|save (?:RM|MYR)\s*\d+)\b"#)
-    return campaign || solicitation || (reward && invitation)
+    let rewardReceipt = notificationMatches(text, #"\b(?:vouchers?|coupons?|baucar|kupon|reward points)\b|优惠券|现金券|积分|折扣码"#)
+        && notificationMatches(text, #"\b(?:received|credited|added|awarded|ready|waiting|available|expires?|redeem|claim|diterima|terima|tebus|tuntut)\b|到账|获得|领取|发放|兑换|到期|已入账"#)
+    let campaignAction = notificationMatches(text, #"\b(?:(?:tap|click) (?:here |now )?to (?:claim|redeem|shop|win|earn|save|collect)|claim (?:your|a)|redeem (?:your|a)|collect (?:your|a)|pay (?:just|only)\s*(?:RM|MYR)|(?:RM|MYR)\s*[\d,.]+\s*(?:off|deal)|(?:free|zero)[- ]?(?:delivery|shipping)|cashback (?:is )?(?:waiting|up for grabs)|cashback (?:will|can) be|(?:buy|get)\s+\d+\s+(?:get|free)|flash sale|payday sale|double[- ]date|bayar hanya|penghantaran percuma|tawaran istimewa)\b|点击(?:领取|抢购|兑换)|立即(?:领取|下单|抢购)|(?:仅需|只需|低至)\s*(?:RM|MYR)|免运费|免费配送|限时|返现资格|领取资格|专属优惠"#)
+    let eligibleReward = reward && notificationMatches(text, #"\b(?:eligible|qualify|claim|redeem|collect|available|waiting|expires?|limited|exclusive|unlock|will receive|can receive|layak|tebus|tuntut|eksklusif)\b|可享|可得|领取|最高|资格|专属|到期|限量"#)
+    return campaign || solicitation || rewardReceipt || campaignAction || eligibleReward || (reward && invitation)
 }
 func isNonTransactionNotification(_ body: String, title: String) -> Bool {
     let text = notificationText(title + " " + body)

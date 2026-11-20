@@ -12,6 +12,21 @@ enum ElegantMotion {
     static var enabled: Bool { UserDefaults.standard.object(forKey: "playfulAnimations") as? Bool ?? true }
 }
 
+/// Animate a changed monetary value in place; never count up from a fake opening balance.
+private struct LedgerAmountMotion: ViewModifier {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var animations = true
+    let cents: Int
+    func body(content: Content) -> some View {
+        content.monospacedDigit()
+            .contentTransition(reduceMotion || !animations ? .identity : .numericText(value: Double(cents)))
+            .animation(reduceMotion || !animations ? nil : YueJiMotion.content, value: cents)
+    }
+}
+extension View {
+    func ledgerAmountMotion(_ cents: Int) -> some View { modifier(LedgerAmountMotion(cents: cents)) }
+}
+
 /// The tone of an empty or status state. It picks a fitting symbol; there is no character.
 enum IslandMood: String { case happy, excited, worried, sad, sleepy }
 

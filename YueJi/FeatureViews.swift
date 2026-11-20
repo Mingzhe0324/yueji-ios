@@ -2258,6 +2258,7 @@ private struct FilteredNotificationDetail: View {
 
 struct TNGInboxView: View {
     @Environment(\.locale) private var uiLocale
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @EnvironmentObject var model: LedgerModel
     @State var pendingOnly = true
     @State var reviewFilter: BookkeepingReviewFilter = .all
@@ -2303,12 +2304,15 @@ struct TNGInboxView: View {
                         }.tint(.gray)
                     }
                     .accessibilityAction(named: tr("忽略", "Ignore", "Abaikan")) { dismiss(item) }
+                    .transition(reduceMotion || !ElegantMotion.enabled ? .identity : .opacity.combined(with: .offset(y: 6)))
                 }
                 } footer: {
                     if !model.readIndex.reviewItems.isEmpty {
                         Text(tr("左滑可忽略提醒，不更改账目或余额。", "Swipe left to ignore a reminder. Entries and balances stay unchanged.", "Leret kiri untuk abaikan peringatan. Rekod dan baki tidak berubah."))
                     }
                 }
+                .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.rows,
+                           value: model.readIndex.reviewItems.filter { reviewFilter == .all || $0.reason == reviewFilter }.map(\.id))
             } else {
             ForEach(model.readIndex.notices) { item in
                 NavigationLink {
