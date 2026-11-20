@@ -806,6 +806,46 @@ private struct MoonWelcomeArtwork: View {
     }
 }
 
+/// Uses the same account-scoped nickname as Settings; refreshes on returning to the app.
+struct OverviewGreeting: View {
+    @ObservedObject private var cloud = CloudAccount.shared
+    @Environment(\.scenePhase) private var scenePhase
+
+    var body: some View {
+        let accountID = cloud.link?.userID.uuidString ?? cloud.email
+        OverviewProfileGreeting(accountID: accountID, signedIn: cloud.signedIn)
+            .id(accountID + (scenePhase == .active ? ".active" : ".inactive"))
+    }
+}
+
+private struct OverviewProfileGreeting: View {
+    let signedIn: Bool
+    @AppStorage private var nickname: String
+
+    init(accountID: String, signedIn: Bool) {
+        self.signedIn = signedIn
+        _nickname = AppStorage(wrappedValue: "", "accountProfile.name." + accountID)
+    }
+
+    private func greeting(at date: Date) -> String {
+        switch Calendar.current.component(.hour, from: date) {
+        case 5..<12: return tr("早上好", "Good morning", "Selamat pagi")
+        case 12..<18: return tr("下午好", "Good afternoon", "Selamat petang")
+        default: return tr("晚上好", "Good evening", "Selamat malam")
+        }
+    }
+
+    var body: some View {
+        TimelineView(.periodic(from: .now, by: 60)) { context in
+            let name = signedIn ? nickname.trimmingCharacters(in: .whitespacesAndNewlines) : ""
+            Text(greeting(at: context.date) + (name.isEmpty ? "" : tr("，", ", ", ", ") + name))
+                .font(.subheadline).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+                .accessibilityIdentifier("overview.greeting")
+        }
+    }
+}
+
 /// Packed avatar choices retain compatibility with earlier profile values.
 /// Shared profile keys keep the Settings summary and profile editor in sync.
 struct AccountSettingsCard: View {

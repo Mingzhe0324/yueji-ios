@@ -816,6 +816,10 @@ struct DashboardView: View {
                 // The header sits on the page itself, like a banking app's balance: month,
                 // amount and quick actions, then the cards.
                 Section {
+                    OverviewGreeting()
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
+                        .listRowInsets(EdgeInsets(top: 4, leading: 20, bottom: 8, trailing: 20))
                     MonthPicker(month: monthBinding)
                         .listRowBackground(Color.clear)
                         .listRowSeparator(.hidden)
