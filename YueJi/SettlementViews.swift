@@ -503,7 +503,7 @@ struct SettlementReviewView: View {
                     .yuejiListSurface().navigationTitle(tr("预览结算", "Review settlement", "Semak penyelesaian")).navigationBarTitleDisplayMode(.inline)
                     .transition(.opacity)
             }
-        }.animation(reduceMotion ? nil : YueJiMotion.standard, value: savedID)
+        }.animation(!reduceMotion && ElegantMotion.enabled ? YueJiMotion.content : nil, value: savedID)
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
     private func confirm() {
@@ -528,9 +528,7 @@ struct SettlementDetailView: View {
     @EnvironmentObject var model: LedgerModel
     let id: String
     var celebrateConfirmation = false
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Namespace private var expenseTransition
-    @State private var confirmationAppeared = false
     @State private var undo = false
     private var record: FriendSettlement? { model.settlement(id: id) }
     var body: some View {
@@ -542,8 +540,7 @@ struct SettlementDetailView: View {
                         Label {
                             Text(tr("已确认", "Confirmed", "Disahkan"))
                         } icon: {
-                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
-                                .symbolEffect(.bounce, value: confirmationAppeared)
+                            SettlementConfirmationMark(animate: celebrateConfirmation)
                         }.font(.subheadline.weight(.medium))
                     }
                     Text(settlementDirection(record.transfer, name: record.name)).font(.headline)
@@ -607,7 +604,6 @@ struct SettlementDetailView: View {
                 }
             } else { Text(tr("记录不存在", "Record not found", "Rekod tidak ditemui")) }
         }.yuejiListSurface().navigationTitle(tr("结算详情", "Settlement details", "Butiran penyelesaian")).navigationBarTitleDisplayMode(.inline)
-            .onAppear { if celebrateConfirmation && !reduceMotion { confirmationAppeared = true } }
             .confirmationDialog(tr("恢复欠款？原消费不变，银行付款保留并恢复待确认，不会重复记账。", "Restore debts? Spending stays unchanged. The bank payment remains for review and is never duplicated.", "Pulihkan hutang? Belanja kekal. Bayaran bank kekal untuk semakan dan tidak digandakan."), isPresented: $undo, titleVisibility: .visible) {
                 Button(tr("确认撤销", "Confirm undo", "Sahkan pembatalan"), role: .destructive) { model.perform(key: "settlement-" + id, action: { [id] in try $0.undoSettlement(id: id) }, completion: { _ in model.showSaved() }) }
             }
@@ -724,7 +720,7 @@ struct NoticeNetSettlementView: View {
     }
     var body: some View {
         Group {
-            if let savedID { SettlementDetailView(id: savedID) }
+            if let savedID { SettlementDetailView(id: savedID, celebrateConfirmation: true) }
             else {
                 Form {
                     if let notice = model.notice(id: noticeID) { NoticeAccountSection(notice: notice) }

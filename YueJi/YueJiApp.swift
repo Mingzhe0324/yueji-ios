@@ -23,6 +23,7 @@ struct RestoredLedgerFeedback {
     let date = Date()
     let expenseIDs: Set<String>
     let noticeIDs: Set<String>
+    var savedExpenseID: String? = nil
 }
 
 @MainActor final class LedgerModel: ObservableObject {
@@ -239,7 +240,7 @@ struct RestoredLedgerFeedback {
         } catch { self.error = error.localizedDescription }
     }
     func highlightSavedExpense(_ id: String) {
-        restoredFeedback = RestoredLedgerFeedback(expenseIDs: [id], noticeIDs: [])
+        restoredFeedback = RestoredLedgerFeedback(expenseIDs: [id], noticeIDs: [], savedExpenseID: id)
     }
     func showSaved(message: String? = nil, sound: FeedbackSounds.Cue = .saved, firstEntry: Bool = false) {
         feedbackMessage = message ?? tr("已保存", "Saved", "Disimpan")

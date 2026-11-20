@@ -683,6 +683,7 @@ private enum OverviewRoute: Hashable { case receipt, automation, savings, travel
 
 struct DashboardView: View {
     @Environment(\.locale) private var uiLocale
+    @Environment(\.ambientActive) private var isActive
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @Environment(\.dynamicTypeSize) private var typeSize
     var guideFocus: String? = nil
@@ -703,6 +704,15 @@ struct DashboardView: View {
     @State private var budgetText = ""
     @State private var budgeting = false
     @State private var recordingIncome = false
+    @State private var focusedSave: UUID?
+    private var savedFocusTarget: String? {
+        guard isActive, !adding, editingExpense == nil, path.isEmpty,
+              loadedSummary == model.overviewQuery(month: month),
+              let feedback = model.restoredFeedback, feedback.id != focusedSave,
+              feedback.date.timeIntervalSinceNow > -15, let id = feedback.savedExpenseID,
+              recentEntries.contains(where: { $0.id == id }) else { return nil }
+        return "expense:" + id
+    }
     private var month: Date { model.isPreview ? Date() : Date(timeIntervalSince1970: monthTimestamp) }
     private var monthBinding: Binding<Date> { Binding(get: { month }, set: { monthTimestamp = $0.timeIntervalSince1970 }) }
     @State private var summary = OverviewSnapshot()
@@ -869,6 +879,16 @@ struct DashboardView: View {
             }.yuejiDashboardSurface()
             .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                 ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
+                    .yuejiZoom(id: "expense:" + destination.id, namespace: navigationMotion)
+            }
+            .task(id: savedFocusTarget) {
+                guard let target = savedFocusTarget else { return }
+                await Task.yield()
+                guard !Task.isCancelled, savedFocusTarget == target else { return }
+                withAnimation(!reduceMotion && ElegantMotion.enabled ? YueJiMotion.content : nil) {
+                    guideScroll.scrollTo(target, anchor: .center)
+                }
+                focusedSave = model.restoredFeedback?.id
             }
             .navigationDestination(for: OverviewRoute.self) { route in
                 switch route {
@@ -989,7 +1009,9 @@ struct DashboardView: View {
             ForEach(recentEntries) { entry in
                 NavigationLink(value: LedgerExpenseDestination(id: entry.id)) {
                     ExpenseRow(entry: entry).foregroundStyle(.primary)
+                        .yuejiZoomSource(id: "expense:" + entry.id, namespace: navigationMotion)
                 }
+                .id("expense:" + entry.id)
                 .modifier(ExpenseContextActions(entry: entry,
                     edit: { guard !adding, editingExpense == nil else { return }; editingExpense = entry },
                     delete: { deletingExpense = entry }))
@@ -1810,12 +1832,12 @@ private struct RestoredRecordHighlight: ViewModifier {
         .task(id: model.restoredFeedback?.id) {
             highlighted = false
             guard let feedback = model.restoredFeedback,
-                  feedback.date.timeIntervalSinceNow > -3,
+                  feedback.date.timeIntervalSinceNow > (feedback.savedExpenseID == nil ? -3 : -15),
                   (notice ? feedback.noticeIDs : feedback.expenseIDs).contains(recordID) else { return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) { highlighted = true }
-            do { try await Task.sleep(for: .milliseconds(450)) }
+            withAnimation(!reduceMotion && ElegantMotion.enabled ? .easeOut(duration: 0.18) : nil) { highlighted = true }
+            do { try await Task.sleep(for: .milliseconds(1000)) }
             catch { highlighted = false; return }
-            withAnimation(reduceMotion ? nil : .easeOut(duration: 0.28)) { highlighted = false }
+            withAnimation(!reduceMotion && ElegantMotion.enabled ? .easeOut(duration: 0.28) : nil) { highlighted = false }
         }
     }
 }
@@ -1958,6 +1980,15 @@ struct ExpensesView: View {
     @State private var timeline = LedgerTimelineSnapshot()
     @State private var loadedQuery: LedgerTimelineQuery?
     @State private var scrollAnchors = LedgerScrollAnchors()
+    @State private var focusedSave: UUID?
+    // Never clear a filter or switch months just to play feedback.
+    private var savedFocusTarget: String? {
+        guard isActive, sheet == nil, path.isEmpty, loadedQuery == query,
+              let feedback = model.restoredFeedback, feedback.id != focusedSave,
+              feedback.date.timeIntervalSinceNow > -15, let id = feedback.savedExpenseID,
+              timeline.expenses.contains(where: { $0.id == id }) else { return nil }
+        return "expense:" + id
+    }
     private var query: LedgerTimelineQuery {
         LedgerTimelineQuery(revision: model.ledgerRevision, month: month, search: search, filter: filter, provider: providerFilter)
     }
@@ -2090,6 +2121,15 @@ struct ExpensesView: View {
                 }
             }
                 .coordinateSpace(name: "ledger-list")
+                .task(id: savedFocusTarget) {
+                    guard let target = savedFocusTarget else { return }
+                    await Task.yield()
+                    guard !Task.isCancelled, savedFocusTarget == target else { return }
+                    withAnimation(!reduceMotion && ElegantMotion.enabled ? YueJiMotion.content : nil) {
+                        listReader.scrollTo(target, anchor: .center)
+                    }
+                    focusedSave = model.restoredFeedback?.id
+                }
                 .navigationDestination(for: LedgerExpenseDestination.self) { destination in
                     ExpenseDetailView(id: destination.id, embeddedInNavigation: true)
                         .yuejiZoom(id: "expense:" + destination.id, namespace: expenseTransition)

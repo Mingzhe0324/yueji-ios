@@ -228,6 +228,39 @@ struct DrawnCheckmark: View {
     }
 }
 
+/// A single, decorative convergence after a settlement has been committed.
+/// Amounts and confirmation text stay readable throughout; this never delays saving.
+struct SettlementConfirmationMark: View {
+    let animate: Bool
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var animations = true
+    @State private var revealed = false
+    @State private var played = false
+    private var showsResult: Bool { revealed || !animate || reduceMotion || !animations }
+
+    var body: some View {
+        ZStack {
+            Circle().fill(IslandPalette.lagoon).frame(width: 7, height: 7)
+                .offset(x: showsResult ? 0 : -8, y: showsResult ? 0 : -3)
+                .opacity(showsResult ? 0 : 1)
+            Circle().fill(IslandPalette.pumpkin).frame(width: 7, height: 7)
+                .offset(x: showsResult ? 0 : 8, y: showsResult ? 0 : 3)
+                .opacity(showsResult ? 0 : 1)
+            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                .scaleEffect(showsResult ? 1 : 0.75).opacity(showsResult ? 1 : 0)
+        }
+        .frame(width: 24, height: 24).accessibilityHidden(true)
+        .task {
+            guard !played else { return }
+            played = true
+            guard animate, !reduceMotion, animations else { revealed = true; return }
+            await Task.yield()
+            guard !Task.isCancelled else { revealed = true; return }
+            withAnimation(.easeInOut(duration: 0.38)) { revealed = true }
+        }
+    }
+}
+
 private struct CheckmarkShape: Shape {
     func path(in rect: CGRect) -> Path {
         var path = Path()
