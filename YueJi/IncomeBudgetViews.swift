@@ -504,21 +504,17 @@ struct BankTransferEditor: View {
     @State private var distinct = false
     @State private var unknownIsIncoming: Bool? = nil
     private var noticeIncoming: Bool { notice?.kind == "incoming" || (notice?.kind == "unknown" && unknownIsIncoming == true) }
+    private var requiredPairedID: String? { notice.flatMap { model.ledger.ownTransferPeerID(for: $0.id) } }
     private var duplicateNeedsReview: Bool { notice?.possibleDuplicate == true || model.notice(id: pairedID)?.possibleDuplicate == true }
     private var pairedNotices: [TNGNotice] {
         guard let notice else { return [] }
-        return model.ledger.tngNotices.filter { other in
-            other.id != notice.id && other.cents == notice.cents && other.settlementID == nil &&
-            (other.resolution == nil || other.resolution == "ownTransfer") &&
-            other.kind != "unknown" && ((other.kind == "incoming") != noticeIncoming) &&
-            (["pending", "transfer", "recorded", "ownTransfer"].contains(other.status) || (other.status == "ignored" && other.resolution == "ownTransfer")) &&
-            !model.ledger.bankTransfers.contains(where: { ($0.noticeIDs ?? []).contains(other.id) })
-        }
+        return model.ledger.ownTransferPairCandidates(noticeID: notice.id, incoming: noticeIncoming)
     }
     private var existingTransfers: [BankTransfer] {
         guard let notice else { return [] }
         return model.ledger.bankTransfers.filter { transfer in
             transfer.cents == notice.cents && (transfer.noticeIDs ?? []).count < 2 &&
+            (requiredPairedID.map { (transfer.noticeIDs ?? []).contains($0) } ?? true) &&
             !(transfer.noticeIDs ?? []).contains(notice.id) &&
             !(transfer.noticeIDs ?? []).contains(where: { id in model.notice(id: id).map { ($0.kind == "incoming") == noticeIncoming } ?? false }) &&
             (notice.bankAccountID == nil || notice.bankAccountID == (noticeIncoming ? transfer.toAccountID : transfer.fromAccountID))
@@ -582,10 +578,12 @@ struct BankTransferEditor: View {
                 }
                 if notice != nil, existingID.isEmpty, !pairedNotices.isEmpty {
                     Section {
-                        Picker(tr("另一边通知（可选）", "Other notification (optional)", "Notifikasi sebelah lagi (pilihan)"), selection: $pairedID) {
-                            Text(tr("只有这边通知", "Only this notification", "Notifikasi ini sahaja")).tag("")
+                        Picker(requiredPairedID == nil
+                               ? tr("另一边通知（可选）", "Other notification (optional)", "Notifikasi sebelah lagi (pilihan)")
+                               : tr("已配对的另一边通知", "Paired notification", "Notifikasi berpasangan"), selection: $pairedID) {
+                            if requiredPairedID == nil { Text(tr("只有这边通知", "Only this notification", "Notifikasi ini sahaja")).tag("") }
                             ForEach(pairedNotices) { other in Text(sourceLabel(other.provider) + " · " + dateLabel(other.date, time: true)).tag(other.id) }
-                        }
+                        }.disabled(requiredPairedID != nil)
                     }
                 }
                 if duplicateNeedsReview {
@@ -610,7 +608,7 @@ struct BankTransferEditor: View {
             .interactiveDismissDisabled(saving)
             .onAppear { initialize() }
             .onChange(of: unknownIsIncoming) { _, _ in
-                existingID = ""; pairedID = ""
+                existingID = ""; pairedID = requiredPairedID ?? ""
                 fromID = noticeIncoming ? "" : (notice?.bankAccountID ?? "")
                 toID = noticeIncoming ? (notice?.bankAccountID ?? "") : ""
             }
@@ -639,7 +637,7 @@ struct BankTransferEditor: View {
             fromID = notice.kind == "incoming" || notice.kind == "unknown" ? "" : (notice.bankAccountID ?? "")
             toID = notice.kind == "incoming" ? (notice.bankAccountID ?? "") : ""
             amount = notice.cents.map { Currency.input($0, "MYR") } ?? ""
-            date = min(notice.date, Date()); pairedID = notice.relatedRecordID ?? ""
+            date = min(notice.date, Date()); pairedID = requiredPairedID ?? ""
         } else {
             fromID = initialAccountID ?? model.ledger.bankAccounts.first?.id ?? ""
             toID = model.ledger.bankAccounts.first { $0.id != fromID }?.id ?? ""
@@ -652,7 +650,8 @@ struct BankTransferEditor: View {
                                         note: note.trimmingCharacters(in: .whitespacesAndNewlines), noticeIDs: original?.noticeIDs)
             let before = original
             if let notice {
-                let pair = pairedID.isEmpty ? nil : model.notice(id: pairedID)
+                let selectedPairID = requiredPairedID ?? pairedID
+                let pair = selectedPairID.isEmpty ? nil : model.notice(id: selectedPairID)
                 let existingID = existingID.isEmpty ? nil : existingID
                 let distinct = distinct
                 let direction = unknownIsIncoming

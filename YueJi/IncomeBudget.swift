@@ -47,6 +47,28 @@ struct BankTransfer: Codable, Identifiable, Equatable {
 }
 
 extension Ledger {
+    /// Legacy transfers paired notices before BankTransfer owned the two movements.
+    /// Preserve those links when upgrading, including a surviving reverse-only link.
+    func ownTransferPeerID(for noticeID: String) -> String? {
+        guard let notice = tngNotices.first(where: { $0.id == noticeID }) else { return nil }
+        if notice.resolution == "ownTransfer", let peer = notice.relatedRecordID { return peer }
+        return tngNotices.first { $0.id != noticeID && $0.resolution == "ownTransfer" && $0.relatedRecordID == noticeID }?.id
+    }
+
+    func ownTransferPairCandidates(noticeID: String, incoming: Bool) -> [TNGNotice] {
+        guard let notice = tngNotices.first(where: { $0.id == noticeID }) else { return [] }
+        let required = ownTransferPeerID(for: noticeID)
+        return tngNotices.filter { other in
+            other.id != noticeID && (required == nil || required == other.id) &&
+            (ownTransferPeerID(for: other.id) == nil || ownTransferPeerID(for: other.id) == noticeID) &&
+            other.cents == notice.cents && other.settlementID == nil &&
+            (other.resolution == nil || other.resolution == "ownTransfer") &&
+            (other.kind == "unknown" ? required == other.id : (other.kind == "incoming") != incoming) &&
+            (["pending", "transfer", "recorded", "ownTransfer"].contains(other.status) || (other.status == "ignored" && other.resolution == "ownTransfer")) &&
+            !bankTransfers.contains(where: { ($0.noticeIDs ?? []).contains(other.id) })
+        }.sorted { $0.date > $1.date }
+    }
+
     /// A single transfer owns both balance movements. Notifications are evidence,
     /// never a second credit/debit after they have been linked.
     mutating func resolveOwnAccountTransfer(noticeIDs: [String], fromAccountID: String, toAccountID: String,
@@ -65,6 +87,16 @@ extension Ledger {
         }
         let merged = Array(Set((transfer.noticeIDs ?? []) + noticeIDs)).sorted()
         guard merged.count <= 2 else { throw LedgerError.invalid("Transfer already has both notifications") }
+        // The explicit direction belongs to the notice that opened the editor,
+        // never to every unknown notice in a legacy pair (nor to sorted-ID order).
+        let primary = tngNotices.first { $0.id == noticeIDs[0] }
+        let primaryIncoming: Bool? = primary.flatMap { notice in
+            if notice.kind != "unknown" { return notice.kind == "incoming" }
+            if let unknownIsIncoming { return unknownIsIncoming }
+            if notice.bankAccountID == toAccountID { return true }
+            if notice.bankAccountID == fromAccountID { return false }
+            return nil
+        }
         var incoming = 0, outgoing = 0
         for id in merged {
             guard let n = copy.tngNotices.firstIndex(where: { $0.id == id }),
@@ -74,7 +106,14 @@ extension Ledger {
             let notice = copy.tngNotices[n]
             let isIncoming: Bool
             if notice.kind == "unknown" {
-                guard let direction = unknownIsIncoming ?? notice.bankAccountID.map({ $0 == toAccountID }) else {
+                let direction: Bool?
+                if id == noticeIDs[0] { direction = primaryIncoming }
+                else if ownTransferPeerID(for: id) == noticeIDs[0], let primaryIncoming {
+                    direction = !primaryIncoming
+                } else if notice.bankAccountID == toAccountID { direction = true }
+                else if notice.bankAccountID == fromAccountID { direction = false }
+                else { direction = nil }
+                guard let direction else {
                     throw LedgerError.invalid(tr("请选择通知是转入还是转出。", "Choose whether this notice is incoming or outgoing.", "Pilih sama ada notifikasi ini wang masuk atau keluar."))
                 }
                 isIncoming = direction
@@ -93,7 +132,7 @@ extension Ledger {
                 !merged.contains(other.id) && paymentIdentity(other) == identity &&
                 (["recorded", "income", "repayment", "reimbursement", "settlement"].contains(other.status) || bankTransfers.contains { ($0.noticeIDs ?? []).contains(other.id) })
             }) { throw LedgerError.invalid("This bank reference is already recorded") }
-            if let peer = notice.relatedRecordID, notice.resolution == "ownTransfer", !merged.contains(peer) {
+            if let peer = ownTransferPeerID(for: id), !merged.contains(peer) {
                 throw LedgerError.invalid(tr("请同时关联原来配对的另一侧通知。", "Include the previously paired notification too.", "Sertakan notifikasi pasangan terdahulu juga."))
             }
             if let expenseID = notice.expenseID {

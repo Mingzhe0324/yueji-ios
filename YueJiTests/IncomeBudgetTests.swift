@@ -355,6 +355,77 @@ final class IncomeBudgetTests: XCTestCase {
         XCTAssertEqual(ledger.bankBalance(to), 2000) // Already included in the opening balance.
     }
 
+    func testLegacyPairedTransferWithUnknownDirectionsUpgradesBothAccountsOnce() throws {
+        for incomingFirst in [true, false] {
+            for unknownPeer in [true, false] {
+                let (base, from, to, date) = ownTransferFixture()
+                var ledger = base
+                var primary = ownTransferNotice(incoming: incomingFirst, accountID: incomingFirst ? to.id : from.id, date: date)
+                var peer = ownTransferNotice(incoming: !incomingFirst, accountID: incomingFirst ? from.id : to.id, date: date)
+                // Sorting reverses the submitted order: direction must stay with primary.
+                primary.id = "z-primary"; peer.id = "a-peer"
+                primary.kind = "unknown"
+                if unknownPeer { peer.kind = "unknown"; peer.bankAccountID = nil }
+                primary.cents = 10000; peer.cents = 10000
+                ledger.tngNotices = [primary, peer]
+                try ledger.resolveNotice(id: primary.id, purpose: "ownTransfer", party: "Me",
+                                         cents: 10000, date: date, relatedID: peer.id)
+                XCTAssertEqual(ledger.ownTransferPairCandidates(noticeID: primary.id, incoming: incomingFirst).map(\.id), [peer.id])
+                let before = ledger.tngNotices
+                XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [primary.id, peer.id], fromAccountID: from.id,
+                    toAccountID: to.id, cents: 10000, date: date, unknownIsIncoming: !incomingFirst))
+                XCTAssertEqual(ledger.tngNotices, before)
+                XCTAssertTrue(ledger.bankTransfers.isEmpty)
+                try ledger.resolveOwnAccountTransfer(noticeIDs: [primary.id, peer.id], fromAccountID: from.id,
+                    toAccountID: to.id, cents: 10000, date: date, unknownIsIncoming: incomingFirst)
+                XCTAssertEqual(ledger.bankBalance(from), 0)
+                XCTAssertEqual(ledger.bankBalance(to), 12000)
+                XCTAssertEqual(ledger.bankTransfers.count, 1)
+                XCTAssertTrue(ledger.expenses.isEmpty)
+                XCTAssertTrue(ledger.incomes.isEmpty)
+                XCTAssertEqual(ledger.tngNotices.first { $0.id == primary.id }?.kind, incomingFirst ? "incoming" : "transfer")
+                XCTAssertEqual(ledger.tngNotices.first { $0.id == peer.id }?.kind, incomingFirst ? "transfer" : "incoming")
+                ledger = try JSONDecoder().decode(Ledger.self, from: JSONEncoder().encode(ledger)).validated()
+                let transfer = try XCTUnwrap(ledger.bankTransfers.first)
+                XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [primary.id, peer.id],
+                    fromAccountID: from.id, toAccountID: to.id, cents: 10000, date: date, unknownIsIncoming: incomingFirst))
+                XCTAssertEqual(ledger.bankTransfers, [transfer])
+                XCTAssertEqual(ledger.bankBalance(from), 0)
+                XCTAssertEqual(ledger.bankBalance(to), 12000)
+                try ledger.deleteBankTransfer(transfer)
+                XCTAssertEqual(ledger.bankBalance(from), 10000)
+                XCTAssertEqual(ledger.bankBalance(to), 2000)
+            }
+        }
+    }
+
+    func testOwnTransferCandidatesDoNotStealSameAmountPreviouslyPairedNotices() throws {
+        let (base, from, to, date) = ownTransferFixture()
+        var ledger = base
+        let outgoing = ownTransferNotice(incoming: false, accountID: from.id, date: date)
+        let incoming = ownTransferNotice(incoming: true, accountID: to.id, date: date)
+        let unrelated = ownTransferNotice(incoming: false, accountID: from.id, date: date.addingTimeInterval(-1))
+        ledger.tngNotices = [outgoing, incoming, unrelated]
+        try ledger.resolveNotice(id: outgoing.id, purpose: "ownTransfer", party: "Me", cents: 1000, date: date, relatedID: incoming.id)
+        XCTAssertEqual(ledger.ownTransferPeerID(for: outgoing.id), incoming.id)
+        XCTAssertEqual(ledger.ownTransferPairCandidates(noticeID: outgoing.id, incoming: false).map(\.id), [incoming.id])
+        XCTAssertTrue(ledger.ownTransferPairCandidates(noticeID: unrelated.id, incoming: false).isEmpty)
+        let before = ledger.tngNotices
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [unrelated.id, incoming.id],
+            fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date))
+        XCTAssertEqual(ledger.tngNotices, before)
+        XCTAssertTrue(ledger.bankTransfers.isEmpty)
+        // A surviving reverse link is still a required pair, not a free candidate.
+        ledger.tngNotices[0].relatedRecordID = nil
+        XCTAssertEqual(ledger.ownTransferPeerID(for: outgoing.id), incoming.id)
+        XCTAssertThrowsError(try ledger.resolveOwnAccountTransfer(noticeIDs: [outgoing.id],
+            fromAccountID: from.id, toAccountID: to.id, cents: 1000, date: date))
+        try ledger.resolveOwnAccountTransfer(noticeIDs: [outgoing.id, incoming.id], fromAccountID: from.id,
+            toAccountID: to.id, cents: 1000, date: date)
+        XCTAssertEqual(ledger.bankBalance(from), 9000) // The unrelated unconfirmed notice is not posted.
+        XCTAssertEqual(ledger.bankBalance(to), 3000)
+    }
+
     func testUnknownTransferRequiresExplicitDirectionAndDuplicateReview() throws {
         let (base, from, to, date) = ownTransferFixture()
         var ledger = base
