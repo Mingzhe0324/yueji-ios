@@ -873,15 +873,22 @@ struct IncomingRepaymentLine: Identifiable, Equatable {
 
 extension Ledger {
     /// The picker, preview and writer must use the same date and outstanding balance.
-    func incomingRepaymentItems(friend: String, date: Date) -> [FriendDebtItem] {
+    func incomingRepaymentCapacity(_ item: FriendDebtItem) -> Int {
+        guard let share = item.expense.shares.first(where: { $0.id == item.shareID }) else { return 0 }
+        // Previously settled entries need their original settlement retained, not a new receipt.
+        if hasActiveSettlement(expenseID: item.expense.id) { return max(0, item.balance) }
+        return max(0, min(share.cents - share.repaid, item.balance + share.refunded))
+    }
+    func incomingRepaymentItems(friend: String, date: Date, includeRefunded: Bool = false) -> [FriendDebtItem] {
         let key = friendKey(friend)
         return friendDebtItems.filter {
-            friendKey($0.friend) == key && $0.expense.paidByFriend == nil && $0.balance > 0
+            friendKey($0.friend) == key && $0.expense.paidByFriend == nil
+            && (includeRefunded ? incomingRepaymentCapacity($0) > 0 : $0.balance > 0)
             && Calendar.current.startOfDay(for: $0.expense.date) <= date
         }
     }
     func incomingRepaymentRounding(friend: String, cents: Int, date: Date, selected: Set<String>) throws -> Int {
-        let balance = incomingRepaymentItems(friend: friend, date: date).filter { selected.contains($0.expense.id) }.reduce(0) { $0 + $1.balance }
+        let balance = incomingRepaymentItems(friend: friend, date: date, includeRefunded: true).filter { selected.contains($0.expense.id) }.reduce(0) { $0 + incomingRepaymentCapacity($1) }
         let excess = cents - balance
         guard balance > 0, (1...100).contains(excess) else { throw LedgerError.invalid("Excess repayment rounding must be between RM0.01 and RM1.00.") }
         var preview = self
@@ -996,7 +1003,9 @@ extension Ledger {
         guard cents > 0 else { throw reviewError("请输入大于零的还款金额。", "Enter a positive repayment amount.", "Masukkan amaun bayaran balik positif.") }
         guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         let indices = expenses.indices.sorted { expenses[$0].date == expenses[$1].date ? expenses[$0].id < expenses[$1].id : expenses[$0].date < expenses[$1].date }
-        let eligibleIDs = Set(incomingRepaymentItems(friend: key, date: date).map(\.id))
+        let eligibleItems = incomingRepaymentItems(friend: key, date: date, includeRefunded: selectedExpenseIDs != nil)
+        let eligibleIDs = Set(eligibleItems.map(\.id))
+        let capacities = Dictionary(uniqueKeysWithValues: eligibleItems.map { ($0.id, selectedExpenseIDs == nil ? max(0, $0.balance) : incomingRepaymentCapacity($0)) })
         let eligible = indices.flatMap { i in expenses[i].shares.indices.compactMap { j -> (Int, Int)? in
             (selectedExpenseIDs == nil || selectedExpenseIDs!.contains(expenses[i].id)) && eligibleIDs.contains(FriendDebtItem.key(expenses[i].id, expenses[i].shares[j].id)) ? (i, j) : nil
         } }
@@ -1008,14 +1017,25 @@ extension Ledger {
                 throw reviewError("所选欠款已改变，请重新选择。", "Selected debts changed. Select them again.", "Hutang dipilih telah berubah. Pilih semula.")
             }
         }
-        let available = eligible.reduce(0, { $0 + outstanding(expense: expenses[$1.0], share: expenses[$1.0].shares[$1.1]) })
+        let available = eligible.reduce(0) { $0 + (capacities[FriendDebtItem.key(expenses[$1.0].id, expenses[$1.0].shares[$1.1].id)] ?? 0) }
         guard cents <= available else {
             throw reviewError("此收款日期可偿还的欠款只有 " + money(available) + "。请检查消费日期；还款不能早于消费。可在下方编辑原账目。", "Only " + money(available) + " is repayable on this date. Check expense dates; repayment cannot precede spending. Edit the original entry below.", "Hanya " + money(available) + " boleh dibayar pada tarikh ini. Semak tarikh belanja; bayaran balik tidak boleh mendahului belanja. Edit rekod asal di bawah.")
         }
         var remaining = cents; let batch = UUID().uuidString
-        for (i, j) in eligible where remaining > 0 {
-            let part = min(remaining, outstanding(expense: expenses[i], share: expenses[i].shares[j]))
-            expenses[i].shares[j].repayments.append(Repayment(cents: part, date: date, batchID: batch)); remaining -= part
+        // Apply to selected outstanding debts first. Only explicitly selected refunded
+        // purchases may receive the remainder, creating a linked amount due back.
+        for refundPass in [false, true] {
+            for (i, j) in eligible where remaining > 0 {
+                let balance = outstanding(expense: expenses[i], share: expenses[i].shares[j])
+                let id = FriendDebtItem.key(expenses[i].id, expenses[i].shares[j].id)
+                let applied = expenses[i].shares[j].repayments.filter { $0.batchID == batch }.reduce(0) { $0 + $1.cents }
+                let capacity = refundPass ? max(0, (capacities[id] ?? 0) - applied) : max(0, balance)
+                let part = min(remaining, capacity)
+                if part > 0 {
+                    expenses[i].shares[j].repayments.append(Repayment(cents: part, date: date, batchID: batch))
+                    remaining -= part
+                }
+            }
         }
     }
     func duplicatePairs(limit: Int = 200) -> [DuplicatePair] {

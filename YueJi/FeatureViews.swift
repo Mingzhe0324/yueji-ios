@@ -4280,7 +4280,7 @@ struct TNGIncomingView: View {
     }
     @State private var reviewingRepayment = false
     private var repaymentItems: [FriendDebtItem] {
-        model.ledger.incomingRepaymentItems(friend: friend, date: date)
+        model.ledger.incomingRepaymentItems(friend: friend, date: date, includeRefunded: true)
     }
     private var laterRepaymentItems: [FriendDebtItem] {
         model.ledger.friendDebtItems.filter {
@@ -4289,7 +4289,10 @@ struct TNGIncomingView: View {
         }
     }
     private var selectedBalance: Int {
-        repaymentItems.filter { selectedDebts.contains($0.expense.id) }.reduce(0) { $0 + $1.balance }
+        repaymentItems.filter { selectedDebts.contains($0.expense.id) }.reduce(0) { $0 + max(0, $1.balance) }
+    }
+    private var selectedReceiptCapacity: Int {
+        repaymentItems.filter { selectedDebts.contains($0.expense.id) }.reduce(0) { $0 + model.ledger.incomingRepaymentCapacity($1) }
     }
     @State private var date = Date()
     @State private var distinct = false
@@ -4301,7 +4304,7 @@ struct TNGIncomingView: View {
     @State private var allocationRequest: IncomeAllocationRequest?
     @State private var removingAllocation: BudgetAllocation?
     private var notice: TNGNotice? { model.notice(id: id) }
-    private var friends: [FriendBalance] { model.friends.filter { $0.owed > 0 } }
+    private var friends: [FriendBalance] { model.friends.filter { !model.ledger.incomingRepaymentItems(friend: $0.id, date: date, includeRefunded: true).isEmpty } }
     @State private var reimbursementExpenseIDs = Set<String>()
     @State private var reimbursementPreview: [ReimbursementAllocation] = []
     @State private var reimbursementRounding = 0
@@ -4452,6 +4455,10 @@ struct TNGIncomingView: View {
                         if selected { selectedDebts.insert(item.expense.id) } else { selectedDebts.remove(item.expense.id) }
                     })) { FriendDebtRow(item: item) }
                     .accessibilityIdentifier("repayment.debt." + item.expense.id)
+                    if model.ledger.incomingRepaymentCapacity(item) > max(0, item.balance) {
+                        Text(tr("??????????????????????????????????", "Includes a refunded share. Select only if the receipt included this purchase; excess becomes money to return.", "Termasuk bahagian dipulangkan. Pilih hanya jika penerimaan merangkumi belanja ini; lebihan perlu dipulangkan."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if !laterRepaymentItems.isEmpty {
                     DisclosureGroup(tr("晚于收款日期的账目", "Expenses after receipt date", "Belanja selepas tarikh penerimaan")) {
@@ -4461,11 +4468,14 @@ struct TNGIncomingView: View {
                     }
                 }
                 LabeledContent(tr("所选未还金额", "Selected outstanding", "Baki dipilih"), value: money(selectedBalance))
+                if let cents = notice?.cents, cents > selectedBalance, cents <= selectedReceiptCapacity {
+                    LabeledContent(tr("??????", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(cents - max(0, selectedBalance)))
+                }
                 if roundingCandidate > 0 {
                     Toggle(tr("确认多收金额作为尾差", "Accept the extra amount as rounding", "Terima amaun tambahan sebagai pembundaran"), isOn: $acceptRounding)
                     Text(tr("实际收款保留，多收部分单独记录，不增加欠款或预算。", "The full receipt is retained. Excess is recorded separately, without increasing debt or budgets.", "Penerimaan penuh dikekalkan. Lebihan direkod berasingan tanpa menambah hutang atau bajet.")).font(.caption)
                     LabeledContent(tr("多收尾差", "Excess rounding", "Lebihan pembundaran"), value: money(roundingCandidate))
-                } else if let cents = notice?.cents, !selectedDebts.isEmpty, cents > selectedBalance {
+                } else if let cents = notice?.cents, !selectedDebts.isEmpty, cents > selectedReceiptCapacity {
                     Text(tr("所选欠款不足以抵扣这笔收款，请核对或选择其他账目。", "Select enough debt to cover this receipt, or review its purpose.", "Pilih hutang mencukupi untuk penerimaan ini atau semak tujuannya.")).foregroundStyle(.orange)
                 }
                 if roundingCandidate == 0, let cents = notice?.cents {
@@ -4504,7 +4514,7 @@ struct TNGIncomingView: View {
                 } else { confirm = true }
             }
                 .buttonStyle(LedgerPrimaryActionStyle())
-                .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: notice?.cents ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedBalance < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && !["ignored", "ownTransfer"].contains(purpose)))
+                .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: notice?.cents ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (purpose == "repayment" && (friend.isEmpty || selectedDebts.isEmpty || (selectedReceiptCapacity < (notice?.cents ?? 0) && !(acceptRounding && roundingCandidate > 0)))) || (notice?.possibleDuplicate == true && !distinct && !["ignored", "ownTransfer"].contains(purpose)))
         }
     }
     private func save() {
