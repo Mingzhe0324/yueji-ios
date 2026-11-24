@@ -2,6 +2,11 @@
 from pathlib import Path
 import json, re, plistlib, xml.etree.ElementTree as ET
 root = Path(__file__).resolve().parents[1]
+for source in (root / 'YueJi').glob('*.swift'):
+    contents = source.read_text(encoding='utf-8')
+    assert not re.search(r'"[^"\n]*\?{3,}[^"\n]*"', contents), f'Corrupted question-mark text in {source.name}'
+    assert '\ufffd' not in contents, f'Unicode replacement character in {source.name}'
+print('PASS: app source contains no corrupted question-mark strings or Unicode replacement characters.')
 text = (root / 'YueJi.xcodeproj/project.pbxproj').read_text()
 tokens = re.findall(r'"(?:\\.|[^"\\])*"|[{}()=;,]|\d+', text.split('\n', 1)[1])
 pos = 0

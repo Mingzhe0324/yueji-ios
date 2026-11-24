@@ -4387,7 +4387,11 @@ struct TNGIncomingView: View {
                             Section(line.expense.displayName) {
                                 Text(dateLabel(line.expense.date)).font(.caption).foregroundStyle(.secondary)
                                 LabeledContent(tr("本次抵扣", "Applied now", "Dibayar sekarang"), value: money(line.applied))
-                                LabeledContent(tr("还后剩余", "Left outstanding", "Baki selepas bayaran"), value: money(line.before - line.applied))
+                                if line.before < line.applied {
+                                    LabeledContent(tr("待退朋友", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(line.applied - line.before))
+                                } else {
+                                    LabeledContent(tr("还后剩余", "Left outstanding", "Baki selepas bayaran"), value: money(line.before - line.applied))
+                                }
                             }
                         }
                         Button(tr("确认还款", "Confirm repayment", "Sahkan bayaran balik")) { save() }
@@ -4453,10 +4457,18 @@ struct TNGIncomingView: View {
                 ForEach(repaymentItems) { item in
                     Toggle(isOn: Binding(get: { selectedDebts.contains(item.expense.id) }, set: { selected in
                         if selected { selectedDebts.insert(item.expense.id) } else { selectedDebts.remove(item.expense.id) }
-                    })) { FriendDebtRow(item: item) }
+                    })) {
+                        VStack(alignment: .leading, spacing: 5) {
+                            if item.balance == 0 && model.ledger.incomingRepaymentCapacity(item) > 0 {
+                                Text(item.expense.displayName).font(.headline)
+                                Text(dateLabel(item.expense.date)).font(.caption).foregroundStyle(.secondary)
+                                Text(tr("费用已退款，可关联原收款", "Purchase refunded; link the original receipt", "Belanja dipulangkan; pautkan penerimaan asal"))
+                            } else { FriendDebtRow(item: item) }
+                        }
+                    }
                     .accessibilityIdentifier("repayment.debt." + item.expense.id)
                     if model.ledger.incomingRepaymentCapacity(item) > max(0, item.balance) {
-                        Text(tr("??????????????????????????????????", "Includes a refunded share. Select only if the receipt included this purchase; excess becomes money to return.", "Termasuk bahagian dipulangkan. Pilih hanya jika penerimaan merangkumi belanja ini; lebihan perlu dipulangkan."))
+                        Text(tr("原收款包含这笔已退款费用时才勾选，多收部分将记为待退朋友。", "Includes a refunded share. Select only if the receipt included this purchase; excess becomes money to return.", "Termasuk bahagian dipulangkan. Pilih hanya jika penerimaan merangkumi belanja ini; lebihan perlu dipulangkan."))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -4469,7 +4481,7 @@ struct TNGIncomingView: View {
                 }
                 LabeledContent(tr("所选未还金额", "Selected outstanding", "Baki dipilih"), value: money(selectedBalance))
                 if let cents = notice?.cents, cents > selectedBalance, cents <= selectedReceiptCapacity {
-                    LabeledContent(tr("??????", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(cents - max(0, selectedBalance)))
+                    LabeledContent(tr("本次待退朋友", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(cents - max(0, selectedBalance)))
                 }
                 if roundingCandidate > 0 {
                     Toggle(tr("确认多收金额作为尾差", "Accept the extra amount as rounding", "Terima amaun tambahan sebagai pembundaran"), isOn: $acceptRounding)

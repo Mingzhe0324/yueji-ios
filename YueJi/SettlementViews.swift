@@ -500,15 +500,15 @@ struct RefundFriendPaymentView: View {
     private func makePlan() throws -> SettlementPlan {
         if let paymentID {
             guard let payment = model.notice(id: paymentID) else {
-                throw settlementError("?????????????????", "Payment is missing. Reopen the notification.", "Bayaran tiada. Buka semula notifikasi.")
+                throw settlementError("付款记录已不存在，请重新打开通知。", "Payment is missing. Reopen the notification.", "Bayaran tiada. Buka semula notifikasi.")
             }
             guard ["payment", "transfer"].contains(payment.kind),
                   ["pending", "transfer", "recorded"].contains(payment.status),
                   payment.settlementID == nil, payment.resolution == nil, (payment.repaymentIDs ?? []).isEmpty else {
-                throw settlementError("????????????????????????????????????", "This notice is not an available outgoing payment, or is already linked. Return to the notice to review its existing link.", "Notifikasi bukan bayaran keluar tersedia atau sudah dipautkan. Kembali untuk semak pautan asal.")
+                throw settlementError("这笔通知不是可关联的转出，或已有其他关联。请返回通知查看。", "This notice is not an available outgoing payment, or is already linked. Return to the notice to review its existing link.", "Notifikasi bukan bayaran keluar tersedia atau sudah dipautkan. Kembali untuk semak pautan asal.")
             }
             guard let cents = payment.cents, cents > 0, cents <= due else {
-                throw settlementError("?????????????????????????????????", "The outgoing amount exceeds the selected refund balance, or is missing. Review the notice and original purchase.", "Amaun keluar melebihi baki pulangan dipilih atau tiada. Semak notifikasi dan pembelian asal.")
+                throw settlementError("实际转出金额超过所选待退金额，或缺少有效金额。请核对通知和原账单。", "The outgoing amount exceeds the selected refund balance, or is missing. Review the notice and original purchase.", "Amaun keluar melebihi baki pulangan dipilih atau tiada. Semak notifikasi dan pembelian asal.")
             }
             return try model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: payment.date)
         }
