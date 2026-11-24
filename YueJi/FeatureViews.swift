@@ -1124,6 +1124,11 @@ struct RefundsView: View {
                             ForEach(e.shares) { share in
                                 if let cents = r.shares[share.id], cents > 0 { Text("\(share.name): \(money(cents))").font(.caption) }
                             }
+                            ForEach(model.ledger.tngNotices.filter { $0.resolution == "refund" && $0.relatedRecordID == e.id && $0.relatedRefundID == r.id }) { notice in
+                                NavigationLink(tr("查看退款通知", "View refund notification", "Lihat notifikasi bayaran balik")) {
+                                    TNGNoticeView(id: notice.id)
+                                }
+                            }
                         }
                     }
                 }
@@ -1139,6 +1144,28 @@ struct RefundsView: View {
                                 }
                             } else {
                                 LabeledContent(share.name, value: tr("无需退回", "Nothing to return", "Tiada pulangan diperlukan"))
+                            }
+                        }
+                    }
+                }
+                if e.refunded > 0 {
+                    Section {
+                        DisclosureGroup(tr("关联收付款", "Linked receipts and payments", "Penerimaan dan bayaran dipautkan")) {
+                            ForEach(model.ledger.settlements.filter { $0.lines.contains { $0.expense.id == e.id && $0.applied != 0 } }) { record in
+                                NavigationLink {
+                                    SettlementDetailView(id: record.id)
+                                } label: {
+                                    VStack(alignment: .leading, spacing: 4) {
+                                        Text(record.name + " · " + settlementDirection(record.transfer, name: record.name))
+                                        Text(money(abs(record.transfer)) + " · " + dateLabel(record.date) + (record.active ? "" : tr(" · 已撤销", " · Undone", " · Dibatalkan")))
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                }
+                            }
+                            ForEach(e.shares) { share in
+                                ForEach(share.repayments) { payment in
+                                    LabeledContent(share.name + " · " + dateLabel(payment.date), value: money(payment.cents))
+                                }
                             }
                         }
                     }

@@ -2913,7 +2913,7 @@ final class LedgerTests: XCTestCase {
         let purchaseDate = settlementDate.addingTimeInterval(-86400)
         let card = BankAccount(name: "Card", openingCents: 10000, openingDate: purchaseDate.addingTimeInterval(-60))
         let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: purchaseDate.addingTimeInterval(-60))
-        let expense = Expense(id: "shared", bankAccountID: card.id, merchant: "Grab", cents: 6000, date: purchaseDate,
+        let expense = Expense(bankAccountID: card.id, id: "shared", merchant: "Grab", cents: 6000, date: purchaseDate,
                               shares: [Share(id: "amy", name: "Amy", cents: 2000), Share(id: "bob", name: "Bob", cents: 2000)])
         var ledger = Ledger(expenses: [expense]); ledger.bankAccounts = [card, wallet]
         for share in expense.shares {
@@ -2922,7 +2922,12 @@ final class LedgerTests: XCTestCase {
         }
         let receipts = ledger.settlements
         let refundDate = settlementDate.addingTimeInterval(86400)
-        try ledger.addRefund(expenseID: expense.id, cents: 6000, date: refundDate)
+        _ = try ledger.receiveTNG(body: "We've reviewed your GrabFood report and issued you a refund of MYR 60.00. Tap for more",
+                                  title: "Successful Refund!", date: refundDate, eventID: "grab-refund", sourceApp: "Grab")
+        let refundNoticeID = try XCTUnwrap(ledger.tngNotices.last?.id)
+        XCTAssertEqual(ledger.bankBalance(card), 4000, "Merchant-issued refund must await receipt confirmation")
+        ledger.tngNotices[ledger.tngNotices.count - 1].bankAccountID = card.id
+        try ledger.resolveNotice(id: refundNoticeID, purpose: "refund", party: "Grab", cents: 6000, date: refundDate, relatedID: expense.id)
         XCTAssertEqual(ledger.settlements, receipts)
         XCTAssertEqual(ledger.friendBalances.reduce(0) { $0 + $1.payable }, 4000)
         XCTAssertEqual(ledger.bankBalance(card), 10000)
@@ -2945,16 +2950,39 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(ledger.expenses.count, 1)
         XCTAssertEqual(Array(ledger.settlements.prefix(2)), receipts)
         let refundID = try XCTUnwrap(ledger.expenses[0].refunds?.first?.id)
+        let linkedRefund = try XCTUnwrap(ledger.tngNotices.first { $0.id == refundNoticeID })
+        XCTAssertEqual(linkedRefund.relatedRecordID, expense.id)
+        XCTAssertEqual(linkedRefund.relatedRefundID, refundID)
+        let linkedReturn = try XCTUnwrap(ledger.settlements.first { $0.id == amyReturn })
+        XCTAssertEqual(linkedReturn.lines.first?.expense.id, linkedRefund.relatedRecordID)
+        XCTAssertEqual(linkedReturn.lines.first?.expense.refunds?.first?.id, linkedRefund.relatedRefundID)
+        XCTAssertEqual(linkedReturn.paymentNoticeID, payment.id)
         let encoded = try LocalStore.encode(ledger)
         XCTAssertThrowsError(try ledger.confirmNoticeNetSettlement(noticeID: payment.id, plan: amyPlan))
         XCTAssertThrowsError(try ledger.removeRefund(expenseID: expense.id, refundID: refundID))
-        XCTAssertThrowsError(try ledger.undoSettlement(id: "received-amy"))
+        XCTAssertThrowsError(try ledger.undoSettlement(id: receipts[0].id))
         XCTAssertEqual(try LocalStore.encode(ledger), encoded, "Rejected changes must be atomic")
         XCTAssertEqual(try LocalStore.decode(encoded).settlements, ledger.settlements)
         try ledger.undoSettlement(id: amyReturn)
         try ledger.undoSettlement(id: bobReturn)
-        try ledger.removeRefund(expenseID: expense.id, refundID: refundID)
+        try ledger.reopenResolvedNotice(id: refundNoticeID)
         XCTAssertEqual(ledger.friendBalances.reduce(0) { $0 + $1.payable + $1.owed }, 0)
+    }
+
+    func testRefundDistinguishesUnpaidFriendsFromFriendsWhoAlreadyPaid() throws {
+        let expense = Expense(id: "shared", merchant: "Grab", cents: 6000, date: settlementDate,
+                              shares: [Share(id: "amy", name: "Amy", cents: 2000), Share(id: "bob", name: "Bob", cents: 2000)])
+        var ledger = Ledger(expenses: [expense])
+        try ledger.repay(expenseID: expense.id, shareID: "amy", cents: 2000, date: settlementDate)
+        try ledger.addRefund(expenseID: expense.id, cents: 3000, date: settlementDate)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.shareID == "amy" }?.balance, -1000)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.shareID == "bob" }?.balance, 1000)
+        try ledger.addRefund(expenseID: expense.id, cents: 3000, date: settlementDate)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.shareID == "amy" }?.balance, -2000)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.shareID == "bob" }?.balance, 0)
+        XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 2000)
+        XCTAssertEqual(ledger.expenses[0].shares[1].repaid, 0)
+        XCTAssertNoThrow(try ledger.validated())
     }
 
     func testPartialRefundAndPartialReturnLeaveCorrectOriginalShareBalances() throws {

@@ -3087,7 +3087,7 @@ struct ExpenseEditor: View {
                 if let original {
                     if model.ledger.hasActiveSettlement(expenseID: original.id) {
                         Section {
-                            Text(tr("此账目已参与结算。修改金额、日期、付款人、分类、物品、分账或退款前，请先撤销相关结算。", "This expense is settled. Undo its settlements before changing amount, date, payer, category, items, shares or refunds.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum menukar amaun, tarikh, pembayar, kategori, item, bahagian atau pulangan."))
+                            Text(tr("此账目已参与结算。修改原消费前需先撤销相关结算；新增退款可直接在退款记录中处理。", "This expense is settled. Undo its settlements before editing the original purchase; add new refunds directly in Refunds.", "Belanja ini telah diselesaikan. Batalkan penyelesaian sebelum mengedit pembelian asal; tambah bayaran balik baharu terus dalam Bayaran balik."))
                             ForEach(model.ledger.settlements.filter { $0.active && $0.lines.contains { $0.expense.id == original.id && $0.applied != 0 } }) { record in
                                 NavigationLink(tr("查看结算", "View settlement", "Lihat penyelesaian")) { SettlementDetailView(id: record.id) }
                             }
