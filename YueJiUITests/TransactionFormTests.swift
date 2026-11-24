@@ -416,7 +416,12 @@ final class TransactionFormTests: XCTestCase {
             XCTAssertEqual(placeName.value as? String, "Location regression", "Cancelling import must preserve the location draft")
             googleImport.tap()
             XCTAssertTrue(importPage.waitForExistence(timeout: 5))
-            let googleInput = app.descendants(matching: .any)["place.googleImport.input"].firstMatch
+            // A vertically expanding TextField can expose either editable AX
+            // type. Exclude containers that inherit its identifier.
+            let googleInput = app.descendants(matching: .any).matching(NSPredicate(
+                format: "identifier == %@ AND (elementType == %d OR elementType == %d)",
+                "place.googleImport.input", XCUIElement.ElementType.textField.rawValue,
+                XCUIElement.ElementType.textView.rawValue)).firstMatch
             enterText("3.1390, 101.6869", into: googleInput, in: app)
             finishKeyboard(in: app)
             app.buttons["place.googleImport.read"].tap()
@@ -645,8 +650,13 @@ final class TransactionFormTests: XCTestCase {
         field.typeText(text)
         // Wait for the accessibility value to catch up after key synthesis.
         // Never retype missing characters or accept a partial value.
-        let complete = XCTNSPredicateExpectation(predicate: NSPredicate(format: "value == %@", text), object: field)
-        XCTAssertEqual(XCTWaiter.wait(for: [complete], timeout: 5), .completed,
+        let complete = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
+            guard let snapshot = try? field.snapshot() else { return false }
+            return (snapshot.value as? String) == text
+        }, object: nil)
+        // A simulator accessibility round trip can exceed five seconds while
+        // the keyboard is active. Keep exact equality and never retype/retry.
+        XCTAssertEqual(XCTWaiter.wait(for: [complete], timeout: 15), .completed,
                        "Typed text must reach the intended field. Expected: \(text); actual: \(String(describing: field.value))", file: file, line: line)
     }
 
