@@ -65,6 +65,20 @@ struct FriendSettlement: Codable, Equatable, Identifiable {
 }
 
 extension Expense {
+    /// Reconstruct refund terms at a settlement without rewriting its audit snapshot.
+    /// Only later, appended refunds may differ; original amounts and shares stay locked.
+    func atSettlementRefunds(_ snapshot: Expense, date: Date) -> Expense? {
+        let old = snapshot.refunds ?? [], current = refunds ?? []
+        guard current.count >= old.count, Array(current.prefix(old.count)) == old,
+              current.dropFirst(old.count).allSatisfy({ $0.date >= Calendar.current.startOfDay(for: date) }) else { return nil }
+        var copy = self
+        copy.refunds = snapshot.refunds
+        for i in copy.shares.indices {
+            let shareID = copy.shares[i].id
+            copy.shares[i].refundCents = old.reduce(0) { $0 + ($1.shares[shareID] ?? 0) }
+        }
+        return copy.sameSettlementTerms(as: snapshot) ? copy : nil
+    }
     var payerLabel: String { paidByFriend ?? tr("我", "Me", "Saya") }
     func sameSettlementTerms(as other: Expense) -> Bool {
         id == other.id && merchant == other.merchant && cents == other.cents && date == other.date
@@ -304,7 +318,7 @@ extension Ledger {
     }
     func requireUnsettledExpense(_ id: String) throws {
         guard !hasActiveSettlement(expenseID: id) else {
-            throw settlementError("此账目已参与结算。请先在朋友页面撤销相关结算，再修改或退款。", "This expense is in a settlement. Undo its settlements on the friend's page before editing, deleting or refunding it.", "Belanja ini dalam penyelesaian. Batalkan penyelesaian di halaman rakan sebelum mengedit, memadam atau memulangkannya.")
+            throw settlementError("此账目已参与结算。请先撤销相关结算，再修改或删除；新增退款可直接记录。", "This expense is in a settlement. Undo its settlements before editing or deleting. New refunds can be recorded directly.", "Belanja ini dalam penyelesaian. Batalkan penyelesaian sebelum mengedit atau memadam. Bayaran balik baharu boleh dicatat terus.")
         }
     }
     /// Manual repayments settle only debts in the chosen direction, without offsetting other items.
@@ -436,9 +450,16 @@ extension Ledger {
     func validateSettlements() throws {
         guard settlements.count <= 10_000, Set(settlements.map(\.id)).count == settlements.count else { throw invalidSettlementData() }
         let byID = Dictionary(expenses.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
-        var applied: [String: Int] = [:], bases: [String: Int] = [:]
+        var applied: [String: Int] = [:]
         var paymentIDs = Set<String>(), identities = Set<String>()
-        for record in settlements {
+        // Dates have day precision in the editor. Preserve confirmation order
+        // within a day, including notices recorded later with an earlier time.
+        let ordered = settlements.enumerated().sorted {
+            let lhs = Calendar.current.startOfDay(for: $0.element.date)
+            let rhs = Calendar.current.startOfDay(for: $1.element.date)
+            return lhs == rhs ? $0.offset < $1.offset : lhs < rhs
+        }.map(\.element)
+        for record in ordered {
             guard !record.id.isEmpty, record.id.count <= 200, !record.friend.isEmpty, record.friend == friendKey(record.friend),
                   record.name.count <= 200, friendKey(record.name) == record.friend, (1...200).contains(record.lines.count),
                   Set(record.lines.map(\.id)).count == record.lines.count, record.date.timeIntervalSince1970 >= 0,
@@ -466,7 +487,8 @@ extension Ledger {
                 guard abs(line.before) <= 10_000_000_000, abs(line.applied) <= abs(line.before),
                       line.applied == 0 || (line.applied > 0) == (line.before > 0), !line.expense.id.isEmpty else { throw invalidSettlementData() }
                 guard record.active, line.applied != 0 else { continue }
-                guard let expense = byID[line.expense.id], expense.sameSettlementTerms(as: line.expense) else {
+                guard let current = byID[line.expense.id],
+                      let expense = current.atSettlementRefunds(line.expense, date: record.date) else {
                     throw settlementError("已结算账目的金额、日期、分类、物品、付款人、分账或退款发生改变。请先撤销相关结算。", "A settled expense's amount, date, category, items, payer, shares or refunds changed. Undo its settlements first.", "Amaun, tarikh, kategori, item, pembayar, bahagian atau pulangan belanja diselesaikan berubah. Batalkan penyelesaian dahulu.")
                 }
                 guard record.date >= Calendar.current.startOfDay(for: expense.date) else { throw invalidSettlementData() }
@@ -478,8 +500,9 @@ extension Ledger {
                     guard expense.paidByFriend.map(friendKey) == record.friend else { throw invalidSettlementData() }
                     base = -expense.owingToPayer
                 }
+                let available = base - (applied[line.id] ?? 0)
+                guard line.applied > 0 ? available >= line.applied : available <= line.applied else { throw invalidSettlementData() }
                 applied[line.id, default: 0] += line.applied
-                bases[line.id] = base
             }
             if record.active, let payment = record.paymentNoticeID {
                 guard paymentIDs.insert(payment).inserted, let notice = tngNotices.first(where: { $0.id == payment }),
@@ -492,10 +515,6 @@ extension Ledger {
                 if let identity = paymentIdentity(notice) { guard identities.insert(identity).inserted else { throw invalidSettlementData() } }
                 try requireUnusedPaymentReference(notice)
             }
-        }
-        for (key, amount) in applied {
-            let base = bases[key] ?? 0
-            guard (amount > 0 ? base >= amount : base <= amount) else { throw invalidSettlementData() }
         }
         for notice in tngNotices where notice.settlementID != nil || notice.status == "settlement" {
             guard settlements.contains(where: { $0.active && $0.id == notice.settlementID && $0.paymentNoticeID == notice.id }) else { throw invalidSettlementData() }

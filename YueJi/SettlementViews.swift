@@ -363,7 +363,14 @@ struct SplitHistoryView: View {
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("分账记录", "Split history", "Sejarah pembahagian")).navigationBarTitleDisplayMode(.inline)
-            .sheet(item: $target) { RepaymentView(target: $0).ledgerFeedback(modal: true) }
+            .sheet(item: $target) { target in
+                if model.ledger.outstanding(expense: target.expense, share: target.share) < 0 {
+                    NavigationStack {
+                        RefundFriendPaymentView(expenseID: target.expense.id, shareID: target.share.id)
+                            .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("关闭", "Close", "Tutup")) { self.target = nil } } }
+                    }.ledgerFeedback(modal: true)
+                } else { RepaymentView(target: target).ledgerFeedback(modal: true) }
+            }
             .confirmationDialog(tr("撤销还款？", "Undo repayment?", "Batalkan bayaran balik?"), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) {
                     if let (expenseID, shareID, repaymentID, isReturn) = undo {
@@ -453,11 +460,75 @@ struct SettlementSelectionView: View {
     }
 }
 
+/// A refund return settles this original share only, without offsetting other purchases.
+struct RefundFriendPaymentView: View {
+    @EnvironmentObject private var model: LedgerModel
+    let expenseID: String
+    let shareID: String
+    @State private var amount = ""
+    @State private var date = Date()
+    @State private var noticeID = ""
+    private var item: FriendDebtItem? {
+        model.ledger.friendDebtItems.first { $0.id == FriendDebtItem.key(expenseID, shareID) }
+    }
+    private var candidates: [TNGNotice] {
+        guard let item else { return [] }
+        return model.ledger.tngNotices.filter {
+            ["payment", "transfer"].contains($0.kind) && ["pending", "transfer", "recorded"].contains($0.status)
+            && $0.settlementID == nil && $0.resolution == nil && ($0.repaymentIDs ?? []).isEmpty
+            && ($0.cents ?? 0) > 0 && ($0.cents ?? 0) <= -item.balance
+            && $0.date >= Calendar.current.startOfDay(for: item.expense.date)
+        }.sorted { $0.date > $1.date }
+    }
+    private var plan: SettlementPlan? {
+        guard let item, item.balance < 0 else { return nil }
+        if !noticeID.isEmpty {
+            guard let notice = candidates.first(where: { $0.id == noticeID }), let cents = notice.cents else { return nil }
+            return try? model.ledger.repaymentPlan(friend: item.friend, selected: [item.id], payment: cents, date: notice.date, direction: .outgoing)
+        }
+        guard let cents = try? toCents(amount) else { return nil }
+        return try? model.ledger.repaymentPlan(friend: item.friend, selected: [item.id], payment: cents, date: date, direction: .outgoing)
+    }
+    var body: some View {
+        Form {
+            if let item {
+                Section(item.friend) {
+                    LabeledContent(tr("待退回", "To return", "Perlu dipulangkan"), value: money(max(0, -item.balance)))
+                    Text(item.expense.displayName).foregroundStyle(.secondary)
+                }
+                Section {
+                    Picker(tr("付款记录", "Payment record", "Rekod bayaran"), selection: $noticeID) {
+                        Text(tr("手动补记", "Record manually", "Catat secara manual")).tag("")
+                        ForEach(candidates) { notice in
+                            Text(notice.provider + " · " + (notice.party ?? "") + " · " + money(notice.cents ?? 0) + " · " + dateLabel(notice.date)).tag(notice.id)
+                        }
+                    }
+                    if noticeID.isEmpty {
+                        TextField(tr("已退金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR"), text: $amount).keyboardType(.decimalPad)
+                        DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, displayedComponents: .date)
+                    }
+                } footer: {
+                    Text(tr("已转账请选对应通知；没有通知才手动补记。可分次退回。", "Choose the notification for an existing payment; record manually if none arrived. Partial returns are supported.", "Pilih notifikasi bayaran sedia ada; catat manual jika tiada. Pulangan separa dibenarkan."))
+                }
+                if let plan {
+                    NavigationLink(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) {
+                        SettlementReviewView(plan: plan, paymentNoticeID: noticeID.isEmpty ? nil : noticeID)
+                    }
+                }
+            }
+        }.yuejiListSurface().navigationTitle(tr("退回朋友", "Return to friend", "Pulangkan kepada rakan"))
+            .navigationBarTitleDisplayMode(.inline)
+            .onAppear { if amount.isEmpty, let item { amount = Currency.input(max(0, -item.balance), "MYR") } }
+    }
+}
+
 struct SettlementReviewView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let plan: SettlementPlan
+    var paymentNoticeID: String? = nil
+    @State private var distinct = false
     @State private var commitID = UUID().uuidString
     @State private var savedID: String?
     @State private var error: String?
@@ -469,7 +540,12 @@ struct SettlementReviewView: View {
             if let savedID { SettlementDetailView(id: savedID, celebrateConfirmation: true).transition(.opacity) }
             else {
                 Form {
-                    if plan.transfer != 0 { Section { BankAccountPicker(selection: $accountID) } }
+                    if let paymentNoticeID, let notice = model.notice(id: paymentNoticeID) {
+                        NoticeAccountSection(notice: notice)
+                        if notice.possibleDuplicate {
+                            Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
+                        }
+                    } else if plan.transfer != 0 { Section { BankAccountPicker(selection: $accountID) } }
                     Section(plan.name) {
                         LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
                         LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
@@ -497,7 +573,7 @@ struct SettlementReviewView: View {
                                 if saving { ProgressView().controlSize(.small) }
                                 Text(saving ? tr("正在保存", "Saving", "Menyimpan") : (plan.transfer == 0 ? tr("确认抵扣，无需转账", "Confirm offset · no transfer", "Sahkan tolakan · tiada pindahan") : tr("确认已付款", "Confirm payment completed", "Sahkan bayaran selesai")))
                             }.frame(maxWidth: .infinity, minHeight: 44)
-                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(saving || (plan.transfer != 0 && accountID == nil))
+                        }.yuejiPrimaryButton().buttonBorderShape(.capsule).disabled(saving || !paymentReady)
                     }
                 }.disabled(saving).interactiveDismissDisabled(saving)
                     .yuejiListSurface().navigationTitle(tr("预览结算", "Review settlement", "Semak penyelesaian")).navigationBarTitleDisplayMode(.inline)
@@ -506,15 +582,26 @@ struct SettlementReviewView: View {
         }.animation(!reduceMotion && ElegantMotion.enabled ? YueJiMotion.content : nil, value: savedID)
             .alert(tr("无法保存", "Unable to save", "Tidak dapat menyimpan"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
     }
+    private var paymentReady: Bool {
+        if let paymentNoticeID {
+            guard let notice = model.notice(id: paymentNoticeID) else { return false }
+            return notice.bankAccountID != nil && (!notice.possibleDuplicate || distinct)
+        }
+        return plan.transfer == 0 || accountID != nil
+    }
     private func confirm() {
         guard !saving, savedID == nil else { return }
         let plan = plan, commitID = commitID, accountID = accountID
+        let paymentNoticeID = paymentNoticeID, distinct = distinct
         saving = true
         Task { @MainActor in
             defer { saving = false }
             do {
                 let id = try await model.mutate { ledger in
-                    try ledger.confirmManualSettlement(plan, id: commitID, accountID: accountID)
+                    if let paymentNoticeID {
+                        return try ledger.confirmNoticeNetSettlement(noticeID: paymentNoticeID, plan: plan, distinctConfirmed: distinct)
+                    }
+                    return try ledger.confirmManualSettlement(plan, id: commitID, accountID: accountID)
                 }
                 savedID = id
                 model.showSaved(message: plan.transfer == 0 ? tr("抵扣已确认", "Offset confirmed", "Tolakan disahkan") : tr("付款已确认", "Payment confirmed", "Bayaran disahkan"))

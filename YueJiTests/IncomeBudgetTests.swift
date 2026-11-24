@@ -531,6 +531,40 @@ final class IncomeBudgetTests: XCTestCase {
         XCTAssertFalse(shouldReviewFinancialNotification(hold, title: "RM38.74 is currently on hold"))
         XCTAssertNil(parseFinancialNotification(body + " Payment failed.", title: "Grab", sourceApp: "Grab"))
     }
+
+    func testObservedGrabRefundStaysPendingUntilOriginalPurchaseAndReceiptAreConfirmed() throws {
+        let date = Date().addingTimeInterval(-120)
+        let card = BankAccount(name: "Visa", openingCents: 10000, openingDate: date.addingTimeInterval(-3600), institution: "RHB", automaticSource: "Grab Card", automaticSuffix: "5785")
+        let charge = "Your Visa 5785 has been charged RM 25.45 for booking A-A46MDWRW239RAV."
+        let refund = "We've reviewed your GrabFood report and issued you a refund of MYR 25.45. Tap for more"
+        for automatic in [false, true] {
+            var ledger = Ledger(); ledger.bankAccounts = [card]
+            _ = try ledger.receiveTNG(body: charge, title: "Grab", date: date, eventID: nil, sourceApp: "Grab", automaticBalances: automatic)
+            XCTAssertEqual(ledger.expenses.count, 1)
+            XCTAssertEqual(ledger.bankBalance(card), 7455)
+            _ = try ledger.receiveTNG(body: refund, title: "Successful Refund!", date: date.addingTimeInterval(60), eventID: "refund-event", sourceApp: "Grab", automaticBalances: automatic)
+            let notice = try XCTUnwrap(ledger.tngNotices.last)
+            XCTAssertEqual(notice.cents, 2545)
+            XCTAssertEqual(notice.kind, "unknown")
+            XCTAssertEqual(notice.status, "pending")
+            XCTAssertEqual(notice.balanceHeldForReview, true)
+            XCTAssertNil(notice.bankAccountID)
+            XCTAssertEqual(ledger.bankBalance(card), 7455, "Issued is not proof of bank receipt")
+            _ = try ledger.receiveTNG(body: refund, title: "Successful Refund!", date: date.addingTimeInterval(60), eventID: "refund-event", sourceApp: "Grab", automaticBalances: automatic)
+            XCTAssertEqual(ledger.tngNotices.count, 2)
+            ledger.tngNotices[1].bankAccountID = card.id
+            try ledger.resolveNotice(id: notice.id, purpose: "refund", party: "Grab", cents: 2545, date: date.addingTimeInterval(60), relatedID: ledger.expenses[0].id)
+            XCTAssertEqual(ledger.bankBalance(card), 10000)
+            XCTAssertEqual(ledger.expenses[0].personal, 0)
+            XCTAssertTrue(ledger.incomes.isEmpty)
+            XCTAssertThrowsError(try ledger.resolveNotice(id: notice.id, purpose: "refund", party: "Grab", cents: 2545, date: date.addingTimeInterval(60), relatedID: ledger.expenses[0].id))
+            XCTAssertNoThrow(try ledger.validated())
+        }
+        XCTAssertNil(parseFinancialNotification("Thanks for contacting us on Missing or wrong items in your order", title: "Your issue has been resolved", sourceApp: "Grab"))
+        XCTAssertNil(parseFinancialNotification("It's about your issue Missing or wrong items in your order", title: "Our specialist has replied!", sourceApp: "Grab"))
+        XCTAssertNil(parseFinancialNotification(refund, title: "Successful Refund!", sourceApp: "Unrelated App"))
+        XCTAssertEqual(parseFinancialNotification("Your Visa 5785 has been charged MYR 41.88 for booking 001048005793-C8LKCX3JJ25YEA.", title: "Grab", sourceApp: "Grab")?.cents, 4188)
+    }
     func testAdditionalWalletPaymentsLinkOnlyTheirConfiguredAccount() throws {
         // Synthetic shared-grammar fixtures, not claimed provider notification samples.
         let date = Date()

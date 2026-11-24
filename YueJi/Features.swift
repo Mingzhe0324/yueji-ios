@@ -930,7 +930,10 @@ func validateRefunds(_ e: Expense) throws {
 }
 extension Ledger {
     mutating func addRefund(expenseID: String, cents: Int, date: Date, custom: [String: Int]? = nil, receivedByMe: Bool? = nil, bankAccountID: String? = nil) throws {
-        try requireUnsettledExpense(expenseID)
+        guard settlements.filter({ $0.active && $0.lines.contains { $0.expense.id == expenseID && $0.applied != 0 } })
+            .allSatisfy({ Calendar.current.startOfDay(for: $0.date) <= date }) else {
+            throw reviewError("退款日期不能早于已有结算。", "Refund date cannot precede existing settlements.", "Tarikh pulangan tidak boleh mendahului penyelesaian sedia ada.")
+        }
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), date <= Date(), date >= Calendar.current.startOfDay(for: expenses[i].date) else { throw LedgerError.invalid("交易金额或日期无效。") }
         let e = expenses[i]
         guard bankAccountID == nil || (bankAccounts.contains { $0.id == bankAccountID } && (e.paidByFriend == nil || receivedByMe == true)) else {
@@ -956,10 +959,11 @@ extension Ledger {
         next.refunds = (e.refunds ?? []) + [record]
         for j in e.shares.indices { next.shares[j].refundCents = e.shares[j].refunded + allocation[j + 1] }
         try next.validateReimbursement()
-        expenses[i] = next
+        var copy = self
+        copy.expenses[i] = next
+        self = try copy.validated()
     }
     mutating func removeRefund(expenseID: String, refundID: String) throws {
-        try requireUnsettledExpense(expenseID)
         guard let i = expenses.firstIndex(where: { $0.id == expenseID }), let r = expenses[i].refunds?.first(where: { $0.id == refundID }) else { return }
         var next = self
         next.expenses[i].refunds?.removeAll { $0.id == refundID }

@@ -910,6 +910,11 @@ extension Ledger {
             notice.reviewReason = accountMatchExplanation(source: verified.sourceBank, suffix: verified.accountSuffix)
         }
         notice.transferPeer = verified.transferPeer
+        if parseGrabRefundNotice(text, title: title, sourceApp: sourceApp) != nil {
+            notice.bankAccountID = nil
+            notice.balanceHeldForReview = true
+            notice.reviewReason = tr("Grab 已发起退款，请确认原账单及实际到账账户。", "Grab issued a refund. Confirm the original purchase and the account actually credited.", "Grab telah memulakan bayaran balik. Sahkan pembelian asal dan akaun yang benar-benar dikreditkan.")
+        }
         if automaticBalances {
             notice.verifiedIncomingBalance = verified.kind == "incoming" && notice.bankAccountID != nil && !duplicate && !crossSourceDuplicate
             notice.aiSuggestion = proposed != nil
@@ -1409,6 +1414,10 @@ extension Ledger {
             }
         case "refund":
             guard let relatedID else { throw LedgerError.invalid("请选择原消费。") }
+            if parseGrabRefundNotice(copy.tngNotices[i].body, title: copy.tngNotices[i].title, sourceApp: copy.tngNotices[i].provider) != nil,
+               copy.tngNotices[i].bankAccountID == nil {
+                throw reviewError("请选择实际收到退款的账户。", "Choose the account that actually received the refund.", "Pilih akaun yang benar-benar menerima bayaran balik.")
+            }
             try copy.addRefund(expenseID: relatedID, cents: cents, date: date, receivedByMe: true, bankAccountID: copy.tngNotices[i].bankAccountID)
             guard let entry = copy.expenses.first(where: { $0.id == relatedID }), let refund = entry.refunds?.last else { throw LedgerError.invalid("退款保存失败。") }
             copy.tngNotices[i].status = "ignored"
@@ -1875,6 +1884,7 @@ func parseFinancialNotification(_ body: String, title: String = "", sourceApp: S
     }
     if let sourceApp, !sourceApp.isEmpty, !validFinancialSource(sourceApp) { return nil }
     if let grab = parseGrabCardCharge(body, title: title, sourceApp: sourceApp) { return grab }
+    if let refund = parseGrabRefundNotice(body, title: title, sourceApp: sourceApp) { return refund }
     let provider = notificationProvider(sourceApp: sourceApp, title: title, body: body)
     if notificationChannel(notificationText(body)) != nil {
         return parseGenericBankNotification(body, title: title, provider: provider)
@@ -1906,7 +1916,7 @@ func parseGrabCardCharge(_ body: String, title: String, sourceApp: String?) -> T
           ["", "grab", "grab card"].contains(heading),
           !source.isEmpty || heading == "grab" else { return nil }
     let text = notificationText(body)
-    let pattern = #"\AYour Visa ([0-9]{4}) has been charged MYR ([0-9]+\.[0-9]{2}) for booking ([A-Za-z0-9]{1,40}-\s*[A-Za-z0-9]{1,40})\.\z"#
+    let pattern = #"\AYour Visa ([0-9]{4}) has been charged (?:MYR|RM) ([0-9]+\.[0-9]{2}) for booking ([A-Za-z0-9]{1,40}(?:-\s*[A-Za-z0-9]{1,40}){1,3})\.\z"#
     guard let regex = try? NSRegularExpression(pattern: pattern),
           let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
           let suffixRange = Range(match.range(at: 1), in: text),
@@ -1915,6 +1925,22 @@ func parseGrabCardCharge(_ body: String, title: String, sourceApp: String?) -> T
           let cents = try? toCents(String(text[amountRange])), cents > 0, cents <= 10_000_000_000 else { return nil }
     let reference = text[referenceRange].filter { !$0.isWhitespace }
     return TNGParsed(kind: "payment", cents: cents, party: "Grab", sourceBank: "Grab Card", accountSuffix: String(text[suffixRange]), reference: reference)
+}
+
+// Observed merchant-issued refund: no card suffix or booking ID, so never post
+// account credit automatically or assume it is the only similarly priced order.
+func parseGrabRefundNotice(_ body: String, title: String, sourceApp: String?) -> TNGParsed? {
+    let source = notificationTitleKey(sourceApp ?? "")
+    let heading = notificationTitleKey(title)
+    guard ["", "grab", "grab card"].contains(source),
+          ["", "grab", "successful refund", "successful refund!"].contains(heading),
+          !source.isEmpty || heading.hasPrefix("successful refund") else { return nil }
+    let text = notificationText(body).replacingOccurrences(of: "’", with: "'")
+    let pattern = #"\AWe've reviewed your GrabFood report and issued you a refund of (?:MYR|RM) ([0-9]+\.[0-9]{2})\. Tap for more\.?\z"#
+    guard let regex = try? NSRegularExpression(pattern: pattern),
+          let match = regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+          let range = Range(match.range(at: 1), in: text), let cents = try? toCents(String(text[range])), cents > 0, cents <= 10_000_000_000 else { return nil }
+    return TNGParsed(kind: "unknown", cents: cents, party: "Grab", sourceBank: "Grab Card")
 }
 
 /// These are generic grammars, not claimed samples from individual banks.

@@ -1127,6 +1127,22 @@ struct RefundsView: View {
                         }
                     }
                 }
+                if e.paidByFriend == nil && e.refunded > 0 {
+                    Section(tr("退回朋友", "Return to friends", "Pulangkan kepada rakan")) {
+                        ForEach(e.shares.filter { $0.refunded > 0 }) { share in
+                            let due = max(0, -model.ledger.outstanding(expense: e, share: share))
+                            if due > 0 {
+                                NavigationLink {
+                                    RefundFriendPaymentView(expenseID: e.id, shareID: share.id)
+                                } label: {
+                                    LabeledContent(share.name, value: money(due))
+                                }
+                            } else {
+                                LabeledContent(share.name, value: tr("无需退回", "Nothing to return", "Tiada pulangan diperlukan"))
+                            }
+                        }
+                    }
+                }
             } else { Text(tr("记录已删除", "Entry was deleted", "Rekod telah dipadam")) }
         }.yuejiListSurface().navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
             .onAppear { if refundAccountID == nil { refundAccountID = expense?.bankAccountID } }
@@ -4989,6 +5005,11 @@ struct FinancialNoticeReviewView: View {
     @State private var error: String?
     @State private var itemDrafts: [ExpenseItemDraft] = []
     @State private var incomeKind: IncomeKind = .other
+    @State private var refundArrived = false
+    private var issuedGrabRefund: Bool {
+        guard let n = notice else { return false }
+        return parseGrabRefundNotice(n.body, title: n.title, sourceApp: n.provider) != nil
+    }
     private var notice: TNGNotice? { model.notice(id: id) }
     private var candidates: [Expense] {
         let cents = (try? toCents(amount)) ?? 0
@@ -5069,6 +5090,11 @@ struct FinancialNoticeReviewView: View {
                 if purpose == "settlement" {
                     NavigationLink(tr("选择朋友", "Choose a friend", "Pilih rakan")) { NoticeSettlementFriendView(noticeID: id) }
                 } else {
+                if purpose == "refund" && issuedGrabRefund {
+                    Toggle(tr("已确认退款实际到账", "Refund receipt confirmed", "Penerimaan bayaran balik disahkan"), isOn: $refundArrived)
+                    Text(tr("Grab 发起退款不等于银行卡已到账；到账后再确认。", "A refund issued by Grab may not have reached your card yet. Confirm after it arrives.", "Bayaran balik dimulakan oleh Grab mungkin belum sampai ke kad. Sahkan selepas diterima."))
+                        .font(.caption).foregroundStyle(.secondary)
+                }
                 Button(tr("确认处理", "Confirm transaction", "Sahkan transaksi")) { if purpose == "ownTransfer" { transferNotice = notice } else if purpose == "expense" { editingNotice = notice } else if purpose == "reimbursement" {
                     do {
                         reimbursementPreview = try model.ledger.previewReimbursement(cents: toCents(amount), date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)
@@ -5076,7 +5102,7 @@ struct FinancialNoticeReviewView: View {
                     } catch { self.error = error.localizedDescription }
                 } else { confirm = true } }
                     .buttonStyle(LedgerPrimaryActionStyle())
-                    .disabled(purpose.isEmpty || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: (try? toCents(amount)) ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
+                    .disabled(purpose.isEmpty || (purpose == "refund" && issuedGrabRefund && (!refundArrived || notice.bankAccountID == nil)) || (purpose == "reimbursement" && (try? model.ledger.previewReimbursement(cents: (try? toCents(amount)) ?? 0, date: date, selected: reimbursementExpenseIDs, roundingCents: reimbursementRounding)) == nil) || (notice.possibleDuplicate && !distinct && !["ignore", "duplicate", "ownTransfer"].contains(purpose)))
                 }
                 NoticeSourceSection(notice: notice)
             } else { Text(tr("通知已删除或清理。", "The notification has been deleted or cleared.", "Notifikasi telah dipadam atau dikosongkan.")) }
