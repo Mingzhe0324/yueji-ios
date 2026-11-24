@@ -501,75 +501,131 @@ struct RefundFriendPaymentView: View {
         return try? model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: date)
     }
     var body: some View {
+        refundForm
+            .yuejiListSurface()
+            .navigationTitle(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan"))
+            .navigationBarTitleDisplayMode(.inline)
+            .navigationDestination(isPresented: $reviewing) { reviewDestination }
+            .onAppear(perform: initializeSelection)
+            .onChange(of: friend) { _, _ in retainEligibleSelection() }
+            .onChange(of: selected) { _, _ in updateManualAmount() }
+            .toolbar { cancelToolbar }
+    }
+
+    private var refundForm: some View {
         Form {
             if let entryType { ManualEntryTypeSection(selection: entryType) }
-            Section {
-                Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
-                    Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
-                    ForEach(friends) { Text($0.name).tag($0.id) }
-                }
-                ForEach(items) { item in
-                    Toggle(isOn: Binding(get: { selected.contains(item.id) }, set: {
-                        if $0 { selected.insert(item.id) } else { selected.remove(item.id) }
-                    })) {
-                        LabeledContent(item.expense.displayName, value: money(-item.balance))
-                    }
-                }
-                if friends.isEmpty {
-                    Text(tr("暂无待退给朋友的款项。先关联商家退款与原账单，并保留朋友原来的还款记录。", "No money is due back to friends. Link the merchant refund to the original purchase and retain the friend's earlier payment.", "Tiada wang perlu dipulangkan. Pautkan bayaran balik peniaga kepada pembelian asal dan kekalkan bayaran rakan terdahulu."))
-                        .foregroundStyle(.secondary)
-                }
+            friendSection
+            if !selected.isEmpty { paymentSection }
+        }
+    }
+
+    private var friendSection: some View {
+        Section {
+            Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
+                Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
+                ForEach(friends) { friend in Text(friend.name).tag(friend.id) }
             }
-            if !selected.isEmpty {
-                Section {
-                    LabeledContent(tr("本次所选待退金额", "Selected amount to return", "Amaun dipilih untuk dipulangkan"), value: money(due))
-                    if initialNoticeID == nil {
-                        Picker(tr("付款记录", "Payment record", "Rekod bayaran"), selection: $noticeID) {
-                            Text(tr("手动补记", "Record manually", "Catat secara manual")).tag("")
-                            ForEach(candidates) { notice in
-                                Text(notice.provider + " · " + (notice.party ?? "") + " · " + money(notice.cents ?? 0) + " · " + dateLabel(notice.date)).tag(notice.id)
-                            }
-                        }
-                    }
-                    if let payment {
-                        LabeledContent(payment.provider, value: money(payment.cents ?? 0))
-                        Text(dateLabel(payment.date)).foregroundStyle(.secondary)
-                    } else if paymentID == nil {
-                        TextField(tr("已退金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR"), text: $amount).keyboardType(.decimalPad)
-                        DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, in: ...Date(), displayedComponents: .date)
-                    }
-                    if let plan {
-                        Button(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) {
-                            reviewPlan = plan; reviewNoticeID = paymentID; reviewing = true
-                        }.buttonStyle(LedgerPrimaryActionStyle())
-                    } else {
-                        Text(tr("请核对金额、付款日期和所选账单；金额不能超过待退余额。", "Check the amount, payment date and selected expenses; the payment cannot exceed the amount due back.", "Semak amaun, tarikh bayaran dan belanja dipilih; bayaran tidak boleh melebihi baki pulangan."))
-                            .font(.caption).foregroundStyle(.secondary)
-                    }
-                } footer: {
-                    Text(tr("原收款保留。退钱后扣减付款账户和待退余额，不计消费。", "The original receipt stays. Returning money reduces the payment account and amount due back, without counting as spending.", "Penerimaan asal kekal. Pulangan mengurangkan akaun bayaran dan baki pulangan, bukan belanja."))
-                }
+            ForEach(items) { item in refundRow(item) }
+            if friends.isEmpty {
+                Text(tr("暂无待退给朋友的款项。先关联商家退款与原账单，并保留朋友原来的还款记录。", "No money is due back to friends. Link the merchant refund to the original purchase and retain the friend's earlier payment.", "Tiada wang perlu dipulangkan. Pautkan bayaran balik peniaga kepada pembelian asal dan kekalkan bayaran rakan terdahulu."))
+                    .foregroundStyle(.secondary)
             }
-        }.yuejiListSurface().navigationTitle(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan"))
-            .navigationBarTitleDisplayMode(.inline)
-            .navigationDestination(isPresented: $reviewing) {
-                if let reviewPlan { SettlementReviewView(plan: reviewPlan, paymentNoticeID: reviewNoticeID) }
+        }
+    }
+
+    private func refundRow(_ item: FriendDebtItem) -> some View {
+        Toggle(isOn: selectionBinding(for: item.id)) {
+            LabeledContent(item.expense.displayName, value: money(-item.balance))
+        }
+    }
+
+    private func selectionBinding(for id: String) -> Binding<Bool> {
+        Binding<Bool>(get: { selected.contains(id) }, set: { isSelected in
+            if isSelected { selected.insert(id) }
+            else { selected.remove(id) }
+        })
+    }
+
+    private var paymentSection: some View {
+        Section {
+            LabeledContent(tr("本次所选待退金额", "Selected amount to return", "Amaun dipilih untuk dipulangkan"), value: money(due))
+            if initialNoticeID == nil { paymentPicker }
+            paymentFields
+            reviewAction
+        } footer: {
+            Text(tr("原收款保留。退钱后扣减付款账户和待退余额，不计消费。", "The original receipt stays. Returning money reduces the payment account and amount due back, without counting as spending.", "Penerimaan asal kekal. Pulangan mengurangkan akaun bayaran dan baki pulangan, bukan belanja."))
+        }
+    }
+
+    private var paymentPicker: some View {
+        Picker(tr("付款记录", "Payment record", "Rekod bayaran"), selection: $noticeID) {
+            Text(tr("手动补记", "Record manually", "Catat secara manual")).tag("")
+            ForEach(candidates) { notice in Text(paymentLabel(notice)).tag(notice.id) }
+        }
+    }
+
+    private func paymentLabel(_ notice: TNGNotice) -> String {
+        let parts: [String] = [notice.provider, notice.party ?? "", money(notice.cents ?? 0), dateLabel(notice.date)]
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder private var paymentFields: some View {
+        if let payment {
+            LabeledContent(payment.provider, value: money(payment.cents ?? 0))
+            Text(dateLabel(payment.date)).foregroundStyle(.secondary)
+        } else if paymentID == nil {
+            TextField(tr("已退金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR"), text: $amount)
+                .keyboardType(.decimalPad)
+            DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, in: ...Date(), displayedComponents: .date)
+        }
+    }
+
+    @ViewBuilder private var reviewAction: some View {
+        if let plan {
+            Button(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) { beginReview(plan) }
+                .buttonStyle(LedgerPrimaryActionStyle())
+        } else {
+            Text(tr("请核对金额、付款日期和所选账单；金额不能超过待退余额。", "Check the amount, payment date and selected expenses; the payment cannot exceed the amount due back.", "Semak amaun, tarikh bayaran dan belanja dipilih; bayaran tidak boleh melebihi baki pulangan."))
+                .font(.caption).foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder private var reviewDestination: some View {
+        if let reviewPlan { SettlementReviewView(plan: reviewPlan, paymentNoticeID: reviewNoticeID) }
+    }
+
+    @ToolbarContentBuilder private var cancelToolbar: some ToolbarContent {
+        if entryType != nil {
+            ToolbarItem(placement: .cancellationAction) {
+                Button(tr("取消", "Cancel", "Batal")) { dismiss() }
             }
-            .onAppear {
-                guard !initialized else { return }; initialized = true
-                if let expenseID, let shareID,
-                   let item = model.ledger.friendDebtItems.first(where: { $0.id == FriendDebtItem.key(expenseID, shareID) }) {
-                    friend = friendKey(item.friend); selected = [item.id]
-                    amount = Currency.input(max(0, -item.balance), "MYR")
-                }
-            }
-            .onChange(of: friend) { _, _ in selected.formIntersection(Set(items.map(\.id))) }
-            .onChange(of: selected) { _, _ in if paymentID == nil { amount = Currency.input(due, "MYR") } }
-            .toolbar {
-                if entryType != nil {
-                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
-                }
-            }
+        }
+    }
+
+    private func initializeSelection() {
+        guard !initialized else { return }
+        initialized = true
+        guard let expenseID, let shareID else { return }
+        let key = FriendDebtItem.key(expenseID, shareID)
+        guard let item = model.ledger.friendDebtItems.first(where: { $0.id == key }) else { return }
+        friend = friendKey(item.friend)
+        selected = [item.id]
+        amount = Currency.input(max(0, -item.balance), "MYR")
+    }
+
+    private func retainEligibleSelection() {
+        selected.formIntersection(Set(items.map(\.id)))
+    }
+
+    private func updateManualAmount() {
+        if paymentID == nil { amount = Currency.input(due, "MYR") }
+    }
+
+    private func beginReview(_ plan: SettlementPlan) {
+        reviewPlan = plan
+        reviewNoticeID = paymentID
+        reviewing = true
     }
 }
 
