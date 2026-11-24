@@ -492,13 +492,27 @@ struct RefundFriendPaymentView: View {
     }
     private var paymentID: String? { initialNoticeID ?? (noticeID.isEmpty ? nil : noticeID) }
     private var payment: TNGNotice? { paymentID.flatMap { model.notice(id: $0) } }
-    private var plan: SettlementPlan? {
+    private var plan: SettlementPlan? { try? makePlan() }
+    private var planError: String {
+        do { _ = try makePlan(); return "" }
+        catch { return error.localizedDescription }
+    }
+    private func makePlan() throws -> SettlementPlan {
         if let paymentID {
-            guard let payment = candidates.first(where: { $0.id == paymentID }), let cents = payment.cents else { return nil }
-            return try? model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: payment.date)
+            guard let payment = model.notice(id: paymentID) else {
+                throw settlementError("?????????????????", "Payment is missing. Reopen the notification.", "Bayaran tiada. Buka semula notifikasi.")
+            }
+            guard ["payment", "transfer"].contains(payment.kind),
+                  ["pending", "transfer", "recorded"].contains(payment.status),
+                  payment.settlementID == nil, payment.resolution == nil, (payment.repaymentIDs ?? []).isEmpty else {
+                throw settlementError("????????????????????????????????????", "This notice is not an available outgoing payment, or is already linked. Return to the notice to review its existing link.", "Notifikasi bukan bayaran keluar tersedia atau sudah dipautkan. Kembali untuk semak pautan asal.")
+            }
+            guard let cents = payment.cents, cents > 0, cents <= due else {
+                throw settlementError("?????????????????????????????????", "The outgoing amount exceeds the selected refund balance, or is missing. Review the notice and original purchase.", "Amaun keluar melebihi baki pulangan dipilih atau tiada. Semak notifikasi dan pembelian asal.")
+            }
+            return try model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: payment.date)
         }
-        guard let cents = try? toCents(amount) else { return nil }
-        return try? model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: date)
+        return try model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: toCents(amount), date: date)
     }
     var body: some View {
         refundForm
