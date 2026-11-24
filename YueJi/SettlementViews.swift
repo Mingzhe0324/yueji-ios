@@ -12,6 +12,7 @@ struct ManualEntryTypeSection: View {
                 Text(tr("别人转账给我", "Money received", "Wang diterima")).tag("receipt")
                 Text(tr("借钱给人", "Lend money", "Pinjamkan wang")).tag("loan")
                 Text(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).tag("settlement")
+                Text(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan")).tag("friendRefund")
             }
         }
     }
@@ -463,62 +464,112 @@ struct SettlementSelectionView: View {
 /// A refund return settles this original share only, without offsetting other purchases.
 struct RefundFriendPaymentView: View {
     @EnvironmentObject private var model: LedgerModel
-    let expenseID: String
-    let shareID: String
+    @Environment(\.dismiss) private var dismiss
+    var expenseID: String? = nil
+    var shareID: String? = nil
+    var initialNoticeID: String? = nil
+    var entryType: Binding<String>? = nil
+    @State private var friend = ""
+    @State private var selected = Set<String>()
     @State private var amount = ""
     @State private var date = Date()
     @State private var noticeID = ""
-    private var item: FriendDebtItem? {
-        model.ledger.friendDebtItems.first { $0.id == FriendDebtItem.key(expenseID, shareID) }
+    @State private var initialized = false
+    @State private var reviewing = false
+    @State private var reviewPlan: SettlementPlan?
+    @State private var reviewNoticeID: String?
+    private var friends: [FriendBalance] {
+        model.friends.filter { !model.ledger.friendRefundItems(friend: $0.id).isEmpty }
     }
+    private var items: [FriendDebtItem] { model.ledger.friendRefundItems(friend: friend) }
+    private var due: Int { items.filter { selected.contains($0.id) }.reduce(0) { $0 - $1.balance } }
     private var candidates: [TNGNotice] {
-        guard let item else { return [] }
-        return model.ledger.tngNotices.filter {
+        model.ledger.tngNotices.filter {
             ["payment", "transfer"].contains($0.kind) && ["pending", "transfer", "recorded"].contains($0.status)
             && $0.settlementID == nil && $0.resolution == nil && ($0.repaymentIDs ?? []).isEmpty
-            && ($0.cents ?? 0) > 0 && ($0.cents ?? 0) <= -item.balance
-            && $0.date >= Calendar.current.startOfDay(for: item.expense.date)
+            && ($0.cents ?? 0) > 0 && ($0.cents ?? 0) <= due
         }.sorted { $0.date > $1.date }
     }
+    private var paymentID: String? { initialNoticeID ?? (noticeID.isEmpty ? nil : noticeID) }
+    private var payment: TNGNotice? { paymentID.flatMap { model.notice(id: $0) } }
     private var plan: SettlementPlan? {
-        guard let item, item.balance < 0 else { return nil }
-        if !noticeID.isEmpty {
-            guard let notice = candidates.first(where: { $0.id == noticeID }), let cents = notice.cents else { return nil }
-            return try? model.ledger.repaymentPlan(friend: item.friend, selected: [item.id], payment: cents, date: notice.date, direction: .outgoing)
+        if let paymentID {
+            guard let payment = candidates.first(where: { $0.id == paymentID }), let cents = payment.cents else { return nil }
+            return try? model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: payment.date)
         }
         guard let cents = try? toCents(amount) else { return nil }
-        return try? model.ledger.repaymentPlan(friend: item.friend, selected: [item.id], payment: cents, date: date, direction: .outgoing)
+        return try? model.ledger.friendRefundPlan(friend: friend, selected: selected, cents: cents, date: date)
     }
     var body: some View {
         Form {
-            if let item {
-                Section(item.friend) {
-                    LabeledContent(tr("待退回", "To return", "Perlu dipulangkan"), value: money(max(0, -item.balance)))
-                    Text(item.expense.displayName).foregroundStyle(.secondary)
+            if let entryType { ManualEntryTypeSection(selection: entryType) }
+            Section {
+                Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
+                    Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
+                    ForEach(friends) { Text($0.name).tag($0.id) }
                 }
-                Section {
-                    Picker(tr("付款记录", "Payment record", "Rekod bayaran"), selection: $noticeID) {
-                        Text(tr("手动补记", "Record manually", "Catat secara manual")).tag("")
-                        ForEach(candidates) { notice in
-                            Text(notice.provider + " · " + (notice.party ?? "") + " · " + money(notice.cents ?? 0) + " · " + dateLabel(notice.date)).tag(notice.id)
-                        }
+                ForEach(items) { item in
+                    Toggle(isOn: Binding(get: { selected.contains(item.id) }, set: {
+                        if $0 { selected.insert(item.id) } else { selected.remove(item.id) }
+                    })) {
+                        LabeledContent(item.expense.displayName, value: money(-item.balance))
                     }
-                    if noticeID.isEmpty {
-                        TextField(tr("已退金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR"), text: $amount).keyboardType(.decimalPad)
-                        DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, displayedComponents: .date)
-                    }
-                } footer: {
-                    Text(tr("已转账请选对应通知；没有通知才手动补记。可分次退回。", "Choose the notification for an existing payment; record manually if none arrived. Partial returns are supported.", "Pilih notifikasi bayaran sedia ada; catat manual jika tiada. Pulangan separa dibenarkan."))
                 }
-                if let plan {
-                    NavigationLink(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) {
-                        SettlementReviewView(plan: plan, paymentNoticeID: noticeID.isEmpty ? nil : noticeID)
-                    }
+                if friends.isEmpty {
+                    Text(tr("暂无待退给朋友的款项。先关联商家退款与原账单，并保留朋友原来的还款记录。", "No money is due back to friends. Link the merchant refund to the original purchase and retain the friend's earlier payment.", "Tiada wang perlu dipulangkan. Pautkan bayaran balik peniaga kepada pembelian asal dan kekalkan bayaran rakan terdahulu."))
+                        .foregroundStyle(.secondary)
                 }
             }
-        }.yuejiListSurface().navigationTitle(tr("退回朋友", "Return to friend", "Pulangkan kepada rakan"))
+            if !selected.isEmpty {
+                Section {
+                    LabeledContent(tr("本次所选待退金额", "Selected amount to return", "Amaun dipilih untuk dipulangkan"), value: money(due))
+                    if initialNoticeID == nil {
+                        Picker(tr("付款记录", "Payment record", "Rekod bayaran"), selection: $noticeID) {
+                            Text(tr("手动补记", "Record manually", "Catat secara manual")).tag("")
+                            ForEach(candidates) { notice in
+                                Text(notice.provider + " · " + (notice.party ?? "") + " · " + money(notice.cents ?? 0) + " · " + dateLabel(notice.date)).tag(notice.id)
+                            }
+                        }
+                    }
+                    if let payment {
+                        LabeledContent(payment.provider, value: money(payment.cents ?? 0))
+                        Text(dateLabel(payment.date)).foregroundStyle(.secondary)
+                    } else if paymentID == nil {
+                        TextField(tr("已退金额 · MYR", "Amount returned · MYR", "Amaun dipulangkan · MYR"), text: $amount).keyboardType(.decimalPad)
+                        DatePicker(tr("付款日期", "Payment date", "Tarikh bayaran"), selection: $date, in: ...Date(), displayedComponents: .date)
+                    }
+                    if let plan {
+                        Button(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) {
+                            reviewPlan = plan; reviewNoticeID = paymentID; reviewing = true
+                        }.buttonStyle(LedgerPrimaryActionStyle())
+                    } else {
+                        Text(tr("请核对金额、付款日期和所选账单；金额不能超过待退余额。", "Check the amount, payment date and selected expenses; the payment cannot exceed the amount due back.", "Semak amaun, tarikh bayaran dan belanja dipilih; bayaran tidak boleh melebihi baki pulangan."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } footer: {
+                    Text(tr("原收款保留。退钱后扣减付款账户和待退余额，不计消费。", "The original receipt stays. Returning money reduces the payment account and amount due back, without counting as spending.", "Penerimaan asal kekal. Pulangan mengurangkan akaun bayaran dan baki pulangan, bukan belanja."))
+                }
+            }
+        }.yuejiListSurface().navigationTitle(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan"))
             .navigationBarTitleDisplayMode(.inline)
-            .onAppear { if amount.isEmpty, let item { amount = Currency.input(max(0, -item.balance), "MYR") } }
+            .navigationDestination(isPresented: $reviewing) {
+                if let reviewPlan { SettlementReviewView(plan: reviewPlan, paymentNoticeID: reviewNoticeID) }
+            }
+            .onAppear {
+                guard !initialized else { return }; initialized = true
+                if let expenseID, let shareID,
+                   let item = model.ledger.friendDebtItems.first(where: { $0.id == FriendDebtItem.key(expenseID, shareID) }) {
+                    friend = friendKey(item.friend); selected = [item.id]
+                    amount = Currency.input(max(0, -item.balance), "MYR")
+                }
+            }
+            .onChange(of: friend) { _, _ in selected.formIntersection(Set(items.map(\.id))) }
+            .onChange(of: selected) { _, _ in if paymentID == nil { amount = Currency.input(due, "MYR") } }
+            .toolbar {
+                if entryType != nil {
+                    ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } }
+                }
+            }
     }
 }
 
@@ -862,6 +913,11 @@ struct SettlementNoticeSection: View {
                 if ["incoming", "payment", "transfer"].contains(notice.kind) {
                     NavigationLink(tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih")) {
                         NoticeSettlementFriendView(noticeID: notice.id)
+                    }
+                }
+                if ["payment", "transfer"].contains(notice.kind) {
+                    NavigationLink(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan")) {
+                        RefundFriendPaymentView(initialNoticeID: notice.id)
                     }
                 }
                 NavigationLink(tr("关联已有结算", "Link an existing settlement", "Pautkan penyelesaian sedia ada")) {

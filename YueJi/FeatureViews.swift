@@ -4280,7 +4280,13 @@ struct TNGIncomingView: View {
     }
     @State private var reviewingRepayment = false
     private var repaymentItems: [FriendDebtItem] {
-        model.debts(friend: friend).filter { $0.balance > 0 && $0.expense.paidByFriend == nil }
+        model.ledger.incomingRepaymentItems(friend: friend, date: date)
+    }
+    private var laterRepaymentItems: [FriendDebtItem] {
+        model.ledger.friendDebtItems.filter {
+            friendKey($0.friend) == friendKey(friend) && $0.balance > 0 && $0.expense.paidByFriend == nil
+            && Calendar.current.startOfDay(for: $0.expense.date) > date
+        }
     }
     private var selectedBalance: Int {
         repaymentItems.filter { selectedDebts.contains($0.expense.id) }.reduce(0) { $0 + $1.balance }
@@ -4358,6 +4364,10 @@ struct TNGIncomingView: View {
             .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
             .onChange(of: friend) { _, _ in selectedDebts.removeAll(); acceptRounding = false }
             .onChange(of: selectedDebts) { _, _ in acceptRounding = false }
+            .onChange(of: repaymentItems.map(\.id)) { _, _ in
+                selectedDebts.formIntersection(Set(repaymentItems.map { $0.expense.id }))
+                acceptRounding = false
+            }
             .onChange(of: date) { _, _ in acceptRounding = false; reimbursementRounding = 0 }
             .sheet(isPresented: $reviewingRepayment) {
                 NavigationStack {
@@ -4443,6 +4453,13 @@ struct TNGIncomingView: View {
                     })) { FriendDebtRow(item: item) }
                     .accessibilityIdentifier("repayment.debt." + item.expense.id)
                 }
+                if !laterRepaymentItems.isEmpty {
+                    DisclosureGroup(tr("晚于收款日期的账目", "Expenses after receipt date", "Belanja selepas tarikh penerimaan")) {
+                        ForEach(laterRepaymentItems) { item in FriendDebtRow(item: item) }
+                        Text(tr("这些账目不能用于本次还款；请核对下方的实际收到日期。", "These expenses cannot be repaid by this receipt. Check the actual receipt date below.", "Belanja ini tidak boleh dibayar dengan penerimaan ini. Semak tarikh penerimaan sebenar di bawah."))
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 LabeledContent(tr("所选未还金额", "Selected outstanding", "Baki dipilih"), value: money(selectedBalance))
                 if roundingCandidate > 0 {
                     Toggle(tr("确认多收金额作为尾差", "Accept the extra amount as rounding", "Terima amaun tambahan sebagai pembundaran"), isOn: $acceptRounding)
@@ -4451,9 +4468,8 @@ struct TNGIncomingView: View {
                 } else if let cents = notice?.cents, !selectedDebts.isEmpty, cents > selectedBalance {
                     Text(tr("所选欠款不足以抵扣这笔收款，请核对或选择其他账目。", "Select enough debt to cover this receipt, or review its purpose.", "Pilih hutang mencukupi untuk penerimaan ini atau semak tujuannya.")).foregroundStyle(.orange)
                 }
-                if roundingCandidate == 0, let selected = friends.first(where: { $0.id == friend }), let cents = notice?.cents {
-                    if cents <= selected.owed { LabeledContent(tr("确认后尚欠", "Balance after confirmation", "Baki selepas pengesahan"), value: money(selected.owed - cents)) }
-                    else { Text(tr("收款超过此朋友欠款，不能全部记为还款。请先核对用途；本版不支持将一笔收款拆成多种用途。", "Receipt exceeds this friend's debt. Review its purpose; splitting one receipt across purposes is not supported yet.", "Amaun melebihi hutang rakan. Semak tujuan; pemisahan satu penerimaan kepada beberapa tujuan belum disokong.")).foregroundStyle(.orange) }
+                if roundingCandidate == 0, let cents = notice?.cents {
+                    if !selectedDebts.isEmpty && cents <= selectedBalance { LabeledContent(tr("所选账目确认后尚欠", "Selected balance after confirmation", "Baki dipilih selepas pengesahan"), value: money(selectedBalance - cents)) }
                 }
                 Text(tr("按整笔收款抵扣欠款，支持未还清；如果此前已手动记过这笔还款，请选忽略。", "Applies the full receipt to debt; partial debt repayment is supported. Ignore if this receipt was already recorded manually.", "Gunakan seluruh penerimaan untuk hutang; bayaran separa hutang disokong. Abaikan jika sudah direkod manual.")).font(.caption)
             }
@@ -5069,13 +5085,16 @@ struct FinancialNoticeReviewView: View {
                         if ["incoming", "payment", "transfer"].contains(notice.kind) {
                             Text(notice.kind == "incoming" ? tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih") : tr("还款 / 报销给朋友", "Repay / reimburse a friend", "Bayar balik rakan")).tag("settlement")
                         }
+                        if ["payment", "transfer"].contains(notice.kind) {
+                            Text(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan")).tag("friendRefund")
+                        }
                         if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
                         Text(tr("忽略", "Ignore", "Abaikan")).tag("ignore")
                     }
                     if purpose == "expense" {
                         Button(tr("编辑完整账目", "Edit full entry", "Edit rekod penuh")) { editingNotice = notice }
                             .disabled(notice.possibleDuplicate && !distinct)
-                    } else if !["ownTransfer", "settlement"].contains(purpose) {
+                    } else if !["ownTransfer", "settlement", "friendRefund"].contains(purpose) {
                         TextField(purpose == "loan" ? tr("借款人", "Borrower", "Peminjam") : tr("商户 / 对方 / 用途", "Merchant / recipient / purpose", "Peniaga / pihak lain / tujuan"), text: $party)
                         TextField("MYR", text: $amount).keyboardType(.decimalPad)
                         DatePicker(tr("交易日期", "Transaction date", "Tarikh transaksi"), selection: $date, in: ...Date())
@@ -5086,7 +5105,7 @@ struct FinancialNoticeReviewView: View {
                         }
                         Text(tr("只选择真正的收入，例如工资、自由职业、兼职或奖金。确认后可选择是否加入预算。", "Choose this only for income you earned, such as salary, freelance, part-time work or a bonus. You can then choose whether to add it to a budget.", "Pilih ini hanya untuk pendapatan yang diperoleh, seperti gaji, kerja bebas, kerja sambilan atau bonus. Kemudian anda boleh memilih untuk menambahnya ke bajet.")).font(.caption)
                     }
-                    if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer", "settlement"].contains(purpose) {
+                    if notice.possibleDuplicate && !["ignore", "duplicate", "ownTransfer", "settlement", "friendRefund"].contains(purpose) {
                         Toggle(tr("已核对，这是另一笔真实交易", "Checked: this is a separate real transaction", "Disemak: ini transaksi sebenar yang berasingan"), isOn: $distinct)
                     }
                 }
@@ -5116,6 +5135,10 @@ struct FinancialNoticeReviewView: View {
                 }
                 if purpose == "settlement" {
                     NavigationLink(tr("选择朋友", "Choose a friend", "Pilih rakan")) { NoticeSettlementFriendView(noticeID: id) }
+                } else if purpose == "friendRefund" {
+                    NavigationLink(tr("选择退款账单", "Choose refunded expenses", "Pilih belanja dipulangkan")) {
+                        RefundFriendPaymentView(initialNoticeID: id)
+                    }
                 } else {
                 if purpose == "refund" && issuedGrabRefund {
                     Toggle(tr("已确认退款实际到账", "Refund receipt confirmed", "Penerimaan bayaran balik disahkan"), isOn: $refundArrived)

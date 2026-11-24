@@ -1349,6 +1349,35 @@ final class EverydayFlowTests: XCTestCase {
         XCTAssertEqual(ledger.expenses.map { $0.shares[0].repaid }, lines.map(\.applied))
         XCTAssertThrowsError(try ledger.previewIncomingRepayment(friend: "Amy", cents: 700, date: now, selected: ["first", "second"]))
     }
+
+    func testIncomingSelectionPreviewAndSaveShareDateEligibility() throws {
+        let day = Calendar.current.startOfDay(for: Date().addingTimeInterval(-172800))
+        let received = day.addingTimeInterval(13 * 3600 + 5 * 60)
+        let account = BankAccount(name: "TNG", openingCents: 10000, openingDate: day.addingTimeInterval(-172800))
+        var ledger = Ledger(expenses: [
+            Expense(id: "yonny", merchant: "Yonny SS2", cents: 3310, date: day, shares: [Share(name: "Jason", cents: 1655)]),
+            Expense(id: "kyodai", merchant: "Kyodai", cents: 2710, date: received.addingTimeInterval(3600), shares: [Share(name: "Jason", cents: 1355)]),
+            Expense(id: "later", merchant: "Next day", cents: 2000, date: day.addingTimeInterval(86400), shares: [Share(name: "Jason", cents: 1000)])])
+        ledger.bankAccounts = [account]
+        ledger.tngNotices = [TNGNotice(bankAccountID: account.id, id: "receipt", body: "Received RM22.91", title: "Transfer", date: received,
+                                       usesReceivedDate: false, kind: "incoming", status: "pending", cents: 2291, party: "Jason")]
+        let items = ledger.incomingRepaymentItems(friend: " jason ", date: received)
+        XCTAssertEqual(Set(items.map { $0.expense.id }), ["yonny", "kyodai"])
+        XCTAssertEqual(items.reduce(0) { $0 + $1.balance }, 3010)
+        let selected = Set(items.map { $0.expense.id })
+        let preview = try ledger.previewIncomingRepayment(friend: "Jason", cents: 2291, date: received, selected: selected)
+        XCTAssertEqual(preview.map(\.applied), [1655, 636])
+        XCTAssertEqual(preview.reduce(0) { $0 + $1.before - $1.applied }, 719)
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.batchRepay(friend: "Jason", cents: 2291, date: received, selectedExpenseIDs: ["yonny", "kyodai", "later"]))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+        try ledger.resolveTNGIncoming(id: "receipt", purpose: "repayment", friend: "Jason", date: received, selectedExpenseIDs: selected)
+        XCTAssertEqual(ledger.bankBalance(account), 12291, "Receipt counted once")
+        XCTAssertEqual(ledger.incomingRepaymentItems(friend: "Jason", date: received).reduce(0) { $0 + $1.balance }, 719)
+        XCTAssertEqual(ledger.expenses.first { $0.id == "later" }?.shares.first?.repaid, 0)
+        XCTAssertEqual(ledger.tngNotices[0].repaymentIDs?.count, 2)
+        XCTAssertNoThrow(try ledger.validated())
+    }
 }
 
 final class ExpenseChargeTests: XCTestCase {
@@ -2983,6 +3012,37 @@ final class LedgerTests: XCTestCase {
         XCTAssertEqual(ledger.expenses[0].shares[0].repaid, 2000)
         XCTAssertEqual(ledger.expenses[0].shares[1].repaid, 0)
         XCTAssertNoThrow(try ledger.validated())
+    }
+
+    func testOneOutgoingNotificationReturnsMultipleRefundedExpensesOnly() throws {
+        let wallet = BankAccount(name: "TNG", openingCents: 10000, openingDate: settlementDate.addingTimeInterval(-86400))
+        var ledger = settlementExample()
+        ledger.expenses.remove(at: 1) // Keep an unrelated friend-paid debt.
+        ledger.expenses.append(Expense(id: "more", merchant: "Another order", cents: 2000, date: settlementDate,
+                                       shares: [Share(id: "amy-more", name: "Amy", cents: 1000)]))
+        ledger.bankAccounts = [wallet]
+        try ledger.repay(expenseID: "lunch", shareID: "amy-lunch", cents: 3000, date: settlementDate)
+        try ledger.repay(expenseID: "more", shareID: "amy-more", cents: 1000, date: settlementDate)
+        try ledger.addRefund(expenseID: "lunch", cents: 6000, date: settlementDate)
+        try ledger.addRefund(expenseID: "more", cents: 2000, date: settlementDate)
+        let eligible = ledger.friendRefundItems(friend: "Amy")
+        XCTAssertEqual(Set(eligible.map { $0.expense.id }), ["lunch", "more"])
+        let selected = Set(eligible.map(\.id))
+        XCTAssertThrowsError(try ledger.friendRefundPlan(friend: "Amy", selected: [FriendDebtItem.key("mine", nil)], cents: 100, date: settlementDate))
+        XCTAssertThrowsError(try ledger.friendRefundPlan(friend: "Amy", selected: selected, cents: 4001, date: settlementDate))
+        let plan = try ledger.friendRefundPlan(friend: "Amy", selected: selected, cents: 3000, date: settlementDate)
+        ledger.tngNotices.append(TNGNotice(bankAccountID: wallet.id, id: "return", body: "Transferred RM30.00", title: "Transfer", date: settlementDate,
+                                           usesReceivedDate: false, kind: "transfer", status: "transfer", cents: 3000, party: "Amy"))
+        let id = try ledger.confirmNoticeNetSettlement(noticeID: "return", plan: plan)
+        XCTAssertEqual(ledger.bankBalance(wallet), 7000)
+        XCTAssertEqual(ledger.friendRefundItems(friend: "Amy").reduce(0) { $0 - $1.balance }, 1000)
+        XCTAssertEqual(ledger.expenses.first { $0.id == "lunch" }?.shares[0].repaid, 3000)
+        XCTAssertEqual(ledger.expenses.first { $0.id == "more" }?.shares[0].repaid, 1000)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.expense.id == "mine" }?.balance, -1500)
+        XCTAssertEqual(ledger.settlements.first { $0.id == id }?.paymentNoticeID, "return")
+        XCTAssertThrowsError(try ledger.confirmNoticeNetSettlement(noticeID: "return", plan: plan))
+        XCTAssertEqual(ledger.bankBalance(wallet), 7000)
+        XCTAssertNoThrow(try LocalStore.decode(LocalStore.encode(ledger)))
     }
 
     func testPartialRefundAndPartialReturnLeaveCorrectOriginalShareBalances() throws {

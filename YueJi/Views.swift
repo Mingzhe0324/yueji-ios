@@ -3001,6 +3001,8 @@ struct ExpenseEditor: View {
                                  onSaved: { finishDraft(); onSaved?() })
             } else if original == nil && initialDraft == nil && entryType == "settlement" {
                 ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
+            } else if original == nil && initialDraft == nil && entryType == "friendRefund" {
+                RefundFriendPaymentView(entryType: $entryType)
             } else if original == nil && initialDraft == nil && entryType == "receipt" {
                 ManualReceiptEntryView(entryType: $entryType, initialDate: initialDate)
             } else {

@@ -309,6 +309,19 @@ extension Ledger {
         guard expense.paidByFriend == nil else { return 0 }
         return share.owed - (settledAmounts[FriendDebtItem.key(expense.id, share.id)] ?? 0)
     }
+    func friendRefundItems(friend: String) -> [FriendDebtItem] {
+        friendDebtItems.filter {
+            friendKey($0.friend) == friendKey(friend) && $0.balance < 0
+            && $0.expense.paidByFriend == nil && $0.expense.refunded > 0 && $0.shareID != nil
+        }
+    }
+    func friendRefundPlan(friend: String, selected: Set<String>, cents: Int, date: Date) throws -> SettlementPlan {
+        let eligible = Set(friendRefundItems(friend: friend).map(\.id))
+        guard !selected.isEmpty, selected.isSubset(of: eligible) else {
+            throw settlementError("请选择需要退钱的原账单。", "Choose the original expenses with money to return.", "Pilih belanja asal dengan wang yang perlu dipulangkan.")
+        }
+        return try repaymentPlan(friend: friend, selected: selected, payment: cents, date: date, direction: .outgoing)
+    }
     func payableToPayer(_ expense: Expense) -> Int {
         guard expense.paidByFriend != nil else { return 0 }
         return max(0, expense.owingToPayer + (settledAmounts[FriendDebtItem.key(expense.id, nil)] ?? 0))

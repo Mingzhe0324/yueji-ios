@@ -872,10 +872,16 @@ struct IncomingRepaymentLine: Identifiable, Equatable {
 }
 
 extension Ledger {
-    func incomingRepaymentRounding(friend: String, cents: Int, date: Date, selected: Set<String>) throws -> Int {
-        let balance = expenses.filter { selected.contains($0.id) && $0.paidByFriend == nil }.reduce(0) { sum, entry in
-            sum + entry.shares.filter { friendKey($0.name) == friendKey(friend) }.reduce(0) { $0 + outstanding(expense: entry, share: $1) }
+    /// The picker, preview and writer must use the same date and outstanding balance.
+    func incomingRepaymentItems(friend: String, date: Date) -> [FriendDebtItem] {
+        let key = friendKey(friend)
+        return friendDebtItems.filter {
+            friendKey($0.friend) == key && $0.expense.paidByFriend == nil && $0.balance > 0
+            && Calendar.current.startOfDay(for: $0.expense.date) <= date
         }
+    }
+    func incomingRepaymentRounding(friend: String, cents: Int, date: Date, selected: Set<String>) throws -> Int {
+        let balance = incomingRepaymentItems(friend: friend, date: date).filter { selected.contains($0.expense.id) }.reduce(0) { $0 + $1.balance }
         let excess = cents - balance
         guard balance > 0, (1...100).contains(excess) else { throw LedgerError.invalid("Excess repayment rounding must be between RM0.01 and RM1.00.") }
         var preview = self
@@ -990,10 +996,14 @@ extension Ledger {
         guard cents > 0 else { throw reviewError("请输入大于零的还款金额。", "Enter a positive repayment amount.", "Masukkan amaun bayaran balik positif.") }
         guard Calendar.current.startOfDay(for: date) <= Calendar.current.startOfDay(for: Date()) else { throw reviewError("收款日期不能在未来。", "Receipt date cannot be in the future.", "Tarikh penerimaan tidak boleh pada masa depan.") }
         let indices = expenses.indices.sorted { expenses[$0].date == expenses[$1].date ? expenses[$0].id < expenses[$1].id : expenses[$0].date < expenses[$1].date }
+        let eligibleIDs = Set(incomingRepaymentItems(friend: key, date: date).map(\.id))
         let eligible = indices.flatMap { i in expenses[i].shares.indices.compactMap { j -> (Int, Int)? in
-            (selectedExpenseIDs == nil || selectedExpenseIDs!.contains(expenses[i].id)) && expenses[i].paidByFriend == nil && friendKey(expenses[i].shares[j].name) == key && outstanding(expense: expenses[i], share: expenses[i].shares[j]) > 0 && Calendar.current.startOfDay(for: expenses[i].date) <= date ? (i, j) : nil
+            (selectedExpenseIDs == nil || selectedExpenseIDs!.contains(expenses[i].id)) && eligibleIDs.contains(FriendDebtItem.key(expenses[i].id, expenses[i].shares[j].id)) ? (i, j) : nil
         } }
         if let selectedExpenseIDs {
+            if expenses.contains(where: { selectedExpenseIDs.contains($0.id) && Calendar.current.startOfDay(for: $0.date) > date }) {
+                throw reviewError("所选账目晚于收款日期，请核对实际收款日期或取消选择该账目。", "A selected expense is after the receipt date. Check the actual receipt date or deselect that expense.", "Belanja dipilih selepas tarikh penerimaan. Semak tarikh sebenar atau nyahpilih belanja itu.")
+            }
             guard !selectedExpenseIDs.isEmpty, selectedExpenseIDs == Set(eligible.map { expenses[$0.0].id }) else {
                 throw reviewError("所选欠款已改变，请重新选择。", "Selected debts changed. Select them again.", "Hutang dipilih telah berubah. Pilih semula.")
             }
