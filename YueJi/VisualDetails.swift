@@ -180,33 +180,6 @@ struct LedgerCategoryTabs: View {
     }
 }
 
-// MARK: - Counting amounts
-
-/// An amount that counts up through the values in between, so every frame shows a real
-/// figure: the Overview's total as the app opens.
-struct CountingMoney: View {
-    let cents: Double
-    var body: some View {
-        Text(verbatim: "").modifier(CountingMoneyText(cents: cents))
-    }
-}
-
-private struct CountingMoneyText: ViewModifier, Animatable {
-    var cents: Double
-    var animatableData: Double {
-        get { cents }
-        set { cents = newValue }
-    }
-    func body(content: Content) -> some View {
-        Text(money(Int(cents.rounded()))).monospacedDigit()
-    }
-}
-
-/// The count-up plays once a launch, as the opening hands over; not on every return.
-@MainActor enum OverviewCountUp {
-    static var played = false
-}
-
 // MARK: - A checkmark that draws itself
 
 /// A checkmark drawn stroke by stroke as it appears, for "Saved" and goals reached.
@@ -214,14 +187,15 @@ struct DrawnCheckmark: View {
     var lineWidth: CGFloat = 2
     var color: Color = .white
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var animations = true
     @State private var progress: CGFloat = 0
     var body: some View {
         CheckmarkShape()
-            .trim(from: 0, to: progress)
+            .trim(from: 0, to: reduceMotion || !animations ? 1 : progress)
             .stroke(color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .round, lineJoin: .round))
             .onAppear {
                 guard progress == 0 else { return }
-                guard !reduceMotion, ElegantMotion.enabled else { progress = 1; return }
+                guard !reduceMotion, animations else { progress = 1; return }
                 withAnimation(.easeOut(duration: 0.28)) { progress = 1 }
             }
             .accessibilityHidden(true)

@@ -723,7 +723,6 @@ struct DashboardView: View {
     @State private var alerts: [SpendingAlert] = []
     @State private var alertsMonth: String?
     /// The total while it counts up as the app opens; nil the rest of the time.
-    @State private var countingCents: Double?
     /// Bumped when this month's budget passes 80%, is reached or is exceeded, so the status
     /// symbol wiggles once. Not on a month change or the first load.
     @State private var budgetAlertBeat = 0
@@ -781,17 +780,6 @@ struct DashboardView: View {
         typeSize.isAccessibilitySize
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 14))
             : AnyLayout(HStackLayout(alignment: .center, spacing: 18))
-    }
-    /// The launch hand-off: the total counts up from zero as the opening reveals the app.
-    private func countUp(to cents: Int) {
-        guard cents > 0, !hideAmounts, !reduceMotion, ElegantMotion.enabled else { return }
-        countingCents = 0
-        Task {
-            do { try await Task.sleep(for: .milliseconds(150)) } catch { countingCents = nil; return }
-            withAnimation(.easeOut(duration: 0.9)) { countingCents = Double(cents) }
-            do { try await Task.sleep(for: .milliseconds(950)) } catch {}
-            countingCents = nil
-        }
     }
     private var owed: Int { summary.owed }
     /// The trend shows the latest six months while the selected month is among them, so
@@ -913,12 +901,8 @@ struct DashboardView: View {
                     let returningRows = model.restoredFeedback.map {
                         $0.date.timeIntervalSinceNow > -3 && !$0.expenseIDs.intersection(Set(fresh.entries.map(\.id))).subtracting(Set(summary.entries.map(\.id))).isEmpty
                     } ?? false
-                    withAnimation(!reduceMotion && (changingMonth || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
+                    withAnimation(!reduceMotion && ElegantMotion.enabled && (changingMonth || changingEmptyState || returningRows || removingRows) ? YueJiMotion.rows : nil) {
                         summary = fresh; loadedSummary = summaryQuery
-                    }
-                    if !OverviewCountUp.played, !model.isPreview {
-                        OverviewCountUp.played = true
-                        countUp(to: fresh.personal)
                     }
                 } catch is CancellationError { return }
                 catch { model.error = error.localizedDescription }
@@ -1087,14 +1071,8 @@ struct DashboardView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
-    /// The month's total; once a launch it counts up from zero as the opening hands over.
-    @ViewBuilder private var heroAmount: some View {
-        if let countingCents, !hideAmounts {
-            CountingMoney(cents: countingCents)
-        } else {
-            amount(personal)
-        }
-    }
+    /// Show the actual total immediately, including on first launch.
+    private var heroAmount: some View { amount(personal) }
     /// The month's budget as the month dial: the budget used inside, the month's days around
     /// it, so it shows at a glance whether the money is going faster than the month. Travel
     /// is kept apart and claims still to come back are listed.

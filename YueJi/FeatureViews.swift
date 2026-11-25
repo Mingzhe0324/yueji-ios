@@ -2004,13 +2004,10 @@ private struct ComparisonRow: View {
 }
 struct AnimatedMoney: View {
     @Environment(\.locale) private var uiLocale
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let cents: Int
     var body: some View {
         let _ = uiLocale.identifier
-        Text(money(cents)).monospacedDigit()
-            .contentTransition(reduceMotion ? .identity : .numericText(value: Double(cents)))
-            .animation(reduceMotion ? nil : YueJiMotion.month, value: cents)
+        Text(money(cents)).ledgerAmountMotion(cents)
     }
 }
 struct LedgerFilterEditor: View {
@@ -5000,7 +4997,7 @@ struct TNGStatusFeedback: View {
         Label(tngStatus(notice), systemImage: notice.status == "pending" ? "clock" : "checkmark.circle.fill")
             .font(.headline).foregroundStyle(notice.status == "pending" ? Color.orange : Color.green)
             .contentTransition(.opacity)
-            .animation(reduceMotion ? nil : YueJiMotion.standard, value: notice.status)
+            .animation(reduceMotion || !ElegantMotion.enabled ? nil : YueJiMotion.content, value: notice.status)
     }
 }
 

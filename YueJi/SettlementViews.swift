@@ -761,6 +761,9 @@ struct SettlementDetailView: View {
     @EnvironmentObject var model: LedgerModel
     let id: String
     var celebrateConfirmation = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @AppStorage("playfulAnimations") private var animations = true
+    @State private var calculationExpanded = false
     @Namespace private var expenseTransition
     @State private var undo = false
     private var record: FriendSettlement? { model.settlement(id: id) }
@@ -788,7 +791,8 @@ struct SettlementDetailView: View {
                     Text(tr("结算不是消费或收入。原始消费保留。", "A settlement is neither spending nor income. Original expenses stay.", "Penyelesaian bukan belanja atau pendapatan. Belanja asal kekal.")).font(.footnote).foregroundStyle(.secondary)
                 }
                 Section {
-                    DisclosureGroup(tr("展开计算明细", "Expand calculation", "Kembangkan pengiraan")) {
+                    DisclosureGroup(tr("展开计算明细", "Expand calculation", "Kembangkan pengiraan"),
+                                    isExpanded: $calculationExpanded.animation(reduceMotion || !animations ? nil : YueJiMotion.detail)) {
                         ForEach(record.lines) { line in
                             VStack(alignment: .leading, spacing: 6) {
                                 Text(line.expense.displayName).font(.headline)
