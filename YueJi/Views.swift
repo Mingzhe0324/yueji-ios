@@ -1310,7 +1310,7 @@ struct DashboardView: View {
             NavigationLink { FriendSummaryView() } label: {
                 HStack {
                     VStack(alignment: .leading, spacing: 4) {
-                        Label(tr("朋友待还", "Friends owe", "Hutang rakan"), systemImage: "person.2.fill")
+                        Label(tr("对方待还", "Friends owe", "Hutang rakan"), systemImage: "person.2.fill")
                         Text(tr("全部月份", "All months", "Semua bulan")).font(.caption).foregroundStyle(.secondary)
                     }
                     Spacer()
@@ -2273,7 +2273,7 @@ struct TNGTimelineRow: View {
     @Environment(\.dynamicTypeSize) private var textSize
     private var movementLabel: String {
         if notice.status == "reimbursement" { return tr("报销到账", "Reimbursement received", "Tuntutan diterima") }
-        if notice.status == "repayment" { return tr("朋友还款", "Friend repayment", "Bayaran balik rakan") }
+        if notice.status == "repayment" { return tr("对方还款", "Friend repayment", "Bayaran balik rakan") }
         if notice.status == "settlement" { return tr("还款／结算", "Repayment / settlement", "Bayaran balik / penyelesaian") }
         switch notice.accountDirection {
         case .incoming: return tr("转入", "Incoming", "Masuk")
@@ -2461,7 +2461,7 @@ struct ExpenseDetailView: View {
                         }
                     }
                     if !entry.shares.isEmpty && entry.paidByFriend == nil {
-                        Section(tr("朋友分账", "Shared expenses", "Belanja dikongsi")) {
+                        Section(tr("分账与往来", "Shared expenses", "Belanja dikongsi")) {
                             ForEach(entry.shares) { share in
                                 VStack(alignment: .leading, spacing: 8) {
                                     LabeledContent(share.name, value: money(share.cents)).font(.headline)
@@ -2610,7 +2610,7 @@ private struct ExpenseDetailHero: View {
             TransactionAmount(cents: entry.purchaseDisplayCents, direction: entry.purchaseDirection)
                 .font(.largeTitle.bold()).minimumScaleFactor(0.6).lineLimit(1)
             if entry.paidByFriend != nil {
-                Text(tr("朋友代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya"))
+                Text(tr("他人代付 · 我的账户未付款", "Friend paid · no payment from my account", "Rakan membayar · tiada bayaran daripada akaun saya"))
                     .font(.caption).foregroundStyle(.secondary)
             }
             Text(entry.displayName).font(.title3.weight(.semibold)).multilineTextAlignment(.center)
@@ -3003,7 +3003,13 @@ struct ExpenseEditor: View {
                 ManualSettlementEntryView(entryType: $entryType, initialDate: initialDate)
             } else if original == nil && initialDraft == nil && entryType == "friendRefund" {
                 RefundFriendPaymentView(entryType: $entryType)
-            } else if original == nil && initialDraft == nil && entryType == "receipt" {
+            } else if original == nil && initialDraft == nil && entryType == "ownTransfer" {
+                Form {
+                    ManualEntryTypeSection(selection: $entryType)
+                    NavigationLink(EntryPurpose.ownTransfer.label) { BankTransferEditor() }
+                }.yuejiListSurface()
+                    .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
+            } else if original == nil && initialDraft == nil && EntryPurpose.receiptTypes.contains(entryType) {
                 ManualReceiptEntryView(entryType: $entryType, initialDate: initialDate)
             } else {
             Form {
@@ -3291,7 +3297,7 @@ struct ExpenseEditor: View {
             }
         } header: {
             Text(tr("谁付款", "Who paid", "Siapa membayar"))
-        } footer: { Text(tr("消费按个人份额计算；朋友代付不会计入我账户的付款。", "Spending uses your personal share. A friend's payment does not count as money leaving your account.", "Belanja menggunakan bahagian anda. Bayaran rakan tidak dikira sebagai wang keluar daripada akaun anda.")) }
+        } footer: { Text(tr("消费按个人份额计算；他人代付不会计入我账户的付款。", "Spending uses your personal share. A friend's payment does not count as money leaving your account.", "Belanja menggunakan bahagian anda. Bayaran rakan tidak dikira sebagai wang keluar daripada akaun anda.")) }
             .disabled((original?.refunded ?? 0) > 0 || (original.map { model.ledger.hasActiveSettlement(expenseID: $0.id) } ?? false))
     }
     private var merchantSection: some View {
@@ -3369,7 +3375,7 @@ struct ExpenseEditor: View {
             } else {
             Button(tr("全是我的", "Entirely mine", "Sepenuhnya milik saya")) { splitting = false }
             Button(tr("全是朋友的", "Entirely my friend's", "Sepenuhnya milik rakan")) { splitting = true; equal = true; includeMe = false; people = Array(people.prefix(1)) }
-            Toggle(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
+            Toggle(tr("分账与往来", "Split with friends", "Bahagi dengan rakan"), isOn: $splitting).guideTarget("expense.split")
             if splitting {
                 if original == nil, people.allSatisfy({ $0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
                    let last = model.ledger.expenses.filter({ !$0.shares.isEmpty && $0.paidByFriend == nil }).max(by: { $0.date < $1.date }) {
@@ -3559,7 +3565,7 @@ struct FriendsView: View {
                 Section {
                     VStack(alignment: .leading, spacing: 6) {
                         HStack(alignment: .center, spacing: 12) {
-                            Text(tr("朋友还欠你", "Friends owe you", "Rakan berhutang kepada anda"))
+                            Text(tr("对方还欠你", "Friends owe you", "Rakan berhutang kepada anda"))
                                 .font(.footnote.weight(.semibold)).foregroundStyle(.secondary)
                                 .textCase(.uppercase)
                             Spacer(minLength: 8)
@@ -3578,7 +3584,7 @@ struct FriendsView: View {
                             .minimumScaleFactor(0.6).lineLimit(1)
                         let payable = balances.reduce(0) { $0 + $1.payable }
                         if payable > 0 {
-                            Text(tr("我欠朋友：", "I owe friends: ", "Saya berhutang kepada rakan: ") + money(payable))
+                            Text(tr("我欠对方：", "I owe friends: ", "Saya berhutang kepada rakan: ") + money(payable))
                                 .font(.subheadline).foregroundStyle(.orange)
                         }
                         Text(tr("全部月份 · 点朋友查看明细和记录还款", "All months · tap a friend to settle up", "Semua bulan · ketik rakan untuk bayar balik"))
@@ -3613,7 +3619,7 @@ struct FriendsView: View {
                 } header: {
                     DashboardSectionHeader(title: tr("分账工具", "Split tools", "Alat pembahagian"))
                 }
-            }.yuejiDashboardSurface().navigationTitle(tr("朋友分账", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
+            }.yuejiDashboardSurface().navigationTitle(tr("分账与往来", "Shared expenses", "Belanja dikongsi")).navigationBarTitleDisplayMode(.large)
                 .yuejiSubtitle(tr("\(unsettled) 位待结清", LocalizedPhrase("\(unsettled) to settle up"), "\(unsettled) belum selesai"))
                 .toolbar { Button { adding = true } label: { Label(tr("新增代垫", "Add advance", "Tambah pendahuluan"), systemImage: "plus") } }
                 .sheet(isPresented: $adding) { ExpenseEditor(original: nil, startWithSplit: true) }
@@ -4144,8 +4150,8 @@ private struct GuideChapter: Identifiable {
             .init(id: "expense", title: tr("记一笔", "Add an expense", "Tambah belanja"), path: "", detail: tr("点“记一笔”，填写金额、商家和日期。", "Tap Add expense, then enter an amount, merchant and date.", "Ketik Tambah belanja, isi amaun, peniaga dan tarikh."), screens: [.overview, .newExpense, .savedExpense]),
             .init(id: "ledger", title: tr("看账本", "Find an entry", "Cari rekod"), path: "", detail: tr("到账本查找记录，再按需要筛选。", "Find entries in Ledger and narrow them down with filters.", "Cari rekod dalam Lejar dan tapis jika perlu."), screens: [.ledger, .filter, .filteredLedger]),
             .init(id: "receipt", title: tr("扫描收据", "Scan a receipt", "Imbas resit"), path: "", detail: tr("选照片后核对金额和日期，再按项目分给每个人。画面使用示例收据数据。", "Choose a photo, check the amounts and date, then assign each item. This demonstration uses sample data.", "Pilih foto, semak amaun dan tarikh, lalu bahagi item. Demonstrasi menggunakan data contoh."), screens: [.receiptEntry, .receipt(0), .receipt(1), .receipt(2), .receipt(3), .receipt(4)]),
-            .init(id: "split", title: tr("朋友分账", "Split with friends", "Bahagi bersama rakan"), path: "", detail: tr("从账本打开一笔消费，再按各自份额分账。", "Open an entry in Ledger and assign each friend's share.", "Buka rekod dalam Lejar dan tetapkan bahagian setiap rakan."), screens: [.ledger, .expenseDetail, .editExpense, .splitEditor, .friends]),
-            .init(id: "repayment", title: tr("朋友还款", "Record a repayment", "Rekod bayaran rakan"), path: "", detail: tr("打开朋友的欠款，按实际收到的金额记录还款。", "Open a friend's balance and record the amount received.", "Buka baki rakan dan rekod amaun yang diterima."), screens: [.friends, .friendDetail, .repaymentDone]),
+            .init(id: "split", title: tr("分账与往来", "Split with friends", "Bahagi bersama rakan"), path: "", detail: tr("从账本打开一笔消费，再按各自份额分账。", "Open an entry in Ledger and assign each friend's share.", "Buka rekod dalam Lejar dan tetapkan bahagian setiap rakan."), screens: [.ledger, .expenseDetail, .editExpense, .splitEditor, .friends]),
+            .init(id: "repayment", title: tr("对方还款", "Record a repayment", "Rekod bayaran rakan"), path: "", detail: tr("打开朋友的欠款，按实际收到的金额记录还款。", "Open a friend's balance and record the amount received.", "Buka baki rakan dan rekod amaun yang diterima."), screens: [.friends, .friendDetail, .repaymentDone]),
             .init(id: "recurring", title: tr("固定消费", "Recurring bills", "Belanja berulang"), path: "", detail: tr("新增计划，设置金额、周期和开始日期。", "Add a schedule with its amount, frequency and start date.", "Tambah jadual bersama amaun, kekerapan dan tarikh mula."), screens: [.recurring, .recurringEditor, .recurring]),
             .init(id: "applePay", title: tr("Apple Pay 自动记账", "Apple Pay automation", "Automasi Apple Pay"), path: "", detail: tr("在快捷指令选交易触发器，接入月记动作，并核对运行结果。系统画面为设置示意。", "Choose a transaction trigger in Shortcuts, connect YueJi's action and check the result. The system setup is illustrated.", "Pilih pencetus transaksi dalam Pintasan, sambung tindakan YueJi dan semak hasil. Tetapan sistem ialah ilustrasi."), screens: [.automation, .applePay(0), .applePay(1), .applePay(2), .applePay(3), .applePay(4)]),
             .init(id: "tng", title: tr("TNG 自动记账", "TNG automation", "Automasi TNG"), path: "", detail: tr("在快捷指令选通知触发器，接入月记动作；收到款项记为＋并由你确认。系统画面为设置示意。", "Choose a notification trigger and YueJi's action; incoming money appears as + for your review. The system setup is illustrated.", "Pilih pencetus notifikasi dan tindakan YueJi; wang masuk bertanda + untuk disemak. Tetapan sistem ialah ilustrasi."), screens: [.automation, .tngSetup(0), .tngSetup(1), .tngSetup(2), .tngSetup(3), .tngSetup(4), .tng, .tngIncoming]),
@@ -4316,7 +4322,7 @@ private enum GuideCue {
         case .receipt(3): return tr("为每个项目选择承担费用的人，共享项目可选多人。", "Choose who pays for each item; shared items can have several people.", "Pilih pembayar setiap item; item bersama boleh dikongsi beberapa orang.")
         case .receipt(4): return tr("这里显示每人应付，税费已计入。", "Each person's total includes their share of charges.", "Jumlah setiap orang termasuk bahagian cajnya.")
         case .expenseDetail: return tr("先查看账目详情，再点“编辑”。", "Review the entry, then tap Edit.", "Semak rekod, kemudian ketik Edit.")
-        case .editExpense: return tr("开启这笔消费的“朋友分账”。", "Enable splitting for this expense.", "Aktifkan pembahagian untuk belanja ini.")
+        case .editExpense: return tr("开启这笔消费的“分账与往来”。", "Enable splitting for this expense.", "Aktifkan pembahagian untuk belanja ini.")
         case .splitEditor: return tr("填好朋友份额，剩下的就是你的消费。", "Set each friend's share; the remainder is yours.", "Tetapkan bahagian rakan; bakinya milik anda.")
         case .friends: return tr("点朋友，查看他还欠多少。", "Tap a friend to see their outstanding balance.", "Ketik rakan untuk melihat baki hutangnya.")
         case .friendDetail: return tr("收到 RM 10 后，记录这次收款。", "After receiving RM 10, record the repayment.", "Selepas menerima RM 10, rekod bayaran itu.")
@@ -4438,7 +4444,7 @@ private struct GuideDemoScene: View {
         case .ledger, .savedExpense, .filteredLedger: return tr("账本", "Ledger", "Lejar")
         case .filter: return tr("筛选", "Filters", "Penapis")
         case .receipt(_): return tr("收据分账", "Receipt split", "Bahagi resit")
-        case .friends: return tr("朋友分账", "Shared expenses", "Belanja dikongsi")
+        case .friends: return tr("分账与往来", "Shared expenses", "Belanja dikongsi")
         case .friendDetail, .repayment, .repaymentDone: return tr("欠款明细", "Balance details", "Butiran baki")
         case .recurring, .recurringEditor: return tr("固定消费", "Recurring expenses", "Belanja berulang")
         case .automation: return tr("自动记账", "Automatic recording", "Rekod automatik")
@@ -4569,7 +4575,7 @@ private struct GuideDemoScene: View {
                 divider(); row(tr("日期", "Date", "Tarikh"), dateLabel(Date()))
                 divider(); row(tr("分类", "Category", "Kategori"), tr("餐饮", "Dining", "Makanan"))
             }
-            section { row(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), "○") }
+            section { row(tr("分账与往来", "Split with friends", "Bahagi dengan rakan"), "○") }
         case .savedExpense:
             heading(tr("账本", "Your ledger", "Lejar anda"))
             section { row("Lunch Cafe", "RM 18.00", icon: "checkmark.circle.fill", tint: .green) }
@@ -4596,10 +4602,10 @@ private struct GuideDemoScene: View {
             }
         case .receipt(let step): receiptContent(step)
         case .editExpense, .splitEditor:
-            heading(tr("朋友分账", "Split with friends", "Bahagi bersama rakan"))
+            heading(tr("分账与往来", "Split with friends", "Bahagi bersama rakan"))
             section(tr("实际付款", "Payment", "Bayaran")) {
                 row("Lunch Cafe", "RM 46.64")
-                divider(); row(tr("朋友分账", "Split with friends", "Bahagi dengan rakan"), screen == .splitEditor ? "●" : "○", target: "expense.split")
+                divider(); row(tr("分账与往来", "Split with friends", "Bahagi dengan rakan"), screen == .splitEditor ? "●" : "○", target: "expense.split")
             }
             if screen == .splitEditor {
                 section {
@@ -4611,7 +4617,7 @@ private struct GuideDemoScene: View {
         case .friends:
             heading(tr("共同消费，清楚分账", "Shared, fairly", "Kongsi dengan adil"))
             section {
-                row(tr("朋友还欠你", "Friends owe you", "Rakan berhutang"), "RM 17.49")
+                row(tr("对方还欠你", "Friends owe you", "Rakan berhutang"), "RM 17.49")
             }
             section(tr("未结清", "Outstanding", "Belum selesai")) {
                 row("Amy", "RM 17.49", icon: "person.crop.circle", target: "friends.person")
@@ -4670,7 +4676,7 @@ private struct GuideDemoScene: View {
             heading(tr("收到款项", "Incoming money", "Wang masuk"))
             section {
                 row("Amy", "+ RM 10.00", icon: "arrow.down.circle", tint: .green)
-                divider(); row(tr("朋友还款", "Friend repayment", "Bayaran rakan"), icon: "person.2")
+                divider(); row(tr("对方还款", "Friend repayment", "Bayaran rakan"), icon: "person.2")
                 divider(); row(tr("其他收入", "Other income", "Pendapatan lain"), icon: "plus.circle")
             }
         case .settings:

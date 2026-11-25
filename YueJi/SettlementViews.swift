@@ -1,5 +1,24 @@
 import SwiftUI
 
+enum EntryPurpose: String, CaseIterable {
+    case expense, loan, repayment, income, allowance, ownTransfer, refund, reimbursement, settlement, friendRefund
+    var label: String {
+        switch self {
+        case .expense: return tr("消费支出", "Expense", "Perbelanjaan")
+        case .loan: return tr("借钱给人", "Lend money", "Pinjamkan wang")
+        case .repayment: return tr("对方还款", "Repayment received", "Bayaran hutang diterima")
+        case .income: return tr("收入", "Income", "Pendapatan")
+        case .allowance: return IncomeKind.allowance.label
+        case .ownTransfer: return tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")
+        case .refund: return tr("退款到账", "Refund received", "Bayaran balik diterima")
+        case .reimbursement: return tr("报销到账", "Reimbursement received", "Tuntutan diterima")
+        case .settlement: return tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih")
+        case .friendRefund: return tr("退钱给对方", "Return money", "Pulangkan wang")
+        }
+    }
+    static let receiptTypes: Set<String> = ["receipt", "repayment", "income", "allowance", "refund", "reimbursement"]
+}
+
 struct ManualEntryTypeSection: View {
     @Environment(\.locale) private var uiLocale
     @Binding var selection: String
@@ -7,12 +26,11 @@ struct ManualEntryTypeSection: View {
         let _ = uiLocale.identifier
         Section {
             Picker(tr("记录类型", "Entry type", "Jenis rekod"), selection: $selection) {
-                Text(tr("消费", "Expense", "Belanja")).tag("expense")
-                Text(tr("朋友代付（待报销给他）", "Friend paid for me", "Rakan bayar untuk saya")).tag("friendPaid")
-                Text(tr("别人转账给我", "Money received", "Wang diterima")).tag("receipt")
-                Text(tr("借钱给人", "Lend money", "Pinjamkan wang")).tag("loan")
-                Text(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).tag("settlement")
-                Text(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan")).tag("friendRefund")
+                Text(EntryPurpose.expense.label).tag("expense")
+                Text(tr("他人代付", "Someone paid for me", "Orang lain bayar untuk saya")).tag("friendPaid")
+                ForEach(EntryPurpose.allCases.filter { $0 != .expense }, id: \.self) { purpose in
+                    Text(purpose.label).tag(purpose.rawValue)
+                }
             }
         }
     }
@@ -31,7 +49,10 @@ struct ManualReceiptEntryView: View {
     @State private var savedID: String?
     @State private var initialized = false
     var body: some View {
-        if let savedID { TNGIncomingView(id: savedID) }
+        if let savedID {
+            if entryType == "refund" { FinancialNoticeReviewView(id: savedID, initialPurpose: "refund") }
+            else { TNGIncomingView(id: savedID, initialPurpose: entryType == "receipt" ? "" : entryType) }
+        }
         else {
             Form {
                 ManualEntryTypeSection(selection: $entryType)
@@ -41,7 +62,7 @@ struct ManualReceiptEntryView: View {
                     BankAccountPicker(selection: $accountID)
                     DatePicker(tr("到账日期", "Received date", "Tarikh diterima"), selection: $date, in: ...Date())
                 } footer: {
-                    Text(tr("下一步选择还款、报销或收入，再确认到账。", "Next, choose repayment, reimbursement or income, then confirm the receipt.", "Seterusnya pilih bayaran hutang, tuntutan atau pendapatan, kemudian sahkan penerimaan."))
+                    Text(tr("下一步核对用途及关联账目。", "Next, review the purpose and linked entries.", "Seterusnya semak tujuan dan rekod berkaitan."))
                 }
                 Button(tr("下一步：确认用途", "Next: confirm purpose", "Seterusnya: sahkan tujuan")) {
                     guard let accountID else { return }
@@ -51,7 +72,7 @@ struct ManualReceiptEntryView: View {
                     }, completion: { savedID = $0 })
                 }.buttonStyle(LedgerPrimaryActionStyle())
                     .disabled(accountID == nil || sender.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || (try? toCents(amount)) == nil || model.isWorking("manual-receipt-" + draftID))
-            }.yuejiListSurface().navigationTitle(tr("别人转账给我", "Money received", "Wang diterima"))
+            }.yuejiListSurface().navigationTitle(EntryPurpose(rawValue: entryType)?.label ?? tr("别人转账给我", "Money received", "Wang diterima"))
                 .onAppear { if !initialized { date = min(initialDate, Date()); initialized = true } }
                 .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal")) { dismiss() } } }
         }
@@ -133,8 +154,8 @@ private enum ManualSettlementMode: String, CaseIterable {
     var direction: AccountDirection { self == .received ? .incoming : (self == .paid ? .outgoing : .neutral) }
     var label: String {
         switch self {
-        case .received: return tr("朋友还给我", "A friend repaid me", "Rakan membayar balik kepada saya")
-        case .paid: return tr("我还给朋友", "I repaid a friend", "Saya membayar balik kepada rakan")
+        case .received: return tr("对方还给我", "A friend repaid me", "Rakan membayar balik kepada saya")
+        case .paid: return tr("我还给对方", "I repaid a friend", "Saya membayar balik kepada rakan")
         case .net: return tr("双方抵扣 / 净额结算", "Offset / net settlement", "Tolakan / penyelesaian bersih")
         }
     }
@@ -146,7 +167,7 @@ struct ManualSettlementEntryView: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var entryType: String
     let initialDate: Date
-    @State private var mode: ManualSettlementMode = .received
+    @State private var mode: ManualSettlementMode = .paid
     @State private var friend = ""
     private var friends: [FriendBalance] {
         model.friends.filter {
@@ -159,10 +180,10 @@ struct ManualSettlementEntryView: View {
             ManualEntryTypeSection(selection: $entryType)
             Section {
                 Picker(tr("付款方向", "Payment direction", "Arah bayaran"), selection: $mode) {
-                    ForEach(ManualSettlementMode.allCases, id: \.self) { Text($0.label).tag($0) }
+                    ForEach(ManualSettlementMode.allCases.filter { $0 != .received }, id: \.self) { Text($0.label).tag($0) }
                 }
-                Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
-                    Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
+                Picker(tr("对象", "Person", "Individu"), selection: $friend) {
+                    Text(tr("请选择对象", "Choose a friend", "Pilih rakan")).tag("")
                     ForEach(friends) { Text($0.name).tag($0.id) }
                 }
                 if friends.isEmpty {
@@ -176,7 +197,7 @@ struct ManualSettlementEntryView: View {
                     SettlementSelectionView(friend: friend, repaymentDirection: mode.direction, initialDate: initialDate)
                 }.disabled(!friends.contains(where: { $0.id == friend }))
             }
-        }.yuejiListSurface().navigationTitle(tr("还款 / 结算", "Repayment / Settlement", "Bayaran balik / Penyelesaian")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(EntryPurpose.settlement.label).navigationBarTitleDisplayMode(.inline)
             .onChange(of: mode) { _, _ in friend = "" }
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button(tr("取消", "Cancel", "Batal"), systemImage: "xmark") { dismiss() } } }
     }
@@ -208,8 +229,8 @@ struct SettlementPaymentRow: View {
 }
 
 private func settledDebtLabel(_ cents: Int) -> String {
-    if cents > 0 { return tr("已结清朋友欠我的款项", "Settled debt owed to me", "Hutang kepada saya diselesaikan") }
-    if cents < 0 { return tr("已结清我欠朋友的款项", "Settled debt I owed", "Hutang saya diselesaikan") }
+    if cents > 0 { return tr("已结清对方欠我的款项", "Settled debt owed to me", "Hutang kepada saya diselesaikan") }
+    if cents < 0 { return tr("已结清我欠对方的款项", "Settled debt I owed", "Hutang saya diselesaikan") }
     return tr("本笔暂未结算", "No amount settled for this item", "Tiada amaun diselesaikan untuk rekod ini")
 }
 
@@ -261,8 +282,8 @@ struct FriendDetailView: View {
                     .listRowBackground(Color.clear)
                 }
                 Section(tr("余额", "Balance", "Baki")) {
-                    LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya")) { AnimatedMoney(cents: friend.owed) }
-                    LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka")) { AnimatedMoney(cents: friend.payable) }
+                    LabeledContent(tr("对方欠我", "They owe me", "Mereka berhutang kepada saya")) { AnimatedMoney(cents: friend.owed) }
+                    LabeledContent(tr("我欠对方", "I owe them", "Saya berhutang kepada mereka")) { AnimatedMoney(cents: friend.payable) }
                     LabeledContent(settlementDirection(net, name: friend.name)) { AnimatedMoney(cents: abs(net)) }
                 }
                 Section(tr("原始账目", "Original expenses", "Belanja asal")) {
@@ -313,7 +334,7 @@ struct FriendDebtRow: View {
             Text(dateLabel(item.expense.date) + " · " + item.expense.categorySummary).font(.caption).foregroundStyle(.secondary)
             Text(tr("付款人：", "Paid by: ", "Dibayar oleh: ") + item.expense.payerLabel).font(.caption)
             Text(item.balance == 0 ? tr("已结清", "Settled", "Selesai") :
-                 (item.balance > 0 ? tr("朋友欠我：", "They owe me: ", "Mereka berhutang: ") : tr("我欠朋友：", "I owe them: ", "Saya berhutang: ")) + money(abs(item.balance)))
+                 (item.balance > 0 ? tr("对方欠我：", "They owe me: ", "Mereka berhutang: ") : tr("我欠对方：", "I owe them: ", "Saya berhutang: ")) + money(abs(item.balance)))
                 .font(.subheadline).monospacedDigit()
         }.padding(.vertical, 4)
     }
@@ -517,7 +538,7 @@ struct RefundFriendPaymentView: View {
     var body: some View {
         refundForm
             .yuejiListSurface()
-            .navigationTitle(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan"))
+            .navigationTitle(tr("退钱给对方", "Return money to a friend", "Pulangkan wang kepada rakan"))
             .navigationBarTitleDisplayMode(.inline)
             .navigationDestination(isPresented: $reviewing) { reviewDestination }
             .onAppear(perform: initializeSelection)
@@ -536,8 +557,8 @@ struct RefundFriendPaymentView: View {
 
     private var friendSection: some View {
         Section {
-            Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
-                Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
+            Picker(tr("对象", "Person", "Individu"), selection: $friend) {
+                Text(tr("请选择对象", "Choose a friend", "Pilih rakan")).tag("")
                 ForEach(friends) { friend in Text(friend.name).tag(friend.id) }
             }
             ForEach(items) { item in refundRow(item) }
@@ -668,8 +689,8 @@ struct SettlementReviewView: View {
                         }
                     } else if plan.transfer != 0 { Section { BankAccountPicker(selection: $accountID) } }
                     Section(plan.name) {
-                        LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
-                        LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
+                        LabeledContent(tr("对方欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
+                        LabeledContent(tr("我欠对方", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
                         LabeledContent(tr("相互抵扣", "Offset", "Tolakan"), value: money(plan.offset))
                         LabeledContent {
                             TransactionAmount(cents: abs(plan.transfer), direction: plan.transfer > 0 ? .incoming : (plan.transfer < 0 ? .outgoing : .neutral))
@@ -906,7 +927,7 @@ struct NoticeSettlementFriendView: View {
                 Text(tr("没有可结算的欠款，请先记录原账目及分账。", "No debts to settle. Record the original entries and shares first.", "Tiada hutang untuk diselesaikan. Rekod transaksi asal dan bahagian dahulu."))
                     .foregroundStyle(.secondary)
             }
-        }.yuejiListSurface().navigationTitle(tr("选择朋友", "Choose a friend", "Pilih rakan"))
+        }.yuejiListSurface().navigationTitle(tr("选择对象", "Choose a friend", "Pilih rakan"))
     }
 }
 
@@ -933,8 +954,8 @@ struct NoticeNetSettlementView: View {
                 Form {
                     if let notice = model.notice(id: noticeID) { NoticeAccountSection(notice: notice) }
                     if let plan {
-                        LabeledContent(tr("朋友欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
-                        LabeledContent(tr("我欠朋友", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
+                        LabeledContent(tr("对方欠我", "They owe me", "Mereka berhutang kepada saya"), value: money(plan.receivable))
+                        LabeledContent(tr("我欠对方", "I owe them", "Saya berhutang kepada mereka"), value: money(plan.payable))
                         LabeledContent(plan.transfer > 0 ? tr("本次收款", "Received now", "Diterima sekarang") : tr("本次付款", "Paid now", "Dibayar sekarang"), value: money(abs(plan.transfer) + rounding))
                         if rounding > 0 {
                             LabeledContent(tr("用于结清欠款", "Applied to debt", "Digunakan untuk hutang"), value: money(abs(plan.transfer)))
@@ -986,7 +1007,7 @@ struct SettlementNoticeSection: View {
                     }
                 }
                 if ["payment", "transfer"].contains(notice.kind) {
-                    NavigationLink(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan")) {
+                    NavigationLink(tr("退钱给对方", "Return money to a friend", "Pulangkan wang kepada rakan")) {
                         RefundFriendPaymentView(initialNoticeID: notice.id)
                     }
                 }

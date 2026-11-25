@@ -386,6 +386,16 @@ extension Ledger {
             guard ids.contains(id) else { throw LedgerError.invalid("Payment account no longer exists") }
         }
     }
+
+    mutating func deleteBankAccount(id: String) throws {
+        guard bankAccounts.contains(where: { $0.id == id }) else { return }
+        var copy = self
+        copy.bankAccounts.removeAll { $0.id == id }
+        do { self = try copy.validated() }
+        catch {
+            throw LedgerError.invalid(tr("此账户仍有关联账目、转账或规则。请先调整这些关联，再删除账户。", "This account still has linked entries, transfers or rules. Reassign them before deleting it.", "Akaun masih mempunyai rekod, pindahan atau peraturan berkaitan. Tetapkan semula sebelum memadam."))
+        }
+    }
 }
 
 /// Genuine income: what a person records by hand or confirms from a bank/TNG notice. Transfers

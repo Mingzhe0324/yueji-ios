@@ -75,7 +75,7 @@ struct TravelBookDetail: View {
                         NavigationLink { ExpenseDetailView(id: debt.expense.id, embeddedInNavigation: true) } label: {
                             VStack(alignment: .leading, spacing: 4) {
                                 Text(debt.friend + " · " + debt.expense.displayName)
-                                Text((debt.balance > 0 ? tr("朋友欠我：", "Owed to me: ", "Hutang kepada saya: ") : tr("我欠朋友：", "I owe: ", "Saya berhutang: ")) + money(abs(debt.balance)))
+                                Text((debt.balance > 0 ? tr("对方欠我：", "Owed to me: ", "Hutang kepada saya: ") : tr("我欠对方：", "I owe: ", "Saya berhutang: ")) + money(abs(debt.balance)))
                                     .font(.caption).foregroundStyle(.secondary)
                             }
                         }
@@ -1174,7 +1174,7 @@ struct RefundsView: View {
         }.yuejiListSurface().navigationTitle(tr("退款记录", "Refunds", "Bayaran balik")).navigationBarTitleDisplayMode(.inline)
             .onAppear { if refundAccountID == nil { refundAccountID = expense?.bankAccountID } }
             .alert(tr("退款", "Refund", "Bayaran balik"), isPresented: Binding(get: { error != nil }, set: { if !$0 { error = nil } })) { Button("OK") {} } message: { Text(error ?? "") }
-            .confirmationDialog(tr("撤销退款？若已退钱给朋友，请先核对返款记录。", "Undo refund? Check any money already returned to friends first.", "Batalkan bayaran balik? Semak wang yang sudah dipulangkan kepada rakan dahulu."), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
+            .confirmationDialog(tr("撤销退款？若已退钱给对方，请先核对返款记录。", "Undo refund? Check any money already returned to friends first.", "Batalkan bayaran balik? Semak wang yang sudah dipulangkan kepada rakan dahulu."), isPresented: Binding(get: { undo != nil }, set: { if !$0 { undo = nil } }), titleVisibility: .visible) {
                 Button(tr("撤销", "Undo", "Batal"), role: .destructive) { if let r = undo { model.perform(key: "refund-" + expenseID, action: { [expenseID, r] in try $0.removeRefund(expenseID: expenseID, refundID: r.id) }, completion: { _ in model.showSaved() }) }; undo = nil }
             }
     }
@@ -1508,7 +1508,7 @@ struct FriendSpendingView: View {
         List {
             Section(tr("当前欠款 · 全部月份", "Current balance · all months", "Baki semasa · semua bulan")) {
                 LabeledContent(tr("尚欠我", "Still owes me", "Masih berhutang saya"), value: money(total?.owed ?? 0))
-                LabeledContent(tr("我欠朋友", "I owe this friend", "Saya berhutang rakan"), value: money(total?.payable ?? 0))
+                LabeledContent(tr("我欠对方", "I owe this friend", "Saya berhutang rakan"), value: money(total?.payable ?? 0))
             }
             Section {
                 Toggle(tr("全部月份", "All months", "Semua bulan"), isOn: $allMonths)
@@ -1589,7 +1589,7 @@ struct FriendStatementView: View {
             if !all { MonthPicker(month: $month) }
             Text(statement).textSelection(.enabled)
             ShareLink(item: statement) { Label(tr("分享账单", "Share statement", "Kongsi penyata"), systemImage: "square.and.arrow.up") }.disabled(loadedQuery != requestedQuery || statement.isEmpty)
-        }.yuejiListSurface().navigationTitle(tr("朋友账单", "Friend statement", "Penyata rakan")).navigationBarTitleDisplayMode(.inline)
+        }.yuejiListSurface().navigationTitle(tr("分账账单", "Friend statement", "Penyata rakan")).navigationBarTitleDisplayMode(.inline)
             .yuejiUpdating(loadedQuery != requestedQuery)
             .task(id: requestedQuery) {
                 guard loadedQuery != requestedQuery else { return }
@@ -1952,7 +1952,7 @@ struct SpendingComparisonView: View {
             Section(tr("个人净消费", "Personal net spending", "Belanja bersih peribadi")) {
                 ComparisonRow(name: tr("总计", "Total", "Jumlah"), current: currentSummary.personal, previous: priorSummary.personal)
                 Text(monthKey(month) + " / " + monthKey(previous)).font(.caption)
-                Text(tr("按两个完整自然月内已记录的账目比较；本月未结束时也不会按天折算。退款扣回原消费月份，朋友还款不算收入。", "Compares recorded entries in the two calendar months, without prorating an unfinished month. Refunds reduce the original month; repayments are not income.", "Membandingkan rekod dua bulan kalendar tanpa prorata bulan belum tamat. Pulangan mengurangkan bulan asal; bayaran balik hutang bukan pendapatan.")).font(.footnote)
+                Text(tr("按两个完整自然月内已记录的账目比较；本月未结束时也不会按天折算。退款扣回原消费月份，对方还款不算收入。", "Compares recorded entries in the two calendar months, without prorating an unfinished month. Refunds reduce the original month; repayments are not income.", "Membandingkan rekod dua bulan kalendar tanpa prorata bulan belum tamat. Pulangan mengurangkan bulan asal; bayaran balik hutang bukan pendapatan.")).font(.footnote)
             }
             Section(tr("分类变化", "Category changes", "Perubahan kategori")) {
                 ForEach(model.ledger.categoryNames, id: \.self) { category in
@@ -2088,7 +2088,7 @@ struct CSVExportView: View {
                 if !all { MonthPicker(month: $month) }
                 Picker(tr("导出内容", "Export content", "Kandungan eksport"), selection: $splits) {
                     Text(tr("消费明细", "Expense details", "Butiran belanja")).tag(false)
-                    Text(tr("朋友分账明细", "Friend split details", "Butiran bahagian rakan")).tag(true)
+                    Text(tr("分账与往来明细", "Friend split details", "Butiran bahagian rakan")).tag(true)
                 }
                 Text(tr("消费明细保留原币金额和汇率；分账明细包含每人的份额、退款、已还、已退回及剩余欠款。所有统计金额使用 MYR。按消费月份选取，还款余额为截至导出时的状态。", "Expenses include original currency and rate. Splits include each person's share, refunds, repayments, returns and outstanding balance in MYR. Filtered by spending month, with balances as of export.", "Belanja termasuk mata wang asal dan kadar. Bahagian termasuk amaun, pulangan, bayaran dan baki setiap rakan dalam MYR. Ditapis mengikut bulan belanja, dengan baki semasa eksport.")).font(.footnote)
                 Button {
@@ -2118,7 +2118,7 @@ func tngStatus(_ notice: TNGNotice) -> String {
     if notice.resolution == "duplicate" { return tr("已合并重复通知", "Duplicate notices merged", "Notifikasi pendua digabungkan") }
     switch notice.status {
     case "recorded": return tr("已记消费", "Expense recorded", "Belanja direkod")
-    case "repayment": return tr("已确认为朋友还款", "Confirmed repayment", "Bayaran balik disahkan")
+    case "repayment": return tr("已确认为对方还款", "Confirmed repayment", "Bayaran balik disahkan")
     case "income": return tr("其他收入", "Other income", "Pendapatan lain")
     case "ownTransfer": return tr("自己账户转入", "Own-account transfer", "Pindahan akaun sendiri")
     case "transfer": return tr("转账 · 不计消费", "Transfer · excluded", "Pindahan · dikecualikan")
@@ -2392,7 +2392,7 @@ struct TNGInboxView: View {
             Section(tr("收款概览 · 全部月份", "Incoming summary · all months", "Ringkasan wang masuk · semua bulan")) {
                 LabeledContent(tr("待确认收款", "Incoming to review", "Wang masuk untuk semakan"), value: String(model.readIndex.incomingReviewCount))
                 LabeledContent(tr("已确认其他收入", "Confirmed other income", "Pendapatan lain disahkan"), value: money(model.readIndex.confirmedIncome))
-                Text(tr("确认的收入保存在这里，不抵扣消费；只有你选择时才会加入预算。朋友还款不算收入。", "Confirmed income is kept here without reducing spending. It goes into a budget only when you choose. Repayments are not income.", "Pendapatan disahkan disimpan di sini tanpa mengurangkan belanja. Ia masuk ke bajet hanya apabila anda pilih. Bayaran balik bukan pendapatan.")).font(.caption)
+                Text(tr("确认的收入保存在这里，不抵扣消费；只有你选择时才会加入预算。对方还款不算收入。", "Confirmed income is kept here without reducing spending. It goes into a budget only when you choose. Repayments are not income.", "Pendapatan disahkan disimpan di sini tanpa mengurangkan belanja. Ia masuk ke bajet hanya apabila anda pilih. Bayaran balik bukan pendapatan.")).font(.caption)
             }
                         }.navigationTitle(tr("收款汇总", "Incoming summary", "Ringkasan wang masuk"))
                     } label: { Label(tr("收款汇总", "Incoming summary", "Ringkasan wang masuk"), systemImage: "chart.bar") }
@@ -4269,6 +4269,7 @@ struct TNGIncomingView: View {
     @Environment(\.locale) private var uiLocale
     @EnvironmentObject var model: LedgerModel
     let id: String
+    var initialPurpose: String = ""
     @State private var purpose = ""
     @State private var friend = ""
     @State private var selectedDebts = Set<String>()
@@ -4364,7 +4365,7 @@ struct TNGIncomingView: View {
             .modifier(AutomaticRecordDeletion(notice: notice, detail: true))
             .modifier(IncomeBudgetPresentation(request: $allocationRequest, removing: $removingAllocation))
             .onChange(of: reimbursementExpenseIDs) { _, _ in reimbursementRounding = 0 }
-            .onAppear { if !initialized, let n = notice { initialized = true; date = n.date } }
+            .onAppear { if !initialized, let n = notice { initialized = true; date = n.date; purpose = initialPurpose } }
             .onChange(of: friend) { _, _ in selectedDebts.removeAll(); acceptRounding = false }
             .onChange(of: selectedDebts) { _, _ in acceptRounding = false }
             .onChange(of: repaymentItems.map(\.id)) { _, _ in
@@ -4388,7 +4389,7 @@ struct TNGIncomingView: View {
                                 Text(dateLabel(line.expense.date)).font(.caption).foregroundStyle(.secondary)
                                 LabeledContent(tr("本次抵扣", "Applied now", "Dibayar sekarang"), value: money(line.applied))
                                 if line.before < line.applied {
-                                    LabeledContent(tr("待退朋友", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(line.applied - line.before))
+                                    LabeledContent(tr("待退对方", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(line.applied - line.before))
                                 } else {
                                     LabeledContent(tr("还后剩余", "Left outstanding", "Baki selepas bayaran"), value: money(line.before - line.applied))
                                 }
@@ -4431,19 +4432,19 @@ struct TNGIncomingView: View {
         Section(tr("这笔钱是什么用途？", "What is this money for?", "Apakah tujuan wang ini?")) {
             Picker(tr("用途", "Purpose", "Tujuan"), selection: $purpose) {
                 Text(tr("请选择", "Choose", "Pilih")).tag("")
-                Text(tr("朋友还款", "Friend repayment", "Bayaran balik rakan")).tag("repayment")
-                Text(tr("报销到账", "Reimbursement received", "Tuntutan diterima")).tag("reimbursement")
+                Text(EntryPurpose.repayment.label).tag("repayment")
+                Text(EntryPurpose.reimbursement.label).tag("reimbursement")
                 Text(IncomeKind.allowance.label).tag("allowance")
-                Text(tr("其他收入", "Other income", "Pendapatan lain")).tag("income")
-                Text(tr("自己账户转入", "Own-account transfer", "Pindahan akaun sendiri")).tag("ownTransfer")
+                Text(EntryPurpose.income.label).tag("income")
+                Text(EntryPurpose.ownTransfer.label).tag("ownTransfer")
                 Text(tr("忽略", "Ignore", "Abaikan")).tag("ignored")
             }
             if purpose == "reimbursement" {
                 ReimbursementMatchFields(party: notice?.party ?? "", cents: notice?.cents ?? 0, date: date, selected: $reimbursementExpenseIDs, rounding: $reimbursementRounding)
             }
             if purpose == "repayment" {
-                Picker(tr("朋友", "Friend", "Rakan"), selection: $friend) {
-                    Text(tr("请选择朋友", "Choose a friend", "Pilih rakan")).tag("")
+                Picker(tr("对象", "Person", "Individu"), selection: $friend) {
+                    Text(tr("请选择对象", "Choose a friend", "Pilih rakan")).tag("")
                     ForEach(friends) { f in Text(f.name + " · " + money(f.owed)).tag(f.id) }
                 }
                 if let selected = friends.first(where: { $0.id == friend }), selected.payable > 0 {
@@ -4468,7 +4469,7 @@ struct TNGIncomingView: View {
                     }
                     .accessibilityIdentifier("repayment.debt." + item.expense.id)
                     if model.ledger.incomingRepaymentCapacity(item) > max(0, item.balance) {
-                        Text(tr("原收款包含这笔已退款费用时才勾选，多收部分将记为待退朋友。", "Includes a refunded share. Select only if the receipt included this purchase; excess becomes money to return.", "Termasuk bahagian dipulangkan. Pilih hanya jika penerimaan merangkumi belanja ini; lebihan perlu dipulangkan."))
+                        Text(tr("原收款包含这笔已退款费用时才勾选，多收部分将记为待退对方。", "Includes a refunded share. Select only if the receipt included this purchase; excess becomes money to return.", "Termasuk bahagian dipulangkan. Pilih hanya jika penerimaan merangkumi belanja ini; lebihan perlu dipulangkan."))
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -4481,7 +4482,7 @@ struct TNGIncomingView: View {
                 }
                 LabeledContent(tr("所选未还金额", "Selected outstanding", "Baki dipilih"), value: money(selectedBalance))
                 if let cents = notice?.cents, cents > selectedBalance, cents <= selectedReceiptCapacity {
-                    LabeledContent(tr("本次待退朋友", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(cents - max(0, selectedBalance)))
+                    LabeledContent(tr("本次待退对方", "Due back to friend", "Perlu dipulangkan kepada rakan"), value: money(cents - max(0, selectedBalance)))
                 }
                 if roundingCandidate > 0 {
                     Toggle(tr("确认多收金额作为尾差", "Accept the extra amount as rounding", "Terima amaun tambahan sebagai pembundaran"), isOn: $acceptRounding)
@@ -5053,6 +5054,7 @@ struct FinancialNoticeReviewView: View {
     @EnvironmentObject var model: LedgerModel
     @Environment(\.dismiss) private var dismiss
     let id: String
+    var initialPurpose: String = ""
     @State private var purpose = ""
     @State private var party = ""
     @State private var amount = ""
@@ -5096,19 +5098,19 @@ struct FinancialNoticeReviewView: View {
                     Picker(tr("这是什么交易？", "What is this transaction?", "Apakah transaksi ini?"), selection: $purpose) {
                         Text(tr("请选择用途", "Select a purpose", "Pilih tujuan")).tag("")
                         if notice.kind != "incoming" {
-                            Text(tr("消费支出", "Expense", "Perbelanjaan")).tag("expense")
-                            Text(tr("借钱给人", "Lend money", "Pinjamkan wang")).tag("loan")
+                            Text(EntryPurpose.expense.label).tag("expense")
+                            Text(EntryPurpose.loan.label).tag("loan")
                         }
-                        Text(tr("收入", "Income", "Pendapatan")).tag("income")
+                        Text(EntryPurpose.income.label).tag("income")
                         Text(IncomeKind.allowance.label).tag("allowance")
-                        Text(tr("自己的账户转账 / 充值", "Own-account transfer / top-up", "Pindahan akaun sendiri / tambah nilai")).tag("ownTransfer")
-                        Text(tr("退款到账", "Refund received", "Bayaran balik diterima")).tag("refund")
-                        Text(tr("报销到账", "Reimbursement received", "Tuntutan diterima")).tag("reimbursement")
+                        Text(EntryPurpose.ownTransfer.label).tag("ownTransfer")
+                        Text(EntryPurpose.refund.label).tag("refund")
+                        Text(EntryPurpose.reimbursement.label).tag("reimbursement")
                         if ["incoming", "payment", "transfer"].contains(notice.kind) {
-                            Text(notice.kind == "incoming" ? tr("还款 / 净结算", "Repayment / net settlement", "Bayaran balik / penyelesaian bersih") : tr("还款 / 报销给朋友", "Repay / reimburse a friend", "Bayar balik rakan")).tag("settlement")
+                            Text(EntryPurpose.settlement.label).tag("settlement")
                         }
                         if ["payment", "transfer"].contains(notice.kind) {
-                            Text(tr("退钱给朋友", "Return money to a friend", "Pulangkan wang kepada rakan")).tag("friendRefund")
+                            Text(EntryPurpose.friendRefund.label).tag("friendRefund")
                         }
                         if notice.possibleDuplicate { Text(tr("同一笔交易，不重复入账", "Same transaction, do not record again", "Transaksi sama, jangan rekod semula")).tag("duplicate") }
                         Text(tr("忽略", "Ignore", "Abaikan")).tag("ignore")
@@ -5156,7 +5158,7 @@ struct FinancialNoticeReviewView: View {
                     Text(tr("下一步选择转出和转入账户，只有一边通知也可以。", "Next, choose both accounts. One notification is enough.", "Seterusnya pilih kedua-dua akaun. Satu notifikasi memadai.")).font(.caption).foregroundStyle(.secondary)
                 }
                 if purpose == "settlement" {
-                    NavigationLink(tr("选择朋友", "Choose a friend", "Pilih rakan")) { NoticeSettlementFriendView(noticeID: id) }
+                    NavigationLink(tr("选择对象", "Choose a friend", "Pilih rakan")) { NoticeSettlementFriendView(noticeID: id) }
                 } else if purpose == "friendRefund" {
                     NavigationLink(tr("选择退款账单", "Choose refunded expenses", "Pilih belanja dipulangkan")) {
                         RefundFriendPaymentView(initialNoticeID: id)
@@ -5199,6 +5201,7 @@ struct FinancialNoticeReviewView: View {
                 // Incoming money is never assumed to be income: the person chooses its purpose.
                 else if n.kind == "payment" { purpose = "expense" }
                 if n.possibleDuplicate { purpose = "duplicate" }
+                if !initialPurpose.isEmpty { purpose = initialPurpose }
             }
             .onChange(of: amount) { _, _ in reimbursementRounding = 0 }
             .onChange(of: date) { _, _ in reimbursementRounding = 0 }

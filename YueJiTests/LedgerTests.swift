@@ -4505,6 +4505,59 @@ final class ConvenienceFeatureTests: XCTestCase {
         XCTAssertNil(ledger.backupCreatedAt)
         XCTAssertNotNil(try LocalStore.decode(LocalStore.exportData(ledger)).backupCreatedAt)
     }
+    func testDeletingAccountIsAtomicAndPreservesLinkedEntries() throws {
+        let date = Date().addingTimeInterval(-86400)
+        let account = BankAccount(name: "Wallet", openingCents: 2000, openingDate: date)
+        var ledger = Ledger()
+        ledger.bankAccounts = [account]
+        var unused = ledger
+        try unused.deleteBankAccount(id: account.id)
+        XCTAssertTrue(unused.bankAccounts.isEmpty)
+        ledger.expenses = [Expense(bankAccountID: account.id, merchant: "Purchase", cents: 100, date: date)]
+        let before = try LocalStore.encode(ledger)
+        XCTAssertThrowsError(try ledger.deleteBankAccount(id: account.id))
+        XCTAssertEqual(try LocalStore.encode(ledger), before)
+        ledger.expenses = []
+        _ = try ledger.addManualReceipt(id: "manual", sender: "Person", cents: 300, date: date, accountID: account.id)
+        XCTAssertThrowsError(try ledger.deleteBankAccount(id: account.id))
+        XCTAssertEqual(ledger.bankAccounts.count, 1)
+        XCTAssertNoThrow(try ledger.validated())
+    }
+
+    func testManualRepaymentUsesSameRefundAllocationAsNotification() throws {
+        let date = Date().addingTimeInterval(-86400)
+        let account = BankAccount(name: "Wallet", openingCents: 0, openingDate: date.addingTimeInterval(-86400))
+        var ledger = Ledger(expenses: [
+            Expense(id: "meal", merchant: "Meal", cents: 1800, date: date, shares: [Share(name: "Colleague", cents: 900)]),
+            Expense(id: "other", merchant: "Another purchase", cents: 1200, date: date, shares: [Share(name: "Colleague", cents: 600)])])
+        ledger.bankAccounts = [account]
+        try ledger.addRefund(expenseID: "meal", cents: 1800, date: date)
+        _ = try ledger.addManualReceipt(id: "manual", sender: "Colleague", cents: 1500, date: date, accountID: account.id)
+        try ledger.resolveTNGIncoming(id: "manual", purpose: "repayment", friend: "Colleague", date: date, selectedExpenseIDs: ["meal", "other"])
+        XCTAssertEqual(ledger.bankBalance(account), 1500)
+        XCTAssertEqual(ledger.friendRefundItems(friend: "Colleague").first?.balance, -900)
+        XCTAssertEqual(ledger.friendDebtItems.first { $0.expense.id == "other" }?.balance, 0)
+        XCTAssertThrowsError(try ledger.resolveTNGIncoming(id: "manual", purpose: "repayment", friend: "Colleague", date: date, selectedExpenseIDs: ["meal", "other"]))
+        XCTAssertNoThrow(try LocalStore.decode(LocalStore.encode(ledger)))
+    }
+
+    func testSharedStatementIncludesFriendPaidPurchaseAndOnlyRemainingBalance() throws {
+        let date = Date().addingTimeInterval(-86400)
+        var ledger = Ledger(expenses: [Expense(merchant: "Paid by colleague", cents: 2400, date: date,
+                                               shares: [Share(name: "Colleague", cents: 1400)], paidByFriend: "Colleague")])
+        let statement = ledger.friendStatement(key: "colleague", month: nil)
+        XCTAssertTrue(statement.contains("Paid by colleague"))
+        XCTAssertTrue(statement.contains(money(1000)))
+        XCTAssertFalse(statement.contains(money(2400)))
+        ledger.expenses = [Expense(merchant: "Refunded order", cents: 2000, date: date,
+                                  shares: [Share(name: "Colleague", cents: 1000, repayments: [Repayment(cents: 1000, date: date)])])]
+        try ledger.addRefund(expenseID: ledger.expenses[0].id, cents: 2000, date: date)
+        let refunded = ledger.friendStatement(key: "colleague", month: nil)
+        XCTAssertTrue(refunded.contains("Refunded order"))
+        XCTAssertTrue(refunded.contains(money(1000)))
+        XCTAssertFalse(refunded.contains(money(2000)))
+    }
+
     func testStatementOnlySharesSelectedFriendAndSpendingMonth() throws {
         let now = Date()
         var ledger = Ledger()

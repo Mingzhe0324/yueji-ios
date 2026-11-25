@@ -269,12 +269,15 @@ struct BankAccountsView: View {
 
 private struct BankAccountDetail: View {
     @EnvironmentObject var model: LedgerModel
+    @Environment(\.dismiss) private var dismiss
     let accountID: String
     private enum Editor: String, Identifiable {
         case account, interest
         var id: String { rawValue }
     }
     @State private var editor: Editor?
+    @State private var deleting = false
+    @State private var deletionError: String?
     var body: some View {
         List {
             if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {
@@ -287,6 +290,8 @@ private struct BankAccountDetail: View {
                     LabeledContent(tr("期初余额", "Opening balance", "Baki awal"), value: money(account.openingCents))
                     LabeledContent(tr("期初时间", "Opening date", "Tarikh awal")) { Text(account.openingDate, format: .dateTime.year().month().day().hour().minute()) }
                     Button(tr("编辑账户", "Edit account", "Edit akaun")) { editor = .account }
+                    Button(tr("删除账户", "Delete account", "Padam akaun"), role: .destructive) { deleting = true }
+                        .accessibilityIdentifier("bankAccount.delete")
                 } footer: {
                     Text(tr("期初余额指此时间之前的余额；更早的收支不会重复计入。", "Opening balance is the balance just before this time; earlier entries are not counted again.", "Baki awal ialah baki sebelum masa ini; rekod lebih awal tidak dikira semula."))
                 }
@@ -363,6 +368,18 @@ private struct BankAccountDetail: View {
                 }
             }
         }.yuejiListSurface().navigationTitle(tr("账户详情", "Account details", "Butiran akaun"))
+        .confirmationDialog(tr("删除此账户？", "Delete this account?", "Padam akaun ini?"), isPresented: $deleting, titleVisibility: .visible) {
+            Button(tr("删除账户", "Delete account", "Padam akaun"), role: .destructive) {
+                model.perform(key: "delete-account-" + accountID, action: { ledger in
+                    try ledger.deleteBankAccount(id: accountID)
+                }, completion: { _ in dismiss() }, failure: { deletionError = $0.localizedDescription })
+            }
+        } message: {
+            Text(tr("删除账户及其期初余额。有关联记录时会阻止删除，保留原账目。", "Deletes the account and its opening balance. Linked records prevent deletion and remain intact.", "Padam akaun dan baki awalnya. Rekod berkaitan menghalang pemadaman dan kekal."))
+        }
+        .alert(tr("无法删除", "Unable to delete", "Tidak dapat memadam"), isPresented: Binding(get: { deletionError != nil }, set: { if !$0 { deletionError = nil } })) {
+            Button("OK") {}
+        } message: { Text(deletionError ?? "") }
         // Present from the stable screen, not a lazily hosted List section.
         .sheet(item: $editor) { destination in
             if let account = model.ledger.bankAccounts.first(where: { $0.id == accountID }) {

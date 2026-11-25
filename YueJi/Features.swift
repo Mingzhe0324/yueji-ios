@@ -1150,39 +1150,37 @@ struct RestorePreview: Identifiable {
 
 extension Ledger {
     func friendStatement(key: String, month: Date?) -> String {
-        let name = friendBalances.first { $0.id == key }?.name ?? key
-        let period = month.map { monthKey($0) } ?? tr("全部月份", "All months", "Semua bulan")
-        var lines = [tr("月记 · 朋友账单", "YueJi · Friend statement", "YueJi · Penyata rakan"), name, period, "MYR"]
-        var net = 0, paid = 0, returned = 0, owed = 0, payable = 0
-        let entries = expenses.filter { month == nil || monthKey($0.date) == monthKey(month!) }.sorted { $0.date < $1.date }
-        for e in entries {
-            for s in e.shares where friendKey(s.name) == key {
-                net += s.cents - s.refunded; paid += s.repaid; returned += s.returned
-                let balance = outstanding(expense: e, share: s)
-                owed += max(0, balance); payable += max(0, -balance)
-                lines.append("\n\(dateLabel(e.date)) · \(e.merchant) · \(e.categorySummary)")
-                lines.append(tr("付款人：", "Paid by: ", "Dibayar oleh: ") + e.payerLabel)
-                lines.append(tr("份额 / 退款：", "Share / refund: ", "Bahagian / pulangan: ") + money(s.cents) + " / " + money(s.refunded))
-                lines.append(tr("已还 / 已退回：", "Repaid / returned: ", "Dibayar / dipulangkan: ") + money(s.repaid) + " / " + money(s.returned))
-                for r in s.repayments { lines.append("  \(dateLabel(r.date)) · " + tr("还款 ", "Repayment ", "Bayaran ") + money(r.cents)) }
-                for r in s.returns ?? [] { lines.append("  \(dateLabel(r.date)) · " + tr("返款 ", "Returned ", "Dipulangkan ") + money(r.cents)) }
-            }
-            if e.paidByFriend.map(friendKey) == key,
-               let item = friendDebtItems.first(where: { $0.expense.id == e.id && $0.shareID == nil }) {
-                owed += max(0, item.balance); payable += max(0, -item.balance)
-                lines.append(tr("我的份额 / 尚欠付款人：", "My share / still owed to payer: ", "Bahagian saya / baki hutang kepada pembayar: ") + money(e.personal) + " / " + money(max(0, -item.balance)))
-            }
+        let key = friendKey(key)
+        let items = friendDebtItems.filter {
+            friendKey($0.friend) == key && (month == nil || monthKey($0.expense.date) == monthKey(month!))
         }
-        for record in settlements where record.friend == key && record.lines.contains(where: { month == nil || monthKey($0.expense.date) == monthKey(month!) }) {
-            lines.append("\n" + tr("结算：", "Settlement: ", "Penyelesaian: ") + dateLabel(record.date) + " · " + money(abs(record.transfer)) + (record.active ? "" : tr(" · 已撤销", " · Undone", " · Dibatalkan")))
-            for line in record.lines where month == nil || monthKey(line.expense.date) == monthKey(month!) { lines.append(line.expense.merchant + " · " + money(line.applied)) }
+        let name = items.first?.friend ?? key
+        let net = items.reduce(0) { $0 + $1.balance }
+        let summary: String
+        if net > 0 { summary = tr("相抵后，你还需付我：", "After offsetting, you owe me: ", "Selepas tolakan, anda perlu bayar saya: ") + money(net) }
+        else if net < 0 { summary = tr("相抵后，我还需付你：", "After offsetting, I owe you: ", "Selepas tolakan, saya perlu bayar anda: ") + money(-net) }
+        else if items.contains(where: { $0.balance != 0 }) { summary = tr("双方欠款相抵后，无需转账", "No transfer needed after offsetting mutual debts", "Tiada pindahan diperlukan selepas tolakan hutang bersama") }
+        else { summary = tr("双方已结清", "Nothing left to pay", "Tiada baki perlu dibayar") }
+        var lines = [tr("月记 · 分账账单", "YueJi · Shared bill", "YueJi · Bil bersama"), name,
+                     month.map { monthKey($0) } ?? tr("全部月份", "All months", "Semua bulan"), "", summary]
+        for item in items {
+            let entry = item.expense
+            lines.append("\n" + dateLabel(entry.date) + " · " + entry.displayName)
+            if let share = entry.shares.first(where: { $0.id == item.shareID }) {
+                lines.append(tr("你的份额：", "Your share: ", "Bahagian anda: ") + money(share.cents - share.refunded))
+                if share.refunded > 0 {
+                    lines.append(tr("已扣除退款：", "Refund deducted: ", "Pulangan ditolak: ") + money(share.refunded))
+                }
+            } else {
+                lines.append(tr("你代付，我的份额：", "You paid; my share: ", "Anda bayar; bahagian saya: ") + money(entry.personal))
+            }
+            if item.balance > 0 { lines.append(tr("你还需付我：", "You still owe me: ", "Anda masih perlu bayar saya: ") + money(item.balance)) }
+            else if item.balance < 0 { lines.append(tr("我还需付你：", "I still owe you: ", "Saya masih perlu bayar anda: ") + money(-item.balance)) }
+            else { lines.append(tr("已结清", "Settled", "Selesai")) }
         }
-        lines.append("\n" + tr("净消费：", "Net spending: ", "Belanja bersih: ") + money(net))
-        lines.append(tr("已还：", "Repaid: ", "Dibayar: ") + money(paid))
-        lines.append(tr("已退回：", "Returned: ", "Dipulangkan: ") + money(returned))
-        lines.append(tr("朋友待还：", "Still owed by friend: ", "Baki hutang rakan: ") + money(owed))
-        lines.append(tr("我欠朋友：", "I owe them: ", "Saya berhutang: ") + money(payable))
-        lines.append(tr("按消费月份筛选，包含这些消费截至目前的所有还款和返款。", "Filtered by spending month; includes all repayments and returns for these entries to date.", "Ditapis mengikut bulan belanja; termasuk semua bayaran dan pulangan rekod ini setakat kini."))
+        if month != nil {
+            lines.append("\n" + tr("仅含本月消费，余额已计入后续还款和退款。", "This month's purchases only; balances include subsequent repayments and refunds.", "Pembelian bulan ini sahaja; baki termasuk bayaran dan pulangan berikutnya."))
+        }
         return lines.joined(separator: "\n")
     }
 }
