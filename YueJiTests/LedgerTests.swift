@@ -3062,6 +3062,12 @@ final class LedgerTests: XCTestCase {
         let eligible = ledger.friendRefundItems(friend: "Amy")
         XCTAssertEqual(Set(eligible.map { $0.expense.id }), ["lunch", "more"])
         let selected = Set(eligible.map(\.id))
+        let paymentDay = Calendar.current.startOfDay(for: settlementDate)
+        XCTAssertNoThrow(try ledger.friendRefundPlan(friend: "Amy", selected: selected, cents: 3000, date: paymentDay), "Same-day entry order must not hide refund confirmation")
+        XCTAssertThrowsError(try ledger.friendRefundPlan(friend: "Amy", selected: selected, cents: 3000, date: paymentDay.addingTimeInterval(-1))) { error in
+            XCTAssertTrue(error.localizedDescription.contains(dateLabel(paymentDay)), "Show the actual blocking date")
+            XCTAssertTrue(eligible.contains { error.localizedDescription.contains($0.expense.displayName) }, "Identify the original expense to review")
+        }
         XCTAssertThrowsError(try ledger.friendRefundPlan(friend: "Amy", selected: [FriendDebtItem.key("mine", nil)], cents: 100, date: settlementDate))
         XCTAssertThrowsError(try ledger.friendRefundPlan(friend: "Amy", selected: selected, cents: 4001, date: settlementDate))
         let plan = try ledger.friendRefundPlan(friend: "Amy", selected: selected, cents: 3000, date: settlementDate)

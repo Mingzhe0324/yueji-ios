@@ -363,9 +363,16 @@ extension Ledger {
         let key = friendKey(friend)
         let items = friendDebtItems.filter { friendKey($0.friend) == key && selected.contains($0.id) }
         guard !selected.isEmpty, selected.count <= 200, items.count == selected.count,
-              items.allSatisfy({ $0.balance != 0 && latestDebtDate($0) <= date }),
+              items.allSatisfy({ $0.balance != 0 }),
               date.timeIntervalSince1970.isFinite, date.timeIntervalSince1970 >= 0, date <= Date(), payment >= 0 else {
             throw settlementError("选择未结清账目，结算日期不能早于相关消费、退款或还款，不能晚于今天。", "Select outstanding items. Settlement must be on or after their expenses, refunds and repayments, and no later than today.", "Pilih rekod belum selesai. Tarikh penyelesaian mesti selepas belanja, pulangan dan bayaran hutang berkaitan, dan tidak lewat daripada hari ini.")
+        }
+        if let laterItem = items.first(where: { latestDebtDate($0) > date }) {
+            let earliest = dateLabel(latestDebtDate(laterItem))
+            throw settlementError(
+                "「\(laterItem.expense.displayName)」有 \(earliest) 的消费、退款或还款记录，晚于本次付款日期。请核对原账单的相关日期。",
+                "\(laterItem.expense.displayName) has an expense, refund or repayment dated \(earliest), after this payment. Check the dates on the original entry.",
+                "\(laterItem.expense.displayName) mempunyai belanja, pulangan atau bayaran bertarikh \(earliest), selepas bayaran ini. Semak tarikh rekod asal.")
         }
         let receivable = items.reduce(0) { $0 + max(0, $1.balance) }
         let payable = items.reduce(0) { $0 + max(0, -$1.balance) }

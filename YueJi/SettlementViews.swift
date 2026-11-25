@@ -617,12 +617,16 @@ struct RefundFriendPaymentView: View {
     }
 
     @ViewBuilder private var reviewAction: some View {
-        if let plan {
-            Button(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) { beginReview(plan) }
-                .buttonStyle(LedgerPrimaryActionStyle())
-        } else {
-            Text(tr("请核对金额、付款日期和所选账单；金额不能超过待退余额。", "Check the amount, payment date and selected expenses; the payment cannot exceed the amount due back.", "Semak amaun, tarikh bayaran dan belanja dipilih; bayaran tidak boleh melebihi baki pulangan."))
-                .font(.caption).foregroundStyle(.secondary)
+        Button(tr("核对并确认", "Review and confirm", "Semak dan sahkan")) {
+            if let currentPlan = try? makePlan() { beginReview(currentPlan) }
+        }
+        .buttonStyle(LedgerPrimaryActionStyle())
+        .disabled(plan == nil)
+        .accessibilityIdentifier("friendRefund.review")
+        if !planError.isEmpty {
+            Text(planError)
+                .font(.caption).foregroundStyle(.orange)
+                .accessibilityIdentifier("friendRefund.validation")
         }
     }
 
