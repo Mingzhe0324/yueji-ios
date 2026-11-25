@@ -1800,6 +1800,8 @@ func isPromotionalNotification(_ body: String, title: String) -> Bool {
             .replacingOccurrences(of: "’", with: "'")
             .replacingOccurrences(of: "\u{2060}", with: "")
             .replacingOccurrences(of: "\u{200D}", with: "")
+            .replacingOccurrences(of: "\u{200B}", with: "")
+            .replacingOccurrences(of: "\u{FEFF}", with: "")
     }
     let heading = normalized(title), content = normalized(body)
     let text = heading + " " + content
@@ -1812,17 +1814,19 @@ func isPromotionalNotification(_ body: String, title: String) -> Bool {
     let amount = #"(?:RM|MYR|USD|SGD|EUR|GBP|CNY|RMB|JPY|AUD|THB|IDR|INR|HKD)\s*[\d,.]+"#
     let receiptPatterns = [
         #"you(?:'ve| have)? (?:paid|received|spent|sent)\s+\#(amount)"#,
+        #"\#(amount)\s+(?:has been\s+)?received from\s+"#,
         #"\#(amount)(?:\s+cashback)?\s+(?:(?:has been|was|is)\s+)?(?:successfully\s+)?(?:credited|debited|deducted|refunded|transferred)"#,
         #"(?:your )?(?:cashback|refund|payment|transfer|purchase) (?:of )?\#(amount)\s+(?:(?:has been|was|is)\s+)?(?:credited|received|successful|completed)"#,
         #"(?:your )?payment of \#(amount) to .+ was successful"#,
         #"your (?:visa|mastercard|card|account).{0,70}(?:has been|was) (?:charged|debited|credited)\s+\#(amount)"#,
+        #"we(?:'ve| have) reviewed your GrabFood report and issued you a refund of\s+\#(amount)"#,
         #"(?:您|你)?(?:已支付|已付款|已收到|已到账|已扣款|付款成功|转账成功)\s*\#(amount)"#,
         #"anda (?:telah )?(?:membayar|menerima)\s+\#(amount)"#,
         #"\#(amount)\s+(?:telah )?(?:dikreditkan|didebitkan|dibayar)"#
     ]
     let completedMoney = sentences.contains { sentence in
-        guard !notificationMatches(sentence, #"\b(?:if you|when you|when using|will be|could be|eligible for|qualify for|for example|jika anda|apabila anda|layak mendapat)\b|即可|可获|有机会|满足条件"#) else { return false }
-        guard !notificationMatches(sentence, amount + #"\s*(?:worth of\s+|cashback\s+)?(?:vouchers?|coupons?|points|baucar|kupon|优惠券|现金券|积分)"#) else { return false }
+        guard !notificationMatches(sentence, #"\b(?:if you|when you|when using|will be|could be|eligible for|qualify for|for example|after you|once you|provided you|subject to|jika anda|apabila anda|layak mendapat|selepas anda)\b|即可|可获|有机会|满足条件|完成任务|消费后可"#) else { return false }
+        guard !notificationMatches(sentence, amount + #"\s*(?:(?:worth of|worth|in|as|dalam bentuk)\s+)?(?:cashback\s+|reward\s+)?(?:vouchers?|coupons?|points|credits? to redeem|baucar|kupon|优惠券|现金券|积分|礼券)"#) else { return false }
         return notificationMatches(sentence, #"^\s*(?:"# + receiptPatterns.joined(separator: "|") + ")")
     }
     // Explicit campaign titles are never payment evidence. Mixed payment receipts
@@ -1839,7 +1843,12 @@ func isPromotionalNotification(_ body: String, title: String) -> Bool {
         && notificationMatches(text, #"\b(?:received|credited|added|awarded|ready|waiting|available|expires?|redeem|claim|diterima|terima|tebus|tuntut)\b|到账|获得|领取|发放|兑换|到期|已入账"#)
     let campaignAction = notificationMatches(text, #"\b(?:(?:tap|click) (?:here |now )?to (?:claim|redeem|shop|win|earn|save|collect)|claim (?:your|a)|redeem (?:your|a)|collect (?:your|a)|pay (?:just|only)\s*(?:RM|MYR)|(?:RM|MYR)\s*[\d,.]+\s*(?:off|deal)|(?:free|zero)[- ]?(?:delivery|shipping)|cashback (?:is )?(?:waiting|up for grabs)|cashback (?:will|can) be|(?:buy|get)\s+\d+\s+(?:get|free)|flash sale|payday sale|double[- ]date|bayar hanya|penghantaran percuma|tawaran istimewa)\b|点击(?:领取|抢购|兑换)|立即(?:领取|下单|抢购)|(?:仅需|只需|低至)\s*(?:RM|MYR)|免运费|免费配送|限时|返现资格|领取资格|专属优惠"#)
     let eligibleReward = reward && notificationMatches(text, #"\b(?:eligible|qualify|claim|redeem|collect|available|waiting|expires?|limited|exclusive|unlock|will receive|can receive|layak|tebus|tuntut|eksklusif)\b|可享|可得|领取|最高|资格|专属|到期|限量"#)
-    return campaign || solicitation || rewardReceipt || campaignAction || eligibleReward || (reward && invitation)
+    // These are invitations to move money, not evidence that money moved.
+    // Evaluate only after protecting a separate, completed receipt sentence.
+    let paymentCampaign = notificationMatches(text, #"\b(?:reload|top[- ]?up|transfer|pay|spend)\b.{0,80}\b(?:to (?:earn|win|unlock|get)|and (?:earn|win|unlock|get)|for a chance|to enter)\b|(?:充值|转账|付款|支付).{0,40}(?:赢取|抽奖|赢大奖|送礼|享优惠)|(?:tambah nilai|bayar|pindah).{0,60}(?:untuk menang|dan menang|untuk mendapat)"#)
+    let conditionalReward = reward && notificationMatches(text, #"\b(?:after you|once you|provided you|subject to|complete .{0,30}(?:payments?|transactions?)|selepas anda)\b|完成任务|消费后可|满足条件"#)
+    let productCampaign = notificationMatches(text, #"\b(?:apply|activate|sign up)\b.{0,60}\b(?:loan|credit|financing|investment|insurance)\b|\b(?:loan|financing|credit limit)\b.{0,60}\b(?:pre[- ]approved|apply now|up to|available for you)\b|申请贷款|开通额度|预批额度|mohon pinjaman"#)
+    return campaign || solicitation || rewardReceipt || campaignAction || eligibleReward || paymentCampaign || conditionalReward || productCampaign || (reward && invitation)
 }
 func isNonTransactionNotification(_ body: String, title: String) -> Bool {
     let text = notificationText(title + " " + body)

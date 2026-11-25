@@ -777,7 +777,21 @@ final class EverydayFlowTests: XCTestCase {
             ("Bank", "Anda layak mendapat pulangan tunai RM10. Tuntut sekarang"),
             ("Grab", "Bayar hanya RM1. Penghantaran percuma hari ini"),
             ("TNG", "You have received ＲＭ１０ voucher. Claim now!"),
-            ("TNG", "RM5 cash\u{2060}back available. Claim now!")
+            ("TNG", "RM5 cash\u{2060}back available. Claim now!"),
+            ("TNG", "You have received RM10 in vouchers. Tap to view."),
+            ("TNG", "You have received RM10 worth of reward points."),
+            ("TNG", "Anda telah menerima RM10 dalam bentuk baucar."),
+            ("TNG", "You have received RM10 cashback once you complete 3 payments."),
+            ("TNG", "RM5 cashback has been credited after you spend RM50."),
+            ("TNG", "Reload RM50 to enter our lucky draw."),
+            ("TNG", "Transfer RM10 for a chance to win a phone."),
+            ("TNG", "充值RM50赢取大奖"),
+            ("TNG", "TNG付款RM10抽奖赢大奖"),
+            ("TNG", "Tambah nilai RM50 untuk menang hadiah."),
+            ("Bank", "Credit limit RM5000 available for you. Transfer funds with ease."),
+            ("Bank", "Apply for financing RM1000. Get funds transferred to your account."),
+            ("TNG", "Get RM5 cash\u{200B}back on your next payment."),
+            ("TNG", "You have received ＲＭ１０ in vouchers. Tap to view.")
         ]
         for (title, body) in campaigns {
             var ledger = Ledger()
@@ -791,6 +805,7 @@ final class EverydayFlowTests: XCTestCase {
             XCTAssertTrue(ledger.expenses.isEmpty, body)
             XCTAssertTrue(ledger.tngNotices.isEmpty, body)
             XCTAssertEqual(ledger.bankAccounts, [account])
+            XCTAssertEqual(ledger.bankBalance(account), 10000, body)
             XCTAssertEqual(ledger.filteredNotifications.count, 1, body)
         }
     }
@@ -804,7 +819,11 @@ final class EverydayFlowTests: XCTestCase {
             "You have paid RM25.50 to IF Cafe. Shop now!",
             "Payment successful\nYou have paid RM25.50 to Cafe. Shop now!",
             "已到账RM5.25。立即领取优惠券",
-            "Anda telah membayar RM25.50. Tebus sekarang!"
+            "Anda telah membayar RM25.50. Tebus sekarang!",
+            "RM 30.00 received from JAMES for ME. Reload RM50 to enter our lucky draw.",
+            "We've reviewed your GrabFood report and issued you a refund of MYR 25.45. Free delivery today!",
+            "Your account has been credited RM1000. Apply for financing today.",
+            "RM10 has been credited to your account. You have received RM5 in vouchers."
         ] {
             XCTAssertFalse(isNonTransactionNotification(body, title: ""), body)
         }
