@@ -60,7 +60,7 @@ extension Ledger {
               !notice.possibleDuplicate, notice.status != "ignored" else { return .neutral }
         switch notice.kind {
         case "incoming": return .incoming
-        case "transfer": return .outgoing
+        case "transfer", "payment": return .outgoing
         default: return .neutral
         }
     }

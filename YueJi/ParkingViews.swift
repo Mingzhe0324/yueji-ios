@@ -614,7 +614,7 @@ private struct ParkingHome: View {
                                 HStack {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Text(session.name.isEmpty ? tr("停车", "Parking", "Parkir") : session.name).font(.headline)
-                                        Text(session.startedAt, style: .date).font(.caption).foregroundStyle(.secondary)
+                                        Text(dateLabel(session.startedAt)).font(.caption).foregroundStyle(.secondary)
                                     }
                                     Spacer()
                                     Text(session.paidCents.map { money($0) } ?? "—")

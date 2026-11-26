@@ -329,6 +329,7 @@ func sourceLabel(_ key: String) -> String {
 func dateLabel(_ date: Date, time: Bool = false) -> String {
     // Foundation reuses the formatter behind a value-based FormatStyle.
     date.formatted(Date.FormatStyle(date: .abbreviated, time: time ? .shortened : .omitted)
+        .weekday(.wide)
         .locale(Locale(identifier: AppLanguage.localeID)))
 }
 func localizedError(_ key: String) -> String {

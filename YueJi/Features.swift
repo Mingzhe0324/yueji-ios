@@ -1494,7 +1494,7 @@ enum RenewalReminders {
         let content = UNMutableNotificationContent()
         content.title = item.title
         content.body = item.body
-        content.sound = .default
+        content.sound = LedgerNotifications.automationSound
         content.threadIdentifier = "yueji.renewal"
         content.userInfo = ["recordID": item.ruleID, "recordKind": "recurring"]
         return UNNotificationRequest(identifier: item.identifier, content: content,

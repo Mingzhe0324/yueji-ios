@@ -6528,6 +6528,33 @@ final class UniversalBankAndPaymentTimeTests: XCTestCase {
 }
 
 final class DirectionNotificationSoundTests: XCTestCase {
+    func testPendingPaymentDirectionDoesNotDependOnAccountAllocation() {
+        var ledger = Ledger()
+        var notice = TNGNotice(id: "pending-card", body: "Card payment", title: "Bank", date: Date(),
+                               usesReceivedDate: false, kind: "payment", status: "pending", cents: 1880, party: "Cafe")
+        ledger.tngNotices = [notice]
+        XCTAssertEqual(ledger.notificationSound(expenseID: nil, noticeID: notice.id), .outgoing)
+        notice.status = "ignored"
+        ledger.tngNotices = [notice]
+        XCTAssertEqual(ledger.notificationSound(expenseID: nil, noticeID: notice.id), .neutral)
+        notice.status = "pending"
+        notice.possibleDuplicate = true
+        ledger.tngNotices = [notice]
+        XCTAssertEqual(ledger.notificationSound(expenseID: nil, noticeID: notice.id), .neutral)
+    }
+
+    func testSharedDateLabelsIncludeWeekdayWithAndWithoutTime() {
+        let locale = Locale(identifier: AppLanguage.localeID)
+        for day in 1...7 {
+            let date = noon(2026, 11, day)
+            let weekday = date.formatted(.dateTime.weekday(.wide).locale(locale))
+            XCTAssertTrue(dateLabel(date).contains(weekday))
+            XCTAssertTrue(dateLabel(date, time: true).contains(weekday))
+            XCTAssertTrue(dateLabel(date).contains("2026"))
+            XCTAssertNotEqual(dateLabel(date), dateLabel(date, time: true))
+        }
+    }
+
     func testDirectionFromSavedResultAndNeutralForDuplicateOrUnknown() throws {
         let now = Date()
         var ledger = Ledger()
