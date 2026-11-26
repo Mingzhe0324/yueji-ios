@@ -6543,11 +6543,12 @@ final class DirectionNotificationSoundTests: XCTestCase {
         XCTAssertEqual(ledger.notificationSound(expenseID: nil, noticeID: notice.id), .neutral)
     }
 
-    func testSharedDateLabelsIncludeWeekdayWithAndWithoutTime() {
+    func testSharedDateLabelsIncludeWeekdayWithAndWithoutTime() throws {
         let locale = Locale(identifier: AppLanguage.localeID)
+        let calendar = Calendar(identifier: .gregorian)
         for day in 1...7 {
-            let date = noon(2026, 11, day)
-            let weekday = date.formatted(.dateTime.weekday(.wide).locale(locale))
+            let date = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 11, day: day, hour: 12)))
+            let weekday = date.formatted(Date.FormatStyle().weekday(.wide).locale(locale))
             XCTAssertTrue(dateLabel(date).contains(weekday))
             XCTAssertTrue(dateLabel(date, time: true).contains(weekday))
             XCTAssertTrue(dateLabel(date).contains("2026"))
